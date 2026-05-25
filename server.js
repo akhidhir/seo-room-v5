@@ -3810,7 +3810,6 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
 
           // If we padded, only take the first portion (approximately same length as original)
           if (wasPadded && humText.length > block.plainText.length * 1.5) {
-            // Split by sentences, take enough to roughly match original length
             const sents = humText.match(/[^.!?]+[.!?]+/g) || [humText];
             const origSentCount = (block.plainText.match(/[^.!?]+[.!?]+/g) || [block.plainText]).length;
             humText = sents.slice(0, origSentCount).join(' ').trim();
@@ -3822,8 +3821,8 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
           if (humText.length > 10 && humText !== block.plainText) {
             block.humanized = humText;
           }
-          debugLog.push((i+1) + ': ' + block.plainText.split(/\s+/).length + 'w score=' + ghData.humanScore + (wasPadded ? ' PADDED' : '') + ' diff=' + (humText !== block.plainText));
-          console.log('[humanize] ' + (i+1) + '/' + pBlocks.length + ': score=' + ghData.humanScore + (wasPadded ? ' (padded)' : ''));
+          debugLog.push((i+1) + ': ' + block.plainText.split(/\s+/).length + 'w ghScore=' + ghData.humanScore + (wasPadded ? ' PAD' : ''));
+          console.log('[humanize] ' + (i+1) + '/' + pBlocks.length + ': ghScore=' + ghData.humanScore + (wasPadded ? ' (padded)' : ''));
         } else {
           const errMsg = (ghData.error || ghData.description || ghData.message || '').substring(0, 80);
           debugLog.push((i+1) + ': ERR=' + errMsg);
@@ -3834,7 +3833,63 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
       }
     }
 
-    // 3. POSITION-BASED REPLACEMENT — work backwards to preserve indices
+    // 3. BRIEF FIDELITY PASS — Use Haiku to restore any brief-critical content
+    // that GPTHuman changed, while keeping GPTHuman's natural phrasing.
+    // Minimal intervention: only fix factual/message deviations.
+    console.log('[humanize] Starting brief fidelity pass with Haiku...');
+    let haikuFixed = 0;
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+
+    if (anthropicKey) {
+      for (let i = 0; i < pBlocks.length; i++) {
+        const block = pBlocks[i];
+        if (!block.humanized || block.humanized === block.plainText) continue;
+
+        try {
+          const haikuResp = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1000,
+            messages: [{
+              role: 'user',
+              content: `You are a copy editor for an Australian fencing company. Below is the ORIGINAL paragraph from the approved client brief, and a DRAFT rewrite.
+
+ORIGINAL (from brief — these facts and messages are mandatory):
+${block.plainText}
+
+DRAFT (has natural phrasing but may have changed key messages):
+${block.humanized}
+
+Your job:
+1. Keep the DRAFT's natural phrasing and sentence structure as much as possible
+2. Restore ANY facts, services, locations, or key selling points from the ORIGINAL that the DRAFT changed, removed, or added incorrectly
+3. Do NOT add content that wasn't in the ORIGINAL
+4. Do NOT remove content that was in both ORIGINAL and DRAFT
+5. Use Australian English (colour, organisation, centre, etc.)
+6. Professional trade industry tone — no slang, no American expressions
+7. Change the MINIMUM number of words — only fix what's factually wrong
+
+Return ONLY the corrected paragraph. No explanation.`
+            }]
+          });
+
+          const fixed = haikuResp.content[0].text.trim();
+          if (fixed.length > 10 && fixed !== block.humanized) {
+            // Apply AU English again to be safe
+            block.humanized = applyAuEnglish(fixed);
+            haikuFixed++;
+            debugLog.push((i+1) + ': HAIKU_FIXED');
+          }
+        } catch (e) {
+          debugLog.push((i+1) + ': HAIKU_ERR=' + e.message.substring(0, 60));
+          console.error('[humanize] Haiku fix error para ' + (i+1) + ':', e.message);
+        }
+      }
+      console.log('[humanize] Haiku fixed ' + haikuFixed + ' paragraphs');
+    } else {
+      debugLog.push('SKIP_HAIKU: no ANTHROPIC_API_KEY');
+    }
+
+    // 4. POSITION-BASED REPLACEMENT — work backwards to preserve indices
     const toReplace = pBlocks.filter(b => b.humanized).sort((a, b) => b.startIdx - a.startIdx);
     let resultHtml = content_html;
     let replacedCount = 0;
@@ -3865,8 +3920,8 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     }
 
     const contentChanged = resultHtml !== content_html;
-    debugLog.push('replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged);
-    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged + ' credits=' + totalCredits);
+    debugLog.push('replaced=' + replacedCount + '/' + pBlocks.length + ' haikuFixed=' + haikuFixed + ' changed=' + contentChanged);
+    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' haikuFixed=' + haikuFixed + ' changed=' + contentChanged + ' credits=' + totalCredits);
 
     // 4. Save to DB if content changed
     if (page_id && contentChanged) {
