@@ -19423,7 +19423,8 @@ PRIORITY ORDER — fix ALL of these:
 1. Meta title: MUST be 50-60 chars AND contain "${fk}". Current is ${currentMetaTitle.length} chars — ${currentMetaTitle.length > 60 ? 'TOO LONG, shorten it' : currentMetaTitle.length < 50 ? 'TOO SHORT, expand it' : 'length OK'}. ALWAYS return a new meta_title.
 2. Meta desc: MUST be 120-155 chars AND contain "${fk}". Current is ${currentMetaDesc.length} chars — ${currentMetaDesc.length > 155 ? 'TOO LONG, shorten it' : currentMetaDesc.length < 120 ? 'TOO SHORT, expand it' : 'length OK'}. ALWAYS return a new meta_description.
 3. Word count: need ${Math.max(0, 1500 - currentWords)} more words. Expand EVERY paragraph by adding 2-4 more sentences with relevant detail, examples, or specifics. This is the biggest score gap.
-4. Focus keyword "${fk}": appears ${fkCount}x, need 3-8. ${fkCount < 3 ? 'Add ' + (3 - fkCount) + ' more uses.' : fkCount > 8 ? 'Remove ' + (fkCount - 8) + ' uses.' : 'OK.'}
+4. Focus keyword "${fk}": appears ${fkCount}x, need 3-8. ${fkCount < 3 ? 'Add ' + (3 - fkCount) + ' more uses.' : fkCount > 8 ? 'OVERUSED — REMOVE ' + (fkCount - 8) + ' uses. Replace some instances with synonyms or pronouns.' : 'OK — do NOT add more.'}
+   HARD LIMIT: The focus keyword must appear between 3 and 8 times total in the final content. Do NOT exceed 8. When expanding paragraphs, use synonyms/variations instead of repeating the exact focus keyword.
 5. Missing keywords: weave into existing sentences
 
 CRITICAL RULES:
