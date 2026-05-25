@@ -33272,7 +33272,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
               });
             }
 
-            pageMap.set(url.replace(/\/$/, ''), { title, outbound, inbound: [], wordCount, textSnippet: textContent.substring(0, 500) });
+            pageMap.set(url.replace(/\/$/, ''), { title, outbound, inbound: [], wordCount, textSnippet: textContent.substring(0, 1500), fullText: textContent });
           } catch (crawlErr) {
             console.log(`[internal-links] Failed to crawl ${url}: ${crawlErr.message}`);
           }
@@ -33387,14 +33387,33 @@ Return ONLY valid JSON array:
           }
         }
 
-        // 7. Save suggestions (clear old pending, keep applied)
+        // 7. Validate & save suggestions (only keep ones where anchor exists in source page)
         await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed')`, [projectId]);
+        let validCount = 0, skippedCount = 0;
         for (const s of suggestions) {
+          // Validate: anchor text must exist in the source page's full text
+          const sourceData = pageMap.get((s.source_url || '').replace(/\/$/, ''));
+          const sourceText = (sourceData?.fullText || sourceData?.textSnippet || '').toLowerCase();
+          const anchor = (s.suggested_anchor || '').toLowerCase().trim();
+          if (!anchor || !sourceText.includes(anchor)) {
+            console.log(`[internal-links] Skipped suggestion: anchor "${s.suggested_anchor}" not found in ${s.source_url}`);
+            skippedCount++;
+            continue;
+          }
+          // Also validate target URL exists in our crawled pages
+          const targetNorm = (s.target_url || '').replace(/\/$/, '');
+          if (!pageMap.has(targetNorm)) {
+            console.log(`[internal-links] Skipped suggestion: target ${s.target_url} not in crawled pages`);
+            skippedCount++;
+            continue;
+          }
           await pool.query(`
             INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
           `, [projectId, s.source_url, s.source_title || '', s.target_url, s.target_title || '', s.suggested_anchor || '', s.context_sentence || '', s.reason || '', s.priority || 'medium']);
+          validCount++;
         }
+        console.log(`[internal-links] Suggestions: ${validCount} valid, ${skippedCount} skipped (anchor not found or bad target)`);
 
         // 8. Compute stats
         const stats = {
