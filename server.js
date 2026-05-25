@@ -33435,7 +33435,16 @@ app.get('/api/projects/:projectId/internal-links/audit', async (req, res) => {
   try {
     const cache = await pool.query('SELECT * FROM internal_link_audit_cache WHERE project_id=$1', [projectId]);
     if (!cache.rows.length) return res.json({ status: 'idle', total_pages: 0, total_links: 0, orphan_pages: [], stats: {}, suggestions_count: 0 });
-    res.json(cache.rows[0]);
+    const row = cache.rows[0];
+    // Stale detection: if running for >5 minutes, auto-reset
+    if (row.status === 'running' && row.updated_at) {
+      const elapsed = Date.now() - new Date(row.updated_at).getTime();
+      if (elapsed > 5 * 60 * 1000) {
+        row.status = row.audited_at ? 'completed' : 'idle';
+        await pool.query('UPDATE internal_link_audit_cache SET status=$2, updated_at=NOW() WHERE project_id=$1', [projectId, row.status]);
+      }
+    }
+    res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
