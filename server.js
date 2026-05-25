@@ -33412,7 +33412,7 @@ Return ONLY valid JSON array:
 
         // 9. Save audit record
         await pool.query(`
-          INSERT INTO audits (project_id, pillar, status, report, completed_at)
+          INSERT INTO audits (project_id, pillar, status, audit_data, completed_at)
           VALUES ($1, 'internal_links', 'completed', $2, NOW())
         `, [projectId, JSON.stringify({ stats, orphan_pages: orphanPages, suggestions_count: suggestions.length })]);
 
