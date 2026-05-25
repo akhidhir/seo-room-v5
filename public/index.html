@@ -15791,6 +15791,25 @@
       var [plagiarismError, setPlagiarismError] = React.useState(null);
       // AI detection — load saved results from DB
       var [aiDetecting, setAiDetecting] = React.useState(false);
+      var [humanizing, setHumanizing] = React.useState(false);
+
+      var handleHumanize = async function() {
+        if (!editContent || humanizing) return;
+        setHumanizing(true);
+        try {
+          var result = await api('/projects/' + pid + '/humanize-only', { 
+            method: 'POST', 
+            body: { content_html: editContent, page_id: page.id, build_id: page.build_id }
+          });
+          if (result.content_html) {
+            setEditContent(result.content_html);
+            alert('Humanized! Score: ' + (result.human_score || 'N/A') + '% human. Credits used: ' + (result.credits_used || 0));
+          }
+        } catch(e) {
+          alert('Humanize error: ' + (e.message || e));
+        }
+        setHumanizing(false);
+      };
       var [aiResult, setAiResult] = React.useState(page.ai_detection_result || null);
       var [gpthumanCredits, setGpthumanCredits] = React.useState(null);
       var [aiError, setAiError] = React.useState(null);
@@ -16151,6 +16170,13 @@
             title: 'Detect AI-generated content via Winston AI',
             style: { padding: '8px 16px', background: aiDetecting ? 'var(--bg3)' : '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: aiDetecting ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
           }, React.createElement('i', { className: aiDetecting ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-robot', style: { marginRight: 6 } }), aiDetecting ? 'Detecting...' : 'AI Detection'),
+          // Humanize Only
+          hasDraft && React.createElement('button', {
+            disabled: humanizing || !editContent,
+            onClick: handleHumanize,
+            title: 'Run GPTHuman to reduce AI detection score without changing the copy',
+            style: { padding: '8px 16px', background: humanizing ? 'var(--bg3)' : '#10b981', color: '#fff', border: 'none', borderRadius: 8, cursor: humanizing ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: humanizing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), humanizing ? 'Humanizing...' : 'Humanize'),
           // Reset
           !isPublished && React.createElement('button', {
             onClick: function() {

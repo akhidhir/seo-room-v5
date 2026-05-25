@@ -3639,6 +3639,127 @@ app.delete('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
 });
 
 // AI Detection (Winston AI) — synchronous, returns human score
+// Humanize Only — run GPTHuman on existing content without AI rewrite
+app.post('/api/projects/:id/humanize-only', async (req, res) => {
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  try {
+    const { content_html, page_id, build_id } = req.body;
+    if (!content_html || content_html.trim().length < 100) {
+      return res.status(400).json({ error: 'Content too short to humanize' });
+    }
+    const apiKey = process.env.GPTHUMAN_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'GPTHUMAN_API_KEY not configured' });
+
+    // Split HTML into blocks to preserve structure
+    const blocks = content_html.split(/(<\/?(?:h[1-6]|p|div|ul|ol|li|blockquote|figure|img|a|table|tr|td|th|thead|tbody|br|hr)[^>]*>)/gi);
+    
+    // Extract text-only blocks (skip HTML tags and short fragments)
+    const textBlocks = [];
+    let currentText = '';
+    let blockMap = []; // maps text positions back to block indices
+    
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      if (block.match(/^<[^>]+>$/)) continue; // skip HTML tags
+      const plain = block.replace(/<[^>]+>/g, '').trim();
+      if (plain.length > 20) {
+        textBlocks.push({ index: i, text: plain });
+      }
+    }
+    
+    // Combine text for GPTHuman (it works better with larger chunks)
+    const SEPARATOR = '\n|||BLOCK_SEP|||\n';
+    const allText = textBlocks.map(b => b.text).join(SEPARATOR);
+    const wordCount = allText.split(/\s+/).length;
+    
+    console.log('[humanize-only] Processing ' + wordCount + ' words via GPTHuman Lite...');
+    
+    // Split into chunks if over 1800 words
+    const chunks = [];
+    if (wordCount > 1800) {
+      const parts = allText.split(SEPARATOR);
+      let chunk = '';
+      let chunkWords = 0;
+      for (const p of parts) {
+        const w = p.split(/\s+/).length;
+        if (chunkWords + w > 1500 && chunk.length >= 300) {
+          chunks.push(chunk.trim());
+          chunk = '';
+          chunkWords = 0;
+        }
+        chunk += (chunk ? SEPARATOR : '') + p;
+        chunkWords += w;
+      }
+      if (chunk.trim().length >= 100) chunks.push(chunk.trim());
+    } else {
+      chunks.push(allText);
+    }
+    
+    let humanizedFull = '';
+    let totalCredits = 0;
+    let lastBalance = null;
+    let lastScore = null;
+    
+    for (let i = 0; i < chunks.length; i++) {
+      const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          text: chunks[i],
+          tone: 'Standard',
+          mode: 'Lite'
+        })
+      });
+      const ghRaw = await ghResp.text();
+      let ghData;
+      try { ghData = JSON.parse(ghRaw); } catch(e) { ghData = { error: ghRaw }; }
+      
+      if (ghData.output) {
+        humanizedFull += (i > 0 ? SEPARATOR : '') + ghData.output;
+        totalCredits += (ghData.creditUsage || 0);
+        lastBalance = ghData.creditBalance;
+        lastScore = ghData.humanScore;
+        console.log('[humanize-only] Chunk ' + (i+1) + '/' + chunks.length + ': score=' + ghData.humanScore + ', credits=' + ghData.creditUsage);
+      } else {
+        console.error('[humanize-only] GPTHuman error on chunk ' + (i+1) + ':', ghData.error || 'unknown');
+        humanizedFull += (i > 0 ? SEPARATOR : '') + chunks[i]; // keep original on failure
+      }
+    }
+    
+    // Map humanized text back to blocks
+    const humanizedParts = humanizedFull.split(SEPARATOR);
+    for (let j = 0; j < Math.min(humanizedParts.length, textBlocks.length); j++) {
+      blocks[textBlocks[j].index] = humanizedParts[j];
+    }
+    
+    const resultHtml = blocks.join('');
+    
+    // Save to DB if page_id provided
+    if (page_id) {
+      if (build_id) {
+        await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND build_id=$3', [resultHtml, page_id, build_id]);
+      } else {
+        await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2', [resultHtml, page_id]);
+      }
+    }
+    
+    console.log('[humanize-only] Done. Credits used: ' + totalCredits + ', balance: ' + lastBalance + ', humanScore: ' + lastScore);
+    res.json({ 
+      content_html: resultHtml, 
+      human_score: lastScore,
+      credits_used: totalCredits,
+      credit_balance: lastBalance
+    });
+  } catch (err) {
+    console.error('[humanize-only] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/projects/:id/ai-detection', async (req, res) => {
   try {
     const { content } = req.body;
