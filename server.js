@@ -3732,21 +3732,116 @@ function applyAuEnglish(text) {
   return result;
 }
 
-// AI Detection (Winston AI) — synchronous, returns human score
-// Humanize Only — ONE PARAGRAPH AT A TIME to GPTHuman (padded to 300+ chars).
-// Section-aware: never mixes content across headings. Australian English post-process.
+// Humanize Only — RULE-BASED. Zero AI, zero API calls, zero cost.
+// Only job: reduce AI detection signals. Does NOT change the copy's meaning.
+// Techniques: contractions, filler words, punctuation variance, sentence restructuring.
 app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], async (req, res) => {
-  req.setTimeout(300000);
-  res.setTimeout(300000);
   try {
     const { content_html, page_id, build_id } = req.body;
     if (!content_html || content_html.trim().length < 100) {
       return res.status(400).json({ error: 'Content too short to humanize' });
     }
-    const apiKey = (process.env.GPTHUMAN_API_KEY || '').trim();
-    if (!apiKey) return res.status(500).json({ error: 'GPTHUMAN_API_KEY not configured' });
 
-    // 1. Extract all <p> blocks with position info
+    // Rule-based humanizer: micro-edits that break AI patterns without changing meaning
+    // Works directly on innerHTML of <p> tags, preserves all HTML structure
+
+    // Contraction map — makes text sound naturally written
+    const CONTRACTIONS = [
+      [/\bwe have\b/gi, "we've"], [/\bwe are\b/gi, "we're"], [/\bwe will\b/gi, "we'll"],
+      [/\byou are\b/gi, "you're"], [/\byou will\b/gi, "you'll"], [/\byou have\b/gi, "you've"],
+      [/\bthey are\b/gi, "they're"], [/\bthey will\b/gi, "they'll"], [/\bthey have\b/gi, "they've"],
+      [/\bit is\b/gi, "it's"], [/\bit will\b/gi, "it'll"], [/\bthat is\b/gi, "that's"],
+      [/\bwho is\b/gi, "who's"], [/\bwho will\b/gi, "who'll"],
+      [/\bdo not\b/gi, "don't"], [/\bdoes not\b/gi, "doesn't"], [/\bdid not\b/gi, "didn't"],
+      [/\bwill not\b/gi, "won't"], [/\bwould not\b/gi, "wouldn't"], [/\bcould not\b/gi, "couldn't"],
+      [/\bshould not\b/gi, "shouldn't"], [/\bcan not\b/gi, "can't"], [/\bcannot\b/gi, "can't"],
+      [/\bis not\b/gi, "isn't"], [/\bare not\b/gi, "aren't"], [/\bwas not\b/gi, "wasn't"],
+      [/\bhas not\b/gi, "hasn't"], [/\bhave not\b/gi, "haven't"],
+      [/\blet us\b/gi, "let's"], [/\bthere is\b/gi, "there's"],
+      [/\bwhat is\b/gi, "what's"], [/\bhere is\b/gi, "here's"],
+    ];
+
+    // Sentence starters — add variety to break uniform AI patterns
+    // Only applied to ~30% of sentences randomly (seeded by sentence length for consistency)
+    const STARTERS = [
+      'Now, ', 'Plus, ', 'And ', 'So ', 'In short, ', 'Better yet, ',
+      'On top of that, ', 'What this means is ', 'The thing is, ', 'Truth is, ',
+    ];
+
+    // Synonym micro-swaps — meaning-preserving word swaps
+    const SWAPS = [
+      [/\butilise\b/gi, 'use'], [/\butilize\b/gi, 'use'],
+      [/\bpurchase\b/gi, 'buy'], [/\bcommence\b/gi, 'start'],
+      [/\badditionally\b/gi, 'also'], [/\bfurthermore\b/gi, 'also'],
+      [/\bhowever\b/gi, 'but'], [/\btherefore\b/gi, 'so'],
+      [/\bin order to\b/gi, 'to'], [/\bdue to the fact that\b/gi, 'because'],
+      [/\bat this point in time\b/gi, 'now'], [/\bin the event that\b/gi, 'if'],
+      [/\ba wide range of\b/gi, 'many'], [/\ba number of\b/gi, 'several'],
+      [/\bprovides\b/gi, 'gives'], [/\brequires\b/gi, 'needs'],
+      [/\bassist\b/gi, 'help'], [/\bdemonstrate\b/gi, 'show'],
+      [/\bensuring\b/gi, 'making sure'], [/\bensure\b/gi, 'make sure'],
+    ];
+
+    function humanizeParagraphText(text, paraIndex) {
+      let result = text;
+
+      // 1. Apply contractions
+      for (const [pattern, replacement] of CONTRACTIONS) {
+        result = result.replace(pattern, (match) => {
+          // Preserve capitalisation of first letter
+          if (match[0] === match[0].toUpperCase() && match[0] !== match[0].toLowerCase()) {
+            return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+          }
+          return replacement;
+        });
+      }
+
+      // 2. Apply synonym swaps
+      for (const [pattern, replacement] of SWAPS) {
+        result = result.replace(pattern, (match) => {
+          if (match[0] === match[0].toUpperCase() && match[0] !== match[0].toLowerCase()) {
+            return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+          }
+          return replacement;
+        });
+      }
+
+      // 3. Add sentence starters to ~25% of sentences (deterministic based on paraIndex + sentence position)
+      const sentences = result.match(/[^.!?]+[.!?]+/g);
+      if (sentences && sentences.length > 2) {
+        const rebuilt = sentences.map((sent, si) => {
+          const trimmed = sent.trim();
+          // Only add starter to middle sentences (not first or last), and only ~25%
+          if (si > 0 && si < sentences.length - 1 && ((paraIndex * 7 + si * 3) % 4 === 0)) {
+            const starter = STARTERS[(paraIndex + si) % STARTERS.length];
+            // Don't add if sentence already starts with a conjunction/filler
+            if (!/^(And|But|So|Now|Plus|Or|Yet|Well|Also|In short|Better|On top|The thing|Truth)\b/i.test(trimmed)) {
+              return starter + trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+            }
+          }
+          return trimmed;
+        });
+        result = rebuilt.join(' ');
+      }
+
+      // 4. Occasionally split long sentences (40+ words) at a comma
+      result = result.replace(/([^.!?]{150,}?), (and|but|so|which|where|while|although) /gi, (match, before, conj) => {
+        return before + '. ' + conj.charAt(0).toUpperCase() + conj.slice(1) + ' ';
+      });
+
+      // 5. Add em-dash variation — replace some " — " or " - " with ", " and vice versa
+      // This breaks the uniform punctuation pattern AI detectors look for
+      if ((paraIndex % 3) === 0) {
+        result = result.replace(/ — /g, ' – ');
+      }
+
+      // 6. Apply Australian English
+      result = applyAuEnglish(result);
+
+      return result;
+    }
+
+    // Extract <p> blocks with positions
     const pBlocks = [];
     const pRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
     let pm;
@@ -3760,8 +3855,7 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
           attrs: pm[1],
           innerHtml,
           plainText,
-          hasInline: /<(a|strong|em|b|i|span)\b/i.test(innerHtml),
-          humanized: null
+          hasInline: /<(a|strong|em|b|i|span)\b/i.test(innerHtml)
         });
       }
     }
@@ -3770,160 +3864,70 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
       return res.json({ content_html, human_score: null, credits_used: 0, debug: { msg: 'No paragraphs with 5+ words' } });
     }
 
-    const totalWords = pBlocks.reduce((s, b) => s + b.plainText.split(/\s+/).length, 0);
-    console.log('[humanize] ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words — sending ONE AT A TIME');
-    const debugLog = ['paras=' + pBlocks.length];
-    const MIN_CHARS = 310;
+    console.log('[humanize] Rule-based: ' + pBlocks.length + ' paragraphs');
+    const debugLog = ['rule-based', 'paras=' + pBlocks.length];
 
-    // 2. Send EACH paragraph individually to GPTHuman (padded to 300+ chars if needed)
-    // This guarantees 1:1 mapping — no content scrambling across paragraphs
-    let totalCredits = 0, lastBalance = null, lastScore = null;
-
+    // Apply humanization to each paragraph
     for (let i = 0; i < pBlocks.length; i++) {
       const block = pBlocks[i];
-      let textToSend = block.plainText;
-      let wasPadded = false;
-
-      // Pad short paragraphs to hit GPTHuman's 300 char minimum
-      if (textToSend.length < MIN_CHARS) {
-        wasPadded = true;
-        // Repeat the paragraph text until we hit minimum
-        const original = textToSend;
-        while (textToSend.length < MIN_CHARS) {
-          textToSend += ' ' + original;
-        }
-      }
-
-      try {
-        const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: textToSend, tone: 'Standard', mode: 'Enhanced' })
-        });
-        const ghData = await ghResp.json();
-
-        if (ghData.output) {
-          let humText = ghData.output.trim();
-          totalCredits += (ghData.creditUsage || 0);
-          lastBalance = ghData.creditBalance;
-          lastScore = ghData.humanScore;
-
-          // If we padded, only take the first portion (approximately same length as original)
-          if (wasPadded && humText.length > block.plainText.length * 1.5) {
-            const sents = humText.match(/[^.!?]+[.!?]+/g) || [humText];
-            const origSentCount = (block.plainText.match(/[^.!?]+[.!?]+/g) || [block.plainText]).length;
-            humText = sents.slice(0, origSentCount).join(' ').trim();
+      if (!block.hasInline) {
+        // Simple: humanize the entire inner text
+        block.humanized = humanizeParagraphText(block.plainText, i);
+      } else {
+        // Has inline tags: humanize only the text nodes, preserve tags
+        // Find and replace text runs between tags
+        let newInner = block.innerHtml;
+        // Extract text-only segments and humanize each
+        const textRuns = [];
+        let lastEnd = 0;
+        const tagRegex = /<[^>]+>/g;
+        let tm;
+        while ((tm = tagRegex.exec(block.innerHtml)) !== null) {
+          if (tm.index > lastEnd) {
+            textRuns.push({ start: lastEnd, end: tm.index, text: block.innerHtml.substring(lastEnd, tm.index) });
           }
-
-          // Apply Australian English corrections
-          humText = applyAuEnglish(humText);
-
-          if (humText.length > 10 && humText !== block.plainText) {
-            block.humanized = humText;
-          }
-          debugLog.push((i+1) + ': ' + block.plainText.split(/\s+/).length + 'w ghScore=' + ghData.humanScore + (wasPadded ? ' PAD' : ''));
-          console.log('[humanize] ' + (i+1) + '/' + pBlocks.length + ': ghScore=' + ghData.humanScore + (wasPadded ? ' (padded)' : ''));
-        } else {
-          const errMsg = (ghData.error || ghData.description || ghData.message || '').substring(0, 80);
-          debugLog.push((i+1) + ': ERR=' + errMsg);
-          console.error('[humanize] ' + (i+1) + ' error:', errMsg);
+          lastEnd = tm.index + tm[0].length;
         }
-      } catch (e) {
-        debugLog.push((i+1) + ': FETCH_ERR=' + e.message);
+        if (lastEnd < block.innerHtml.length) {
+          textRuns.push({ start: lastEnd, end: block.innerHtml.length, text: block.innerHtml.substring(lastEnd) });
+        }
+        // Apply humanization to text runs (reverse order to preserve positions)
+        for (let r = textRuns.length - 1; r >= 0; r--) {
+          const run = textRuns[r];
+          if (run.text.trim().length < 10) continue;
+          const humRun = humanizeParagraphText(run.text, i + r);
+          if (humRun !== run.text) {
+            newInner = newInner.substring(0, run.start) + humRun + newInner.substring(run.end);
+          }
+        }
+        block.humanized = null; // stored in newInner
+        block.newInnerHtml = newInner;
       }
     }
 
-    // 3. BRIEF FIDELITY PASS — Use Haiku to restore any brief-critical content
-    // that GPTHuman changed, while keeping GPTHuman's natural phrasing.
-    // Minimal intervention: only fix factual/message deviations.
-    console.log('[humanize] Starting brief fidelity pass with Haiku...');
-    let haikuFixed = 0;
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
-
-    if (anthropicKey) {
-      for (let i = 0; i < pBlocks.length; i++) {
-        const block = pBlocks[i];
-        if (!block.humanized || block.humanized === block.plainText) continue;
-
-        try {
-          const haikuResp = await anthropic.messages.create({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 1000,
-            messages: [{
-              role: 'user',
-              content: `You are a copy editor for an Australian fencing company. Below is the ORIGINAL paragraph from the approved client brief, and a DRAFT rewrite.
-
-ORIGINAL (from brief — these facts and messages are mandatory):
-${block.plainText}
-
-DRAFT (has natural phrasing but may have changed key messages):
-${block.humanized}
-
-Your job:
-1. Keep the DRAFT's natural phrasing and sentence structure as much as possible
-2. Restore ANY facts, services, locations, or key selling points from the ORIGINAL that the DRAFT changed, removed, or added incorrectly
-3. Do NOT add content that wasn't in the ORIGINAL
-4. Do NOT remove content that was in both ORIGINAL and DRAFT
-5. Use Australian English (colour, organisation, centre, etc.)
-6. Professional trade industry tone — no slang, no American expressions
-7. Change the MINIMUM number of words — only fix what's factually wrong
-
-Return ONLY the corrected paragraph. No explanation.`
-            }]
-          });
-
-          const fixed = haikuResp.content[0].text.trim();
-          if (fixed.length > 10 && fixed !== block.humanized) {
-            // Apply AU English again to be safe
-            block.humanized = applyAuEnglish(fixed);
-            haikuFixed++;
-            debugLog.push((i+1) + ': HAIKU_FIXED');
-          }
-        } catch (e) {
-          debugLog.push((i+1) + ': HAIKU_ERR=' + e.message.substring(0, 60));
-          console.error('[humanize] Haiku fix error para ' + (i+1) + ':', e.message);
-        }
-      }
-      console.log('[humanize] Haiku fixed ' + haikuFixed + ' paragraphs');
-    } else {
-      debugLog.push('SKIP_HAIKU: no ANTHROPIC_API_KEY');
-    }
-
-    // 4. POSITION-BASED REPLACEMENT — work backwards to preserve indices
-    const toReplace = pBlocks.filter(b => b.humanized).sort((a, b) => b.startIdx - a.startIdx);
+    // Position-based replacement — backwards
     let resultHtml = content_html;
     let replacedCount = 0;
 
-    for (const block of toReplace) {
+    for (let i = pBlocks.length - 1; i >= 0; i--) {
+      const block = pBlocks[i];
       let newPTag;
-      if (!block.hasInline) {
+      if (block.hasInline && block.newInnerHtml && block.newInnerHtml !== block.innerHtml) {
+        newPTag = '<p' + block.attrs + '>' + block.newInnerHtml + '</p>';
+      } else if (!block.hasInline && block.humanized && block.humanized !== block.plainText) {
         newPTag = '<p' + block.attrs + '>' + block.humanized + '</p>';
       } else {
-        // Preserve inline tags via sentence-level find/replace
-        const origSents = block.plainText.match(/[^.!?]+[.!?]+/g) || [block.plainText];
-        const humSents = block.humanized.match(/[^.!?]+[.!?]+/g) || [block.humanized];
-        let newInner = block.innerHtml;
-        let anyChange = false;
-        for (let si = 0; si < Math.min(origSents.length, humSents.length); si++) {
-          const os = origSents[si].trim();
-          const hs = humSents[si].trim();
-          if (os !== hs && os.length >= 10 && newInner.includes(os)) {
-            newInner = newInner.replace(os, hs);
-            anyChange = true;
-          }
-        }
-        if (!anyChange) continue;
-        newPTag = '<p' + block.attrs + '>' + newInner + '</p>';
+        continue;
       }
       resultHtml = resultHtml.substring(0, block.startIdx) + newPTag + resultHtml.substring(block.endIdx);
       replacedCount++;
     }
 
     const contentChanged = resultHtml !== content_html;
-    debugLog.push('replaced=' + replacedCount + '/' + pBlocks.length + ' haikuFixed=' + haikuFixed + ' changed=' + contentChanged);
-    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' haikuFixed=' + haikuFixed + ' changed=' + contentChanged + ' credits=' + totalCredits);
+    debugLog.push('replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged);
+    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged);
 
-    // 4. Save to DB if content changed
+    // Save to DB if content changed
     if (page_id && contentChanged) {
       if (build_id) {
         await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND build_id=$3', [resultHtml, page_id, build_id]);
@@ -3934,9 +3938,9 @@ Return ONLY the corrected paragraph. No explanation.`
 
     res.json({
       content_html: resultHtml,
-      human_score: lastScore,
-      credits_used: totalCredits,
-      credit_balance: lastBalance,
+      human_score: null,
+      credits_used: 0,
+      credit_balance: null,
       debug: { paragraphs: pBlocks.length, replaced: replacedCount, changed: contentChanged, log: debugLog }
     });
   } catch (err) {
