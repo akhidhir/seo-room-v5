@@ -11030,13 +11030,22 @@
         setRunning(true);
         setRateLimitMsg('');
         try {
-          await api(`/projects/${project.id}/internal-links/audit`, { method: 'POST', body: { force } });
-          setTimeout(loadData, 2000);
+          const r = await api(`/projects/${project.id}/internal-links/audit`, { method: 'POST', body: { force } });
+          if (r.ok || r.status === 'running') {
+            const poll = () => {
+              api(`/projects/${project.id}/internal-links/audit`).then(d => {
+                setAudit(d);
+                if (d.status === 'running') setTimeout(poll, 3000);
+                else { setRunning(false); loadData(); }
+              }).catch(() => { setRunning(false); });
+            };
+            setTimeout(poll, 3000);
+          } else { setRunning(false); }
         } catch (err) {
+          setRunning(false);
           if (err.canForce) { setRateLimitMsg(err.message); }
           else alert(err.message);
         }
-        setRunning(false);
       };
 
       const updateSuggestion = async (id, status) => {
