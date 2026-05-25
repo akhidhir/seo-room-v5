@@ -1095,6 +1095,61 @@ async function initDb() {
     `);
     await client.query(`INSERT INTO agency_settings (key, value) VALUES ('monthly_budget', '0') ON CONFLICT DO NOTHING`).catch(() => {});
 
+    // Internal linking tables
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS internal_link_graph (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        source_url TEXT NOT NULL,
+        source_title TEXT DEFAULT '',
+        target_url TEXT NOT NULL,
+        target_title TEXT DEFAULT '',
+        anchor_text TEXT DEFAULT '',
+        context_snippet TEXT DEFAULT '',
+        link_type TEXT DEFAULT 'content',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, source_url, target_url, anchor_text)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ilg_project ON internal_link_graph(project_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ilg_source ON internal_link_graph(project_id, source_url)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ilg_target ON internal_link_graph(project_id, target_url)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS internal_link_suggestions (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        source_url TEXT NOT NULL,
+        source_title TEXT DEFAULT '',
+        target_url TEXT NOT NULL,
+        target_title TEXT DEFAULT '',
+        suggested_anchor TEXT DEFAULT '',
+        context_sentence TEXT DEFAULT '',
+        reason TEXT DEFAULT '',
+        priority TEXT DEFAULT 'medium',
+        status TEXT DEFAULT 'pending',
+        applied_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ils_project ON internal_link_suggestions(project_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_ils_status ON internal_link_suggestions(project_id, status)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS internal_link_audit_cache (
+        project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'idle',
+        total_pages INTEGER DEFAULT 0,
+        total_links INTEGER DEFAULT 0,
+        orphan_pages JSONB DEFAULT '[]',
+        stats JSONB DEFAULT '{}',
+        suggestions_count INTEGER DEFAULT 0,
+        error_message TEXT,
+        audited_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
     throw e;
@@ -33110,7 +33165,457 @@ app.put('/api/agency/budget', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ==================== 16. STARTUP ====================
+// ==================== 16. INTERNAL LINKING ====================
+
+// Run internal link audit — crawl pages, build link graph, find orphans, generate AI suggestions
+app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const force = req.body?.force === true;
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    if (!project.domain) return res.status(400).json({ error: 'Project domain is required' });
+
+    // Rate limit: 1/month
+    const limit = await checkMonthlyAuditLimit(projectId, 'internal_links', force);
+    if (limit.limited) return res.status(429).json({ error: `Internal link audit already run this month. Next available in ${limit.daysUntil} days.`, canForce: true });
+
+    // Mark running
+    await pool.query(`
+      INSERT INTO internal_link_audit_cache (project_id, status, updated_at)
+      VALUES ($1, 'running', NOW())
+      ON CONFLICT (project_id) DO UPDATE SET status='running', error_message=NULL, updated_at=NOW()
+    `, [projectId]);
+
+    res.json({ ok: true, status: 'running' });
+
+    // Background processing
+    (async () => {
+      try {
+        const baseUrl = project.domain.replace(/\/$/, '');
+        const wpUrl = project.wp_url || baseUrl;
+
+        // 1. Discover pages
+        const authHeaders = getWpAuthHeaders(project);
+        const pages = await discoverPages(baseUrl, wpUrl, authHeaders);
+        console.log(`[internal-links] Discovered ${pages.length} pages for project ${projectId}`);
+        if (!pages.length) {
+          await pool.query(`UPDATE internal_link_audit_cache SET status='completed', total_pages=0, total_links=0, orphan_pages='[]', stats='{}', suggestions_count=0, audited_at=NOW(), updated_at=NOW() WHERE project_id=$1`, [projectId]);
+          return;
+        }
+
+        // 2. Crawl each page and extract internal links
+        const domain = new URL(baseUrl).hostname;
+        const linkGraph = []; // {source_url, source_title, target_url, anchor_text, context_snippet}
+        const pageData = []; // {url, title, wordCount, outbound[], inbound[]}
+        const pageMap = new Map(); // url -> {title, outbound, inbound, wordCount}
+
+        for (const page of pages) {
+          const url = page.url;
+          try {
+            const resp = await fetch(url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
+            if (!resp.ok) continue;
+            const html = await resp.text();
+            const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            const title = titleMatch ? titleMatch[1].trim() : page.title;
+
+            // Word count (strip HTML)
+            const textContent = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            const wordCount = textContent.split(/\s+/).length;
+
+            // Extract internal links from content area
+            const bodyMatch = html.match(/<body[\s\S]*?<\/body>/i);
+            const body = bodyMatch ? bodyMatch[0] : html;
+            // Remove nav, header, footer to focus on content links
+            const content = body
+              .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+              .replace(/<header[\s\S]*?<\/header>/gi, '')
+              .replace(/<footer[\s\S]*?<\/footer>/gi, '');
+
+            const linkRegex = /<a\s[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+            let match;
+            const outbound = [];
+            while ((match = linkRegex.exec(content)) !== null) {
+              let href = match[1].trim();
+              const anchorHtml = match[2];
+              const anchor = anchorHtml.replace(/<[^>]+>/g, '').trim();
+              if (!anchor || anchor.length > 200) continue;
+
+              // Resolve relative URLs
+              try {
+                const resolved = new URL(href, url);
+                if (resolved.hostname !== domain) continue; // external
+                href = resolved.href.replace(/\/$/, '');
+              } catch { continue; }
+
+              // Skip assets, anchors, etc
+              if (href.match(/\.(jpg|jpeg|png|gif|svg|pdf|css|js|xml|zip)$/i)) continue;
+              if (href === url.replace(/\/$/, '')) continue; // self-link
+
+              // Get surrounding context (sentence containing the link)
+              const plainContext = content.substring(Math.max(0, match.index - 100), match.index + match[0].length + 100)
+                .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+              outbound.push({ target_url: href, anchor_text: anchor, context_snippet: plainContext.substring(0, 250) });
+              linkGraph.push({
+                source_url: url.replace(/\/$/, ''),
+                source_title: title,
+                target_url: href,
+                anchor_text: anchor,
+                context_snippet: plainContext.substring(0, 250)
+              });
+            }
+
+            pageMap.set(url.replace(/\/$/, ''), { title, outbound, inbound: [], wordCount });
+          } catch (crawlErr) {
+            console.log(`[internal-links] Failed to crawl ${url}: ${crawlErr.message}`);
+          }
+        }
+
+        // 3. Build inbound links
+        for (const link of linkGraph) {
+          const target = pageMap.get(link.target_url);
+          if (target) {
+            target.inbound.push({ source_url: link.source_url, anchor_text: link.anchor_text });
+          }
+        }
+
+        // 4. Find orphan pages (0 inbound internal links, excluding homepage)
+        const orphanPages = [];
+        const pageStats = [];
+        for (const [url, data] of pageMap) {
+          const isHome = url === baseUrl || url === baseUrl.replace(/\/$/, '') || url.replace(/https?:\/\//, '').replace(/\/$/, '') === domain;
+          pageStats.push({
+            url,
+            title: data.title,
+            outbound_count: data.outbound.length,
+            inbound_count: data.inbound.length,
+            word_count: data.wordCount,
+            is_orphan: !isHome && data.inbound.length === 0
+          });
+          if (!isHome && data.inbound.length === 0) {
+            orphanPages.push({ url, title: data.title, word_count: data.wordCount });
+          }
+        }
+
+        // 5. Save link graph to DB (clear old, insert new)
+        await pool.query('DELETE FROM internal_link_graph WHERE project_id=$1', [projectId]);
+        for (const link of linkGraph) {
+          await pool.query(`
+            INSERT INTO internal_link_graph (project_id, source_url, source_title, target_url, anchor_text, context_snippet)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (project_id, source_url, target_url, anchor_text) DO NOTHING
+          `, [projectId, link.source_url, link.source_title, link.target_url, link.anchor_text, link.context_snippet]);
+        }
+
+        // 6. Generate AI suggestions via Haiku
+        const suggestions = [];
+        if (pageMap.size >= 2) {
+          // Build page summary for AI
+          const pageSummaries = [];
+          for (const [url, data] of pageMap) {
+            pageSummaries.push({
+              url,
+              title: data.title,
+              outbound: data.outbound.length,
+              inbound: data.inbound.length,
+              outbound_targets: data.outbound.map(l => l.target_url).slice(0, 10),
+              word_count: data.wordCount
+            });
+          }
+
+          try {
+            const aiResp = await anthropic.messages.create({
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 4000,
+              messages: [{
+                role: 'user',
+                content: `You are an internal linking SEO expert. Analyze this website's internal link structure and suggest new internal links that would improve SEO.
+
+Business: ${project.business_name || project.name}
+Industry: ${project.industry || 'unknown'}
+Domain: ${domain}
+
+Current pages and their link counts:
+${JSON.stringify(pageSummaries, null, 2)}
+
+Orphan pages (no inbound links): ${JSON.stringify(orphanPages.map(p => p.url))}
+
+Rules:
+- Focus on linking related content together (topical relevance)
+- Prioritize orphan pages — they need inbound links most
+- Suggest specific anchor text that includes relevant keywords
+- Include the sentence/context where the link should be inserted
+- Don't suggest links that already exist
+- Suggest 5-15 links maximum
+- Priority: high (orphan pages, cornerstone), medium (related topics), low (nice-to-have)
+
+Return ONLY valid JSON array:
+[{
+  "source_url": "https://...",
+  "source_title": "Page title",
+  "target_url": "https://...",
+  "target_title": "Target page title",
+  "suggested_anchor": "anchor text for the link",
+  "context_sentence": "The sentence where this link should be inserted, with [anchor text] marked in brackets",
+  "reason": "Why this link helps SEO",
+  "priority": "high|medium|low"
+}]`
+              }]
+            });
+
+            const aiText = aiResp.content[0]?.text || '[]';
+            // Extract JSON from response
+            const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              for (const s of parsed) {
+                if (s.source_url && s.target_url) {
+                  suggestions.push(s);
+                }
+              }
+            }
+          } catch (aiErr) {
+            console.error(`[internal-links] AI suggestion error: ${aiErr.message}`);
+          }
+        }
+
+        // 7. Save suggestions (clear old pending, keep applied)
+        await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed')`, [projectId]);
+        for (const s of suggestions) {
+          await pool.query(`
+            INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+          `, [projectId, s.source_url, s.source_title || '', s.target_url, s.target_title || '', s.suggested_anchor || '', s.context_sentence || '', s.reason || '', s.priority || 'medium']);
+        }
+
+        // 8. Compute stats
+        const stats = {
+          total_pages: pageMap.size,
+          total_internal_links: linkGraph.length,
+          avg_outbound: pageMap.size ? (linkGraph.length / pageMap.size).toFixed(1) : 0,
+          orphan_count: orphanPages.length,
+          pages_with_few_links: pageStats.filter(p => p.outbound_count < 3 && !p.is_orphan).length,
+          most_linked: [...pageMap.entries()]
+            .map(([url, d]) => ({ url, title: d.title, inbound: d.inbound.length }))
+            .sort((a, b) => b.inbound - a.inbound)
+            .slice(0, 5),
+          least_linked: [...pageMap.entries()]
+            .map(([url, d]) => ({ url, title: d.title, inbound: d.inbound.length }))
+            .sort((a, b) => a.inbound - b.inbound)
+            .slice(0, 5),
+          page_details: pageStats
+        };
+
+        // 9. Save audit record
+        await pool.query(`
+          INSERT INTO audits (project_id, pillar, status, report, completed_at)
+          VALUES ($1, 'internal_links', 'completed', $2, NOW())
+        `, [projectId, JSON.stringify({ stats, orphan_pages: orphanPages, suggestions_count: suggestions.length })]);
+
+        // 10. Update cache
+        await pool.query(`
+          UPDATE internal_link_audit_cache
+          SET status='completed', total_pages=$2, total_links=$3, orphan_pages=$4, stats=$5, suggestions_count=$6, audited_at=NOW(), updated_at=NOW()
+          WHERE project_id=$1
+        `, [projectId, pageMap.size, linkGraph.length, JSON.stringify(orphanPages), JSON.stringify(stats), suggestions.length]);
+
+        console.log(`[internal-links] Audit complete for project ${projectId}: ${pageMap.size} pages, ${linkGraph.length} links, ${orphanPages.length} orphans, ${suggestions.length} suggestions`);
+
+      } catch (bgErr) {
+        console.error(`[internal-links] Background audit error: ${bgErr.message}`);
+        await pool.query(`UPDATE internal_link_audit_cache SET status='error', error_message=$2, updated_at=NOW() WHERE project_id=$1`, [projectId, bgErr.message]);
+      }
+    })();
+
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get internal link audit status + results
+app.get('/api/projects/:projectId/internal-links/audit', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const cache = await pool.query('SELECT * FROM internal_link_audit_cache WHERE project_id=$1', [projectId]);
+    if (!cache.rows.length) return res.json({ status: 'idle', total_pages: 0, total_links: 0, orphan_pages: [], stats: {}, suggestions_count: 0 });
+    res.json(cache.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get link graph for a project
+app.get('/api/projects/:projectId/internal-links/graph', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const links = await pool.query('SELECT * FROM internal_link_graph WHERE project_id=$1 ORDER BY source_url', [projectId]);
+    res.json({ links: links.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get suggestions
+app.get('/api/projects/:projectId/internal-links/suggestions', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const status = req.query.status || 'pending';
+  try {
+    const q = status === 'all'
+      ? await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 ORDER BY priority DESC, created_at', [projectId])
+      : await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 AND status=$2 ORDER BY priority DESC, created_at', [projectId, status]);
+    res.json({ suggestions: q.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Approve/dismiss suggestion
+app.put('/api/projects/:projectId/internal-links/suggestions/:id', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body; // 'approved' or 'dismissed'
+  if (!['approved', 'dismissed'].includes(status)) return res.status(400).json({ error: 'Status must be approved or dismissed' });
+  try {
+    await pool.query('UPDATE internal_link_suggestions SET status=$1 WHERE id=$2', [status, id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Bulk approve/dismiss
+app.post('/api/projects/:projectId/internal-links/suggestions/bulk', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { ids, status } = req.body;
+  if (!['approved', 'dismissed'].includes(status) || !Array.isArray(ids)) return res.status(400).json({ error: 'Invalid request' });
+  try {
+    await pool.query('UPDATE internal_link_suggestions SET status=$1 WHERE project_id=$2 AND id = ANY($3)', [status, projectId, ids]);
+    res.json({ ok: true, updated: ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Apply approved suggestions — insert links into WordPress pages
+app.post('/api/projects/:projectId/internal-links/apply', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { suggestion_ids } = req.body; // optional: specific IDs, otherwise all approved
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const wpUrl = project.wp_url || project.domain;
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Get approved suggestions to apply
+    let suggestions;
+    if (suggestion_ids?.length) {
+      suggestions = await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 AND id = ANY($2) AND status=$3', [projectId, suggestion_ids, 'approved']);
+    } else {
+      suggestions = await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 AND status=$2', [projectId, 'approved']);
+    }
+
+    if (!suggestions.rows.length) return res.json({ ok: true, applied: 0, message: 'No approved suggestions to apply' });
+
+    // Group by source page
+    const bySource = {};
+    for (const s of suggestions.rows) {
+      if (!bySource[s.source_url]) bySource[s.source_url] = [];
+      bySource[s.source_url].push(s);
+    }
+
+    let applied = 0;
+    let failed = 0;
+    const results = [];
+
+    for (const [sourceUrl, pageSuggestions] of Object.entries(bySource)) {
+      try {
+        // Find WP page/post ID from URL
+        const slug = sourceUrl.replace(project.domain?.replace(/\/$/, ''), '').replace(/^\/|\/$/g, '') || '';
+        if (!slug) { results.push({ url: sourceUrl, status: 'skipped', reason: 'Homepage — manual edit recommended' }); continue; }
+
+        // Try pages first, then posts
+        let wpPage = null;
+        let wpType = 'pages';
+        for (const type of ['pages', 'posts']) {
+          try {
+            const searchResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug.split('/').pop())}&_fields=id,content,title,slug`, {
+              headers: authHeaders
+            });
+            if (searchResp.ok) {
+              const results = await searchResp.json();
+              if (results.length) { wpPage = results[0]; wpType = type; break; }
+            }
+          } catch {}
+        }
+
+        if (!wpPage) { results.push({ url: sourceUrl, status: 'skipped', reason: 'WP page not found' }); failed += pageSuggestions.length; continue; }
+
+        let content = wpPage.content?.rendered || wpPage.content?.raw || '';
+
+        // Snapshot before write
+        for (const s of pageSuggestions) {
+          // Insert link: find anchor text in content and wrap with <a> tag
+          const anchor = s.suggested_anchor;
+          const targetUrl = s.target_url;
+
+          // Check if link already exists
+          if (content.includes(`href="${targetUrl}"`) || content.includes(`href="${targetUrl}/"`)) {
+            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'skipped', reason: 'Link already exists' });
+            await pool.query(`UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1`, [s.id]);
+            applied++;
+            continue;
+          }
+
+          // Find the anchor text in content (case-insensitive, whole word)
+          const anchorRegex = new RegExp(`(?<!<a[^>]*>)(${anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?![^<]*<\/a>)`, 'i');
+          const anchorMatch = content.match(anchorRegex);
+
+          if (anchorMatch) {
+            // Save to wp_change_history before modifying
+            await pool.query(`
+              INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+              VALUES ($1, $2, $3, $4, 'internal_link', 'content', $5, $6)
+            `, [projectId, wpPage.id, sourceUrl, wpPage.title?.rendered || '', content.substring(0, 500), `Added link: "${anchor}" → ${targetUrl}`]);
+
+            // Replace first occurrence only
+            content = content.replace(anchorRegex, `<a href="${targetUrl}">${anchorMatch[1]}</a>`);
+
+            await pool.query(`UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1`, [s.id]);
+            applied++;
+            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'applied', anchor, target: targetUrl });
+          } else {
+            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'failed', reason: `Anchor text "${anchor}" not found in page content` });
+            failed++;
+          }
+        }
+
+        // Write updated content back to WordPress
+        if (results.some(r => r.status === 'applied' && r.url === sourceUrl)) {
+          const updateResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/wp/v2/${wpType}/${wpPage.id}`, {
+            method: 'POST',
+            headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content })
+          });
+          if (!updateResp.ok) {
+            console.error(`[internal-links] Failed to update WP page ${wpPage.id}: ${updateResp.status}`);
+          }
+        }
+      } catch (pageErr) {
+        console.error(`[internal-links] Error applying to ${sourceUrl}: ${pageErr.message}`);
+        failed += pageSuggestions.length;
+        results.push({ url: sourceUrl, status: 'error', reason: pageErr.message });
+      }
+    }
+
+    res.json({ ok: true, applied, failed, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete all internal link data for a project
+app.delete('/api/projects/:projectId/internal-links', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    await pool.query('DELETE FROM internal_link_graph WHERE project_id=$1', [projectId]);
+    await pool.query('DELETE FROM internal_link_suggestions WHERE project_id=$1', [projectId]);
+    await pool.query('DELETE FROM internal_link_audit_cache WHERE project_id=$1', [projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== 17. STARTUP ====================
 
 async function start() {
   try {

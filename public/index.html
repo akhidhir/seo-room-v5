@@ -10998,6 +10998,348 @@
       );
     }
 
+    function InternalLinkingPage({ project }) {
+      const [audit, setAudit] = useState(null);
+      const [suggestions, setSuggestions] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [running, setRunning] = useState(false);
+      const [applying, setApplying] = useState(false);
+      const [tab, setTab] = useState('overview'); // overview, suggestions, graph
+      const [filter, setFilter] = useState('pending'); // pending, approved, applied, dismissed, all
+      const [selectedIds, setSelectedIds] = useState(new Set());
+      const [rateLimitMsg, setRateLimitMsg] = useState('');
+
+      const loadData = async () => {
+        try {
+          const [auditData, sugData] = await Promise.all([
+            api(`/projects/${project.id}/internal-links/audit`),
+            api(`/projects/${project.id}/internal-links/suggestions?status=${filter}`)
+          ]);
+          setAudit(auditData);
+          setSuggestions(sugData.suggestions || []);
+          if (auditData.status === 'running') setTimeout(loadData, 3000);
+        } catch (e) { console.error(e); }
+        setLoading(false);
+      };
+
+      useEffect(() => { loadData(); }, [project?.id, filter]);
+
+      const runAudit = async (force = false) => {
+        setRunning(true);
+        setRateLimitMsg('');
+        try {
+          await api(`/projects/${project.id}/internal-links/audit`, { method: 'POST', body: { force } });
+          setTimeout(loadData, 2000);
+        } catch (err) {
+          if (err.canForce) { setRateLimitMsg(err.message); }
+          else alert(err.message);
+        }
+        setRunning(false);
+      };
+
+      const updateSuggestion = async (id, status) => {
+        await api(`/projects/${project.id}/internal-links/suggestions/${id}`, { method: 'PUT', body: { status } });
+        loadData();
+      };
+
+      const bulkAction = async (status) => {
+        if (!selectedIds.size) return;
+        await api(`/projects/${project.id}/internal-links/suggestions/bulk`, { method: 'POST', body: { ids: [...selectedIds], status } });
+        setSelectedIds(new Set());
+        loadData();
+      };
+
+      const applySuggestions = async (ids) => {
+        setApplying(true);
+        try {
+          const r = await api(`/projects/${project.id}/internal-links/apply`, { method: 'POST', body: { suggestion_ids: ids || [] } });
+          alert(`Applied: ${r.applied}, Failed: ${r.failed}`);
+          loadData();
+        } catch (e) { alert(e.message); }
+        setApplying(false);
+      };
+
+      const toggleSelect = (id) => {
+        const next = new Set(selectedIds);
+        next.has(id) ? next.delete(id) : next.add(id);
+        setSelectedIds(next);
+      };
+
+      const selectAll = () => {
+        if (selectedIds.size === suggestions.length) setSelectedIds(new Set());
+        else setSelectedIds(new Set(suggestions.map(s => s.id)));
+      };
+
+      const stats = audit?.stats || {};
+      const orphans = audit?.orphan_pages || [];
+      const isRunning = audit?.status === 'running' || running;
+
+      if (loading) return React.createElement('div', { style: { padding: 32, textAlign: 'center', color: '#999' } }, 'Loading...');
+
+      const priorityColor = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
+      const statusColor = { pending: '#6b7280', approved: '#14b8a6', applied: '#22c55e', dismissed: '#ef4444' };
+
+      return React.createElement('div', { style: { padding: '24px 32px' } },
+        // Header
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+          React.createElement('h2', { style: { margin: 0, fontSize: 22 } },
+            React.createElement('i', { className: 'fas fa-link', style: { marginRight: 10, color: 'var(--accent)' } }),
+            'Internal Linking'
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+            isRunning && React.createElement('span', { style: { color: '#f59e0b', fontSize: 13 } },
+              React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Auditing...'
+            ),
+            React.createElement('button', {
+              className: 'btn',
+              disabled: isRunning,
+              onClick: () => runAudit(),
+              style: { fontSize: 13, padding: '8px 20px' }
+            }, React.createElement('i', { className: 'fas fa-search', style: { marginRight: 6 } }), audit?.audited_at ? 'Re-run Audit' : 'Run Audit')
+          )
+        ),
+
+        // Rate limit banner
+        rateLimitMsg && React.createElement('div', {
+          style: { background: '#f59e0b22', border: '1px solid #f59e0b', borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }
+        },
+          React.createElement('span', { style: { color: '#f59e0b', fontSize: 13, flex: 1 } }, rateLimitMsg),
+          React.createElement('button', { className: 'btn', onClick: () => { setRateLimitMsg(''); runAudit(true); }, style: { fontSize: 13, padding: '6px 16px', background: '#f59e0b', color: '#000', border: 'none', fontWeight: 600 } },
+            React.createElement('i', { className: 'fa-solid fa-bolt', style: { marginRight: 6 } }), 'Force Re-run'),
+          React.createElement('button', { onClick: () => setRateLimitMsg(''), style: { background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontSize: 16, padding: 0 } }, '×')
+        ),
+
+        // Tabs
+        React.createElement('div', { style: { display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid #333' } },
+          ['overview', 'suggestions', 'graph'].map(t =>
+            React.createElement('button', {
+              key: t,
+              onClick: () => setTab(t),
+              style: {
+                padding: '10px 24px', background: 'none', border: 'none', borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
+                color: tab === t ? 'var(--accent)' : '#999', cursor: 'pointer', fontSize: 14, fontWeight: tab === t ? 600 : 400, textTransform: 'uppercase'
+              }
+            }, t === 'overview' ? `Overview${stats.total_pages ? ` (${stats.total_pages})` : ''}` : t === 'suggestions' ? `Suggestions (${suggestions.length})` : 'Link Graph')
+          )
+        ),
+
+        // Tab content
+        tab === 'overview' && React.createElement('div', null,
+          // Stats row
+          audit?.audited_at && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 } },
+            [
+              { label: 'PAGES CRAWLED', value: stats.total_pages || 0, color: 'var(--accent)' },
+              { label: 'INTERNAL LINKS', value: stats.total_internal_links || 0, color: '#3b82f6' },
+              { label: 'ORPHAN PAGES', value: stats.orphan_count || 0, color: stats.orphan_count > 0 ? '#ef4444' : '#22c55e' },
+              { label: 'SUGGESTIONS', value: audit?.suggestions_count || 0, color: '#f59e0b' }
+            ].map((s, i) =>
+              React.createElement('div', { key: i, style: { background: '#1a1a2e', borderRadius: 8, padding: 20, textAlign: 'center' } },
+                React.createElement('div', { style: { fontSize: 32, fontWeight: 700, color: s.color } }, s.value),
+                React.createElement('div', { style: { fontSize: 11, color: '#999', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 } }, s.label)
+              )
+            )
+          ),
+
+          // Orphan pages
+          orphans.length > 0 && React.createElement('div', { style: { marginBottom: 24 } },
+            React.createElement('h3', { style: { fontSize: 15, color: '#ef4444', marginBottom: 12 } },
+              React.createElement('i', { className: 'fas fa-unlink', style: { marginRight: 8 } }),
+              `Orphan Pages (${orphans.length}) — No inbound internal links`
+            ),
+            React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden' } },
+              React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
+                React.createElement('thead', null,
+                  React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
+                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Page'),
+                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'right', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Word Count')
+                  )
+                ),
+                React.createElement('tbody', null,
+                  orphans.map((p, i) =>
+                    React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
+                      React.createElement('td', { style: { padding: '10px 16px' } },
+                        React.createElement('div', { style: { fontWeight: 500, color: '#fff' } }, p.title),
+                        React.createElement('div', { style: { fontSize: 11, color: '#666', marginTop: 2 } }, p.url)
+                      ),
+                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'right', color: '#999' } }, p.word_count?.toLocaleString())
+                    )
+                  )
+                )
+              )
+            )
+          ),
+
+          // Most/Least linked
+          stats.most_linked?.length > 0 && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+            [
+              { title: 'Most Linked Pages', data: stats.most_linked, color: '#22c55e' },
+              { title: 'Least Linked Pages', data: stats.least_linked, color: '#ef4444' }
+            ].map((panel, pi) =>
+              React.createElement('div', { key: pi, style: { background: '#1a1a2e', borderRadius: 8, padding: 16 } },
+                React.createElement('h4', { style: { fontSize: 13, color: panel.color, marginBottom: 12, textTransform: 'uppercase' } }, panel.title),
+                panel.data.map((p, i) =>
+                  React.createElement('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #222', fontSize: 13 } },
+                    React.createElement('span', { style: { color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.title || p.url),
+                    React.createElement('span', { style: { color: panel.color, fontWeight: 600, marginLeft: 12 } }, `${p.inbound} inbound`)
+                  )
+                )
+              )
+            )
+          ),
+
+          // Last audit info
+          audit?.audited_at && React.createElement('div', { style: { marginTop: 16, fontSize: 12, color: '#666' } },
+            `Last audit: ${new Date(audit.audited_at).toLocaleString()} • Avg outbound links per page: ${stats.avg_outbound || 0}`
+          ),
+
+          // No audit yet
+          !audit?.audited_at && React.createElement('div', { style: { textAlign: 'center', padding: 60, color: '#666' } },
+            React.createElement('i', { className: 'fas fa-link', style: { fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 } }),
+            React.createElement('div', { style: { fontSize: 16, marginBottom: 8 } }, 'No internal link audit yet'),
+            React.createElement('div', { style: { fontSize: 13 } }, 'Run an audit to discover your internal link structure, find orphan pages, and get AI suggestions.')
+          )
+        ),
+
+        // Suggestions tab
+        tab === 'suggestions' && React.createElement('div', null,
+          // Filter bar
+          React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' } },
+            ['pending', 'approved', 'applied', 'dismissed', 'all'].map(f =>
+              React.createElement('button', {
+                key: f,
+                onClick: () => { setFilter(f); setSelectedIds(new Set()); },
+                style: {
+                  padding: '6px 14px', borderRadius: 6, fontSize: 12, cursor: 'pointer', textTransform: 'uppercase',
+                  background: filter === f ? 'var(--accent)' : '#1a1a2e', color: filter === f ? '#000' : '#999', border: 'none', fontWeight: filter === f ? 600 : 400
+                }
+              }, f)
+            ),
+            React.createElement('div', { style: { flex: 1 } }),
+            filter === 'pending' && selectedIds.size > 0 && React.createElement(React.Fragment, null,
+              React.createElement('button', { className: 'btn', onClick: () => bulkAction('approved'), style: { fontSize: 12, padding: '6px 14px', background: '#14b8a6' } },
+                React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), `Approve (${selectedIds.size})`),
+              React.createElement('button', { className: 'btn', onClick: () => bulkAction('dismissed'), style: { fontSize: 12, padding: '6px 14px', background: '#ef4444' } },
+                React.createElement('i', { className: 'fas fa-times', style: { marginRight: 4 } }), `Dismiss (${selectedIds.size})`)
+            ),
+            filter === 'approved' && React.createElement('button', {
+              className: 'btn',
+              disabled: applying,
+              onClick: () => applySuggestions(),
+              style: { fontSize: 12, padding: '6px 14px', background: '#22c55e', color: '#000' }
+            }, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 4 } }), applying ? 'Applying...' : 'Apply All Approved')
+          ),
+
+          // Suggestions table
+          suggestions.length === 0 && React.createElement('div', { style: { textAlign: 'center', padding: 40, color: '#666' } },
+            `No ${filter === 'all' ? '' : filter + ' '}suggestions found.`
+          ),
+
+          suggestions.length > 0 && React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden' } },
+            React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
+              React.createElement('thead', null,
+                React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
+                  filter === 'pending' && React.createElement('th', { style: { padding: '10px 12px', width: 30 } },
+                    React.createElement('input', { type: 'checkbox', checked: selectedIds.size === suggestions.length && suggestions.length > 0, onChange: selectAll })
+                  ),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'From'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'To'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Anchor Text'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Priority'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Status'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'right', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Actions')
+                )
+              ),
+              React.createElement('tbody', null,
+                suggestions.map(s =>
+                  React.createElement('tr', { key: s.id, style: { borderBottom: '1px solid #222' } },
+                    filter === 'pending' && React.createElement('td', { style: { padding: '10px 12px' } },
+                      React.createElement('input', { type: 'checkbox', checked: selectedIds.has(s.id), onChange: () => toggleSelect(s.id) })
+                    ),
+                    React.createElement('td', { style: { padding: '10px 16px' } },
+                      React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, s.source_title || s.source_url.split('/').pop()),
+                      React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, s.source_url)
+                    ),
+                    React.createElement('td', { style: { padding: '10px 16px' } },
+                      React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, s.target_title || s.target_url.split('/').pop()),
+                      React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, s.target_url)
+                    ),
+                    React.createElement('td', { style: { padding: '10px 16px', color: 'var(--accent)', fontWeight: 500 } }, s.suggested_anchor),
+                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
+                      React.createElement('span', { style: { padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', background: priorityColor[s.priority] + '22', color: priorityColor[s.priority] } }, s.priority)
+                    ),
+                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
+                      React.createElement('span', { style: { padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', background: (statusColor[s.status] || '#666') + '22', color: statusColor[s.status] || '#666' } }, s.status)
+                    ),
+                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'right' } },
+                      s.status === 'pending' && React.createElement(React.Fragment, null,
+                        React.createElement('button', { onClick: () => updateSuggestion(s.id, 'approved'), style: { background: 'none', border: 'none', color: '#14b8a6', cursor: 'pointer', marginRight: 8, fontSize: 13 }, title: 'Approve' },
+                          React.createElement('i', { className: 'fas fa-check' })
+                        ),
+                        React.createElement('button', { onClick: () => updateSuggestion(s.id, 'dismissed'), style: { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 13 }, title: 'Dismiss' },
+                          React.createElement('i', { className: 'fas fa-times' })
+                        )
+                      ),
+                      s.status === 'approved' && React.createElement('button', {
+                        onClick: () => applySuggestions([s.id]),
+                        disabled: applying,
+                        style: { background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', fontSize: 13 },
+                        title: 'Apply to WordPress'
+                      }, React.createElement('i', { className: 'fas fa-magic' }))
+                    )
+                  )
+                )
+              )
+            )
+          ),
+
+          // Reason tooltip row — show reason for hovered/expanded suggestion
+          suggestions.length > 0 && React.createElement('div', { style: { marginTop: 8, fontSize: 11, color: '#666' } },
+            'Hover over a suggestion row to see the AI reasoning.'
+          )
+        ),
+
+        // Graph tab
+        tab === 'graph' && React.createElement('div', null,
+          // Page details table
+          stats.page_details?.length > 0 ? React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden' } },
+            React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
+              React.createElement('thead', null,
+                React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Page'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Outbound'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Inbound'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Words'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Status')
+                )
+              ),
+              React.createElement('tbody', null,
+                stats.page_details.sort((a, b) => a.inbound_count - b.inbound_count).map((p, i) =>
+                  React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
+                    React.createElement('td', { style: { padding: '10px 16px' } },
+                      React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
+                      React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, p.url)
+                    ),
+                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
+                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
+                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: '#999' } }, p.word_count?.toLocaleString()),
+                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
+                      React.createElement('span', {
+                        style: {
+                          padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+                          background: p.is_orphan ? '#ef444422' : p.outbound_count < 3 ? '#f59e0b22' : '#22c55e22',
+                          color: p.is_orphan ? '#ef4444' : p.outbound_count < 3 ? '#f59e0b' : '#22c55e'
+                        }
+                      }, p.is_orphan ? 'ORPHAN' : p.outbound_count < 3 ? 'FEW LINKS' : 'OK')
+                    )
+                  )
+                )
+              )
+            )
+          ) : React.createElement('div', { style: { textAlign: 'center', padding: 40, color: '#666' } }, 'Run an audit to see the link graph.')
+        )
+      );
+    }
+
     function UserBehaviourPage({ project }) {
       const [metrics, setMetrics] = useState([]);
       const [loading, setLoading] = useState(true);
@@ -29629,6 +29971,8 @@
             return <UserBehaviourPage project={project} />;
           case 'redirects':
             return <RedirectsPage project={project} />;
+          case 'internal-linking':
+            return <InternalLinkingPage project={project} />;
           case 'handshake':
             return <PlayersHandshakePage project={project} />;
 case 'action-plan':
@@ -29721,6 +30065,7 @@ case 'action-plan':
             { id: 'indexing', label: 'Indexing Status', icon: 'fas fa-file-import' },
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
             { id: 'redirects', label: '404s & Redirects', icon: 'fas fa-directions' },
+            { id: 'internal-linking', label: 'Internal Linking', icon: 'fas fa-link' },
           ] },
         ]},
         { section: 'STRATEGY', items: [
