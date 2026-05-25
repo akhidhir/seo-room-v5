@@ -19362,57 +19362,79 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
       ? await pool.query('SELECT page_name, slug FROM site_pages WHERE build_id=$1 AND id != $2', [briefBuildId, pageId])
       : await pool.query('SELECT page_name, slug FROM site_pages WHERE project_id=$1 AND id != $2', [page.project_id || projectId, pageId]);
 
-    const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
+    const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + (t.msg || t.text || '')).join('\n');
     const missingKwsText = (missing_keywords || []).map(k => typeof k === 'object' ? k.keyword : k).join(', ');
 
     // PATCH-BASED APPROACH: AI returns list of find/replace patches, server applies them
     // This guarantees HTML structure (headings, tags) is 100% preserved
     const originalHtml = page.draft_content || '';
 
+    // Calculate current stats for the AI
+    const plainText = originalHtml.replace(/<[^>]+>/g, '');
+    const currentWords = plainText.trim() ? plainText.trim().split(/\s+/).length : 0;
+    const fk = focus_keyword || page.focus_keyword || '';
+    const fkRegex = fk ? new RegExp(fk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi') : null;
+    const fkCount = fkRegex ? (plainText.match(fkRegex) || []).length : 0;
+    const currentMetaTitle = page.meta_title || '';
+    const currentMetaDesc = page.meta_description || '';
+
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
       messages: [{
         role: 'user',
-        content: `You are an SEO content optimizer. Analyze the content below and return a list of SMALL text patches to fix score issues. Do NOT return full HTML. Only return targeted find-and-replace patches.
+        content: `You are an SEO content optimizer. Return ONLY targeted find-and-replace patches to improve the score. Do NOT return full HTML.
 
 BUSINESS: ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}
 ${briefText ? '\nBRIEF:\n' + briefText + '\n' : ''}
-CURRENT CONTENT (score: ${content_score || 0}/100):
-${originalHtml}
 
-SCORE ISSUES TO FIX:
+CURRENT STATS:
+- Content Score: ${content_score || 0}/100
+- Word count: ${currentWords} (target: 1500)
+- Focus keyword: "${fk}" — appears ${fkCount} times (need 3-8)
+- Meta title: "${currentMetaTitle}" (${currentMetaTitle.length} chars, ideal: 50-60, MUST contain focus keyword)
+- Meta desc: "${currentMetaDesc}" (${currentMetaDesc.length} chars, ideal: 120-155, MUST contain focus keyword)
+
+SCORE ISSUES TO FIX (from dashboard — these are EXACT):
 ${issuesText || 'None'}
 
 MISSING KEYWORDS to weave in naturally:
 ${missingKwsText || 'None'}
 
-FOCUS KEYWORD: ${focus_keyword || page.focus_keyword || 'N/A'}
+TARGET KEYWORDS: ${(target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword).join(', ') || 'None'}
+
+CURRENT CONTENT:
+${originalHtml}
 
 AVAILABLE INTERNAL LINKS (use slug as href):
 ${allPages.rows.map(p => p.page_name + ' (' + p.slug + ')').join(', ')}
 
-Return ONLY a JSON object with this exact structure:
+Return ONLY a JSON object:
 {
   "patches": [
-    { "find": "exact text from the content to replace", "replace": "new text with keyword woven in" },
-    { "find": "another exact sentence or phrase", "replace": "modified version with internal link added" }
+    { "find": "exact text from content", "replace": "modified text with keyword woven in" }
   ],
-  "meta_title": "suggested meta title or null if current is fine",
-  "meta_description": "suggested meta description or null if current is fine",
-  "ai_notes": "brief summary of changes made"
+  "meta_title": "new title with focus keyword, 50-60 chars" or null,
+  "meta_description": "new desc with focus keyword, 120-155 chars" or null,
+  "ai_notes": "brief summary"
 }
 
+PRIORITY ORDER — fix these first:
+1. Focus keyword: weave "${fk}" into 2-3 more existing sentences naturally (need ${3 - fkCount} more uses minimum)
+2. Meta title: must be 50-60 chars AND contain "${fk}"
+3. Meta desc: must be 120-155 chars AND contain "${fk}"
+4. Word count: expand existing paragraphs with 1-2 extra sentences each (need ${Math.max(0, 1500 - currentWords)} more words)
+5. Missing keywords: weave into existing sentences
+
 CRITICAL RULES:
-1. Each "find" MUST be an EXACT substring that exists in the current content (copy-paste it exactly)
-2. Each "find" should be a full sentence or meaningful phrase (not a single word)
-3. The "replace" must keep the same meaning but weave in missing keywords or add internal links
-4. Do NOT touch any HTML heading tags (h1, h2, h3) — only modify paragraph/sentence text
-5. Keep changes minimal — 5 to 15 patches maximum
-6. Do NOT add new sections or paragraphs. Only modify existing text.
-7. If word count is low, expand existing sentences by appending 1-2 clauses
-8. Internal links: wrap existing words with <a href="/slug">existing words</a>
-9. NEVER include HTML tags in "find" — only plain text as it appears between tags`
+1. Each "find" MUST be an EXACT substring copied from the content (plain text only, no HTML tags)
+2. Each "find" should be a full sentence or meaningful phrase
+3. The "replace" keeps same meaning but weaves in keywords or expands
+4. Do NOT touch headings (H1, H2, H3) — only modify paragraph text
+5. 5 to 15 patches maximum
+6. Do NOT add new sections. Only expand/modify existing sentences.
+7. If adding words, expand EXISTING paragraphs — append sentences after current ones
+8. NEVER include HTML tags in "find" — only the text between tags`
       }]
     });
 
