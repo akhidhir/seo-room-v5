@@ -21895,7 +21895,6 @@
       const [rankings, setRankings] = useState([]);
       const [syncing, setSyncing] = useState(false);
       const [importing, setImporting] = useState(false);
-      const [rateLimitMsg, setRateLimitMsg] = useState('');
 
       const loadData = async () => {
         const [kwRes, rankRes] = await Promise.all([
@@ -21982,15 +21981,13 @@
         const kwCount = keywords.length;
         if (!force && !await confirmCost(project.id, 'serp_sync', { keywords: kwCount, provider: provider || 'serpapi' })) return;
         setSyncing(true);
-        setRateLimitMsg('');
         try {
           const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'serpapi', force } });
           if (r.ok) loadData(); else if (r.error) alert(r.error);
         } catch (err) {
           if (err.canForce) {
-            setRateLimitMsg(err.message);
             setSyncing(false);
-            return;
+            throw err; // re-throw for page-level handling
           }
           alert(err.message);
         }
@@ -22026,6 +22023,7 @@
       const [showCostConfirm, setShowCostConfirm] = useState(false);
       const [expandedAnalysis, setExpandedAnalysis] = useState(null);
       const [sentToActionPlan, setSentToActionPlan] = useState({});
+      const [rateLimitMsg, setRateLimitMsg] = useState('');
       const [importingMaps, setImportingMaps] = useState(false);
       const [serpProvider, setSerpProvider] = useState('serpapi');
       const [serpView, setSerpView] = useState('rankings');
@@ -22534,7 +22532,7 @@
                   <option value="serpapi">SerpAPI (GPS)</option>
                   <option value="dataforseo">DataForSEO (City)</option>
                 </select>
-                <button className="btn btn-primary" onClick={() => syncRanks(serpProvider)} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
+                <button className="btn btn-primary" onClick={() => { setRateLimitMsg(''); syncRanks(serpProvider).catch(err => { if (err.canForce) setRateLimitMsg(err.message); }); }} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
                   {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
                 </button>
               </div>
