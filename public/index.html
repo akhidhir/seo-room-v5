@@ -16197,6 +16197,13 @@
             onClick: handleImportCurrent, disabled: importingCurrent,
             style: { padding: '8px 16px', background: '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: importingCurrent ? 0.6 : 1 }
           }, React.createElement('i', { className: importingCurrent ? 'fas fa-spinner fa-spin' : 'fa-solid fa-download', style: { marginRight: 6 } }), importingCurrent ? 'Importing...' : 'Import Current Copy'),
+          // Optimise (light — fix score gaps only)
+          hasDraft && !isPublished && React.createElement('button', {
+            disabled: lightOptimising || !editContent,
+            onClick: handleLightOptimise,
+            title: 'Fix score issues (missing keywords, links, meta) while keeping original copy',
+            style: { padding: '8px 16px', background: lightOptimising ? 'var(--bg3)' : '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: lightOptimising ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: lightOptimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-chart-line', style: { marginRight: 6 } }), lightOptimising ? 'Optimising...' : 'Optimise'),
           // Rewrite
           !isPublished && hasDraft && React.createElement('button', {
             onClick: handleOptimise, disabled: optimising,
