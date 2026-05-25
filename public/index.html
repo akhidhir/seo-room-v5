@@ -15881,7 +15881,7 @@
               },
               stats: {
                 current: { words: scoreData ? scoreData.stats.words : 0 },
-                proposed: { words: newHtml.replace(/<[^>]+>/g, '').trim().split(/\s+/).length }
+                proposed: { words: newHtml.replace(/<[^>]+>/g, '').trim().split(/\s+/).length, h2s: (newHtml.match(/<h2/gi) || []).length, h3s: (newHtml.match(/<h3/gi) || []).length, links: (newHtml.match(/<a[\s>]/gi) || []).length }
               },
               item_id: page.id
             });
