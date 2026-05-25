@@ -15793,6 +15793,30 @@
       var [aiDetecting, setAiDetecting] = React.useState(false);
       var [humanizing, setHumanizing] = React.useState(false);
       var [lightOptimising, setLightOptimising] = React.useState(false);
+      var [suggestingKws, setSuggestingKws] = React.useState(false);
+
+      var handleSuggestKeywords = async function() {
+        if (suggestingKws) return;
+        setSuggestingKws(true);
+        try {
+          var data = await api(apiPrefix + '/site-pages/' + page.id + '/suggest-keywords', {
+            method: 'POST',
+            body: {
+              content_html: editContent,
+              focus_keyword: editMeta.focus_keyword,
+              existing_keywords: targetKeywords
+            }
+          });
+          if (data.keywords && data.keywords.length > 0) {
+            var newKws = targetKeywords.slice();
+            data.keywords.forEach(function(k) { if (newKws.indexOf(k) === -1) newKws.push(k); });
+            setTargetKeywords(newKws);
+          } else {
+            alert('No keyword suggestions found');
+          }
+        } catch(e) { alert('Error: ' + (e.message || e)); }
+        setSuggestingKws(false);
+      };
 
       var handleHumanize = async function() {
         if (!editContent || humanizing) return;
@@ -16654,6 +16678,8 @@
               pageTitle: page.page_name || page.page_title || '',
               pageUrl: page.page_url || page.published_url || '',
               onAddKeyword: function(kw) { if (targetKeywords.indexOf(kw) === -1) setTargetKeywords(targetKeywords.concat([kw])); },
+              suggestingKeywords: suggestingKws,
+              onSuggestKeywords: handleSuggestKeywords,
               onRemoveKeyword: function(kw) { setTargetKeywords(targetKeywords.filter(function(k) { return k !== kw; })); },
               onScoreChange: setScoreData
             })
@@ -19496,7 +19522,7 @@
       );
     }
 
-    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, itemType, pageTitle, pageUrl, metaTitle, metaDesc }) {
+    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, itemType, pageTitle, pageUrl, metaTitle, metaDesc, onSuggestKeywords, suggestingKeywords }) {
       const apiTable = itemType === 'site_pages' ? 'site-pages' : 'content-queue';
       const text = useMemo(() => {
         if (!content) return '';
@@ -19903,7 +19929,12 @@
           React.createElement('form', { onSubmit: e => { e.preventDefault(); const v = e.target.kw.value.trim(); if (v && onAddKeyword) { onAddKeyword(v); e.target.kw.value = ''; } }, style: { display: 'flex', gap: 6 } },
             React.createElement('input', { name: 'kw', placeholder: 'Type keyword...', style: { flex: 1, padding: '6px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 } }),
             React.createElement('button', { type: 'submit', style: { background: '#22c55e', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 13, borderRadius: 6, padding: '6px 12px', fontWeight: 700 } }, '+')
-          )
+          ),
+          onSuggestKeywords && React.createElement('button', {
+            onClick: onSuggestKeywords,
+            disabled: suggestingKeywords,
+            style: { marginTop: 6, width: '100%', padding: '6px 10px', background: suggestingKeywords ? 'var(--bg3)' : '#6366f1', border: 'none', color: '#fff', cursor: suggestingKeywords ? 'wait' : 'pointer', fontSize: 12, borderRadius: 6, fontWeight: 600 }
+          }, React.createElement('i', { className: suggestingKeywords ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb', style: { marginRight: 6 } }), suggestingKeywords ? 'Suggesting...' : 'Suggest Keywords from Brief')
         ),
         usedKws.filter(k => !k.isTarget).length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
           React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: '#22c55e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 } },

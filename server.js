@@ -19210,6 +19210,97 @@ function humanizeDocument(html) {
 }
 
 // AI Optimise a site page — takes score tips + content, returns improved version
+// Suggest target keywords based on brief + page content
+app.post(['/api/projects/:projectId/site-pages/:pageId/suggest-keywords', '/api/builds/:buildId/site-pages/:pageId/suggest-keywords'], async (req, res) => {
+  try {
+    const { projectId, buildId, pageId } = req.params;
+    const { content_html, focus_keyword, existing_keywords } = req.body;
+    
+    let page;
+    if (buildId) {
+      page = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND build_id=$2', [pageId, buildId])).rows[0];
+    } else {
+      page = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId])).rows[0];
+    }
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+
+    // Get brief
+    let briefText = '';
+    const bid = buildId || page.build_id;
+    if (bid) {
+      try {
+        const br = await pool.query('SELECT copywriting_brief FROM website_builds WHERE id=$1', [bid]);
+        if (br.rows.length > 0 && br.rows[0].copywriting_brief) {
+          const b = typeof br.rows[0].copywriting_brief === 'string' ? JSON.parse(br.rows[0].copywriting_brief) : br.rows[0].copywriting_brief;
+          const parts = [];
+          if (b.business_name) parts.push('Business: ' + b.business_name);
+          if (b.industry) parts.push('Industry: ' + b.industry);
+          if (b.target_audience) parts.push('Audience: ' + (Array.isArray(b.target_audience) ? b.target_audience.join(', ') : b.target_audience));
+          if (b.service_areas) parts.push('Service Areas: ' + (Array.isArray(b.service_areas) ? b.service_areas.join(', ') : b.service_areas));
+          const pageName = (page.page_name || '').toLowerCase();
+          if (b.service_pages && Array.isArray(b.service_pages)) {
+            const match = b.service_pages.find(sp => (sp.name || '').toLowerCase() === pageName || (sp.slug || '').toLowerCase() === (page.slug || '').toLowerCase());
+            if (match) {
+              if (match.keywords) parts.push('Page Keywords from Brief: ' + (Array.isArray(match.keywords) ? match.keywords.join(', ') : match.keywords));
+              if (match.services) parts.push('Services: ' + (Array.isArray(match.services) ? match.services.join(', ') : match.services));
+            }
+          }
+          briefText = parts.join('\n');
+        }
+      } catch(e) {}
+    }
+
+    let project;
+    if (page.project_id) project = (await pool.query('SELECT * FROM projects WHERE id=$1', [page.project_id])).rows[0];
+    if (!project && bid) {
+      const build = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [bid])).rows[0];
+      if (build) project = build;
+    }
+    if (!project) project = { name: 'Business', industry: 'services', location: 'Australia' };
+
+    const plainContent = (content_html || page.draft_content || '').replace(/<[^>]+>/g, ' ').substring(0, 2000);
+    
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: `Suggest 5-8 SEO target keywords for this page.
+
+Business: ${project.business_name || project.name} (${project.industry || 'services'}) in ${project.location || 'Australia'}
+Page: ${page.page_name || 'Unknown'}
+Focus keyword: ${focus_keyword || page.focus_keyword || 'none'}
+${briefText ? 'Brief:\n' + briefText : ''}
+
+Page content preview:
+${plainContent}
+
+Already tracked: ${(existing_keywords || []).join(', ') || 'none'}
+
+Rules:
+- Suggest keywords someone would Google to find this page
+- Mix short-tail (2 words) and long-tail (3-5 words)
+- Include location-based variants if relevant (e.g. "fencing Perth")
+- Do NOT repeat already-tracked keywords
+- Return ONLY a JSON array of strings: ["keyword 1", "keyword 2", ...]`
+      }]
+    });
+
+    const text = aiResp.content[0].text.trim();
+    const match = text.match(/\[.*\]/s);
+    let keywords = [];
+    if (match) {
+      try { keywords = JSON.parse(match[0]); } catch(e) {}
+    }
+    
+    console.log('[suggest-keywords] Suggested ' + keywords.length + ' keywords for page ' + pageId);
+    res.json({ keywords });
+  } catch (err) {
+    console.error('[suggest-keywords] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Light Optimise — fix score gaps only, keep original copy structure and voice
 app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/builds/:buildId/site-pages/:pageId/light-optimise'], async (req, res) => {
   req.setTimeout(300000);
