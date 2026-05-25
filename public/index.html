@@ -15832,14 +15832,14 @@
         if (!editContent || humanizing) return;
         setHumanizing(true);
         try {
-          var result = await api('/projects/' + pid + '/humanize-only', { 
-            method: 'POST', 
-            body: { content_html: editContent, page_id: page.id, build_id: page.build_id }
+          var result = await api(apiPrefix + '/humanize-only', {
+            method: 'POST',
+            body: { content_html: editContent, page_id: page.id, build_id: project?.build_id || null }
           });
           if (result.content_html) {
             setEditContent(result.content_html);
             var d = result.debug || {};
-            alert('Humanized! Score: ' + (result.human_score || 'N/A') + '% human. Credits: ' + (result.credits_used || 0) + '. Paras found: ' + (d.paragraphs_found || '?') + ', replaced: ' + (d.replaced || 0) + ', failed: ' + (d.failed_replace || 0) + ', changed: ' + (d.content_changed || false));
+            alert('Humanized! Score: ' + (result.human_score || 'N/A') + '% human. Credits: ' + (result.credits_used || 0) + '. Paras: ' + (d.paragraphs || '?') + ', replaced: ' + (d.replaced || 0) + ', haikuFixed: ' + (d.haikuFixed || 0) + ', changed: ' + (d.changed || false));
             if (d.log) console.log('[humanize debug]', d.log);
           }
         } catch(e) {
@@ -16045,7 +16045,7 @@
       };
 
       var handleSaveEdit = async function() {
-        if (!pid) return;
+        if (!pid && !project?.build_id) return;
         setSavingMeta(true);
         try {
           var result = await api(apiPrefix + '/site-pages/' + page.id, {
