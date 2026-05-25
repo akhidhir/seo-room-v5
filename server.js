@@ -3711,7 +3711,7 @@ app.post('/api/projects/:id/humanize-only', async (req, res) => {
         body: JSON.stringify({
           text: chunks[i],
           tone: 'Standard',
-          mode: 'Lite'
+          mode: 'Enhanced'
         })
       });
       const ghRaw = await ghResp.text();
@@ -19423,7 +19423,7 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
               body: JSON.stringify({
                 text: chunks[i],
                 tone: 'Standard',
-                mode: 'Lite'
+                mode: 'Enhanced'
               })
             });
             const ghRawText = await ghResp.text();
