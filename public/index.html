@@ -21895,6 +21895,7 @@
       const [rankings, setRankings] = useState([]);
       const [syncing, setSyncing] = useState(false);
       const [importing, setImporting] = useState(false);
+      const [rateLimitMsg, setRateLimitMsg] = useState('');
 
       const loadData = async () => {
         const [kwRes, rankRes] = await Promise.all([
@@ -21981,13 +21982,15 @@
         const kwCount = keywords.length;
         if (!force && !await confirmCost(project.id, 'serp_sync', { keywords: kwCount, provider: provider || 'serpapi' })) return;
         setSyncing(true);
+        setRateLimitMsg('');
         try {
           const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'serpapi', force } });
           if (r.ok) loadData(); else if (r.error) alert(r.error);
         } catch (err) {
-          if (err.canForce && confirm(err.message + '\n\nForce re-run now? (additional API costs apply)')) {
+          if (err.canForce) {
+            setRateLimitMsg(err.message);
             setSyncing(false);
-            return syncRanks(provider, true);
+            return;
           }
           alert(err.message);
         }
@@ -22534,6 +22537,15 @@
                 <button className="btn btn-primary" onClick={() => syncRanks(serpProvider)} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
                   {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
                 </button>
+              </div>
+            )}
+            {rateLimitMsg && (
+              <div style={{ background: '#f59e0b22', border: '1px solid #f59e0b', borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, marginLeft: 8 }}>
+                <span style={{ color: '#f59e0b', fontSize: 13, flex: 1 }}>{rateLimitMsg}</span>
+                <button className="btn" onClick={() => { setRateLimitMsg(''); syncRanks(serpProvider, true); }} style={{ fontSize: 13, padding: '6px 16px', background: '#f59e0b', color: '#000', border: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  <i className="fa-solid fa-bolt" style={{ marginRight: 6 }} />Force Re-run
+                </button>
+                <button onClick={() => setRateLimitMsg('')} style={{ background: 'none', border: 'none', color: '#f59e0b', cursor: 'pointer', fontSize: 16, padding: 0 }}>×</button>
               </div>
             )}
             {serpView === 'actions' && serpActions.length > 0 && (
