@@ -3638,31 +3638,26 @@ app.delete('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// GPTHuman test endpoint — hit /api/test-gpthuman in browser to verify API key + response
+// GPTHuman test endpoint
 app.get('/api/test-gpthuman', async (req, res) => {
   try {
-    const apiKey = process.env.GPTHUMAN_API_KEY;
-    if (!apiKey) return res.json({ error: 'GPTHUMAN_API_KEY not set in env', keys: Object.keys(process.env).filter(k => k.includes('GPT') || k.includes('HUMAN')).join(', ') });
+    const apiKey = (process.env.GPTHUMAN_API_KEY || '').trim();
+    if (!apiKey) return res.json({ error: 'GPTHUMAN_API_KEY not set' });
     const testText = 'Professional fencing installation services are available throughout the Perth metropolitan area for both residential and commercial properties requiring high quality boundary solutions.';
-    console.log('[test-gpthuman] Sending test: ' + testText.length + ' chars');
     const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: testText, tone: 'Standard', mode: 'Enhanced' })
     });
-    const status = ghResp.status;
     const raw = await ghResp.text();
-    console.log('[test-gpthuman] Status: ' + status + ', Response: ' + raw.substring(0, 500));
-    let parsed;
-    try { parsed = JSON.parse(raw); } catch(e) { parsed = { raw_text: raw }; }
-    res.json({ status, apiKeyPrefix: apiKey.substring(0, 8) + '...', input: testText, response: parsed, changed: parsed.output ? (parsed.output.trim() !== testText) : false });
-  } catch(e) {
-    res.json({ error: e.message });
-  }
+    let parsed; try { parsed = JSON.parse(raw); } catch(e) { parsed = { raw: raw }; }
+    res.json({ status: ghResp.status, key_len: apiKey.length, key_start: apiKey.substring(0, 6), input: testText, response: parsed, changed: parsed.output ? (parsed.output.trim() !== testText) : false });
+  } catch(e) { res.json({ error: e.message }); }
 });
 
 // AI Detection (Winston AI) — synchronous, returns human score
 // Humanize Only — run GPTHuman on existing content, PRESERVE all HTML structure
+// Uses POSITION-BASED slicing for guaranteed replacement (no string-search failures)
 app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);
@@ -3671,131 +3666,119 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     if (!content_html || content_html.trim().length < 100) {
       return res.status(400).json({ error: 'Content too short to humanize' });
     }
-    const apiKey = process.env.GPTHUMAN_API_KEY;
+    const apiKey = (process.env.GPTHUMAN_API_KEY || '').trim();
     if (!apiKey) return res.status(500).json({ error: 'GPTHUMAN_API_KEY not configured' });
 
-    // STRATEGY: Extract each <p> block, send plain text to GPTHuman individually,
-    // rebuild HTML with humanized text while preserving all structure.
-
-    // Extract all <p> blocks with their text and position
+    // Extract all <p> blocks with position info for exact slicing
     const pBlocks = [];
     const pRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
     let m;
     while ((m = pRegex.exec(content_html)) !== null) {
       const innerHtml = m[2];
-      const innerText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-      if (innerText.length >= 15) {
-        pBlocks.push({ fullMatch: m[0], attrs: m[1], innerHtml, innerText, index: m.index });
+      const plainText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      if (plainText.length >= 15) {
+        pBlocks.push({
+          startIdx: m.index,                    // position in content_html
+          endIdx: m.index + m[0].length,        // end position
+          fullMatch: m[0],
+          attrs: m[1],
+          innerHtml,
+          plainText,
+          wordCount: plainText.split(/\s+/).length
+        });
       }
     }
 
     if (pBlocks.length === 0) {
-      return res.json({ content_html, human_score: null, credits_used: 0, credit_balance: null, debug: 'No <p> blocks found with 15+ chars' });
+      return res.json({ content_html, human_score: null, credits_used: 0, credit_balance: null, debug: { msg: 'No <p> blocks found with 15+ chars' } });
     }
 
-    const totalWords = pBlocks.reduce((sum, b) => sum + b.innerText.split(/\s+/).length, 0);
-    console.log('[humanize-only] Found ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words. Sending each individually to GPTHuman...');
+    const totalWords = pBlocks.reduce((s, b) => s + b.wordCount, 0);
+    console.log('[humanize] ' + pBlocks.length + ' paragraphs, ' + totalWords + ' words');
 
-    // Send EACH paragraph to GPTHuman individually
-    let totalCredits = 0;
-    let lastBalance = null;
-    let lastScore = null;
+    // Send each paragraph to GPTHuman individually
+    let totalCredits = 0, lastBalance = null, lastScore = null;
     const debugLog = [];
-    const humanizedBlockTexts = new Array(pBlocks.length).fill(null);
 
     for (let i = 0; i < pBlocks.length; i++) {
-      const blockText = pBlocks[i].innerText;
-      const wordCount = blockText.split(/\s+/).length;
-      if (wordCount < 8) {
-        debugLog.push('Para ' + (i+1) + ': SKIPPED (only ' + wordCount + ' words)');
+      const b = pBlocks[i];
+      if (b.wordCount < 8) {
+        debugLog.push((i+1) + ': skip(' + b.wordCount + 'w)');
+        pBlocks[i].humanized = null;
         continue;
       }
-
       try {
         const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: blockText, tone: 'Standard', mode: 'Enhanced' })
+          body: JSON.stringify({ text: b.plainText, tone: 'Standard', mode: 'Enhanced' })
         });
-        const ghRaw = await ghResp.text();
-        let ghData;
-        try { ghData = JSON.parse(ghRaw); } catch(e) { ghData = { error: ghRaw }; }
-
+        const ghData = await ghResp.json();
         if (ghData.output) {
-          const outText = ghData.output.trim();
-          const changed = outText !== blockText;
-          humanizedBlockTexts[i] = outText;
+          pBlocks[i].humanized = ghData.output.trim();
           totalCredits += (ghData.creditUsage || 0);
           lastBalance = ghData.creditBalance;
           lastScore = ghData.humanScore;
-          debugLog.push('Para ' + (i+1) + ': ' + wordCount + 'w, score=' + ghData.humanScore + ', changed=' + changed + ', orig="' + blockText.substring(0, 40) + '...", hum="' + outText.substring(0, 40) + '..."');
-          console.log('[humanize-only] Para ' + (i+1) + '/' + pBlocks.length + ': ' + wordCount + 'w, score=' + ghData.humanScore + ', changed=' + changed);
+          const diff = pBlocks[i].humanized !== b.plainText;
+          debugLog.push((i+1) + ': ' + b.wordCount + 'w score=' + ghData.humanScore + ' diff=' + diff);
+          console.log('[humanize] ' + (i+1) + '/' + pBlocks.length + ' ' + b.wordCount + 'w score=' + ghData.humanScore + ' diff=' + diff);
         } else {
-          const errMsg = ghData.error || ghData.message || JSON.stringify(ghData);
-          debugLog.push('Para ' + (i+1) + ': GPTHuman ERROR: ' + errMsg);
-          console.error('[humanize-only] GPTHuman error para ' + (i+1) + ':', errMsg);
+          pBlocks[i].humanized = null;
+          debugLog.push((i+1) + ': ERR=' + (ghData.error || ghData.message || JSON.stringify(ghData)).substring(0, 80));
+          console.error('[humanize] ERR ' + (i+1) + ':', ghData.error || ghData.message || 'unknown');
         }
       } catch (e) {
-        debugLog.push('Para ' + (i+1) + ': FETCH ERROR: ' + e.message);
-        console.error('[humanize-only] Fetch error para ' + (i+1) + ':', e.message);
+        pBlocks[i].humanized = null;
+        debugLog.push((i+1) + ': FETCH_ERR=' + e.message);
       }
     }
 
-    // Replace each <p> block — work BACKWARDS to preserve string positions
+    // POSITION-BASED REPLACEMENT — work backwards so indices stay valid
+    // Build result by slicing content_html at known positions
     let resultHtml = content_html;
     let replacedCount = 0;
-    let failedReplace = 0;
+    let offset = 0; // track cumulative offset from replacements
 
-    // Process in reverse order so earlier replacements don't shift positions
-    for (let i = pBlocks.length - 1; i >= 0; i--) {
-      const humText = humanizedBlockTexts[i];
-      if (!humText || humText === pBlocks[i].innerText) continue;
+    // Sort blocks by startIdx descending (process from end to start)
+    const sorted = pBlocks.slice().sort((a, b) => b.startIdx - a.startIdx);
 
-      const hasInlineTags = /<(a|strong|em|b|i|span|br)\b/i.test(pBlocks[i].innerHtml);
+    for (const block of sorted) {
+      if (!block.humanized || block.humanized === block.plainText) continue;
 
-      if (!hasInlineTags) {
-        // Simple case: replace entire inner content
-        const newP = '<p' + pBlocks[i].attrs + '>' + humText + '</p>';
-        if (resultHtml.includes(pBlocks[i].fullMatch)) {
-          resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
-          replacedCount++;
-        } else {
-          failedReplace++;
-          debugLog.push('Para ' + (i+1) + ': REPLACE FAILED — fullMatch not found in HTML');
-        }
+      let newPTag;
+      const hasInline = /<(a|strong|em|b|i|span|br)\b/i.test(block.innerHtml);
+
+      if (!hasInline) {
+        // No inline tags — replace entire <p> content
+        newPTag = '<p' + block.attrs + '>' + block.humanized + '</p>';
       } else {
-        // Has inline tags — replace plain text segments between tags
-        // Strategy: find each plain-text run in innerHTML and replace with corresponding humanized text
-        const origSentences = pBlocks[i].innerText.match(/[^.!?]+[.!?]+/g) || [pBlocks[i].innerText];
-        const humSentences = humText.match(/[^.!?]+[.!?]+/g) || [humText];
-        let newInner = pBlocks[i].innerHtml;
-        let changed = false;
-        const pairs = Math.min(origSentences.length, humSentences.length);
-        for (let s = 0; s < pairs; s++) {
-          const origS = origSentences[s].trim();
-          const humS = humSentences[s].trim();
-          if (origS === humS || origS.length < 10) continue;
-          if (newInner.includes(origS)) {
-            newInner = newInner.replace(origS, humS);
-            changed = true;
+        // Has inline tags — strip text nodes and rebuild with humanized text
+        // Split humanized into sentences, map to original sentences
+        const origSents = block.plainText.match(/[^.!?]+[.!?]+/g) || [block.plainText];
+        const humSents = block.humanized.match(/[^.!?]+[.!?]+/g) || [block.humanized];
+        let newInner = block.innerHtml;
+        let anyChange = false;
+        for (let s = 0; s < Math.min(origSents.length, humSents.length); s++) {
+          const os = origSents[s].trim();
+          const hs = humSents[s].trim();
+          if (os !== hs && os.length >= 10 && newInner.includes(os)) {
+            newInner = newInner.replace(os, hs);
+            anyChange = true;
           }
         }
-        if (changed) {
-          const newP = '<p' + pBlocks[i].attrs + '>' + newInner + '</p>';
-          if (resultHtml.includes(pBlocks[i].fullMatch)) {
-            resultHtml = resultHtml.replace(pBlocks[i].fullMatch, newP);
-            replacedCount++;
-          } else {
-            failedReplace++;
-          }
-        }
+        if (!anyChange) continue;
+        newPTag = '<p' + block.attrs + '>' + newInner + '</p>';
       }
+
+      // Slice and splice at exact positions
+      resultHtml = resultHtml.substring(0, block.startIdx) + newPTag + resultHtml.substring(block.endIdx);
+      replacedCount++;
     }
 
     const contentChanged = resultHtml !== content_html;
-    console.log('[humanize-only] Replaced ' + replacedCount + '/' + pBlocks.length + ' paragraphs, failed=' + failedReplace + ', contentChanged=' + contentChanged + '. Credits: ' + totalCredits);
+    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged + ' credits=' + totalCredits);
 
-    // Save to DB if page_id provided AND content actually changed
+    // Save to DB if content changed
     if (page_id && contentChanged) {
       if (build_id) {
         await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND build_id=$3', [resultHtml, page_id, build_id]);
@@ -3809,16 +3792,10 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
       human_score: lastScore,
       credits_used: totalCredits,
       credit_balance: lastBalance,
-      debug: {
-        paragraphs_found: pBlocks.length,
-        replaced: replacedCount,
-        failed_replace: failedReplace,
-        content_changed: contentChanged,
-        log: debugLog
-      }
+      debug: { paragraphs: pBlocks.length, replaced: replacedCount, changed: contentChanged, log: debugLog }
     });
   } catch (err) {
-    console.error('[humanize-only] Error:', err.message);
+    console.error('[humanize] Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
