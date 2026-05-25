@@ -33177,9 +33177,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
     const project = proj.rows[0];
     if (!project.domain) return res.status(400).json({ error: 'Project domain is required' });
 
-    // Rate limit: 1/month
-    const limit = await checkMonthlyAuditLimit(projectId, 'internal_links', force);
-    if (limit.limited) return res.status(429).json({ error: `Internal link audit already run this month. Next available in ${limit.daysUntil} days.`, canForce: true });
+    // No rate limit — internal linking is low-cost
 
     // Mark running
     await pool.query(`
