@@ -19365,59 +19365,110 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
     const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
     const missingKwsText = (missing_keywords || []).map(k => typeof k === 'object' ? k.keyword : k).join(', ');
 
+    // PATCH-BASED APPROACH: AI returns list of find/replace patches, server applies them
+    // This guarantees HTML structure (headings, tags) is 100% preserved
+    const originalHtml = page.draft_content || '';
+
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
       messages: [{
         role: 'user',
-        content: `You are an SEO content optimizer. Your job is to make MINIMAL changes to fix the score issues below. DO NOT rewrite the content. Keep the original voice, structure, headings, and paragraphs.
+        content: `You are an SEO content optimizer. Analyze the content below and return a list of SMALL text patches to fix score issues. Do NOT return full HTML. Only return targeted find-and-replace patches.
 
 BUSINESS: ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}
 ${briefText ? '\nBRIEF:\n' + briefText + '\n' : ''}
 CURRENT CONTENT (score: ${content_score || 0}/100):
-${page.draft_content || ''}
+${originalHtml}
 
 SCORE ISSUES TO FIX:
 ${issuesText || 'None'}
 
-MISSING KEYWORDS (weave naturally into EXISTING sentences — do not add new paragraphs for them):
+MISSING KEYWORDS to weave in naturally:
 ${missingKwsText || 'None'}
 
 FOCUS KEYWORD: ${focus_keyword || page.focus_keyword || 'N/A'}
 
-AVAILABLE INTERNAL LINKS:
+AVAILABLE INTERNAL LINKS (use slug as href):
 ${allPages.rows.map(p => p.page_name + ' (' + p.slug + ')').join(', ')}
 
-RULES — FOLLOW STRICTLY:
-1. Keep ALL existing headings (H1, H2, H3) exactly as they are unless the score says they're missing
-2. Keep ALL existing paragraphs — only modify wording slightly to insert missing keywords
-3. Do NOT add new sections or remove existing ones
-4. Do NOT change the tone or writing style
-5. If word count is low, expand EXISTING paragraphs with 1-2 more sentences — do not add new sections
-6. Add internal links as <a href="slug">text</a> into existing sentences where natural
-7. If meta title/description need fixing, suggest new ones
-8. Return the FULL HTML content with your minimal changes applied
+Return ONLY a JSON object with this exact structure:
+{
+  "patches": [
+    { "find": "exact text from the content to replace", "replace": "new text with keyword woven in" },
+    { "find": "another exact sentence or phrase", "replace": "modified version with internal link added" }
+  ],
+  "meta_title": "suggested meta title or null if current is fine",
+  "meta_description": "suggested meta description or null if current is fine",
+  "ai_notes": "brief summary of changes made"
+}
 
-Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "list of specific changes made" }`
+CRITICAL RULES:
+1. Each "find" MUST be an EXACT substring that exists in the current content (copy-paste it exactly)
+2. Each "find" should be a full sentence or meaningful phrase (not a single word)
+3. The "replace" must keep the same meaning but weave in missing keywords or add internal links
+4. Do NOT touch any HTML heading tags (h1, h2, h3) — only modify paragraph/sentence text
+5. Keep changes minimal — 5 to 15 patches maximum
+6. Do NOT add new sections or paragraphs. Only modify existing text.
+7. If word count is low, expand existing sentences by appending 1-2 clauses
+8. Internal links: wrap existing words with <a href="/slug">existing words</a>
+9. NEVER include HTML tags in "find" — only plain text as it appears between tags`
       }]
     });
 
-    let result;
+    let patches = [];
+    let metaTitle = null;
+    let metaDesc = null;
+    let aiNotes = '';
     try {
       const text = aiResponse.content[0].text.trim().replace(/^```json?\n?/, '').replace(/\n?```$/, '');
-      result = JSON.parse(text);
+      const parsed = JSON.parse(text);
+      patches = parsed.patches || [];
+      metaTitle = parsed.meta_title || null;
+      metaDesc = parsed.meta_description || null;
+      aiNotes = parsed.ai_notes || '';
     } catch (e) {
-      result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
+      console.error('[light-optimise] Failed to parse AI patches:', e.message);
+      return res.status(500).json({ error: 'AI returned invalid patch format' });
     }
 
-    console.log('[light-optimise] Done for page ' + pageId);
+    // Apply patches to original HTML
+    let optimisedHtml = originalHtml;
+    let appliedCount = 0;
+    let skippedCount = 0;
+    for (const patch of patches) {
+      if (!patch.find || !patch.replace || patch.find === patch.replace) {
+        skippedCount++;
+        continue;
+      }
+      // Check if the find text exists in the HTML (could be inside tags)
+      if (optimisedHtml.includes(patch.find)) {
+        optimisedHtml = optimisedHtml.replace(patch.find, patch.replace);
+        appliedCount++;
+      } else {
+        // Try case-insensitive match as fallback
+        const idx = optimisedHtml.toLowerCase().indexOf(patch.find.toLowerCase());
+        if (idx !== -1) {
+          optimisedHtml = optimisedHtml.substring(0, idx) + patch.replace + optimisedHtml.substring(idx + patch.find.length);
+          appliedCount++;
+        } else {
+          skippedCount++;
+          console.log('[light-optimise] Patch not found:', patch.find.substring(0, 80) + '...');
+        }
+      }
+    }
+
+    console.log('[light-optimise] Done for page ' + pageId + ' — applied: ' + appliedCount + ', skipped: ' + skippedCount + ' of ' + patches.length + ' patches');
     res.json({
       preview: true,
-      content_html: result.content_html,
-      meta_title: result.meta_title,
-      meta_description: result.meta_description,
-      ai_notes: result.ai_notes,
-      proposed: result
+      content_html: optimisedHtml,
+      meta_title: metaTitle || page.meta_title,
+      meta_description: metaDesc || page.meta_description,
+      ai_notes: aiNotes + (skippedCount > 0 ? ' (' + skippedCount + ' patches skipped — text not found)' : ''),
+      proposed: { content_html: optimisedHtml, meta_title: metaTitle, meta_description: metaDesc, ai_notes: aiNotes },
+      patches_applied: appliedCount,
+      patches_skipped: skippedCount,
+      patches_total: patches.length
     });
   } catch (err) {
     console.error('[light-optimise] Error:', err.message);
