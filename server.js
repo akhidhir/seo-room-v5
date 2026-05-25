@@ -19210,6 +19210,130 @@ function humanizeDocument(html) {
 }
 
 // AI Optimise a site page — takes score tips + content, returns improved version
+// Light Optimise — fix score gaps only, keep original copy structure and voice
+app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/builds/:buildId/site-pages/:pageId/light-optimise'], async (req, res) => {
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  const { projectId, buildId, pageId } = req.params;
+  const { tips, stats, content_score, missing_keywords, focus_keyword, target_keywords } = req.body;
+  try {
+    let pageResult;
+    if (buildId) {
+      pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND build_id=$2', [pageId, buildId]);
+    } else {
+      pageResult = await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    }
+    if (pageResult.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageResult.rows[0];
+
+    let project;
+    if (page.project_id) {
+      project = (await pool.query('SELECT * FROM projects WHERE id=$1', [page.project_id])).rows[0];
+    }
+    if (!project && (buildId || page.build_id)) {
+      const bid = buildId || page.build_id;
+      const build = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [bid])).rows[0];
+      if (build) project = build;
+    }
+    if (!project) project = { name: 'Website Build', business_name: 'Business', industry: 'services', location: 'Australia' };
+
+    // Fetch brief
+    let briefText = '';
+    const briefBuildId = buildId || page.build_id;
+    if (briefBuildId) {
+      try {
+        const briefResult = await pool.query('SELECT copywriting_brief FROM website_builds WHERE id=$1', [briefBuildId]);
+        if (briefResult.rows.length > 0 && briefResult.rows[0].copywriting_brief) {
+          const b = typeof briefResult.rows[0].copywriting_brief === 'string' ? JSON.parse(briefResult.rows[0].copywriting_brief) : briefResult.rows[0].copywriting_brief;
+          const parts = [];
+          if (b.business_name) parts.push('Business: ' + b.business_name);
+          if (b.industry) parts.push('Industry: ' + b.industry);
+          if (b.target_audience) parts.push('Target Audience: ' + (Array.isArray(b.target_audience) ? b.target_audience.join(', ') : b.target_audience));
+          if (b.brand_tone) parts.push('Brand Tone: ' + (Array.isArray(b.brand_tone) ? b.brand_tone.join(', ') : b.brand_tone));
+          if (b.differentiators) parts.push('Differentiators: ' + (Array.isArray(b.differentiators) ? b.differentiators.join(', ') : b.differentiators));
+          if (b.service_areas) parts.push('Service Areas: ' + (Array.isArray(b.service_areas) ? b.service_areas.join(', ') : b.service_areas));
+          const pageName = (page.page_name || '').toLowerCase();
+          if (b.service_pages && Array.isArray(b.service_pages)) {
+            const match = b.service_pages.find(sp => (sp.name || '').toLowerCase() === pageName || (sp.slug || '').toLowerCase() === (page.slug || '').toLowerCase());
+            if (match) {
+              if (match.description) parts.push('Page Brief: ' + match.description);
+              if (match.keywords) parts.push('Page Keywords: ' + (Array.isArray(match.keywords) ? match.keywords.join(', ') : match.keywords));
+            }
+          }
+          briefText = parts.join('\n');
+        }
+      } catch (e) {}
+    }
+    if (!briefText && page.ai_notes) briefText = page.ai_notes;
+
+    // Get all pages for internal linking
+    const allPages = briefBuildId
+      ? await pool.query('SELECT page_name, slug FROM site_pages WHERE build_id=$1 AND id != $2', [briefBuildId, pageId])
+      : await pool.query('SELECT page_name, slug FROM site_pages WHERE project_id=$1 AND id != $2', [page.project_id || projectId, pageId]);
+
+    const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
+    const missingKwsText = (missing_keywords || []).map(k => typeof k === 'object' ? k.keyword : k).join(', ');
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: `You are an SEO content optimizer. Your job is to make MINIMAL changes to fix the score issues below. DO NOT rewrite the content. Keep the original voice, structure, headings, and paragraphs.
+
+BUSINESS: ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}
+${briefText ? '\nBRIEF:\n' + briefText + '\n' : ''}
+CURRENT CONTENT (score: ${content_score || 0}/100):
+${page.draft_content || ''}
+
+SCORE ISSUES TO FIX:
+${issuesText || 'None'}
+
+MISSING KEYWORDS (weave naturally into EXISTING sentences — do not add new paragraphs for them):
+${missingKwsText || 'None'}
+
+FOCUS KEYWORD: ${focus_keyword || page.focus_keyword || 'N/A'}
+
+AVAILABLE INTERNAL LINKS:
+${allPages.rows.map(p => p.page_name + ' (' + p.slug + ')').join(', ')}
+
+RULES — FOLLOW STRICTLY:
+1. Keep ALL existing headings (H1, H2, H3) exactly as they are unless the score says they're missing
+2. Keep ALL existing paragraphs — only modify wording slightly to insert missing keywords
+3. Do NOT add new sections or remove existing ones
+4. Do NOT change the tone or writing style
+5. If word count is low, expand EXISTING paragraphs with 1-2 more sentences — do not add new sections
+6. Add internal links as <a href="slug">text</a> into existing sentences where natural
+7. If meta title/description need fixing, suggest new ones
+8. Return the FULL HTML content with your minimal changes applied
+
+Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "list of specific changes made" }`
+      }]
+    });
+
+    let result;
+    try {
+      const text = aiResponse.content[0].text.trim().replace(/^```json?\n?/, '').replace(/\n?```$/, '');
+      result = JSON.parse(text);
+    } catch (e) {
+      result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
+    }
+
+    console.log('[light-optimise] Done for page ' + pageId);
+    res.json({
+      preview: true,
+      content_html: result.content_html,
+      meta_title: result.meta_title,
+      meta_description: result.meta_description,
+      ai_notes: result.ai_notes,
+      proposed: result
+    });
+  } catch (err) {
+    console.error('[light-optimise] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:buildId/site-pages/:pageId/optimise'], async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);

@@ -15792,6 +15792,7 @@
       // AI detection — load saved results from DB
       var [aiDetecting, setAiDetecting] = React.useState(false);
       var [humanizing, setHumanizing] = React.useState(false);
+      var [lightOptimising, setLightOptimising] = React.useState(false);
 
       var handleHumanize = async function() {
         if (!editContent || humanizing) return;
@@ -15809,6 +15810,52 @@
           alert('Humanize error: ' + (e.message || e));
         }
         setHumanizing(false);
+      };
+
+      var handleLightOptimise = async function() {
+        if (!editContent || lightOptimising) return;
+        setLightOptimising(true);
+        try {
+          var html = editContent || '';
+          var plain = html.replace(/<[^>]+>/g, '');
+          var tips = scoreData ? scoreData.tips : [];
+          var allKwAnalysis = (targetKeywords || []).map(function(k) {
+            var kw = typeof k === 'string' ? k : k.keyword;
+            var regex = new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            return { keyword: kw, count: (plain.match(regex) || []).length };
+          });
+          var missingKws = allKwAnalysis.filter(function(k) { return k.count === 0; });
+          var data = await api(apiPrefix + '/site-pages/' + page.id + '/light-optimise', {
+            method: 'POST',
+            body: {
+              tips: tips,
+              missing_keywords: missingKws.map(function(k) { return k.keyword; }),
+              target_keywords: targetKeywords,
+              content_score: scoreData ? scoreData.score : 0,
+              stats: scoreData ? scoreData.stats : {},
+              focus_keyword: editMeta.focus_keyword
+            }
+          });
+          if (data.error) { alert('Optimise failed: ' + data.error); }
+          else if (data.content_html || (data.proposed && data.proposed.content_html)) {
+            var newHtml = data.content_html || data.proposed.content_html;
+            setOptimisePreview({
+              preview: true,
+              proposed: {
+                content_html: newHtml,
+                meta_title: data.meta_title || (data.proposed && data.proposed.meta_title) || editMeta.meta_title,
+                meta_description: data.meta_description || (data.proposed && data.proposed.meta_description) || editMeta.meta_desc,
+                ai_notes: data.ai_notes || (data.proposed && data.proposed.ai_notes) || null
+              },
+              stats: {
+                current: { words: scoreData ? scoreData.stats.words : 0 },
+                proposed: { words: newHtml.replace(/<[^>]+>/g, '').trim().split(/\s+/).length }
+              },
+              item_id: page.id
+            });
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setLightOptimising(false);
       };
       var [aiResult, setAiResult] = React.useState(page.ai_detection_result || null);
       var [gpthumanCredits, setGpthumanCredits] = React.useState(null);
