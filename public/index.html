@@ -1234,7 +1234,12 @@
       }
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Request failed');
+      if (!res.ok) {
+        const err = new Error(data.error || 'Request failed');
+        err.canForce = data.canForce || false;
+        err.status = res.status;
+        throw err;
+      }
       return data;
     };
 
@@ -2455,14 +2460,20 @@
         setTimeout(extractAndSync, 1000);
       }, [report, project?.id, loading]);
 
-      const runAudit = async () => {
+      const runAudit = async (force = false) => {
         const costFeature = auditKey === 'gbp-external' ? 'gbp_audit' : auditKey === 'gsc-agent' ? 'gsc_audit' : 'website_audit';
-        if (!await confirmCost(project.id, costFeature)) return;
+        if (!force && !await confirmCost(project.id, costFeature)) return;
         setLoading(true); setError(''); setReport('');
         try {
-          await api(`/projects/${project.id}/audits/${auditKey}/run`, { method: 'POST' });
+          await api(`/projects/${project.id}/audits/${auditKey}/run`, { method: 'POST', body: { force } });
           startPolling(project.id, auditKey);
-        } catch (err) { setError(err.message); setLoading(false); }
+        } catch (err) {
+          if (err.canForce && confirm(err.message + '\n\nForce re-run now? (additional API costs apply)')) {
+            setLoading(false);
+            return runAudit(true);
+          }
+          setError(err.message); setLoading(false);
+        }
       };
 
       // Parse report into sections — only split on numbered headers
@@ -3653,13 +3664,16 @@
         }).catch(() => {});
       };
 
-      const runGbpAudit = async () => {
+      const runGbpAudit = async (force = false) => {
         setAuditRunning(true); setAuditError('');
         try {
-          await api(`/projects/${project.id}/audits/gbp-internal/run`, { method: 'POST' });
+          await api(`/projects/${project.id}/audits/gbp-internal/run`, { method: 'POST', body: { force } });
           await loadGbpFindings();
-          reload(true); // refresh KPI data too
-        } catch (err) { setAuditError(err.message); }
+          reload(true);
+        } catch (err) {
+          if (err.canForce && confirm(err.message + '\n\nForce re-run now?')) { setAuditRunning(false); return runGbpAudit(true); }
+          setAuditError(err.message);
+        }
         setAuditRunning(false);
       };
 
@@ -5478,12 +5492,15 @@
         api(`/projects/${project.id}/gbp-profile`).then(d => { if (d) setProfileSummary(d); }).catch(() => {});
       }, [project?.id]);
 
-      const runAudit = async () => {
+      const runAudit = async (force = false) => {
         setLoading(true); setError('');
         try {
-          const res = await api(`/projects/${project.id}/audits/gbp-internal/run`, { method: 'POST' });
+          const res = await api(`/projects/${project.id}/audits/gbp-internal/run`, { method: 'POST', body: { force } });
           await loadFindings();
-        } catch (err) { setError(err.message); setLoading(false); }
+        } catch (err) {
+          if (err.canForce && confirm(err.message + '\n\nForce re-run now?')) { setLoading(false); return runAudit(true); }
+          setError(err.message); setLoading(false);
+        }
       };
 
       const updateStatus = async (id, status) => {
@@ -6066,17 +6083,20 @@
 
       useEffect(() => { if (project?.id) loadFindings(); }, [project?.id]);
 
-      const runAudit = async () => {
+      const runAudit = async (force = false) => {
         setLoading(true); setError('');
         try {
-          const res = await api(`/projects/${project.id}/audits/gsc/run`, { method: 'POST' });
+          const res = await api(`/projects/${project.id}/audits/gsc/run`, { method: 'POST', body: { force } });
           if (res.findings) {
             setFindings(res.findings);
             setSummary(res.summary);
           } else {
             await loadFindings();
           }
-        } catch (err) { setError(err.message); }
+        } catch (err) {
+          if (err.canForce && confirm(err.message + '\n\nForce re-run now?')) { setLoading(false); return runAudit(true); }
+          setError(err.message);
+        }
         finally { setLoading(false); }
       };
 
@@ -7404,13 +7424,16 @@
         } catch (e) { /* no previous speed audit */ }
       };
 
-      const runAudit = async () => {
+      const runAudit = async (force = false) => {
         setLoading(true); setError('');
         try {
-          const data = await api(`/projects/${project.id}/audits/technical/run`, { method: 'POST' });
+          const data = await api(`/projects/${project.id}/audits/technical/run`, { method: 'POST', body: { force } });
           if (data.findings) setFindings(data.findings);
           else if (data.error) setError(data.error);
-        } catch (err) { setError(err.message); }
+        } catch (err) {
+          if (err.canForce && confirm(err.message + '\n\nForce re-run now?')) { setLoading(false); return runAudit(true); }
+          setError(err.message);
+        }
         finally { setLoading(false); }
       };
 
@@ -11243,13 +11266,16 @@
         } catch (e) { /* no history */ }
       };
 
-      const runAudit = async () => {
+      const runAudit = async (force = false) => {
         setLoading(true); setError('');
         try {
-          const data = await api(`/projects/${project.id}/onpage-audit/run`, { method: 'POST' });
+          const data = await api(`/projects/${project.id}/onpage-audit/run`, { method: 'POST', body: { force } });
           if (data?.pages) { setPages(data.pages); setSelected(new Set()); _onpageCache[_opck] = { pages: data.pages }; }
           else if (data?.error) setError(data.error);
-        } catch (err) { setError(err.message); }
+        } catch (err) {
+          if (err.canForce && confirm(err.message + '\n\nForce re-run now?')) { setLoading(false); return runAudit(true); }
+          setError(err.message);
+        }
         finally { setLoading(false); }
       };
 
@@ -21951,12 +21977,20 @@
         };
         input.click();
       };
-      const syncRanks = async (provider) => {
+      const syncRanks = async (provider, force = false) => {
         const kwCount = keywords.length;
-        if (!await confirmCost(project.id, 'serp_sync', { keywords: kwCount, provider: provider || 'serpapi' })) return;
+        if (!force && !await confirmCost(project.id, 'serp_sync', { keywords: kwCount, provider: provider || 'serpapi' })) return;
         setSyncing(true);
-        const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'serpapi' } });
-        if (r.ok) loadData(); else if (r.error) alert(r.error);
+        try {
+          const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'serpapi', force } });
+          if (r.ok) loadData(); else if (r.error) alert(r.error);
+        } catch (err) {
+          if (err.canForce && confirm(err.message + '\n\nForce re-run now? (additional API costs apply)')) {
+            setSyncing(false);
+            return syncRanks(provider, true);
+          }
+          alert(err.message);
+        }
         setSyncing(false);
       };
 
@@ -23370,11 +23404,11 @@
         return () => { if (pollTimer) clearTimeout(pollTimer); };
       }, [project?.id]);
 
-      const discover = async () => {
+      const discover = async (force = false) => {
         setLoading(true);
         setHasRun(true);
         try {
-          await api(`/projects/${project.id}/discovery/run`, { method: 'POST' });
+          await api(`/projects/${project.id}/discovery/run`, { method: 'POST', body: { force } });
           const poll = async () => {
             const r = await api(`/projects/${project.id}/discovery`);
             if (r.status === 'done') {
@@ -23387,15 +23421,21 @@
             }
           };
           setTimeout(poll, 3000);
-        } catch (e) { alert('Discovery failed: ' + e.message); setLoading(false); }
+        } catch (e) {
+          if (e.canForce && confirm(e.message + '\n\nForce re-run now? (additional API costs apply)')) {
+            setLoading(false);
+            return discover(true);
+          }
+          alert('Discovery failed: ' + e.message); setLoading(false);
+        }
       };
 
-      const discoverMaps = async () => {
-        if (!await confirmCost(project.id, 'discover_maps', { keywords: 30, provider: discoverMapsProvider })) return;
+      const discoverMaps = async (force = false) => {
+        if (!force && !await confirmCost(project.id, 'discover_maps', { keywords: 30, provider: discoverMapsProvider })) return;
         setMapsLoading(true);
         setHasMapsRun(true);
         try {
-          await api(`/projects/${project.id}/discovery/maps/run`, { method: 'POST', body: { provider: discoverMapsProvider } });
+          await api(`/projects/${project.id}/discovery/maps/run`, { method: 'POST', body: { provider: discoverMapsProvider, force } });
           const poll = async () => {
             const r = await api(`/projects/${project.id}/discovery/maps`);
             if (r.maps_status === 'done') {
@@ -23408,7 +23448,13 @@
             }
           };
           setTimeout(poll, 3000);
-        } catch (e) { alert('Maps discovery failed: ' + e.message); setMapsLoading(false); }
+        } catch (e) {
+          if (e.canForce && confirm(e.message + '\n\nForce re-run now? (additional API costs apply)')) {
+            setMapsLoading(false);
+            return discoverMaps(true);
+          }
+          alert('Maps discovery failed: ' + e.message); setMapsLoading(false);
+        }
       };
 
       const addToSerp = async () => {
@@ -23802,14 +23848,26 @@
               r.results.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
               setGridScans({ ...scanMap });
             } else if (r.error) {
-              // Monthly rate limit — show message and stop immediately
-              if (r.error.includes('already run this month') || r.error.includes('already checked this month')) {
-                alert(r.error);
-                break;
-              }
               console.error(`Scan error for ${mapKws[i].keyword}:`, r.error); failed++;
             }
-          } catch (e) { console.error(`Scan failed for ${mapKws[i].keyword}:`, e.message); failed++; }
+          } catch (e) {
+            if (e.canForce && confirm(e.message + '\n\nForce re-run all remaining keywords? (additional API costs apply)')) {
+              // Re-scan remaining keywords with force
+              for (let j = i; j < mapKws.length; j++) {
+                setScanProgress(`Force scanning ${j + 1}/${mapKws.length}: ${mapKws[j].keyword} ${mapKws[j].location || ''}...`);
+                try {
+                  const r2 = await api(`/projects/${project.id}/maps/grid-scan`, {
+                    method: 'POST',
+                    body: { grid_size: gridSize, radius_km: gridRadius, keyword_ids: [mapKws[j].id], force: true }
+                  });
+                  if (r2.ok && r2.results) { r2.results.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; }); setGridScans({ ...scanMap }); }
+                } catch (e2) { console.error(`Force scan failed for ${mapKws[j].keyword}:`, e2.message); failed++; }
+              }
+              break;
+            }
+            if (e.status === 429) { alert(e.message); break; }
+            console.error(`Scan failed for ${mapKws[i].keyword}:`, e.message); failed++;
+          }
         }
         if (failed > 0) alert(`${failed} of ${mapKws.length} keywords failed to scan. Check console for details.`);
         await loadData();

@@ -5545,7 +5545,8 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
 }
 
 // Helper: check if an audit was already completed this month for a project+pillar
-async function checkMonthlyAuditLimit(projectId, pillar) {
+async function checkMonthlyAuditLimit(projectId, pillar, force = false) {
+  if (force) return { limited: false };
   const { rows } = await pool.query(
     `SELECT id, completed_at FROM audits
      WHERE project_id=$1 AND pillar=$2 AND status='completed'
@@ -5557,7 +5558,7 @@ async function checkMonthlyAuditLimit(projectId, pillar) {
     const completedAt = new Date(rows[0].completed_at);
     const nextMonth = new Date(completedAt.getFullYear(), completedAt.getMonth() + 1, 1);
     const daysUntil = Math.ceil((nextMonth - Date.now()) / 86400000);
-    return { limited: true, lastAudit: completedAt, nextAvailable: nextMonth, daysUntil };
+    return { limited: true, lastAudit: completedAt, nextAvailable: nextMonth, daysUntil, canForce: true };
   }
   return { limited: false };
 }
@@ -8320,8 +8321,9 @@ app.get('/api/projects/:projectId/rc-profile', async (req, res) => {
 app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) => {
   const { projectId } = req.params;
   try {
-    const limit = await checkMonthlyAuditLimit(projectId, 'gbp-internal');
-    if (limit.limited) return res.status(429).json({ error: `GBP audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+    const force = req.body?.force === true;
+    const limit = await checkMonthlyAuditLimit(projectId, 'gbp-internal', force);
+    if (limit.limited) return res.status(429).json({ error: `GBP audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.`, canForce: true });
 
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -9422,8 +9424,9 @@ Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics
 app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
   const { projectId } = req.params;
   try {
-    const limit = await checkMonthlyAuditLimit(projectId, 'onpage');
-    if (limit.limited) return res.status(429).json({ error: `On-Page audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+    const force = req.body?.force === true;
+    const limit = await checkMonthlyAuditLimit(projectId, 'onpage', force);
+    if (limit.limited) return res.status(429).json({ error: `On-Page audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.`, canForce: true });
 
     // Get WP URL from project
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -19302,8 +19305,9 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
 app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
   const { projectId } = req.params;
   try {
-    const limit = await checkMonthlyAuditLimit(projectId, 'gsc');
-    if (limit.limited) return res.status(429).json({ error: `GSC audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+    const force = req.body?.force === true;
+    const limit = await checkMonthlyAuditLimit(projectId, 'gsc', force);
+    if (limit.limited) return res.status(429).json({ error: `GSC audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.`, canForce: true });
 
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -19943,8 +19947,9 @@ const AUSTRALIAN_DIRECTORIES = [
 app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
   const { projectId } = req.params;
   try {
-    const limit = await checkMonthlyAuditLimit(projectId, 'gbp');
-    if (limit.limited) return res.status(429).json({ error: `GBP audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.` });
+    const force = req.body?.force === true;
+    const limit = await checkMonthlyAuditLimit(projectId, 'gbp', force);
+    if (limit.limited) return res.status(429).json({ error: `GBP audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.`, canForce: true });
 
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
@@ -21204,9 +21209,10 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
     const project = proj.rows[0];
 
     // Monthly audit limit check
-    const limitCheck = await checkMonthlyAuditLimit(projectId, 'gbp_external');
+    const force = req.body?.force === true;
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'gbp_external', force);
     if (limitCheck.limited) {
-      return res.status(429).json({ error: `GBP External audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+      return res.status(429).json({ error: `GBP External audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.`, canForce: true });
     }
 
     // Delete old external findings
@@ -22886,9 +22892,10 @@ app.post('/api/projects/:projectId/audits/website-agent/run', async (req, res) =
     const project = proj.rows[0];
 
     // Monthly audit limit check
-    const limitCheck = await checkMonthlyAuditLimit(projectId, 'website');
+    const force = req.body?.force === true;
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'website', force);
     if (limitCheck.limited) {
-      return res.status(429).json({ error: `Website audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+      return res.status(429).json({ error: `Website audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.`, canForce: true });
     }
 
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='website' AND status != 'fixed'`, [projectId]);
@@ -23007,9 +23014,10 @@ app.post('/api/projects/:projectId/audits/gsc-agent/run', async (req, res) => {
     const project = proj.rows[0];
 
     // Monthly audit limit check
-    const limitCheck = await checkMonthlyAuditLimit(projectId, 'gsc_agent');
+    const force = req.body?.force === true;
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'gsc_agent', force);
     if (limitCheck.limited) {
-      return res.status(429).json({ error: `GSC audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+      return res.status(429).json({ error: `GSC audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.`, canForce: true });
     }
 
     await pool.query(`DELETE FROM audit_findings WHERE project_id=$1 AND pillar='gsc_agent'`, [projectId]);
@@ -25353,9 +25361,10 @@ app.post('/api/projects/:projectId/audits/technical/run', async (req, res) => {
     const project = proj.rows[0];
 
     // Monthly audit limit check
-    const limitCheck = await checkMonthlyAuditLimit(projectId, 'technical');
+    const force = req.body?.force === true;
+    const limitCheck = await checkMonthlyAuditLimit(projectId, 'technical', force);
     if (limitCheck.limited) {
-      return res.status(429).json({ error: `Technical audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.` });
+      return res.status(429).json({ error: `Technical audit already completed this month (${limitCheck.lastAudit.toLocaleDateString()}). Next available in ${limitCheck.daysUntil} days.`, canForce: true });
     }
 
     const wpUrl = project.wordpress_url;
@@ -26402,12 +26411,14 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
     }
 
     // ── Monthly rate limit: 1 SERP discovery per project per calendar month ──
-    if (existing?.discovered_at && existing.status === 'done') {
+    const force = req.body?.force === true;
+    if (!force && existing?.discovered_at && existing.status === 'done') {
       const last = new Date(existing.discovered_at);
       const now = new Date();
       if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
         return res.status(429).json({
-          error: `SERP Discovery already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next run available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
+          error: `SERP Discovery already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next run available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`,
+          canForce: true
         });
       }
     }
@@ -26621,12 +26632,14 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
     }
 
     // ── Monthly rate limit: 1 Maps discovery per project per calendar month ──
-    if (existing?.maps_status === 'done' && existing.maps_count > 0) {
+    const force = req.body?.force === true;
+    if (!force && existing?.maps_status === 'done' && existing.maps_count > 0) {
       const last = new Date(existing.updated_at);
       const now = new Date();
       if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
         return res.status(429).json({
-          error: `Maps Discovery already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next run available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
+          error: `Maps Discovery already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next run available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`,
+          canForce: true
         });
       }
     }
@@ -27242,6 +27255,7 @@ app.delete('/api/projects/:projectId/maps/clean', async (req, res) => {
 // SERPapi-powered Maps/Local Pack sync
 app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
   const provider = (req.body?.provider || 'serpapi').toLowerCase();
+  const force = req.body?.force === true;
   if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
   if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured.' });
   const { projectId } = req.params;
@@ -27251,18 +27265,21 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
     const project = projRes.rows[0];
     const businessName = project.business_name || project.name || '';
 
-    // ── Monthly rate limit: 1 Maps sync per project per calendar month ──
-    const lastMapsCheck = await pool.query(
-      `SELECT MAX(checked_at) as last_checked FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL`,
-      [projectId]
-    );
-    if (lastMapsCheck.rows[0]?.last_checked) {
-      const last = new Date(lastMapsCheck.rows[0].last_checked);
-      const now = new Date();
-      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
-        return res.status(429).json({
-          error: `Maps Rankings already checked this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next check available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
-        });
+    // ── Monthly rate limit (skip if force) ──
+    if (!force) {
+      const lastMapsCheck = await pool.query(
+        `SELECT MAX(checked_at) as last_checked FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL`,
+        [projectId]
+      );
+      if (lastMapsCheck.rows[0]?.last_checked) {
+        const last = new Date(lastMapsCheck.rows[0].last_checked);
+        const now = new Date();
+        if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+          return res.status(429).json({
+            error: `Maps Rankings already checked this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next check available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`,
+            canForce: true
+          });
+        }
       }
     }
 
@@ -27522,7 +27539,7 @@ function generateGrid(centerLat, centerLng, radiusKm, gridSize) {
 app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
   const { projectId } = req.params;
-  const { keyword_ids, grid_size = 5, radius_km = 10 } = req.body;
+  const { keyword_ids, grid_size = 5, radius_km = 10, force } = req.body;
 
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -27533,18 +27550,21 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
 
     if (!businessName) return res.status(400).json({ error: 'Business name not set in Project Settings' });
 
-    // ── Monthly rate limit: 1 grid scan per project per calendar month ──
-    const lastGridScan = await pool.query(
-      `SELECT MAX(scanned_at) as last_scanned FROM grid_scans WHERE project_id=$1`,
-      [projectId]
-    );
-    if (lastGridScan.rows[0]?.last_scanned) {
-      const last = new Date(lastGridScan.rows[0].last_scanned);
-      const now = new Date();
-      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
-        return res.status(429).json({
-          error: `Grid scan already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next scan available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
-        });
+    // ── Monthly rate limit (skip if force) ──
+    if (!force) {
+      const lastGridScan = await pool.query(
+        `SELECT MAX(scanned_at) as last_scanned FROM grid_scans WHERE project_id=$1`,
+        [projectId]
+      );
+      if (lastGridScan.rows[0]?.last_scanned) {
+        const last = new Date(lastGridScan.rows[0].last_scanned);
+        const now = new Date();
+        if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+          return res.status(429).json({
+            error: `Grid scan already run this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next scan available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`,
+            canForce: true
+          });
+        }
       }
     }
 
@@ -27929,6 +27949,7 @@ app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
 // Sync ranks — calls DataForSEO or SerpAPI for all tracked keywords
 app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
   const provider = (req.body?.provider || 'serpapi').toLowerCase(); // 'dataforseo' or 'serpapi'
+  const force = req.body?.force === true;
   if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
   if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
   const { projectId } = req.params;
@@ -27939,18 +27960,21 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
     const businessName = project.business_name || project.name || domain;
 
-    // ── Monthly rate limit: 1 SERP check per project per calendar month ──
-    const lastCheck = await pool.query(
-      `SELECT MAX(checked_at) as last_checked FROM rank_tracking WHERE project_id=$1`,
-      [projectId]
-    );
-    if (lastCheck.rows[0]?.last_checked) {
-      const last = new Date(lastCheck.rows[0].last_checked);
-      const now = new Date();
-      if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
-        return res.status(429).json({
-          error: `SERP Rankings already checked this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next check available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`
-        });
+    // ── Monthly rate limit: 1 SERP check per project per calendar month (skip if force) ──
+    if (!force) {
+      const lastCheck = await pool.query(
+        `SELECT MAX(checked_at) as last_checked FROM rank_tracking WHERE project_id=$1`,
+        [projectId]
+      );
+      if (lastCheck.rows[0]?.last_checked) {
+        const last = new Date(lastCheck.rows[0].last_checked);
+        const now = new Date();
+        if (last.getFullYear() === now.getFullYear() && last.getMonth() === now.getMonth()) {
+          return res.status(429).json({
+            error: `SERP Rankings already checked this month (${last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}). Next check available ${new Date(now.getFullYear(), now.getMonth() + 1, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}.`,
+            canForce: true
+          });
+        }
       }
     }
 
