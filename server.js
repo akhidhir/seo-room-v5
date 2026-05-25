@@ -33527,16 +33527,20 @@ app.post('/api/projects/:projectId/internal-links/suggestions/bulk', async (req,
 // Apply approved suggestions — insert links into WordPress pages
 app.post('/api/projects/:projectId/internal-links/apply', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { suggestion_ids } = req.body; // optional: specific IDs, otherwise all approved
+  const { suggestion_ids } = req.body;
   try {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
-    const wpUrl = project.wp_url || project.domain;
+    let wpUrl = project.wp_url || project.domain;
+    if (!/^https?:\/\//i.test(wpUrl)) wpUrl = 'https://' + wpUrl;
     const authHeaders = getWpAuthHeaders(project);
     if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
-    // Get approved suggestions to apply
+    let domain = project.domain || '';
+    if (!/^https?:\/\//i.test(domain)) domain = 'https://' + domain;
+    domain = domain.replace(/\/$/, '');
+
     let suggestions;
     if (suggestion_ids?.length) {
       suggestions = await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 AND id = ANY($2) AND status=$3', [projectId, suggestion_ids, 'approved']);
@@ -33546,7 +33550,6 @@ app.post('/api/projects/:projectId/internal-links/apply', async (req, res) => {
 
     if (!suggestions.rows.length) return res.json({ ok: true, applied: 0, message: 'No approved suggestions to apply' });
 
-    // Group by source page
     const bySource = {};
     for (const s of suggestions.rows) {
       if (!bySource[s.source_url]) bySource[s.source_url] = [];
@@ -33559,79 +33562,119 @@ app.post('/api/projects/:projectId/internal-links/apply', async (req, res) => {
 
     for (const [sourceUrl, pageSuggestions] of Object.entries(bySource)) {
       try {
-        // Find WP page/post ID from URL
-        const slug = sourceUrl.replace(project.domain?.replace(/\/$/, ''), '').replace(/^\/|\/$/g, '') || '';
+        // Extract slug — strip domain (with or without protocol)
+        let slug = sourceUrl.replace(/^https?:\/\//, '').replace(project.domain?.replace(/^https?:\/\//, '').replace(/\/$/, ''), '').replace(/^\/|\/$/g, '') || '';
         if (!slug) { results.push({ url: sourceUrl, status: 'skipped', reason: 'Homepage — manual edit recommended' }); continue; }
+        const lastSlug = slug.split('/').pop();
+        console.log('[internal-links] Applying to slug:', lastSlug, 'from URL:', sourceUrl);
 
-        // Try pages first, then posts
+        // Try pages, posts, then auto-detect custom post types
         let wpPage = null;
         let wpType = 'pages';
-        for (const type of ['pages', 'posts']) {
+        const typesToTry = ['pages', 'posts'];
+
+        // Detect custom post type from URL path (e.g., /testimonial/testimonial-6)
+        const pathParts = slug.split('/');
+        if (pathParts.length >= 2) {
+          const possibleCpt = pathParts[0];
+          if (!['category', 'tag', 'author', 'page'].includes(possibleCpt)) {
+            typesToTry.push(possibleCpt);  // e.g., 'testimonial'
+          }
+        }
+
+        for (const type of typesToTry) {
           try {
-            const searchResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug.split('/').pop())}&_fields=id,content,title,slug`, {
+            const searchResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(lastSlug)}&_fields=id,content,title,slug`, {
               headers: authHeaders
             });
             if (searchResp.ok) {
-              const results = await searchResp.json();
-              if (results.length) { wpPage = results[0]; wpType = type; break; }
+              const found = await searchResp.json();
+              if (found.length) { wpPage = found[0]; wpType = type; break; }
             }
           } catch {}
         }
 
-        if (!wpPage) { results.push({ url: sourceUrl, status: 'skipped', reason: 'WP page not found' }); failed += pageSuggestions.length; continue; }
+        if (!wpPage) {
+          const reason = 'WP page not found (tried: ' + typesToTry.join(', ') + ')';
+          console.log('[internal-links]', reason, 'for slug:', lastSlug);
+          results.push({ url: sourceUrl, status: 'skipped', reason });
+          failed += pageSuggestions.length;
+          continue;
+        }
 
         let content = wpPage.content?.rendered || wpPage.content?.raw || '';
+        // Strip HTML for anchor matching, keep original for position mapping
+        const plainContent = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+        let contentModified = false;
 
-        // Snapshot before write
         for (const s of pageSuggestions) {
-          // Insert link: find anchor text in content and wrap with <a> tag
           const anchor = s.suggested_anchor;
           const targetUrl = s.target_url;
 
-          // Check if link already exists
-          if (content.includes(`href="${targetUrl}"`) || content.includes(`href="${targetUrl}/"`)) {
+          if (content.includes('href="' + targetUrl + '"') || content.includes('href="' + targetUrl + '/"')) {
             results.push({ url: sourceUrl, suggestion_id: s.id, status: 'skipped', reason: 'Link already exists' });
-            await pool.query(`UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1`, [s.id]);
+            await pool.query("UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1", [s.id]);
             applied++;
             continue;
           }
 
-          // Find the anchor text in content (case-insensitive, whole word)
-          const anchorRegex = new RegExp(`(?<!<a[^>]*>)(${anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?![^<]*<\/a>)`, 'i');
-          const anchorMatch = content.match(anchorRegex);
+          // Try 3 strategies to find and insert the anchor
+          let inserted = false;
 
-          if (anchorMatch) {
-            // Save to wp_change_history before modifying
-            await pool.query(`
-              INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
-              VALUES ($1, $2, $3, $4, 'internal_link', 'content', $5, $6)
-            `, [projectId, wpPage.id, sourceUrl, wpPage.title?.rendered || '', content.substring(0, 500), `Added link: "${anchor}" → ${targetUrl}`]);
+          // Strategy 1: exact match in HTML content (works for classic editor)
+          const anchorEsc = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const exactRegex = new RegExp('(?<!<a[^>]*>)(' + anchorEsc + ')(?![^<]*<\/a>)', 'i');
+          const exactMatch = content.match(exactRegex);
+          if (exactMatch) {
+            await pool.query("INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'internal_link', 'content', $5, $6)",
+              [projectId, wpPage.id, sourceUrl, wpPage.title?.rendered || '', content.substring(0, 500), 'Added link: "' + anchor + '" → ' + targetUrl]);
+            content = content.replace(exactRegex, '<a href="' + targetUrl + '">' + exactMatch[1] + '</a>');
+            inserted = true;
+          }
 
-            // Replace first occurrence only
-            content = content.replace(anchorRegex, `<a href="${targetUrl}">${anchorMatch[1]}</a>`);
+          // Strategy 2: match in plain text (Elementor — text split across tags)
+          if (!inserted) {
+            const plainRegex = new RegExp(anchorEsc, 'i');
+            const plainMatch = plainContent.match(plainRegex);
+            if (plainMatch) {
+              // Found in plain text but not in HTML — text is split by tags
+              // Build a regex that allows HTML tags between words
+              const words = anchor.split(/\s+/).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+              const flexRegex = new RegExp('(' + words.join('(?:\\s|<[^>]*>)*\\s*') + ')', 'i');
+              const flexMatch = content.match(flexRegex);
+              if (flexMatch) {
+                await pool.query("INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'internal_link', 'content', $5, $6)",
+                  [projectId, wpPage.id, sourceUrl, wpPage.title?.rendered || '', content.substring(0, 500), 'Added link: "' + anchor + '" → ' + targetUrl]);
+                content = content.replace(flexRegex, '<a href="' + targetUrl + '">' + anchor + '</a>');
+                inserted = true;
+              }
+            }
+          }
 
-            await pool.query(`UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1`, [s.id]);
+          if (inserted) {
+            contentModified = true;
+            await pool.query("UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1", [s.id]);
             applied++;
             results.push({ url: sourceUrl, suggestion_id: s.id, status: 'applied', anchor, target: targetUrl });
           } else {
-            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'failed', reason: `Anchor text "${anchor}" not found in page content` });
+            console.log('[internal-links] Anchor not found:', anchor, 'in', sourceUrl.split('/').pop());
+            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'failed', reason: 'Anchor text "' + anchor + '" not found in page content' });
             failed++;
           }
         }
 
-        // Write updated content back to WordPress
-        if (results.some(r => r.status === 'applied' && r.url === sourceUrl)) {
-          const updateResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/wp/v2/${wpType}/${wpPage.id}`, {
+        if (contentModified) {
+          const updateResp = await fetch(wpUrl.replace(/\/$/, '') + '/wp-json/wp/v2/' + wpType + '/' + wpPage.id, {
             method: 'POST',
             headers: { ...authHeaders, 'Content-Type': 'application/json' },
             body: JSON.stringify({ content })
           });
           if (!updateResp.ok) {
-            console.error(`[internal-links] Failed to update WP page ${wpPage.id}: ${updateResp.status}`);
+            console.error('[internal-links] Failed to update WP page ' + wpPage.id + ': ' + updateResp.status);
           }
         }
       } catch (pageErr) {
-        console.error(`[internal-links] Error applying to ${sourceUrl}: ${pageErr.message}`);
+        console.error('[internal-links] Error applying to ' + sourceUrl + ': ' + pageErr.message);
         failed += pageSuggestions.length;
         results.push({ url: sourceUrl, status: 'error', reason: pageErr.message });
       }

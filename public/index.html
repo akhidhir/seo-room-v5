@@ -11055,7 +11055,8 @@
         setApplying(true);
         try {
           const r = await api(`/projects/${project.id}/internal-links/apply`, { method: 'POST', body: { suggestion_ids: ids || [] } });
-          alert(`Applied: ${r.applied}, Failed: ${r.failed}`);
+          const failReasons = (r.results || []).filter(x => x.status === 'failed' || x.status === 'skipped').map(x => x.reason).filter(Boolean);
+          alert(`Applied: ${r.applied}, Failed: ${r.failed}${failReasons.length ? '\n\nReasons:\n' + failReasons.slice(0,5).join('\n') : ''}`);
           loadData();
         } catch (e) { alert(e.message); }
         setApplying(false);
