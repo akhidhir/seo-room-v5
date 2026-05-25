@@ -19380,7 +19380,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
 
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8192,
+      max_tokens: 16000,
       messages: [{
         role: 'user',
         content: `You are an SEO content optimizer. Return ONLY targeted find-and-replace patches to improve the score. Do NOT return full HTML.
@@ -19422,7 +19422,7 @@ Return ONLY a JSON object:
 PRIORITY ORDER — fix ALL of these:
 1. Meta title: MUST be 50-60 chars AND contain "${fk}". Current is ${currentMetaTitle.length} chars — ${currentMetaTitle.length > 60 ? 'TOO LONG, shorten it' : currentMetaTitle.length < 50 ? 'TOO SHORT, expand it' : 'length OK'}. ALWAYS return a new meta_title.
 2. Meta desc: MUST be 120-155 chars AND contain "${fk}". Current is ${currentMetaDesc.length} chars — ${currentMetaDesc.length > 155 ? 'TOO LONG, shorten it' : currentMetaDesc.length < 120 ? 'TOO SHORT, expand it' : 'length OK'}. ALWAYS return a new meta_description.
-3. Word count: currently ${currentWords} words, need ${Math.max(0, 1500 - currentWords)} more to reach 1500. ${currentWords < 1500 ? 'THIS IS THE #1 PRIORITY. You MUST add at least ' + Math.max(0, 1500 - currentWords) + ' words total across all patches. Each patch that expands a paragraph should add 30-50 new words of relevant detail, examples, suburb names, process descriptions, or material specifics. Target at least 15 expansion patches.' : 'Word count is good.'}
+3. Word count: currently ${currentWords} words, need ${Math.max(0, 1500 - currentWords)} more to reach 1500. ${currentWords < 1500 ? 'THIS IS THE #1 PRIORITY. You MUST add at least ' + Math.ceil(Math.max(0, 1500 - currentWords) * 1.2) + ' words total across all patches (overshoot by 20%). For EVERY paragraph in the content, create a patch that expands it by 40-60 words with relevant detail: material types, process steps, suburb names, timeframes, cost context, benefits, or customer scenarios. You need 15-20 expansion patches minimum.' : 'Word count is good.'}
 4. Focus keyword "${fk}": appears ${fkCount}x, need 3-8. ${fkCount >= 5 ? 'ALREADY ENOUGH — do NOT add "${fk}" in ANY patch. Use synonyms only when expanding. If over 8, actively REMOVE some by replacing with "we", "our team", "our services", etc.' : fkCount >= 3 ? 'Already in range — do NOT add more.' : 'Add exactly ' + (5 - fkCount) + ' more uses.'}
    ABSOLUTE RULE: NEVER add the exact phrase "${fk}" when expanding paragraphs. Use variations like "our fencing services", "we", "the team", "our work" etc. The keyword is already present enough.
 5. Missing keywords: weave into existing sentences
@@ -19482,14 +19482,38 @@ CRITICAL RULES:
       }
     }
 
+    // Ensure meta title and desc include focus keyword and are correct length
+    const finalFk = focus_keyword || page.focus_keyword || '';
+    let finalMetaTitle = metaTitle || page.meta_title || '';
+    let finalMetaDesc = metaDesc || page.meta_description || '';
+    // If meta doesn't contain focus keyword, or is wrong length, generate a basic one
+    if (finalFk && (!finalMetaTitle.toLowerCase().includes(finalFk.toLowerCase()) || finalMetaTitle.length > 65 || finalMetaTitle.length < 40)) {
+      const pageName = page.page_name || page.page_title || '';
+      const bizName = project.business_name || project.name || '';
+      // Build a meta title: "Focus Keyword | Business Name" or similar, 50-60 chars
+      let candidate = finalFk.charAt(0).toUpperCase() + finalFk.slice(1) + ' | ' + bizName + ' | ' + (project.location || 'Perth');
+      if (candidate.length > 60) candidate = finalFk.charAt(0).toUpperCase() + finalFk.slice(1) + ' | ' + bizName;
+      if (candidate.length > 60) candidate = candidate.substring(0, 57) + '...';
+      if (candidate.length < 40) candidate = pageName + ' — ' + candidate;
+      finalMetaTitle = candidate;
+    }
+    if (finalFk && (!finalMetaDesc.toLowerCase().includes(finalFk.toLowerCase()) || finalMetaDesc.length > 160 || finalMetaDesc.length < 100)) {
+      const bizName = project.business_name || project.name || '';
+      const location = project.location || 'Perth';
+      let candidate = bizName + ' offers professional ' + finalFk + ' services in ' + location + '. Contact us for a free quote and expert advice on your next project.';
+      if (candidate.length > 155) candidate = candidate.substring(0, 152) + '...';
+      if (candidate.length < 120) candidate = 'Looking for ' + finalFk + '? ' + candidate;
+      finalMetaDesc = candidate;
+    }
+
     console.log('[light-optimise] Done for page ' + pageId + ' — applied: ' + appliedCount + ', skipped: ' + skippedCount + ' of ' + patches.length + ' patches');
     res.json({
       preview: true,
       content_html: optimisedHtml,
-      meta_title: metaTitle || page.meta_title,
-      meta_description: metaDesc || page.meta_description,
+      meta_title: finalMetaTitle,
+      meta_description: finalMetaDesc,
       ai_notes: aiNotes + (skippedCount > 0 ? ' (' + skippedCount + ' patches skipped — text not found)' : ''),
-      proposed: { content_html: optimisedHtml, meta_title: metaTitle, meta_description: metaDesc, ai_notes: aiNotes },
+      proposed: { content_html: optimisedHtml, meta_title: finalMetaTitle, meta_description: finalMetaDesc, ai_notes: aiNotes },
       patches_applied: appliedCount,
       patches_skipped: skippedCount,
       patches_total: patches.length
