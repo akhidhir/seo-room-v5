@@ -16273,16 +16273,20 @@
             onClick: function() {
               if (!confirm('Reset this page? This will clear all draft content, meta, and AI notes. This cannot be undone.')) return;
               setEditContent('');
-              setEditMeta({ meta_title: '', meta_desc: '', focus_keyword: page.focus_keyword || '' });
+              setEditMeta({ meta_title: '', meta_desc: '', focus_keyword: '' });
               setOptimisePreview(null);
               setSectionView(false);
+              setTargetKeywords([]);
               setEditorKey(function(k) { return k + 1; });
-              console.log('[reset] PUT', apiPrefix + '/site-pages/' + page.id);
               api(apiPrefix + '/site-pages/' + page.id + '/reset', { method: 'POST' })
                 .then(function(result) {
-                  console.log('[reset] result:', result);
                   if (result && result.error) { alert('Reset failed: ' + result.error); return; }
-                  onUpdate(Object.assign({}, page, { draft_content: '', meta_title: '', meta_description: '', stage: 'brief', word_count: 0 }));
+                  onUpdate(Object.assign({}, page, {
+                    draft_content: '', meta_title: '', meta_description: '', focus_keyword: '',
+                    stage: 'brief', word_count: 0, ai_notes: null, target_keywords: [],
+                    plagiarism_result: null, ai_detection_result: null, page_sections: null,
+                    competitor_analysis: null, comments: []
+                  }));
                 })
                 .catch(function(e) { alert('Reset failed: ' + e.message); });
             },

@@ -1778,7 +1778,11 @@ app.post(['/api/builds/:buildId/site-pages/:pageId/reset', '/api/projects/:proje
     const scopeCol = buildId ? 'build_id' : 'project_id';
     const scopeVal = buildId || projectId;
     const result = await pool.query(
-      `UPDATE site_pages SET draft_content='', meta_title='', meta_description='', stage='brief', word_count=0, updated_at=NOW() WHERE id=$1 AND ${scopeCol}=$2 RETURNING *`,
+      `UPDATE site_pages SET draft_content='', meta_title='', meta_description='', focus_keyword='',
+       stage='brief', word_count=0, ai_notes=NULL, target_keywords='[]'::jsonb,
+       plagiarism_result=NULL, ai_detection_result=NULL, page_sections=NULL,
+       competitor_analysis=NULL, comments='[]'::jsonb, updated_at=NOW()
+       WHERE id=$1 AND ${scopeCol}=$2 RETURNING *`,
       [pageId, scopeVal]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Page not found' });
