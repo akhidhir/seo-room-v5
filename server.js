@@ -19419,22 +19419,23 @@ Return ONLY a JSON object:
   "ai_notes": "brief summary"
 }
 
-PRIORITY ORDER — fix these first:
-1. Focus keyword: weave "${fk}" into 2-3 more existing sentences naturally (need ${3 - fkCount} more uses minimum)
-2. Meta title: must be 50-60 chars AND contain "${fk}"
-3. Meta desc: must be 120-155 chars AND contain "${fk}"
-4. Word count: expand existing paragraphs with 1-2 extra sentences each (need ${Math.max(0, 1500 - currentWords)} more words)
+PRIORITY ORDER — fix ALL of these:
+1. Meta title: MUST be 50-60 chars AND contain "${fk}". Current is ${currentMetaTitle.length} chars — ${currentMetaTitle.length > 60 ? 'TOO LONG, shorten it' : currentMetaTitle.length < 50 ? 'TOO SHORT, expand it' : 'length OK'}. ALWAYS return a new meta_title.
+2. Meta desc: MUST be 120-155 chars AND contain "${fk}". Current is ${currentMetaDesc.length} chars — ${currentMetaDesc.length > 155 ? 'TOO LONG, shorten it' : currentMetaDesc.length < 120 ? 'TOO SHORT, expand it' : 'length OK'}. ALWAYS return a new meta_description.
+3. Word count: need ${Math.max(0, 1500 - currentWords)} more words. Expand EVERY paragraph by adding 2-4 more sentences with relevant detail, examples, or specifics. This is the biggest score gap.
+4. Focus keyword "${fk}": appears ${fkCount}x, need 3-8. ${fkCount < 3 ? 'Add ' + (3 - fkCount) + ' more uses.' : fkCount > 8 ? 'Remove ' + (fkCount - 8) + ' uses.' : 'OK.'}
 5. Missing keywords: weave into existing sentences
 
 CRITICAL RULES:
 1. Each "find" MUST be an EXACT substring copied from the content (plain text only, no HTML tags)
 2. Each "find" should be a full sentence or meaningful phrase
-3. The "replace" keeps same meaning but weaves in keywords or expands
+3. The "replace" keeps same meaning but expands with more detail, keywords, and specifics
 4. Do NOT touch headings (H1, H2, H3) — only modify paragraph text
-5. 5 to 15 patches maximum
-6. Do NOT add new sections. Only expand/modify existing sentences.
-7. If adding words, expand EXISTING paragraphs — append sentences after current ones
-8. NEVER include HTML tags in "find" — only the text between tags`
+5. Use 10 to 20 patches — be aggressive about expanding content to hit 1500 words
+6. Do NOT add new sections. Expand EXISTING paragraphs substantially.
+7. Each patch should ADD 20-40 words by expanding the sentence with more detail
+8. NEVER include HTML tags in "find" — only the text between tags
+9. ALWAYS return meta_title and meta_description — never null`
       }]
     });
 
