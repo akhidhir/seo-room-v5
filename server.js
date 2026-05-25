@@ -3638,9 +3638,32 @@ app.delete('/api/projects/:id/plagiarism-check/:scanId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GPTHuman test endpoint — hit /api/test-gpthuman in browser to verify API key + response
+app.get('/api/test-gpthuman', async (req, res) => {
+  try {
+    const apiKey = process.env.GPTHUMAN_API_KEY;
+    if (!apiKey) return res.json({ error: 'GPTHUMAN_API_KEY not set in env', keys: Object.keys(process.env).filter(k => k.includes('GPT') || k.includes('HUMAN')).join(', ') });
+    const testText = 'Professional fencing installation services are available throughout the Perth metropolitan area for both residential and commercial properties requiring high quality boundary solutions.';
+    console.log('[test-gpthuman] Sending test: ' + testText.length + ' chars');
+    const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: testText, tone: 'Standard', mode: 'Enhanced' })
+    });
+    const status = ghResp.status;
+    const raw = await ghResp.text();
+    console.log('[test-gpthuman] Status: ' + status + ', Response: ' + raw.substring(0, 500));
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch(e) { parsed = { raw_text: raw }; }
+    res.json({ status, apiKeyPrefix: apiKey.substring(0, 8) + '...', input: testText, response: parsed, changed: parsed.output ? (parsed.output.trim() !== testText) : false });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
 // AI Detection (Winston AI) — synchronous, returns human score
 // Humanize Only — run GPTHuman on existing content, PRESERVE all HTML structure
-app.post('/api/projects/:id/humanize-only', async (req, res) => {
+app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);
   try {
