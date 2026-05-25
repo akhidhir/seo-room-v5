@@ -33480,6 +33480,29 @@ app.put('/api/projects/:projectId/internal-links/suggestions/:id', async (req, r
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Edit a suggestion (change anchor, target, source, etc.)
+app.patch('/api/projects/:projectId/internal-links/suggestions/:id', async (req, res) => {
+  const { id } = req.params;
+  const { suggested_anchor, target_url, target_title, source_url, source_title, context_sentence, reason, priority } = req.body;
+  try {
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+    if (suggested_anchor !== undefined) { fields.push(`suggested_anchor=$${idx++}`); vals.push(suggested_anchor); }
+    if (target_url !== undefined) { fields.push(`target_url=$${idx++}`); vals.push(target_url); }
+    if (target_title !== undefined) { fields.push(`target_title=$${idx++}`); vals.push(target_title); }
+    if (source_url !== undefined) { fields.push(`source_url=$${idx++}`); vals.push(source_url); }
+    if (source_title !== undefined) { fields.push(`source_title=$${idx++}`); vals.push(source_title); }
+    if (context_sentence !== undefined) { fields.push(`context_sentence=$${idx++}`); vals.push(context_sentence); }
+    if (reason !== undefined) { fields.push(`reason=$${idx++}`); vals.push(reason); }
+    if (priority !== undefined) { fields.push(`priority=$${idx++}`); vals.push(priority); }
+    if (!fields.length) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(id);
+    await pool.query(`UPDATE internal_link_suggestions SET ${fields.join(', ')} WHERE id=$${idx}`, vals);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Bulk approve/dismiss
 app.post('/api/projects/:projectId/internal-links/suggestions/bulk', async (req, res) => {
   const projectId = parseInt(req.params.projectId);

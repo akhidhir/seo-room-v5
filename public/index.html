@@ -11008,6 +11008,8 @@
       const [filter, setFilter] = useState('pending'); // pending, approved, applied, dismissed, all
       const [selectedIds, setSelectedIds] = useState(new Set());
       const [rateLimitMsg, setRateLimitMsg] = useState('');
+      const [editingId, setEditingId] = useState(null);
+      const [editData, setEditData] = useState({});
 
       const loadData = async () => {
         try {
@@ -11068,6 +11070,19 @@
       const selectAll = () => {
         if (selectedIds.size === suggestions.length) setSelectedIds(new Set());
         else setSelectedIds(new Set(suggestions.map(s => s.id)));
+      };
+
+      const startEdit = (s) => {
+        setEditingId(s.id);
+        setEditData({ suggested_anchor: s.suggested_anchor, target_url: s.target_url, source_url: s.source_url });
+      };
+
+      const saveEdit = async (id) => {
+        try {
+          await api(`/projects/${project.id}/internal-links/suggestions/${id}`, { method: 'PATCH', body: editData });
+          setEditingId(null);
+          loadData();
+        } catch (e) { alert(e.message); }
       };
 
       const stats = audit?.stats || {};
@@ -11272,6 +11287,9 @@
                     ),
                     React.createElement('td', { style: { padding: '10px 16px', textAlign: 'right' } },
                       s.status === 'pending' && React.createElement(React.Fragment, null,
+                        React.createElement('button', { onClick: () => startEdit(s), style: { background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', marginRight: 8, fontSize: 13 }, title: 'Edit' },
+                          React.createElement('i', { className: 'fas fa-pen' })
+                        ),
                         React.createElement('button', { onClick: () => updateSuggestion(s.id, 'approved'), style: { background: 'none', border: 'none', color: '#14b8a6', cursor: 'pointer', marginRight: 8, fontSize: 13 }, title: 'Approve' },
                           React.createElement('i', { className: 'fas fa-check' })
                         ),
@@ -11295,6 +11313,43 @@
           // Reason tooltip row — show reason for hovered/expanded suggestion
           suggestions.length > 0 && React.createElement('div', { style: { marginTop: 8, fontSize: 11, color: '#666' } },
             'Hover over a suggestion row to see the AI reasoning.'
+          ),
+
+          // Edit panel
+          editingId && React.createElement('div', {
+            style: { background: '#1a1a2e', border: '1px solid #3b82f6', borderRadius: 8, padding: 16, marginTop: 12 }
+          },
+            React.createElement('div', { style: { fontSize: 13, color: '#3b82f6', fontWeight: 600, marginBottom: 12 } }, 'Edit Suggestion'),
+            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 } },
+              React.createElement('div', null,
+                React.createElement('label', { style: { fontSize: 11, color: '#999', textTransform: 'uppercase', display: 'block', marginBottom: 4 } }, 'Anchor Text'),
+                React.createElement('input', {
+                  value: editData.suggested_anchor || '',
+                  onChange: e => setEditData({ ...editData, suggested_anchor: e.target.value }),
+                  style: { width: '100%', padding: '8px 12px', background: '#0d0d1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }
+                })
+              ),
+              React.createElement('div', null,
+                React.createElement('label', { style: { fontSize: 11, color: '#999', textTransform: 'uppercase', display: 'block', marginBottom: 4 } }, 'Target URL'),
+                React.createElement('input', {
+                  value: editData.target_url || '',
+                  onChange: e => setEditData({ ...editData, target_url: e.target.value }),
+                  style: { width: '100%', padding: '8px 12px', background: '#0d0d1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }
+                })
+              ),
+              React.createElement('div', null,
+                React.createElement('label', { style: { fontSize: 11, color: '#999', textTransform: 'uppercase', display: 'block', marginBottom: 4 } }, 'Source URL'),
+                React.createElement('input', {
+                  value: editData.source_url || '',
+                  onChange: e => setEditData({ ...editData, source_url: e.target.value }),
+                  style: { width: '100%', padding: '8px 12px', background: '#0d0d1a', border: '1px solid #333', borderRadius: 6, color: '#fff', fontSize: 13 }
+                })
+              )
+            ),
+            React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' } },
+              React.createElement('button', { onClick: () => setEditingId(null), style: { padding: '6px 16px', background: '#333', border: 'none', borderRadius: 6, color: '#999', cursor: 'pointer', fontSize: 12 } }, 'Cancel'),
+              React.createElement('button', { onClick: () => saveEdit(editingId), className: 'btn', style: { padding: '6px 16px', fontSize: 12 } }, 'Save Changes')
+            )
           )
         ),
 
