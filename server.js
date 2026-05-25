@@ -33272,7 +33272,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
               });
             }
 
-            pageMap.set(url.replace(/\/$/, ''), { title, outbound, inbound: [], wordCount });
+            pageMap.set(url.replace(/\/$/, ''), { title, outbound, inbound: [], wordCount, textSnippet: textContent.substring(0, 500) });
           } catch (crawlErr) {
             console.log(`[internal-links] Failed to crawl ${url}: ${crawlErr.message}`);
           }
@@ -33326,7 +33326,8 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
               outbound: data.outbound.length,
               inbound: data.inbound.length,
               outbound_targets: data.outbound.map(l => l.target_url).slice(0, 10),
-              word_count: data.wordCount
+              word_count: data.wordCount,
+              text_excerpt: data.textSnippet || ''
             });
           }
 
@@ -33347,12 +33348,12 @@ ${JSON.stringify(pageSummaries, null, 2)}
 
 Orphan pages (no inbound links): ${JSON.stringify(orphanPages.map(p => p.url))}
 
-Rules:
+CRITICAL RULES:
+- The "suggested_anchor" MUST be an EXACT phrase that appears in the source page's text_excerpt. Do NOT invent anchor text.
+- Only suggest anchors you can see in the source page's text_excerpt field. If you can't find suitable text, skip that suggestion.
 - Focus on linking related content together (topical relevance)
 - Prioritize orphan pages — they need inbound links most
-- Suggest specific anchor text that includes relevant keywords
-- Include the sentence/context where the link should be inserted
-- Don't suggest links that already exist
+- Don't suggest links that already exist (check outbound_targets)
 - Suggest 5-15 links maximum
 - Priority: high (orphan pages, cornerstone), medium (related topics), low (nice-to-have)
 
