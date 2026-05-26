@@ -15976,8 +15976,19 @@
       };
 
       var handleGenerate = async function() {
+        if (!editMeta.focus_keyword && !page.focus_keyword) {
+          alert('Set a focus keyword before generating content.');
+          return;
+        }
         setGenerating(true);
         try {
+          // Save focus keyword to DB before generating so the server has it
+          if (editMeta.focus_keyword && editMeta.focus_keyword !== page.focus_keyword) {
+            await api(apiPrefix + '/site-pages/' + page.id, {
+              method: 'PATCH',
+              body: { focus_keyword: editMeta.focus_keyword }
+            });
+          }
           var data = await api(apiPrefix + '/site-pages/' + page.id + '/generate-content', { method: 'POST' });
           if (data.content) {
             onUpdate(Object.assign({}, page, { draft_content: data.content, word_count: data.word_count, stage: 'written' }));
