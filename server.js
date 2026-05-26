@@ -3161,7 +3161,7 @@ async function crawlSiteForMigration(siteUrl) {
 
   for (const smUrl of sitemapUrls) {
     try {
-      const resp = await axios.get(smUrl, { timeout: 15000, headers: { 'User-Agent': 'SEORoom/1.0' } });
+      const resp = await axios.get(smUrl, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' } });
       const xml = resp.data;
       // Extract URLs from sitemap
       const locMatches = xml.match(/<loc>(.*?)<\/loc>/gi) || [];
@@ -3170,7 +3170,7 @@ async function crawlSiteForMigration(siteUrl) {
         // Check if it's a sub-sitemap
         if (url.includes('sitemap') && url.endsWith('.xml')) {
           try {
-            const subResp = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'SEORoom/1.0' } });
+            const subResp = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' } });
             const subLocs = subResp.data.match(/<loc>(.*?)<\/loc>/gi) || [];
             for (const subLoc of subLocs) {
               const subUrl = subLoc.replace(/<\/?loc>/gi, '').trim();
@@ -3207,7 +3207,7 @@ async function crawlSiteForMigration(siteUrl) {
       if (visited.has(url)) return null;
       visited.add(url);
       try {
-        const resp = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'SEORoom/1.0' }, maxRedirects: 3 });
+        const resp = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' }, maxRedirects: 3 });
         const html = resp.data;
         const title = (html.match(/<title[^>]*>(.*?)<\/title>/is) || [])[1]?.trim() || '';
         const metaDesc = (html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/is) || [])[1]?.trim() || '';
@@ -15071,7 +15071,7 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
         const timeout = setTimeout(() => controller.abort(), 10000);
         const resp = await fetch(url, {
           signal: controller.signal,
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' }
         });
         clearTimeout(timeout);
 
@@ -21624,7 +21624,7 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
     // 1c. Scrape website for NAP consistency + schema
     if (domain) {
       try {
-        const siteRes = await fetch(`https://${domain}`, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoom/1.0)' } });
+        const siteRes = await fetch(`https://${domain}`, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' } });
         if (siteRes.ok) {
           const html = await siteRes.text();
           gbpData.websiteCheck = {
@@ -30253,7 +30253,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     const crawlPage = async (url) => {
       try {
         const resp = await fetch(url, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' },
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
           signal: AbortSignal.timeout(10000)
         });
         if (!resp.ok) return { url, error: `HTTP ${resp.status}` };
@@ -34895,7 +34895,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
             for (const postType of ['pages', 'posts']) {
               try {
                 const resp = await fetch(baseWpUrl + '/wp-json/wp/v2/' + postType + '?slug=' + encodeURIComponent(slug), {
-                  headers: { ...wpAuthHeaders, 'User-Agent': 'SEORoom/1.0' },
+                  headers: { ...wpAuthHeaders, 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
                   signal: AbortSignal.timeout(10000)
                 });
                 if (resp.ok) {
