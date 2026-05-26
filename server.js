@@ -4324,7 +4324,61 @@ Return ONLY the HTML content, no explanation.`;
     }
     pipeline.steps.push({ step: 'rule_based', paragraphs: pBlocks.length });
 
-    // ── STEP 5: Banned word scrub (safety net) ──
+    // ── STEP 5: Force-inject missing keywords ──
+    // Re-check content after repair — if mandatory keywords are STILL missing, physically insert them
+    if (brief && Object.keys(brief).length > 0) {
+      const recheckContent = finalContent.replace(/<[^>]+>/g, ' ').replace(/[-–—]/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+      const STOP_WORDS2 = new Set(['with', 'that', 'this', 'from', 'your', 'their', 'they', 'have', 'been', 'will', 'each', 'also', 'more', 'than', 'into', 'over', 'such', 'only', 'very', 'when', 'where', 'which', 'what', 'about', 'across', 'after', 'before', 'between', 'through', 'during', 'without', 'within', 'along', 'among', 'around', 'upon', 'under']);
+      function phraseMatch2(phrase) {
+        const words = phrase.toLowerCase().replace(/[-–—]/g, ' ').replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS2.has(w));
+        if (words.length === 0) return true;
+        return words.every(w => recheckContent.includes(w));
+      }
+
+      // Collect all mandatory keywords that are still missing
+      const stillMissing = [];
+      if (brief.about_page && brief.about_page.keywords) {
+        const kws = Array.isArray(brief.about_page.keywords) ? brief.about_page.keywords : [brief.about_page.keywords];
+        for (const kw of kws) { if (!phraseMatch2(kw)) stillMissing.push(kw); }
+      }
+      let pageName2 = '';
+      if (page_id) {
+        const pgQ3 = await pool.query('SELECT page_name FROM site_pages WHERE id=$1', [page_id]);
+        pageName2 = (pgQ3.rows[0] || {}).page_name || '';
+      }
+      const isHome2 = pageName2.toLowerCase() === 'home';
+      let matchedService2 = null;
+      if (brief.service_pages) {
+        matchedService2 = brief.service_pages.find(sp => {
+          const spName = (sp.page_name || '').toLowerCase();
+          return spName === pageName2.toLowerCase() || pageName2.toLowerCase().includes(spName) || spName.includes(pageName2.toLowerCase());
+        });
+      }
+      if (matchedService2 && matchedService2.keywords && !isHome2) {
+        const kws = Array.isArray(matchedService2.keywords) ? matchedService2.keywords : [matchedService2.keywords];
+        for (const kw of kws) { if (!phraseMatch2(kw)) stillMissing.push(kw); }
+      }
+
+      if (stillMissing.length > 0) {
+        console.log('[smart-humanize] Step 5: Force-injecting ' + stillMissing.length + ' missing keywords: ' + stillMissing.join(', '));
+        // Find the first substantial <p> tag and append the keywords naturally
+        const firstPMatch = finalContent.match(/<p([^>]*)>([\s\S]*?)<\/p>/i);
+        if (firstPMatch) {
+          // Build a natural sentence containing all missing keywords
+          const kwSentence = stillMissing.length === 1
+            ? 'As trusted ' + stillMissing[0] + ', we deliver results that speak for themselves.'
+            : 'As experienced ' + stillMissing.join(' and ') + ', we deliver results that speak for themselves.';
+          // Insert after the first paragraph
+          const insertPoint = finalContent.indexOf(firstPMatch[0]) + firstPMatch[0].length;
+          finalContent = finalContent.substring(0, insertPoint) + '\n<p>' + kwSentence + '</p>' + finalContent.substring(insertPoint);
+          pipeline.steps.push({ step: 'force_inject', keywords: stillMissing });
+        }
+      } else {
+        pipeline.steps.push({ step: 'force_inject', skipped: 'All keywords present' });
+      }
+    }
+
+    // ── STEP 6: Banned word scrub (safety net) ──
     if (brief.words_to_avoid && brief.words_to_avoid.length) {
       let scrubCount = 0;
       for (const banned of brief.words_to_avoid) {
