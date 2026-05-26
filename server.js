@@ -19872,57 +19872,41 @@ ${allPages.rows.map(p => p.page_name + ' (' + p.slug + ')').join(', ')}
 
 REQUIREMENTS:
 - Fix ALL listed issues
-- Weave missing keywords naturally (don't keyword stuff)
-- Target 1500+ words
-- Ensure focus keyword appears 3-8 times
 - Add H2/H3 subheadings if lacking
 - Add internal links as <a href="slug">anchor text</a>
 - Keep the same overall structure and tone, just improve
 - Return ONLY the optimized HTML content (no wrapping markdown)
 - Also return updated meta title (max 60 chars) and meta description (max 155 chars)
 
-CRITICAL — DEFEAT AI DETECTION (this content will be scanned by AI detectors — you MUST pass as human-written):
+ANTI-REPETITION (THIS IS THE #1 PRIORITY — violating these rules makes the content unusable):
+- NEVER repeat the same idea, concept, or selling point twice on the entire page. Say it ONCE, say it well, move on.
+- Each paragraph MUST cover a DIFFERENT topic or aspect. Before writing a paragraph, check: "Did I already say this?" If yes, DELETE it.
+- Each sentence must add NEW information not stated anywhere else on the page. If a sentence doesn't teach the reader something new, cut it.
+- NEVER pad content. 800 words of unique info beats 1500 words of repeated fluff. Aim for the word target ONLY with genuinely new content.
+- NEVER restate the same service description in different words across sections. "We install fences" and "Our team handles fence installation" is the SAME thing — pick one.
+- Maximum ONE mention of each specific service type per page (e.g., say "Colorbond fencing" once, not in every section).
+- Focus keyword: 3-8 times across the ENTIRE page, spread out. Never more than once per paragraph.
+- Missing keywords: weave each one in ONCE, naturally. Do not stuff them.
+- Paragraphs: 2-4 sentences max. No walls of text.
+- Sentences: average 15-20 words. No sentence over 35 words.
 
-PERPLEXITY (make word choices UNPREDICTABLE):
-- Do NOT pick the most obvious/common word. Instead of "professional" try "proper". Instead of "solutions" try "work". Instead of "ensure" try "make sure". Instead of "utilize" try "use". Instead of "provide" try "do" or "handle". Instead of "residential" try "home" sometimes. Instead of "commercial" try "business" or "corporate".
-- Swap formal vocabulary for everyday words: "approximately" → "about", "numerous" → "lots of", "purchase" → "buy", "commence" → "start", "assist" → "help", "regarding" → "about", "prior to" → "before", "in order to" → "to"
-- NEVER use these AI-giveaway words anywhere in the content: comprehensive, innovative, leverage, streamline, cutting-edge, state-of-the-art, seamless, robust, navigate, landscape, delve, crucial, optimal, facilitate, enhance, utilize, diverse, realm, multifaceted, elevate, foster, harness, pivotal, dynamic, testament, cornerstone, holistic
+CONTENT STRUCTURE:
+- H2 sections should each cover a distinct subtopic (e.g., materials, process, pricing, areas served — not the same service described 4 ways)
+- The page should read like a conversation that PROGRESSES — each section builds on the last, doesn't circle back
+- End with ONE clear CTA, not repeated calls to action in every section
 
-BURSTINESS (vary sentence length WILDLY):
-- Write some sentences that are only 3-5 words long. "We fix fences." "That's the difference." "Full stop."
-- Then write one really long sentence that goes on for 30-40 words with multiple clauses joined by commas and dashes
-- NEVER write 3+ consecutive sentences of similar length — check yourself
-- Some paragraphs should be just ONE sentence. Others can be 5-6 sentences.
-- At least 20% of sentences must be under 8 words
+VOICE & STYLE:
+- Write like a tradie explaining their work to a homeowner — plain English, not marketing copy
+- Use contractions: we're, you'll, it's, don't, can't, that's, we've
+- Use Australian English: colour, centre, organise, specialise
+- Everyday words over formal ones: "use" not "utilise", "about" not "approximately", "help" not "assist", "buy" not "purchase", "start" not "commence"
+- Mix sentence lengths: some short (4-6 words), some medium, occasionally one longer one
+- Start paragraphs differently every time
+- No formulaic transitions: skip "Moreover", "Furthermore", "Additionally", "In addition", "In conclusion"
+- Include specific local details where relevant (suburbs, WA conditions)
 
-ENTROPY (break patterns, add randomness):
-- Start paragraphs differently every time — NEVER start two paragraphs the same way
-- Mix up sentence openers: questions, statements, fragments, "And" / "But" / "So", imperatives ("Call us"), personal ("We've seen")
-- NEVER use formulaic transitions: "Moreover", "Furthermore", "Additionally", "In addition", "It's worth noting", "In conclusion", "Ultimately"
-- Break parallel structure in lists — each item should have different grammar
-- Use parenthetical asides (like this one) and dashes — for interruptions — randomly
-
-HUMAN VOICE:
-- Use contractions EVERYWHERE: we're, you'll, it's, don't, won't, can't, there's, that's, here's, we've, they're, we'd
-- Include 2-3 opinionated statements: "honestly", "the truth is", "most people don't realise"
-- Add specific local details: Perth suburb names, WA weather references, Australian slang
-- Include at least one rhetorical question per section
-- Write like a tradie explaining their work to a homeowner over a coffee — not like a brochure
-- Use Australian English: "colour", "centre", "organise", "specialise"
-
-BANNED STRUCTURES (these trigger AI detection at the document level):
-- NEVER use numbered steps format ("Step 1:", "Step 2:"). Describe the process as a flowing narrative instead.
-- NEVER use FAQ format ("Question? Answer.") for more than ONE question in the whole page. Weave info into paragraphs.
-- NEVER use paired opposites in the same sentence ("home or business, big or small, simple or complex"). Pick ONE and talk about it.
-- NEVER use three parallel fragments in a row ("Materials sorted. Labour covered. Timeline locked."). Write them as a normal sentence.
-- NEVER list three CTA options ("call us, fill out our form, or drop by"). Give ONE call to action per paragraph.
-- NEVER start consecutive paragraphs with the same word or structure.
-- NEVER use "there is/are no" + noun + "answer" pattern ("There's no single answer").
-- NEVER write "it depends on your situation/needs/property" — give a REAL answer with specifics.
-- NEVER use "whether it's X or Y" or "be it X or Y" balanced constructions.
-
-BANNED PHRASES (using ANY of these will trigger AI detection):
-"Whether you're looking for", "When it comes to", "In today's", "Look no further", "Your trusted partner", "Dedicated to providing", "Committed to excellence", "One-stop shop", "Hassle-free", "Don't hesitate to", "Feel free to", "A wide range of", "Take it to the next level", "We understand that", "Rest assured", "Peace of mind", "Second to none", "Top-notch", "Are you looking for", "plays a crucial role", "It is important to note", "with care and attention", "that means something to us", "zero obligation", "attention to detail", "transparent pricing", "honest assessment", "straightforward service"
+BANNED PHRASES:
+"Whether you're looking for", "When it comes to", "In today's", "Look no further", "Your trusted partner", "Dedicated to providing", "Committed to excellence", "One-stop shop", "Hassle-free", "Don't hesitate to", "Feel free to", "A wide range of", "Take it to the next level", "We understand that", "Rest assured", "Peace of mind", "Second to none", "Top-notch", "Are you looking for", "plays a crucial role", "It is important to note", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "state-of-the-art", "seamless", "robust", "holistic"
 
 Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed" }`
       }]
