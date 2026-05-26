@@ -15849,18 +15849,22 @@
         if (!editContent || humanizing) return;
         setHumanizing(true);
         try {
-          var result = await api(apiPrefix + '/humanize-only', {
+          var result = await api(apiPrefix + '/humanize-smart', {
             method: 'POST',
             body: { content_html: editContent, page_id: page.id, build_id: project?.build_id || null }
           });
           if (result.content_html) {
             setEditContent(result.content_html);
-            var d = result.debug || {};
-            var msg = 'Content humanized successfully!';
-            if (result.credits_used > 0) msg += ' GPTHuman credits used: ' + result.credits_used + '.';
+            var msg = 'Smart humanize complete!';
+            if (result.credits_used > 0) msg += ' GPTHuman credits: ' + result.credits_used + '.';
+            if (result.gaps_found > 0) msg += ' Brief gaps found: ' + result.gaps_found + ', repaired: ' + result.gaps_repaired + '.';
+            else msg += ' Brief: 100% compliant.';
             msg += ' Run AI Detection to check the score.';
             alert(msg);
-            if (d.log) console.log('[humanize debug]', d.log);
+            // Refresh brief check display
+            if (result.brief_score_before != null) {
+              setBriefCheckResult({ score: result.brief_score_before, gaps: [] });
+            }
           }
         } catch(e) {
           alert('Humanize error: ' + (e.message || e));

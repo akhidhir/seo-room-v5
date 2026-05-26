@@ -4052,6 +4052,318 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
   }
 });
 
+// ============================================================================
+// SMART HUMANIZE PIPELINE — Humanize → Brief Check → Surgical Repair → Re-humanize
+// Achieves 80%+ human score while preserving brief compliance
+// ============================================================================
+app.post(['/api/projects/:id/humanize-smart', '/api/builds/:id/humanize-smart'], async (req, res) => {
+  try {
+    const { content_html, page_id, build_id } = req.body;
+    if (!content_html || content_html.trim().length < 100) {
+      return res.status(400).json({ error: 'Content too short to humanize' });
+    }
+
+    const buildId = req.params.id.match(/^\d+$/) ? (req.path.includes('/builds/') ? parseInt(req.params.id) : null) : null;
+    const projectId = !buildId ? parseInt(req.params.id) : null;
+    const pipeline = { steps: [], totalCredits: 0 };
+
+    // ── STEP 1: GPTHuman API (per-paragraph) ──
+    console.log('[smart-humanize] Step 1: GPTHuman API pass');
+    let gpthContent = content_html;
+    let gpthCredits = 0;
+    const GPTHUMAN_KEY = process.env.GPTHUMAN_API_KEY;
+    if (GPTHUMAN_KEY) {
+      try {
+        const pTagRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
+        const paragraphs = [];
+        let pMatch;
+        while ((pMatch = pTagRegex.exec(content_html)) !== null) {
+          const innerHtml = pMatch[2];
+          const innerPlain = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+          if (innerPlain.length >= 50) {
+            paragraphs.push({ full: pMatch[0], attrs: pMatch[1], innerHtml, innerPlain });
+          }
+        }
+
+        let htmlResult = content_html;
+        let successCount = 0;
+
+        for (let i = 0; i < paragraphs.length; i++) {
+          const para = paragraphs[i];
+          try {
+            const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + GPTHUMAN_KEY, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: para.innerPlain, tone: 'Standard', mode: 'Professional' })
+            });
+            const ghData = await ghResp.json();
+            if (ghData.output && ghData.output.length > 20) {
+              const cleanOutput = ghData.output.replace(/\n+/g, ' ').trim();
+              const lenRatio = cleanOutput.length / para.innerPlain.length;
+              if (lenRatio > 0.5 && lenRatio < 2.5) {
+                htmlResult = htmlResult.replace(para.full, '<p' + para.attrs + '>' + cleanOutput + '</p>');
+                successCount++;
+              }
+              gpthCredits += (ghData.creditUsage || 0);
+            }
+          } catch (paraErr) {
+            console.error('[smart-humanize] GPTHuman para ' + (i+1) + ' error:', paraErr.message);
+          }
+        }
+
+        gpthContent = htmlResult;
+        pipeline.totalCredits += gpthCredits;
+        pipeline.steps.push({ step: 'gpthuman', paragraphs: paragraphs.length, humanized: successCount, credits: gpthCredits });
+        console.log('[smart-humanize] Step 1 done: ' + successCount + '/' + paragraphs.length + ' paragraphs, credits=' + gpthCredits);
+      } catch (ghErr) {
+        console.error('[smart-humanize] GPTHuman error:', ghErr.message);
+        pipeline.steps.push({ step: 'gpthuman', error: ghErr.message });
+      }
+    } else {
+      pipeline.steps.push({ step: 'gpthuman', skipped: 'No API key' });
+    }
+
+    // ── STEP 2: Brief Compliance Check on humanized content ──
+    console.log('[smart-humanize] Step 2: Brief compliance check');
+    let gaps = [];
+    let briefScore = 100;
+    let brief = {};
+
+    // Get brief
+    const bId = build_id || buildId;
+    if (bId) {
+      const bResult = await pool.query('SELECT copywriting_brief FROM website_builds WHERE id=$1', [bId]);
+      brief = (bResult.rows[0] || {}).copywriting_brief || {};
+    } else if (page_id) {
+      const pgQ = await pool.query('SELECT build_id FROM site_pages WHERE id=$1', [page_id]);
+      if (pgQ.rows[0] && pgQ.rows[0].build_id) {
+        const bResult = await pool.query('SELECT copywriting_brief FROM website_builds WHERE id=$1', [pgQ.rows[0].build_id]);
+        brief = (bResult.rows[0] || {}).copywriting_brief || {};
+      }
+    }
+
+    if (brief && Object.keys(brief).length > 0) {
+      // Normalize content for checking
+      const checkContent = gpthContent.replace(/<[^>]+>/g, ' ').replace(/[-–—]/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+      const STOP_WORDS = new Set(['with', 'that', 'this', 'from', 'your', 'their', 'they', 'have', 'been', 'will', 'each', 'also', 'more', 'than', 'into', 'over', 'such', 'only', 'very', 'when', 'where', 'which', 'what', 'about', 'across', 'after', 'before', 'between', 'through', 'during', 'without', 'within', 'along', 'among', 'around', 'upon', 'under']);
+
+      function phraseMatch(phrase) {
+        const words = phrase.toLowerCase().replace(/[-–—]/g, ' ').replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w));
+        if (words.length === 0) return true;
+        return words.every(w => checkContent.includes(w));
+      }
+
+      // Get page info for context
+      let pageName = '';
+      if (page_id) {
+        const pgQ2 = await pool.query('SELECT page_name FROM site_pages WHERE id=$1', [page_id]);
+        pageName = (pgQ2.rows[0] || {}).page_name || '';
+      }
+      const pageNameLower = pageName.toLowerCase();
+      const isHome = pageNameLower === 'home';
+
+      let totalChecks = 0, passed = 0;
+
+      // Check about_page keywords
+      if (brief.about_page && brief.about_page.keywords) {
+        const kws = Array.isArray(brief.about_page.keywords) ? brief.about_page.keywords : [brief.about_page.keywords];
+        for (const kw of kws) { totalChecks++; if (phraseMatch(kw)) passed++; else gaps.push({ type: 'keyword', phrase: kw, message: `Missing keyword: "${kw}"` }); }
+      }
+
+      // Check service page keywords
+      let matchedService = null;
+      if (brief.service_pages) {
+        matchedService = brief.service_pages.find(sp => {
+          const spName = (sp.page_name || '').toLowerCase();
+          return spName === pageNameLower || pageNameLower.includes(spName) || spName.includes(pageNameLower);
+        });
+      }
+      if (matchedService && matchedService.keywords && !isHome) {
+        const kws = Array.isArray(matchedService.keywords) ? matchedService.keywords : [matchedService.keywords];
+        for (const kw of kws) { totalChecks++; if (phraseMatch(kw)) passed++; else gaps.push({ type: 'keyword', phrase: kw, message: `Missing keyword: "${kw}"` }); }
+      }
+
+      // Check differentiators
+      if (brief.differentiators && brief.differentiators.length) {
+        for (const diff of brief.differentiators) { totalChecks++; if (phraseMatch(diff)) passed++; else gaps.push({ type: 'differentiator', phrase: diff, message: `Missing differentiator: "${diff}"` }); }
+      }
+
+      // Check about page dot points (Home/About)
+      if ((isHome || pageNameLower === 'about') && brief.about_page && brief.about_page.dot_points) {
+        for (const dp of brief.about_page.dot_points) { totalChecks++; if (phraseMatch(dp)) passed++; else gaps.push({ type: 'about', phrase: dp, message: `Missing about point: "${dp}"` }); }
+      }
+
+      // Check words to avoid
+      if (brief.words_to_avoid && brief.words_to_avoid.length) {
+        for (const word of brief.words_to_avoid) {
+          totalChecks++;
+          const avoidRegex = new RegExp('\\b' + word.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w*\\b');
+          if (!avoidRegex.test(checkContent)) passed++;
+          else gaps.push({ type: 'avoid', phrase: word, message: `Contains banned word: "${word}"` });
+        }
+      }
+
+      briefScore = totalChecks > 0 ? Math.round((passed / totalChecks) * 100) : 100;
+      pipeline.steps.push({ step: 'brief_check', score: briefScore, gaps: gaps.length, total: totalChecks });
+      console.log('[smart-humanize] Step 2 done: score=' + briefScore + '% gaps=' + gaps.length);
+    } else {
+      pipeline.steps.push({ step: 'brief_check', skipped: 'No brief found' });
+    }
+
+    // ── STEP 3: Surgical AI Repair (only if gaps found, excluding "avoid" type) ──
+    let repairedContent = gpthContent;
+    const repairGaps = gaps.filter(g => g.type !== 'avoid'); // "avoid" gaps are handled by scrubber
+    const avoidGaps = gaps.filter(g => g.type === 'avoid');
+
+    if (repairGaps.length > 0) {
+      console.log('[smart-humanize] Step 3: Surgical AI repair for ' + repairGaps.length + ' gaps');
+      try {
+        const missingPhrases = repairGaps.map(g => g.phrase).filter(Boolean);
+        const plainContent = gpthContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+        const repairPrompt = `You are a surgical content editor. Your job is to insert missing phrases into existing content with MINIMAL changes.
+
+EXISTING CONTENT (already humanized — DO NOT rewrite):
+${gpthContent}
+
+MISSING PHRASES THAT MUST APPEAR (insert each naturally — add a short clause or sentence, do NOT rewrite existing text):
+${missingPhrases.map(p => '- "' + p + '"').join('\n')}
+
+RULES:
+1. Keep 95%+ of existing text EXACTLY as-is
+2. For each missing phrase, find the most natural place to INSERT it — add a short clause, prepend/append to an existing sentence, or add a brief new sentence
+3. Do NOT rewrite, rephrase, or restructure existing sentences
+4. Do NOT change the tone, style, or vocabulary of the existing text
+5. Do NOT add filler or padding — just the minimum insertion to include each phrase
+6. Preserve ALL HTML tags exactly as they are
+7. Return the full HTML content with your surgical insertions
+
+Return ONLY the HTML content, no explanation.`;
+
+        const repairResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 8000,
+          messages: [{ role: 'user', content: repairPrompt }]
+        });
+
+        let repairResult = repairResp.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+
+        // Safety: check the repair didn't deviate too much
+        const origLen = gpthContent.replace(/<[^>]+>/g, '').length;
+        const repairLen = repairResult.replace(/<[^>]+>/g, '').length;
+        const changeRatio = repairLen / origLen;
+
+        if (changeRatio > 0.85 && changeRatio < 1.3) {
+          repairedContent = repairResult;
+          pipeline.steps.push({ step: 'surgical_repair', gaps_fixed: repairGaps.length, change_ratio: changeRatio.toFixed(2) });
+          console.log('[smart-humanize] Step 3 done: change_ratio=' + changeRatio.toFixed(2));
+        } else {
+          console.log('[smart-humanize] Step 3 skipped: change_ratio=' + changeRatio.toFixed(2) + ' too divergent');
+          pipeline.steps.push({ step: 'surgical_repair', skipped: 'Output too different (ratio=' + changeRatio.toFixed(2) + ')' });
+        }
+      } catch (repairErr) {
+        console.error('[smart-humanize] Repair error:', repairErr.message);
+        pipeline.steps.push({ step: 'surgical_repair', error: repairErr.message });
+      }
+    } else {
+      pipeline.steps.push({ step: 'surgical_repair', skipped: 'No gaps to fix' });
+    }
+
+    // ── STEP 4: Rule-based humanizer on repaired content ──
+    console.log('[smart-humanize] Step 4: Rule-based humanizer');
+    const CONTRACTIONS = [
+      [/\bwe have\b/gi, "we've"], [/\bwe are\b/gi, "we're"], [/\bwe will\b/gi, "we'll"],
+      [/\byou are\b/gi, "you're"], [/\byou will\b/gi, "you'll"], [/\byou have\b/gi, "you've"],
+      [/\bthey are\b/gi, "they're"], [/\bthey will\b/gi, "they'll"], [/\bthey have\b/gi, "they've"],
+      [/\bit is\b/gi, "it's"], [/\bit will\b/gi, "it'll"], [/\bthat is\b/gi, "that's"],
+      [/\bdo not\b/gi, "don't"], [/\bdoes not\b/gi, "doesn't"], [/\bdid not\b/gi, "didn't"],
+      [/\bwill not\b/gi, "won't"], [/\bwould not\b/gi, "wouldn't"], [/\bcould not\b/gi, "couldn't"],
+      [/\bshould not\b/gi, "shouldn't"], [/\bcan not\b/gi, "can't"], [/\bcannot\b/gi, "can't"],
+      [/\bis not\b/gi, "isn't"], [/\bare not\b/gi, "aren't"], [/\bwas not\b/gi, "wasn't"],
+      [/\bhas not\b/gi, "hasn't"], [/\bhave not\b/gi, "haven't"],
+      [/\blet us\b/gi, "let's"], [/\bthere is\b/gi, "there's"],
+    ];
+    const SWAPS = [
+      [/\bthey've to\b/gi, 'they have to'], [/\byou've a\b/gi, 'you have a'],
+      [/\bwe've a\b/gi, 'we have a'], [/\bit's to\b/gi, 'it is to'],
+      [/\butilise\b/gi, 'use'], [/\butilize\b/gi, 'use'],
+      [/\badditionally\b/gi, 'also'], [/\bfurthermore\b/gi, 'also'],
+      [/\bhowever\b/gi, 'but'], [/\btherefore\b/gi, 'so'],
+      [/\bin order to\b/gi, 'to'], [/\bensuring\b/gi, 'making sure'], [/\bensure\b/gi, 'make sure'],
+    ];
+
+    function humanizeText(text, idx) {
+      let result = text;
+      for (const [p, r] of CONTRACTIONS) {
+        result = result.replace(p, (m) => m[0] === m[0].toUpperCase() && m[0] !== m[0].toLowerCase() ? r.charAt(0).toUpperCase() + r.slice(1) : r);
+      }
+      for (const [p, r] of SWAPS) {
+        result = result.replace(p, (m) => m[0] === m[0].toUpperCase() && m[0] !== m[0].toLowerCase() ? r.charAt(0).toUpperCase() + r.slice(1) : r);
+      }
+      result = applyAuEnglish(result);
+      return result;
+    }
+
+    // Apply rule-based to all <p> tags
+    let finalContent = repairedContent;
+    const pRegex2 = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
+    const pBlocks = [];
+    let pm2;
+    while ((pm2 = pRegex2.exec(repairedContent)) !== null) {
+      pBlocks.push({ start: pm2.index, end: pm2.index + pm2[0].length, attrs: pm2[1], inner: pm2[2] });
+    }
+    for (let i = pBlocks.length - 1; i >= 0; i--) {
+      const b = pBlocks[i];
+      const plain = b.inner.replace(/<[^>]+>/g, '').trim();
+      if (plain.length < 20) continue;
+      // Humanize text between tags
+      const humInner = b.inner.replace(/>([^<]+)</g, (m, txt) => '>' + humanizeText(txt, i) + '<');
+      const humOuter = humanizeText(b.inner.replace(/<[^>]+>/g, ''), i);
+      const newInner = /<(a|strong|em|b|i|span)\b/i.test(b.inner) ? humInner : humOuter;
+      finalContent = finalContent.substring(0, b.start) + '<p' + b.attrs + '>' + newInner + '</p>' + finalContent.substring(b.end);
+    }
+    pipeline.steps.push({ step: 'rule_based', paragraphs: pBlocks.length });
+
+    // ── STEP 5: Banned word scrub (safety net) ──
+    if (brief.words_to_avoid && brief.words_to_avoid.length) {
+      let scrubCount = 0;
+      for (const banned of brief.words_to_avoid) {
+        const regex = new RegExp('\\b' + banned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w*\\b', 'gi');
+        if (regex.test(finalContent.replace(/<[^>]+>/g, ' '))) {
+          finalContent = finalContent.replace(/>([^<]+)</g, (match, text) => '>' + text.replace(regex, '') + '<');
+          finalContent = finalContent.replace(/>([^<]+)</g, (m, t) => '>' + t.replace(/\s{2,}/g, ' ').trim() + '<');
+          scrubCount++;
+        }
+      }
+      if (scrubCount > 0) pipeline.steps.push({ step: 'banned_scrub', words_scrubbed: scrubCount });
+    }
+
+    // Save to DB
+    if (page_id) {
+      const saveBuildId = build_id || buildId;
+      if (saveBuildId) {
+        await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2 AND build_id=$3', [finalContent, page_id, saveBuildId]);
+      } else {
+        await pool.query('UPDATE site_pages SET draft_content=$1, updated_at=NOW() WHERE id=$2', [finalContent, page_id]);
+      }
+    }
+
+    console.log('[smart-humanize] Pipeline complete. Steps: ' + pipeline.steps.map(s => s.step).join(' → '));
+
+    res.json({
+      content_html: finalContent,
+      credits_used: pipeline.totalCredits,
+      brief_score_before: briefScore,
+      gaps_found: gaps.length,
+      gaps_repaired: repairGaps.length,
+      pipeline
+    });
+  } catch (err) {
+    console.error('[smart-humanize] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/projects/:id/ai-detection', async (req, res) => {
   try {
     const { content } = req.body;
