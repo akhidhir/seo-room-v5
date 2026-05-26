@@ -3433,43 +3433,52 @@ async function crawlSiteForMigration(siteUrl) {
   const sitemapUrls = [`${siteUrl}/sitemap.xml`, `${siteUrl}/sitemap_index.xml`];
   let pageUrls = [];
 
+  const CRAWL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+  console.log(`[migration-crawl] Starting crawl for ${siteUrl}`);
+
   for (const smUrl of sitemapUrls) {
     try {
-      const resp = await axios.get(smUrl, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' } });
+      console.log(`[migration-crawl] Trying sitemap: ${smUrl}`);
+      const resp = await axios.get(smUrl, { timeout: 15000, headers: { 'User-Agent': CRAWL_UA } });
       const xml = resp.data;
-      // Extract URLs from sitemap
+      console.log(`[migration-crawl] Sitemap response: ${resp.status}, length: ${(typeof xml === 'string' ? xml.length : 0)}`);
       const locMatches = xml.match(/<loc>(.*?)<\/loc>/gi) || [];
+      console.log(`[migration-crawl] Found ${locMatches.length} <loc> entries`);
       for (const loc of locMatches) {
         const url = loc.replace(/<\/?loc>/gi, '').trim();
-        // Check if it's a sub-sitemap
         if (url.includes('sitemap') && url.endsWith('.xml')) {
           try {
-            const subResp = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' } });
+            const subResp = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': CRAWL_UA } });
             const subLocs = subResp.data.match(/<loc>(.*?)<\/loc>/gi) || [];
+            console.log(`[migration-crawl] Sub-sitemap ${url}: ${subLocs.length} entries`);
             for (const subLoc of subLocs) {
               const subUrl = subLoc.replace(/<\/?loc>/gi, '').trim();
               if (!subUrl.includes('sitemap') && !subUrl.endsWith('.xml')) pageUrls.push(subUrl);
             }
-          } catch (e) { /* skip broken sub-sitemap */ }
+          } catch (e) { console.log(`[migration-crawl] Sub-sitemap error: ${e.message}`); }
         } else {
           pageUrls.push(url);
         }
       }
       if (pageUrls.length > 0) break;
-    } catch (e) { /* try next sitemap URL */ }
+    } catch (e) { console.log(`[migration-crawl] Sitemap ${smUrl} error: ${e.message}`); }
   }
 
   // Fallback: try WP REST API
   if (pageUrls.length === 0) {
+    console.log(`[migration-crawl] No sitemap pages found, trying WP REST API...`);
     try {
-      const wpPages = await axios.get(`${siteUrl}/wp-json/wp/v2/pages?per_page=100&_fields=link`, { timeout: 10000 });
+      const wpPages = await axios.get(`${siteUrl}/wp-json/wp/v2/pages?per_page=100&_fields=link`, { timeout: 10000, headers: { 'User-Agent': CRAWL_UA } });
+      console.log(`[migration-crawl] WP pages: ${wpPages.data.length}`);
       pageUrls.push(...wpPages.data.map(p => p.link));
-    } catch (e) { /* not WP */ }
+    } catch (e) { console.log(`[migration-crawl] WP pages error: ${e.message}`); }
     try {
-      const wpPosts = await axios.get(`${siteUrl}/wp-json/wp/v2/posts?per_page=100&_fields=link`, { timeout: 10000 });
+      const wpPosts = await axios.get(`${siteUrl}/wp-json/wp/v2/posts?per_page=100&_fields=link`, { timeout: 10000, headers: { 'User-Agent': CRAWL_UA } });
+      console.log(`[migration-crawl] WP posts: ${wpPosts.data.length}`);
       pageUrls.push(...wpPosts.data.map(p => p.link));
-    } catch (e) { /* not WP */ }
+    } catch (e) { console.log(`[migration-crawl] WP posts error: ${e.message}`); }
   }
+  console.log(`[migration-crawl] Total page URLs found: ${pageUrls.length}`);
 
   // Cap at 200 pages
   pageUrls = [...new Set(pageUrls)].slice(0, 200);
