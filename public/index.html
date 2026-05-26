@@ -19827,6 +19827,33 @@
           ),
           React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginTop: 4 } }, 'Content Score')
         ),
+        // Smart workflow guidance banner
+        (function() {
+          var hasContent = content && content.replace(/<[^>]+>/g, '').trim().length > 50;
+          var hasFocusKw = !!(focusKeyword);
+          var hasCompetitors = !!(competitorData && competitorData.topicGaps);
+          var pendingTopics = hasCompetitors ? (competitorData.topicGaps.missingTopics || []).filter(function(t) { return t.status === 'pending'; }).length : 0;
+          var pendingKeywords = hasCompetitors ? (competitorData.topicGaps.missingKeywords || []).filter(function(k) { return k.status === 'pending'; }).length : 0;
+          var acceptedTopics = hasCompetitors ? (competitorData.topicGaps.missingTopics || []).filter(function(t) { return t.status === 'accepted'; }) : [];
+          var acceptedKeywords = hasCompetitors ? (competitorData.topicGaps.missingKeywords || []).filter(function(k) { return k.status === 'accepted'; }) : [];
+          var plainContent = hasContent ? content.replace(/<[^>]+>/g, '').toLowerCase() : '';
+          var unincludedTopics = acceptedTopics.filter(function(t) { var words = t.text.toLowerCase().split(/\s+/).filter(function(w) { return w.length > 3; }); return words.length > 0 && words.filter(function(w) { return plainContent.includes(w); }).length < Math.ceil(words.length * 0.5); });
+          var unincludedKws = acceptedKeywords.filter(function(k) { return !plainContent.includes(k.text.toLowerCase()); });
+          var step = null;
+          var icon = 'fa-solid fa-arrow-right';
+          var color = '#6366f1';
+          if (!hasFocusKw) { step = 'Set a focus keyword first'; icon = 'fa-solid fa-key'; color = '#ef4444'; }
+          else if (!hasContent) { step = 'Click Generate Content to create your first draft'; icon = 'fa-solid fa-pen-fancy'; color = '#22c55e'; }
+          else if (!hasCompetitors) { step = 'Click Check Competitors to analyse your competition'; icon = 'fa-solid fa-users'; color = '#8b5cf6'; }
+          else if (pendingTopics > 0 || pendingKeywords > 0) { step = 'Accept or reject the ' + (pendingTopics + pendingKeywords) + ' pending items above'; icon = 'fa-solid fa-list-check'; color = '#f59e0b'; }
+          else if (unincludedTopics.length > 0 || unincludedKws.length > 0) { step = 'Click Rewrite to apply your ' + (unincludedTopics.length + unincludedKws.length) + ' accepted choices'; icon = 'fa-solid fa-wand-magic-sparkles'; color = '#f59e0b'; }
+          else if (score < 85) { step = 'Click Optimise to boost your score to 85+'; icon = 'fa-solid fa-chart-line'; color = '#f59e0b'; }
+          else { step = 'Content ready — review and edit manually if needed'; icon = 'fa-solid fa-circle-check'; color = '#22c55e'; }
+          return step ? React.createElement('div', { style: { margin: '12px 0', padding: '10px 12px', background: color + '15', border: '1px solid ' + color + '40', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('i', { className: icon, style: { color: color, fontSize: 14, flexShrink: 0 } }),
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: color, lineHeight: 1.4 } }, 'Next: ' + step)
+          ) : null;
+        })(),
         tips.length > 0 && React.createElement('div', { style: { marginBottom: 16 } },
           React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 } }, 'Tips to Improve'),
           tips.map((tip, i) => {
