@@ -15809,6 +15809,8 @@
       // AI detection — load saved results from DB
       var [aiDetecting, setAiDetecting] = React.useState(false);
       var [humanizing, setHumanizing] = React.useState(false);
+      var [briefChecking, setBriefChecking] = React.useState(false);
+      var [briefCheckResult, setBriefCheckResult] = React.useState(page.brief_gaps ? { gaps: page.brief_gaps, score: null } : null);
       var [lightOptimising, setLightOptimising] = React.useState(false);
       var [suggestingKws, setSuggestingKws] = React.useState(false);
 
@@ -15864,6 +15866,21 @@
           alert('Humanize error: ' + (e.message || e));
         }
         setHumanizing(false);
+      };
+
+      var handleBriefCheck = async function() {
+        if (!editContent || briefChecking) return;
+        setBriefChecking(true);
+        try {
+          var result = await api(apiPrefix + '/site-pages/' + page.id + '/brief-check', { method: 'POST' });
+          setBriefCheckResult(result);
+          if (result.gaps && result.gaps.length === 0) {
+            alert('Brief check passed! Score: ' + result.score + '% — all brief requirements covered.');
+          }
+        } catch(e) {
+          alert('Brief check error: ' + (e.message || e));
+        }
+        setBriefChecking(false);
       };
 
       var handleLightOptimise = async function() {
@@ -16293,6 +16310,13 @@
             style: { padding: '8px 16px', background: optimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', fontSize: 14, padding: '8px 16px', fontWeight: 700,
               border: 'none', color: '#fff', borderRadius: 8, cursor: optimising ? 'wait' : 'pointer', boxShadow: optimising ? 'none' : '0 2px 12px rgba(245,158,11,0.3)' }
           }, React.createElement('i', { className: optimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), optimising ? 'Rewriting...' : 'Rewrite'),
+          // Brief Check
+          hasDraft && React.createElement('button', {
+            disabled: briefChecking || !editContent,
+            onClick: handleBriefCheck,
+            title: 'Check content alignment with copywriting brief',
+            style: { padding: '8px 16px', background: briefChecking ? 'var(--bg3)' : briefCheckResult && briefCheckResult.score === 100 ? '#10b981' : '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: briefChecking ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: briefChecking ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-clipboard-check', style: { marginRight: 6 } }), briefChecking ? 'Checking...' : 'Brief Check' + (briefCheckResult && briefCheckResult.score != null ? ' (' + briefCheckResult.score + '%)' : '')),
           // Plagiarism Check
           hasDraft && React.createElement('button', {
             disabled: plagiarismChecking || !editContent,
@@ -16409,6 +16433,44 @@
             plagiarismResult.matchedSources && plagiarismResult.matchedSources.length === 0 && React.createElement('div', { style: { padding: '10px 14px', background: '#22c55e15', borderRadius: 8, color: '#22c55e', fontSize: 13, textAlign: 'center' } },
               React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), 'No plagiarism detected — content is original'
             )
+          )
+        ),
+
+        // Brief Check Results
+        briefCheckResult && briefCheckResult.gaps && briefCheckResult.gaps.length > 0 && React.createElement('div', {
+          style: { background: 'var(--card)', borderRadius: 10, padding: 16, marginBottom: 20, border: '1px solid #f59e0b40' }
+        },
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+            React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.5 } },
+              React.createElement('i', { className: 'fas fa-clipboard-check', style: { marginRight: 6 } }), 'Brief Compliance',
+              briefCheckResult.score != null && React.createElement('span', { style: { marginLeft: 8, fontSize: 14, fontWeight: 800, color: briefCheckResult.score >= 90 ? '#22c55e' : briefCheckResult.score >= 70 ? '#f59e0b' : '#ef4444' } }, briefCheckResult.score + '%')
+            ),
+            React.createElement('button', {
+              onClick: function() { setBriefCheckResult(null); },
+              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }
+            }, '×')
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' } },
+            React.createElement('div', { style: { padding: '6px 12px', borderRadius: 6, background: '#22c55e15', color: '#22c55e', fontSize: 13, fontWeight: 600 } },
+              (briefCheckResult.passed || 0) + ' passed'
+            ),
+            React.createElement('div', { style: { padding: '6px 12px', borderRadius: 6, background: '#ef444415', color: '#ef4444', fontSize: 13, fontWeight: 600 } },
+              briefCheckResult.gaps.length + ' gaps'
+            )
+          ),
+          briefCheckResult.gaps.map(function(gap, i) {
+            var icon = gap.type === 'keyword' ? 'fa-key' : gap.type === 'style' ? 'fa-palette' : gap.type === 'process' ? 'fa-list-check' : gap.type === 'avoid' ? 'fa-ban' : gap.type === 'differentiator' ? 'fa-star' : 'fa-circle-info';
+            var color = gap.severity === 'high' ? '#ef4444' : '#f59e0b';
+            return React.createElement('div', {
+              key: i, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--bg2)', borderRadius: 6, marginBottom: 4, fontSize: 13, borderLeft: '3px solid ' + color }
+            },
+              React.createElement('i', { className: 'fas ' + icon, style: { color: color, width: 16, textAlign: 'center' } }),
+              React.createElement('span', { style: { color: 'var(--text)', flex: 1 } }, gap.message),
+              React.createElement('span', { style: { fontSize: 10, color: color, textTransform: 'uppercase', fontWeight: 700, whiteSpace: 'nowrap' } }, gap.severity)
+            );
+          }),
+          React.createElement('div', { style: { marginTop: 12, fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' } },
+            'These gaps are saved and will be included in the next Rewrite/Optimise run.'
           )
         ),
 

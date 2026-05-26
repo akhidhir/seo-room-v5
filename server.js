@@ -716,6 +716,7 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS plagiarism_result JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS ai_detection_result JSONB DEFAULT NULL`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS brief_gaps JSONB DEFAULT NULL`).catch(() => {});
 
     // Website builds — standalone new website projects (not tied to existing projects)
     await client.query(`
@@ -15194,6 +15195,7 @@ CURRENT SEO SCORE: ${content_score || 'unknown'}/100
 TARGET KEYWORDS: ${(target_keywords || []).join(', ') || 'none'}
 SEO TIPS:
 ${(tips || []).join('\n')}
+${(() => { try { const bg = Array.isArray(item.brief_gaps) ? item.brief_gaps : (typeof item.brief_gaps === 'string' ? JSON.parse(item.brief_gaps) : []); return bg.length > 0 ? '\nBRIEF COMPLIANCE GAPS (fix these in this revision):\n' + bg.map(g => '- [' + g.severity + '] ' + g.message).join('\n') : ''; } catch(e) { return ''; } })()}
 
 CURRENT CONTENT:
 ${current_proposed.content_html}
@@ -18859,7 +18861,7 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
         briefPageContent = `\nCLIENT-PROVIDED CONTENT FOR THIS PAGE:\n${match.description || ''}`;
         if (match.process_steps && match.process_steps.length) briefPageContent += `\nProcess steps (MUST include ALL): ${match.process_steps.join('; ')}`;
         if (match.types_or_styles && match.types_or_styles.length) briefPageContent += `\nFencing types/styles (MUST mention ALL of these by name): ${match.types_or_styles.join(', ')}`;
-        if (match.keywords && match.keywords.length) briefPageContent += `\nPage keywords: ${Array.isArray(match.keywords) ? match.keywords.join(', ') : match.keywords}`;
+        if (match.keywords && match.keywords.length) briefPageContent += `\nMANDATORY KEYWORDS (MUST use each exact phrase at least once): ${Array.isArray(match.keywords) ? match.keywords.join(', ') : match.keywords}`;
       }
       // Also check for partial slug match
       if (!match && page.slug) {
@@ -18871,7 +18873,7 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
           briefPageContent = `\nCLIENT-PROVIDED CONTENT FOR THIS PAGE:\n${slugMatch.description || ''}`;
           if (slugMatch.process_steps && slugMatch.process_steps.length) briefPageContent += `\nProcess steps (MUST include ALL): ${slugMatch.process_steps.join('; ')}`;
           if (slugMatch.types_or_styles && slugMatch.types_or_styles.length) briefPageContent += `\nFencing types/styles (MUST mention ALL of these by name): ${slugMatch.types_or_styles.join(', ')}`;
-          if (slugMatch.keywords && slugMatch.keywords.length) briefPageContent += `\nPage keywords: ${Array.isArray(slugMatch.keywords) ? slugMatch.keywords.join(', ') : slugMatch.keywords}`;
+          if (slugMatch.keywords && slugMatch.keywords.length) briefPageContent += `\nMANDATORY KEYWORDS (MUST use each exact phrase at least once): ${Array.isArray(slugMatch.keywords) ? slugMatch.keywords.join(', ') : slugMatch.keywords}`;
         }
       }
     }
@@ -18881,6 +18883,22 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     }
     if (page.page_name === 'Home') {
       briefPageContent = `\nThis is the homepage. Incorporate the brand differentiators and showcase all services: ${(brief.service_pages || []).map(s => s.page_name).join(', ')}`;
+      // Inject all brief keywords (about page + all service pages)
+      const allBriefKeywords = new Set();
+      if (brief.about_page && brief.about_page.keywords) {
+        (Array.isArray(brief.about_page.keywords) ? brief.about_page.keywords : [brief.about_page.keywords]).forEach(k => allBriefKeywords.add(k));
+      }
+      if (brief.about_page && brief.about_page.dot_points) {
+        brief.about_page.dot_points.forEach(dp => allBriefKeywords.add(dp));
+      }
+      if (brief.service_pages) {
+        brief.service_pages.forEach(sp => {
+          if (sp.keywords) (Array.isArray(sp.keywords) ? sp.keywords : [sp.keywords]).forEach(k => allBriefKeywords.add(k));
+        });
+      }
+      if (allBriefKeywords.size > 0) {
+        briefPageContent += `\n\nMANDATORY KEYWORDS (you MUST use each of these exact phrases at least once in the content):\n${[...allBriefKeywords].map(k => `- "${k}"`).join('\n')}`;
+      }
     }
 
     // AI notes from brief upload
@@ -18956,6 +18974,137 @@ Return ONLY the HTML content, no markdown wrapping.`
     res.json({ content, word_count: wordCount });
   } catch (e) {
     console.error('[build-content-gen] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Brief Compliance Check (rule-based, zero AI cost) ──
+app.post(['/api/builds/:buildId/site-pages/:pageId/brief-check', '/api/projects/:projectId/site-pages/:pageId/brief-check'], async (req, res) => {
+  const { buildId, projectId, pageId } = req.params;
+  try {
+    // Get page
+    const pageQ = buildId
+      ? await pool.query('SELECT * FROM site_pages WHERE id=$1 AND build_id=$2', [pageId, buildId])
+      : await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
+    if (pageQ.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
+    const page = pageQ.rows[0];
+    const content = (page.draft_content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+
+    if (!content.trim()) return res.json({ gaps: [{ type: 'error', message: 'Page has no content yet' }], score: 0 });
+
+    // Get brief
+    let brief = {};
+    if (buildId || page.build_id) {
+      const bId = buildId || page.build_id;
+      const bResult = await pool.query('SELECT copywriting_brief FROM website_builds WHERE id=$1', [bId]);
+      brief = (bResult.rows[0] || {}).copywriting_brief || {};
+    }
+
+    const gaps = [];
+    let totalChecks = 0;
+    let passed = 0;
+
+    // 1. Check mandatory keywords (from about_page + service pages)
+    const mandatoryKeywords = new Set();
+    if (brief.about_page && brief.about_page.keywords) {
+      (Array.isArray(brief.about_page.keywords) ? brief.about_page.keywords : [brief.about_page.keywords]).forEach(k => mandatoryKeywords.add(k));
+    }
+    // Find matching service page
+    const pageNameLower = page.page_name.toLowerCase();
+    let matchedService = null;
+    if (brief.service_pages) {
+      matchedService = brief.service_pages.find(sp => {
+        const spName = (sp.page_name || '').toLowerCase();
+        return spName === pageNameLower || pageNameLower.includes(spName) || spName.includes(pageNameLower);
+      });
+      if (matchedService && matchedService.keywords) {
+        (Array.isArray(matchedService.keywords) ? matchedService.keywords : [matchedService.keywords]).forEach(k => mandatoryKeywords.add(k));
+      }
+    }
+    // For Home page, collect all service page keywords too
+    if (pageNameLower === 'home' && brief.service_pages) {
+      brief.service_pages.forEach(sp => {
+        if (sp.keywords) (Array.isArray(sp.keywords) ? sp.keywords : [sp.keywords]).forEach(k => mandatoryKeywords.add(k));
+      });
+    }
+    for (const kw of mandatoryKeywords) {
+      totalChecks++;
+      if (content.includes(kw.toLowerCase())) { passed++; }
+      else { gaps.push({ type: 'keyword', severity: 'high', message: `Missing keyword: "${kw}"` }); }
+    }
+
+    // 2. Check types/styles (from matched service page)
+    if (matchedService && matchedService.types_or_styles && matchedService.types_or_styles.length) {
+      for (const style of matchedService.types_or_styles) {
+        totalChecks++;
+        if (content.includes(style.toLowerCase())) { passed++; }
+        else { gaps.push({ type: 'style', severity: 'high', message: `Missing fencing type/style: "${style}"` }); }
+      }
+    }
+    // For Home page, check all types across all services
+    if (pageNameLower === 'home' && brief.service_pages) {
+      const allTypes = new Set();
+      brief.service_pages.forEach(sp => {
+        if (sp.types_or_styles) sp.types_or_styles.forEach(t => allTypes.add(t));
+      });
+      for (const t of allTypes) {
+        totalChecks++;
+        if (content.includes(t.toLowerCase())) { passed++; }
+        else { gaps.push({ type: 'style', severity: 'medium', message: `Missing type/style from brief: "${t}"` }); }
+      }
+    }
+
+    // 3. Check process steps (from matched service page)
+    if (matchedService && matchedService.process_steps && matchedService.process_steps.length) {
+      for (const step of matchedService.process_steps) {
+        totalChecks++;
+        // Fuzzy: check if key words from the step appear
+        const stepWords = step.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+        const matchCount = stepWords.filter(w => content.includes(w)).length;
+        if (matchCount >= Math.ceil(stepWords.length * 0.5)) { passed++; }
+        else { gaps.push({ type: 'process', severity: 'medium', message: `Process step not covered: "${step}"` }); }
+      }
+    }
+
+    // 4. Check differentiators
+    if (brief.differentiators && brief.differentiators.length) {
+      for (const diff of brief.differentiators) {
+        totalChecks++;
+        const diffWords = diff.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+        const matchCount = diffWords.filter(w => content.includes(w)).length;
+        if (matchCount >= Math.ceil(diffWords.length * 0.4)) { passed++; }
+        else { gaps.push({ type: 'differentiator', severity: 'medium', message: `Differentiator not emphasized: "${diff}"` }); }
+      }
+    }
+
+    // 5. Check words to avoid
+    if (brief.words_to_avoid && brief.words_to_avoid.length) {
+      for (const word of brief.words_to_avoid) {
+        totalChecks++;
+        if (!content.includes(word.toLowerCase())) { passed++; }
+        else { gaps.push({ type: 'avoid', severity: 'high', message: `Contains banned word: "${word}"` }); }
+      }
+    }
+
+    // 6. Check about page dot points (for Home and About pages)
+    if ((pageNameLower === 'home' || pageNameLower === 'about') && brief.about_page && brief.about_page.dot_points) {
+      for (const dp of brief.about_page.dot_points) {
+        totalChecks++;
+        const dpWords = dp.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+        const matchCount = dpWords.filter(w => content.includes(w)).length;
+        if (matchCount >= Math.ceil(dpWords.length * 0.5)) { passed++; }
+        else { gaps.push({ type: 'about', severity: 'medium', message: `About page point missing: "${dp}"` }); }
+      }
+    }
+
+    const score = totalChecks > 0 ? Math.round((passed / totalChecks) * 100) : 100;
+
+    // Save gaps to page for optimiser to use
+    await pool.query('UPDATE site_pages SET brief_gaps=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(gaps), pageId]);
+
+    res.json({ score, passed, total: totalChecks, gaps });
+  } catch (e) {
+    console.error('[brief-check] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
