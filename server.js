@@ -18834,7 +18834,7 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     console.log(`[build-content-gen] Page: ${page.page_name}, briefRawText: ${build.brief_raw_text ? build.brief_raw_text.length + ' chars' : 'NULL'}, briefJSON: ${build.copywriting_brief ? 'YES' : 'NULL'}, fullBriefText: ${fullBriefText ? fullBriefText.length + ' chars' : 'EMPTY'}, briefContext: "${briefContext.substring(0, 100)}", briefPageContent: "${briefPageContent.substring(0, 100)}"`);
 
     const aiResponse = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5-20241022',
+      model: 'claude-sonnet-4-6',
       max_tokens: 16000,
       messages: [{
         role: 'user',
