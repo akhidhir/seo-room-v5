@@ -16654,7 +16654,7 @@
 
         // Content editor + Score panel side by side — both independently scrollable
         React.createElement('div', { style: { display: 'flex', gap: 16, height: 'calc(100vh - 120px)' } },
-          React.createElement('div', { style: { flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden' } },
+          React.createElement('div', { style: { flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' } },
             React.createElement('div', { style: { background: 'var(--bg)', borderRadius: 8, padding: 0, border: '1px solid var(--border)', overflow: 'hidden' } },
               // Section View — uses ReviewEditor (same as content_queue)
               sectionView && page.page_sections?.length > 0
@@ -16706,7 +16706,7 @@
                       )
             )
           ),
-          React.createElement('div', { className: 'score-sidebar', style: { width: 340, minWidth: 340, overflowY: 'auto', overflowX: 'hidden' } },
+          React.createElement('div', { className: 'score-sidebar', style: { width: 340, minWidth: 340, overflowY: 'auto', overflowX: 'hidden', minHeight: 0, height: '100%' } },
             React.createElement(ContentScorePanel, {
               key: editorKey,
               content: editContent,
