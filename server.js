@@ -18968,7 +18968,7 @@ Return ONLY the HTML content, no markdown wrapping.`
     // Scrub banned words from brief
     if (brief.words_to_avoid && brief.words_to_avoid.length) {
       for (const banned of brief.words_to_avoid) {
-        const regex = new RegExp('\\b' + banned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+        const regex = new RegExp('\\b' + banned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w*\\b', 'gi');
         if (regex.test(content.replace(/<[^>]+>/g, ' '))) {
           content = content.replace(/>([^<]+)</g, (match, text) => '>' + text.replace(regex, '') + '<');
           content = content.replace(/>([^<]+)</g, (m, t) => '>' + t.replace(/\s{2,}/g, ' ').trim() + '<');
@@ -19125,12 +19125,16 @@ app.post(['/api/builds/:buildId/site-pages/:pageId/brief-check', '/api/projects/
       }
     }
 
-    // 7. Check words to avoid (exact match — these should NOT appear)
+    // 7. Check words to avoid (matches root + variants e.g. cheap → cheaper/cheapest)
     if (brief.words_to_avoid && brief.words_to_avoid.length) {
       for (const word of brief.words_to_avoid) {
         totalChecks++;
-        if (!content.includes(word.toLowerCase())) { passed++; }
-        else { gaps.push({ type: 'avoid', severity: 'high', message: `Contains banned word: "${word}"` }); }
+        const avoidRegex = new RegExp('\\b' + word.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w*\\b');
+        if (!avoidRegex.test(content)) { passed++; }
+        else {
+          const match = content.match(avoidRegex);
+          gaps.push({ type: 'avoid', severity: 'high', message: `Contains banned word variant: "${match ? match[0] : word}"` });
+        }
       }
     }
 
@@ -20254,7 +20258,7 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
             let html = result.content_html;
             for (const banned of br.words_to_avoid) {
               // Only replace the banned word itself (case-insensitive, word boundary), not compound words
-              const regex = new RegExp('\\b' + banned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+              const regex = new RegExp('\\b' + banned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w*\\b', 'gi');
               if (regex.test(html.replace(/<[^>]+>/g, ' '))) {
                 // Replace in text content only (preserve HTML tags)
                 html = html.replace(/>([^<]+)</g, (match, text) => {
