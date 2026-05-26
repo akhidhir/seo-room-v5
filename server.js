@@ -19689,16 +19689,18 @@ PRIORITY ORDER — fix ALL of these:
 5. Missing keywords: weave into existing sentences
 
 CRITICAL RULES:
-1. Each "find" MUST be an EXACT substring copied from the content (plain text only, no HTML tags)
-2. Each "find" should be a full sentence or meaningful phrase
-3. The "replace" keeps same meaning but expands with more detail and specifics
+1. Each "find" MUST be an EXACT substring copied character-for-character from the content (plain text only, no HTML tags)
+2. Each "find" should be a COMPLETE sentence ending with a period, question mark, or exclamation mark
+3. The "replace" REPLACES the found text — the original "find" text is DELETED and only the "replace" text remains. So "replace" must be a COMPLETE rewrite of the sentence, not an addition to it.
 4. Do NOT touch headings (H1, H2, H3) — only modify paragraph text
-5. Use 10 to 20 patches — be aggressive about expanding content to hit 1500 words
-6. Do NOT add new sections. Expand EXISTING paragraphs substantially.
-7. Each patch should ADD 20-40 words by expanding the sentence with more detail
+5. Use 10 to 20 patches to expand content toward 1500 words
+6. Do NOT add new sections. Expand EXISTING paragraphs.
+7. Each patch should ADD 20-40 words of GENUINELY NEW information: specific materials, process steps, suburb names, timeframes, or customer scenarios NOT already in the content
 8. NEVER include HTML tags in "find" — only the text between tags
 9. ALWAYS return meta_title and meta_description — never null
-10. ANTI-STUFFING: NEVER repeat any keyword phrase more than 3 times in the ENTIRE content. If focus keyword or target keyword already appears 3+ times, do NOT add it again. Use natural variations instead. Keyword stuffing destroys SEO rankings.`
+10. ANTI-STUFFING: NEVER repeat any keyword phrase more than 3 times total. Use natural variations instead.
+11. ANTI-DUPLICATE: Before writing any "replace" text, check the ENTIRE existing content. NEVER add a sentence that says the same thing as another sentence already in the content, even in different words. If a point is already made, do NOT rephrase it — add a DIFFERENT point instead.
+12. Each "replace" must contain ZERO overlap with surrounding sentences. If the paragraph already mentions soil types, your patch must NOT mention soil types again — add something new like drainage, post depth, or bracing instead.`
       }]
     });
 
@@ -19768,14 +19770,49 @@ CRITICAL RULES:
       finalMetaDesc = candidate;
     }
 
+    // Post-processing: remove near-duplicate sentences
+    const dedupHtml = (function(html) {
+      // Extract all sentences from the content
+      const plain = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const sentences = plain.match(/[^.!?]+[.!?]+/g) || [];
+      const seen = [];
+      const dupes = [];
+      for (const s of sentences) {
+        const words = s.toLowerCase().trim().match(/[a-z]{4,}/g) || [];
+        if (words.length < 4) continue; // skip very short sentences
+        // Check against all previously seen sentences
+        for (const prev of seen) {
+          const overlap = words.filter(w => prev.words.includes(w)).length;
+          const similarity = overlap / Math.max(words.length, prev.words.length);
+          if (similarity > 0.7) {
+            // Keep the longer one, mark shorter as duplicate
+            const dupeSentence = s.trim().length < prev.text.length ? s.trim() : prev.text;
+            if (!dupes.includes(dupeSentence)) dupes.push(dupeSentence);
+            break;
+          }
+        }
+        seen.push({ text: s.trim(), words });
+      }
+      // Remove duplicate sentences from HTML
+      let result = html;
+      for (const dupe of dupes) {
+        const escaped = dupe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        try {
+          result = result.replace(new RegExp('\\s*' + escaped.substring(0, Math.min(escaped.length, 200))), '');
+        } catch(e) {}
+      }
+      if (dupes.length > 0) console.log('[light-optimise] Dedup removed ' + dupes.length + ' near-duplicate sentences');
+      return result;
+    })(optimisedHtml);
+
     console.log('[light-optimise] Done for page ' + pageId + ' — applied: ' + appliedCount + ', skipped: ' + skippedCount + ' of ' + patches.length + ' patches');
     res.json({
       preview: true,
-      content_html: optimisedHtml,
+      content_html: dedupHtml,
       meta_title: finalMetaTitle,
       meta_description: finalMetaDesc,
       ai_notes: aiNotes + (skippedCount > 0 ? ' (' + skippedCount + ' patches skipped — text not found)' : ''),
-      proposed: { content_html: optimisedHtml, meta_title: finalMetaTitle, meta_description: finalMetaDesc, ai_notes: aiNotes },
+      proposed: { content_html: dedupHtml, meta_title: finalMetaTitle, meta_description: finalMetaDesc, ai_notes: aiNotes },
       patches_applied: appliedCount,
       patches_skipped: skippedCount,
       patches_total: patches.length
