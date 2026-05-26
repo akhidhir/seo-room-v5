@@ -3464,16 +3464,20 @@ async function crawlSiteForMigration(siteUrl) {
     } catch (e) { console.log(`[migration-crawl] Sitemap ${smUrl} error: ${e.message}`); }
   }
 
-  // Also try WP REST API (paginated) — supplements sitemap, catches pages not in sitemap
+  // Also try WP REST API (paginated) — supplements sitemap, gets titles too
   console.log(`[migration-crawl] Trying WP REST API (paginated)...`);
+  const wpTitleMap = {}; // url -> { title, slug }
   async function fetchAllWpType(type) {
     const allLinks = [];
     let page = 1;
     while (true) {
       try {
-        const resp = await axios.get(`${siteUrl}/wp-json/wp/v2/${type}?per_page=100&page=${page}&_fields=link`, { timeout: 10000, headers: { 'User-Agent': CRAWL_UA } });
+        const resp = await axios.get(`${siteUrl}/wp-json/wp/v2/${type}?per_page=100&page=${page}&_fields=link,title,slug`, { timeout: 10000, headers: { 'User-Agent': CRAWL_UA } });
         if (!resp.data || resp.data.length === 0) break;
-        allLinks.push(...resp.data.map(p => p.link));
+        for (const p of resp.data) {
+          allLinks.push(p.link);
+          if (p.title?.rendered) wpTitleMap[p.link] = { title: p.title.rendered, slug: p.slug || '' };
+        }
         const totalPages = parseInt(resp.headers['x-wp-totalpages'] || '1');
         console.log(`[migration-crawl] WP ${type} page ${page}/${totalPages}: ${resp.data.length} items`);
         if (page >= totalPages) break;
@@ -3493,34 +3497,26 @@ async function crawlSiteForMigration(siteUrl) {
     const wpPosts = await fetchAllWpType('posts');
     pageUrls.push(...wpPosts);
   } catch (e) { /* logged inside */ }
-  console.log(`[migration-crawl] Total page URLs found: ${pageUrls.length}`);
 
   // Deduplicate
   pageUrls = [...new Set(pageUrls)];
+  console.log(`[migration-crawl] Total unique page URLs: ${pageUrls.length}`);
 
-  // Fetch meta for each page (batch of 10)
-  for (let i = 0; i < pageUrls.length; i += 10) {
-    const batch = pageUrls.slice(i, i + 10);
-    const results = await Promise.allSettled(batch.map(async (url) => {
-      if (visited.has(url)) return null;
-      visited.add(url);
-      try {
-        const resp = await axios.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' }, maxRedirects: 3 });
-        const html = resp.data;
-        const title = (html.match(/<title[^>]*>(.*?)<\/title>/is) || [])[1]?.trim() || '';
-        const metaDesc = (html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/is) || [])[1]?.trim() || '';
-        const h1 = (html.match(/<h1[^>]*>(.*?)<\/h1>/is) || [])[1]?.replace(/<[^>]+>/g, '').trim() || '';
-        const canonical = (html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["'](.*?)["']/is) || [])[1]?.trim() || '';
-        const slug = new URL(url).pathname.replace(/\/$/, '').split('/').pop() || '/';
-        return { url, slug, title, meta_desc: metaDesc, h1, canonical, status: resp.status };
-      } catch (e) {
-        return { url, slug: new URL(url).pathname, title: '', meta_desc: '', h1: '', canonical: '', status: e.response?.status || 0 };
-      }
-    }));
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) pages.push(r.value);
-    }
+  // Build pages array — use WP API titles where available, no individual HTML fetching
+  for (const url of pageUrls) {
+    const slug = new URL(url).pathname.replace(/\/$/, '').split('/').pop() || '/';
+    const wpData = wpTitleMap[url];
+    pages.push({
+      url,
+      slug: wpData?.slug || slug,
+      title: wpData?.title || '',
+      meta_desc: '',
+      h1: '',
+      canonical: '',
+      status: 200
+    });
   }
+  console.log(`[migration-crawl] Final pages count: ${pages.length}`);
 
   return pages;
 }
