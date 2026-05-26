@@ -19945,8 +19945,10 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
       result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
     }
 
-    // Post-process: GPTHuman API humanization to defeat AI detection
-    if (result.content_html) {
+    // Post-process: DISABLED — GPTHuman + rule-based humanizer was mangling Opus output
+    // (sentence starters inserted mid-word, regex replacements breaking HTML structure)
+    // Humanize-only endpoint (/humanize-only) remains available as a separate step if needed
+    if (false && result.content_html) {
       try {
         // Strip HTML tags for GPTHuman (it works on plain text), then re-apply
         const plainText = result.content_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
