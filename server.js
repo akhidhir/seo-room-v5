@@ -3774,8 +3774,86 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
       return res.status(400).json({ error: 'Content too short to humanize' });
     }
 
-    // Rule-based humanizer: micro-edits that break AI patterns without changing meaning
+    // Step 1: GPTHuman API in Light mode (structural rewriting to beat AI detection)
+    let gpthContent = content_html;
+    let gpthScore = null;
+    let gpthCredits = 0;
+    const GPTHUMAN_KEY = process.env.GPTHUMAN_API_KEY;
+    if (GPTHUMAN_KEY) {
+      try {
+        const plainText = content_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        const wordCount = plainText.split(/\s+/).length;
+        if (plainText.length >= 300) {
+          // Split into chunks if over 1800 words
+          const chunks = [];
+          if (wordCount > 1800) {
+            const sentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
+            let chunk = '';
+            let chunkWords = 0;
+            for (const s of sentences) {
+              const sWords = s.trim().split(/\s+/).length;
+              if (chunkWords + sWords > 1500 && chunk.length >= 300) {
+                chunks.push(chunk.trim());
+                chunk = '';
+                chunkWords = 0;
+              }
+              chunk += s;
+              chunkWords += sWords;
+            }
+            if (chunk.trim().length >= 300) chunks.push(chunk.trim());
+            else if (chunks.length > 0) chunks[chunks.length - 1] += ' ' + chunk.trim();
+            else chunks.push(chunk.trim());
+          } else {
+            chunks.push(plainText);
+          }
+
+          console.log('[humanize] GPTHuman Light mode: ' + chunks.length + ' chunk(s), ' + wordCount + ' words');
+          let humanizedText = '';
+          for (let i = 0; i < chunks.length; i++) {
+            const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + GPTHUMAN_KEY, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: chunks[i], tone: 'Standard', mode: 'Light' })
+            });
+            const ghData = await ghResp.json();
+            if (ghData.output) {
+              humanizedText += (i > 0 ? ' ' : '') + ghData.output;
+              gpthScore = ghData.humanScore;
+              gpthCredits += (ghData.creditUsage || 0);
+              console.log('[humanize] GPTHuman chunk ' + (i+1) + '/' + chunks.length + ': humanScore=' + ghData.humanScore + ', credits=' + ghData.creditUsage);
+            } else {
+              console.error('[humanize] GPTHuman error chunk ' + i + ':', ghData);
+              humanizedText += (i > 0 ? ' ' : '') + chunks[i];
+            }
+          }
+
+          // Re-inject humanized text into HTML — paragraph-by-paragraph replacement
+          if (humanizedText && humanizedText.length > 100) {
+            const humanSentences = humanizedText.match(/[^.!?]+[.!?]+/g) || [humanizedText];
+            const origSentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
+            let htmlResult = content_html;
+            // Replace sentence by sentence (backwards to preserve positions)
+            for (let i = Math.min(origSentences.length, humanSentences.length) - 1; i >= 0; i--) {
+              const orig = origSentences[i].trim();
+              const human = humanSentences[i].trim();
+              if (orig.length > 20 && human.length > 10 && orig !== human) {
+                const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                try {
+                  htmlResult = htmlResult.replace(new RegExp(escaped.substring(0, Math.min(escaped.length, 150))), human);
+                } catch(e) {}
+              }
+            }
+            gpthContent = htmlResult;
+          }
+        }
+      } catch (ghErr) {
+        console.error('[humanize] GPTHuman API error:', ghErr.message);
+      }
+    }
+
+    // Step 2: Rule-based humanizer on top — micro-edits for extra safety
     // Works directly on innerHTML of <p> tags, preserves all HTML structure
+    const content_to_humanize = gpthContent;
 
     // Contraction map — makes text sound naturally written
     const CONTRACTIONS = [
@@ -3877,7 +3955,7 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     const pBlocks = [];
     const pRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
     let pm;
-    while ((pm = pRegex.exec(content_html)) !== null) {
+    while ((pm = pRegex.exec(content_to_humanize)) !== null) {
       const innerHtml = pm[2];
       const plainText = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
       if (plainText.split(/\s+/).length >= 5) {
@@ -3893,7 +3971,7 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     }
 
     if (pBlocks.length === 0) {
-      return res.json({ content_html, human_score: null, credits_used: 0, debug: { msg: 'No paragraphs with 5+ words' } });
+      return res.json({ content_html: content_to_humanize, human_score: gpthScore, credits_used: gpthCredits, debug: { msg: 'No paragraphs with 5+ words', gpthApplied: gpthCredits > 0 } });
     }
 
     console.log('[humanize] Rule-based: ' + pBlocks.length + ' paragraphs');
@@ -3938,7 +4016,7 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     }
 
     // Position-based replacement — backwards
-    let resultHtml = content_html;
+    let resultHtml = content_to_humanize;
     let replacedCount = 0;
 
     for (let i = pBlocks.length - 1; i >= 0; i--) {
@@ -3957,7 +4035,8 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
 
     const contentChanged = resultHtml !== content_html;
     debugLog.push('replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged);
-    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged);
+    if (gpthCredits > 0) debugLog.push('gpth_credits=' + gpthCredits + ' gpth_score=' + gpthScore);
+    console.log('[humanize] Done: replaced=' + replacedCount + '/' + pBlocks.length + ' changed=' + contentChanged + ' gpthCredits=' + gpthCredits);
 
     // Save to DB if content changed
     if (page_id && contentChanged) {
@@ -3970,10 +4049,10 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
 
     res.json({
       content_html: resultHtml,
-      human_score: null,
-      credits_used: 0,
+      human_score: gpthScore,
+      credits_used: gpthCredits,
       credit_balance: null,
-      debug: { paragraphs: pBlocks.length, replaced: replacedCount, changed: contentChanged, log: debugLog }
+      debug: { paragraphs: pBlocks.length, replaced: replacedCount, changed: contentChanged, gpthApplied: gpthCredits > 0, log: debugLog }
     });
   } catch (err) {
     console.error('[humanize] Error:', err.message);

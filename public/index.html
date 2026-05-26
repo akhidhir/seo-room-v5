@@ -15854,7 +15854,10 @@
           if (result.content_html) {
             setEditContent(result.content_html);
             var d = result.debug || {};
-            alert('Humanized! Score: ' + (result.human_score || 'N/A') + '% human. Credits: ' + (result.credits_used || 0) + '. Paras: ' + (d.paragraphs || '?') + ', replaced: ' + (d.replaced || 0) + ', haikuFixed: ' + (d.haikuFixed || 0) + ', changed: ' + (d.changed || false));
+            var msg = 'Content humanized successfully!';
+            if (result.credits_used > 0) msg += ' GPTHuman credits used: ' + result.credits_used + '.';
+            msg += ' Run AI Detection to check the score.';
+            alert(msg);
             if (d.log) console.log('[humanize debug]', d.log);
           }
         } catch(e) {
