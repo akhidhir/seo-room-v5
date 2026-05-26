@@ -3863,7 +3863,14 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
     ];
 
     // Synonym micro-swaps — meaning-preserving word swaps
+    // Also fixes awkward contractions GPTHuman sometimes introduces
     const SWAPS = [
+      // GPTHuman cleanup — fix Irish/British-style contractions that sound wrong in AU English
+      [/\bthey've to\b/gi, 'they have to'], [/\byou've a\b/gi, 'you have a'],
+      [/\bwe've a\b/gi, 'we have a'], [/\bthey've a\b/gi, 'they have a'],
+      [/\bit's to\b/gi, 'it is to'], [/\bthere've\b/gi, 'there have'],
+      [/\bwe reckon\b/gi, 'we recommend'], [/\bwe'd reckon\b/gi, 'we would recommend'],
+      // Standard swaps
       [/\butilise\b/gi, 'use'], [/\butilize\b/gi, 'use'],
       [/\bpurchase\b/gi, 'buy'], [/\bcommence\b/gi, 'start'],
       [/\badditionally\b/gi, 'also'], [/\bfurthermore\b/gi, 'also'],
@@ -18842,11 +18849,30 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     // Find matching service page from brief
     let briefPageContent = '';
     if (brief.service_pages) {
-      const match = brief.service_pages.find(sp => sp.page_name.toLowerCase() === page.page_name.toLowerCase());
+      const pageNameLower = page.page_name.toLowerCase();
+      const match = brief.service_pages.find(sp => {
+        const spName = (sp.page_name || '').toLowerCase();
+        // Exact match or partial match (e.g., "Boundary Fencing" matches "Fencing" page or vice versa)
+        return spName === pageNameLower || pageNameLower.includes(spName) || spName.includes(pageNameLower);
+      });
       if (match) {
         briefPageContent = `\nCLIENT-PROVIDED CONTENT FOR THIS PAGE:\n${match.description || ''}`;
-        if (match.process_steps && match.process_steps.length) briefPageContent += `\nProcess steps: ${match.process_steps.join('; ')}`;
-        if (match.types_or_styles && match.types_or_styles.length) briefPageContent += `\nTypes/styles to mention: ${match.types_or_styles.join(', ')}`;
+        if (match.process_steps && match.process_steps.length) briefPageContent += `\nProcess steps (MUST include ALL): ${match.process_steps.join('; ')}`;
+        if (match.types_or_styles && match.types_or_styles.length) briefPageContent += `\nFencing types/styles (MUST mention ALL of these by name): ${match.types_or_styles.join(', ')}`;
+        if (match.keywords && match.keywords.length) briefPageContent += `\nPage keywords: ${Array.isArray(match.keywords) ? match.keywords.join(', ') : match.keywords}`;
+      }
+      // Also check for partial slug match
+      if (!match && page.slug) {
+        const slugMatch = brief.service_pages.find(sp => {
+          const spSlug = (sp.slug || sp.page_name || '').toLowerCase().replace(/\s+/g, '-');
+          return spSlug.includes(page.slug.toLowerCase()) || page.slug.toLowerCase().includes(spSlug);
+        });
+        if (slugMatch) {
+          briefPageContent = `\nCLIENT-PROVIDED CONTENT FOR THIS PAGE:\n${slugMatch.description || ''}`;
+          if (slugMatch.process_steps && slugMatch.process_steps.length) briefPageContent += `\nProcess steps (MUST include ALL): ${slugMatch.process_steps.join('; ')}`;
+          if (slugMatch.types_or_styles && slugMatch.types_or_styles.length) briefPageContent += `\nFencing types/styles (MUST mention ALL of these by name): ${slugMatch.types_or_styles.join(', ')}`;
+          if (slugMatch.keywords && slugMatch.keywords.length) briefPageContent += `\nPage keywords: ${Array.isArray(slugMatch.keywords) ? slugMatch.keywords.join(', ') : slugMatch.keywords}`;
+        }
       }
     }
     if (page.page_name === 'About' && brief.about_page) {
