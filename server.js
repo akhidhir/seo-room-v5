@@ -3104,6 +3104,26 @@ app.post('/api/migrations', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Update standalone migration settings
+app.put('/api/migrations/:migrationId', async (req, res) => {
+  try {
+    const { wp_url, wp_username, wp_app_password, name } = req.body;
+    const sets = [];
+    const vals = [];
+    let idx = 1;
+    if (wp_url !== undefined) { sets.push(`wp_url = $${idx++}`); vals.push(wp_url || null); }
+    if (wp_username !== undefined) { sets.push(`wp_username = $${idx++}`); vals.push(wp_username || null); }
+    if (wp_app_password !== undefined) { sets.push(`wp_app_password = $${idx++}`); vals.push(wp_app_password || null); }
+    if (name !== undefined) { sets.push(`name = $${idx++}`); vals.push(name); }
+    if (sets.length === 0) return res.json({ ok: true });
+    sets.push(`updated_at = NOW()`);
+    vals.push(req.params.migrationId);
+    await pool.query(`UPDATE seo_migrations SET ${sets.join(', ')} WHERE id = $${idx}`, vals);
+    const result = await pool.query(`SELECT * FROM seo_migrations WHERE id = $1`, [req.params.migrationId]);
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Delete standalone migration
 app.delete('/api/migrations/:migrationId', async (req, res) => {
   try {

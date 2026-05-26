@@ -16856,9 +16856,9 @@
       var [newWpUser, setNewWpUser] = React.useState('');
       var [newWpPass, setNewWpPass] = React.useState('');
 
-      var PHASES = ['crawl', 'match', 'redirects', 'monitor'];
-      var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', monitor: 'Monitor' };
-      var PHASE_ICONS = { crawl: 'fa-spider', match: 'fa-link', redirects: 'fa-directions', monitor: 'fa-chart-line' };
+      var PHASES = ['crawl', 'match', 'redirects', 'monitor', 'settings'];
+      var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', monitor: 'Monitor', settings: 'Settings' };
+      var PHASE_ICONS = { crawl: 'fa-spider', match: 'fa-link', redirects: 'fa-directions', monitor: 'fa-chart-line', settings: 'fa-cog' };
 
       var accent = '#f97316';
       var btnStyle = { padding: '10px 20px', borderRadius: 8, border: 'none', background: accent, color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' };
@@ -17235,6 +17235,40 @@
         );
       }
 
+      // --- Settings Phase ---
+      function renderSettingsPhase() {
+        var m = activeMigration;
+        var inputStyle = { width: '100%', padding: '10px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, marginBottom: 12, boxSizing: 'border-box' };
+        var [settingsWpUrl, setSettingsWpUrl] = React.useState(m.wp_url || '');
+        var [settingsWpUser, setSettingsWpUser] = React.useState(m.wp_username || '');
+        var [settingsWpPass, setSettingsWpPass] = React.useState(m.wp_app_password || '');
+        var [saving, setSaving] = React.useState(false);
+        var [saved, setSaved] = React.useState(false);
+
+        function handleSaveSettings() {
+          setSaving(true); setSaved(false);
+          api('/migrations/' + m.id, { method: 'PUT', body: { wp_url: settingsWpUrl, wp_username: settingsWpUser, wp_app_password: settingsWpPass } })
+            .then(function(r) { setActiveMigration(Object.assign({}, m, { wp_url: settingsWpUrl, wp_username: settingsWpUser, wp_app_password: settingsWpPass })); setSaved(true); setTimeout(function() { setSaved(false); }, 2000); })
+            .catch(function() {})
+            .finally(function() { setSaving(false); });
+        }
+
+        return React.createElement('div', { style: { maxWidth: 500 } },
+          React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 16 } }, 'WordPress Credentials'),
+          React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 20 } }, 'Required for pushing redirects and transferring meta data to the new site.'),
+          React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'WordPress URL'),
+          React.createElement('input', { value: settingsWpUrl, onChange: function(e) { setSettingsWpUrl(e.target.value); }, placeholder: 'https://new-site.com', style: inputStyle }),
+          React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'WP Username'),
+          React.createElement('input', { value: settingsWpUser, onChange: function(e) { setSettingsWpUser(e.target.value); }, placeholder: 'admin', style: inputStyle }),
+          React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'WP Application Password'),
+          React.createElement('input', { type: 'password', value: settingsWpPass, onChange: function(e) { setSettingsWpPass(e.target.value); }, placeholder: 'xxxx xxxx xxxx', style: inputStyle }),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 } },
+            React.createElement('button', { onClick: handleSaveSettings, disabled: saving, style: Object.assign({}, btnStyle, saving ? { opacity: 0.6 } : {}) }, saving ? 'Saving...' : 'Save Credentials'),
+            saved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 13, fontWeight: 600 } }, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Saved!') : null
+          )
+        );
+      }
+
       // --- Create Modal ---
       function renderCreateModal() {
         if (!showCreateModal) return null;
@@ -17281,7 +17315,7 @@
           React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } }, activeMigration.name),
           React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 16 } }, activeMigration.old_site_url + ' → ' + activeMigration.new_site_url),
           renderPhaseBar(),
-          phase === 'crawl' ? renderCrawlPhase() : phase === 'match' ? renderMatchPhase() : phase === 'redirects' ? renderRedirectsPhase() : phase === 'monitor' ? renderMonitorPhase() : null
+          phase === 'crawl' ? renderCrawlPhase() : phase === 'match' ? renderMatchPhase() : phase === 'redirects' ? renderRedirectsPhase() : phase === 'monitor' ? renderMonitorPhase() : phase === 'settings' ? renderSettingsPhase() : null
         ) : React.createElement('div', null,
           // Migration list
           React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 16 } },
