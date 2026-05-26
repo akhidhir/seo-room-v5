@@ -18926,7 +18926,10 @@ REQUIREMENTS:
 - No placeholder text — all content must be specific to this business
 - NEVER repeat the same idea twice. Each paragraph must cover a different topic.
 - Each sentence must add new information. No padding or filler.
-- Use Australian English: colour, centre, organise, specialise
+
+${HUMAN_WRITING_RULES}
+
+FINAL REMINDER — YOUR #1 PRIORITY IS TO WRITE LIKE A HUMAN. If the text reads like AI wrote it, it will be rejected. Re-read the anti-AI rules above and apply EVERY one. Use unexpected words, erratic sentence lengths, sentence fragments, hedging, contractions, and register shifts.
 
 Return ONLY the HTML content, no markdown wrapping.`
       }]
@@ -19001,6 +19004,10 @@ ${settings.tone_of_voice ? '- Brand voice: ' + settings.tone_of_voice : ''}
 - Include a clear call to action
 - Do NOT include the <html>, <head>, or <body> tags — just the page content HTML starting with <h1>
 - Do NOT include any placeholder text — all content must be real and specific to this business
+
+${HUMAN_WRITING_RULES}
+
+FINAL REMINDER — YOUR #1 PRIORITY IS TO WRITE LIKE A HUMAN. If the text reads like AI wrote it, it will be rejected. Re-read the anti-AI rules above and apply EVERY one.
 
 Return ONLY the HTML content, no markdown wrapping.`
       }]
