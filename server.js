@@ -18979,6 +18979,7 @@ Return ONLY the HTML content, no markdown wrapping.`
 });
 
 // ── Brief Compliance Check (rule-based, zero AI cost) ──
+// Smart matching: checks key words from phrases, not exact multi-word strings
 app.post(['/api/builds/:buildId/site-pages/:pageId/brief-check', '/api/projects/:projectId/site-pages/:pageId/brief-check'], async (req, res) => {
   const { buildId, projectId, pageId } = req.params;
   try {
@@ -19004,80 +19005,113 @@ app.post(['/api/builds/:buildId/site-pages/:pageId/brief-check', '/api/projects/
     let totalChecks = 0;
     let passed = 0;
 
-    // 1. Check mandatory keywords (from about_page + service pages)
-    const mandatoryKeywords = new Set();
-    if (brief.about_page && brief.about_page.keywords) {
-      (Array.isArray(brief.about_page.keywords) ? brief.about_page.keywords : [brief.about_page.keywords]).forEach(k => mandatoryKeywords.add(k));
+    // Helper: smart phrase match — all significant words (>3 chars) from phrase must appear in content
+    const STOP_WORDS = new Set(['with', 'that', 'this', 'from', 'your', 'their', 'they', 'have', 'been', 'will', 'each', 'also', 'more', 'than', 'into', 'over', 'such', 'only', 'very', 'when', 'where', 'which', 'what', 'about', 'across', 'after', 'before', 'between', 'through', 'during', 'without', 'within', 'along', 'among', 'around', 'upon', 'under']);
+    function phraseMatch(phrase) {
+      const words = phrase.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w));
+      if (words.length === 0) return true;
+      return words.every(w => content.includes(w));
     }
-    // Find matching service page
+
+    // Helper: extract core term from a style/type (strip generic prefixes)
+    // "Colorbond fencing" → check "colorbond", "Commercial fencing for warehouses" → check "warehouses"
+    function coreTermMatch(style) {
+      const lower = style.toLowerCase();
+      // First try exact match
+      if (content.includes(lower)) return true;
+      // Then try the distinctive word(s) — remove generic words like fencing, retaining, walls, commercial, custom, residential, solutions
+      const GENERIC = new Set(['fencing', 'retaining', 'walls', 'wall', 'commercial', 'custom', 'residential', 'solutions', 'professional', 'installation', 'services', 'perth', 'quality', 'high', 'durable', 'property']);
+      const words = lower.replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2 && !GENERIC.has(w) && !STOP_WORDS.has(w));
+      // If all words are generic (e.g., "Custom residential fencing solutions"), check the full concept differently
+      if (words.length === 0) return content.includes(lower.split(/\s+/).slice(0, 2).join(' '));
+      return words.every(w => content.includes(w));
+    }
+
     const pageNameLower = page.page_name.toLowerCase();
+    const isHome = pageNameLower === 'home';
+
+    // Find matching service page from brief
     let matchedService = null;
     if (brief.service_pages) {
       matchedService = brief.service_pages.find(sp => {
         const spName = (sp.page_name || '').toLowerCase();
         return spName === pageNameLower || pageNameLower.includes(spName) || spName.includes(pageNameLower);
       });
-      if (matchedService && matchedService.keywords) {
-        (Array.isArray(matchedService.keywords) ? matchedService.keywords : [matchedService.keywords]).forEach(k => mandatoryKeywords.add(k));
-      }
-    }
-    // For Home page, collect all service page keywords too
-    if (pageNameLower === 'home' && brief.service_pages) {
-      brief.service_pages.forEach(sp => {
-        if (sp.keywords) (Array.isArray(sp.keywords) ? sp.keywords : [sp.keywords]).forEach(k => mandatoryKeywords.add(k));
-      });
-    }
-    for (const kw of mandatoryKeywords) {
-      totalChecks++;
-      if (content.includes(kw.toLowerCase())) { passed++; }
-      else { gaps.push({ type: 'keyword', severity: 'high', message: `Missing keyword: "${kw}"` }); }
     }
 
-    // 2. Check types/styles (from matched service page)
+    // 1. Check about_page keywords (these are the core SEO keywords — always check)
+    if (brief.about_page && brief.about_page.keywords) {
+      const kws = Array.isArray(brief.about_page.keywords) ? brief.about_page.keywords : [brief.about_page.keywords];
+      for (const kw of kws) {
+        totalChecks++;
+        if (phraseMatch(kw)) { passed++; }
+        else { gaps.push({ type: 'keyword', severity: 'high', message: `Missing keyword: "${kw}"` }); }
+      }
+    }
+
+    // 2. Check matched service page keywords (only for that specific page, not Home)
+    if (matchedService && matchedService.keywords && !isHome) {
+      const kws = Array.isArray(matchedService.keywords) ? matchedService.keywords : [matchedService.keywords];
+      for (const kw of kws) {
+        totalChecks++;
+        if (phraseMatch(kw)) { passed++; }
+        else { gaps.push({ type: 'keyword', severity: 'high', message: `Missing keyword: "${kw}"` }); }
+      }
+    }
+
+    // 3. Check types/styles — use core term matching
     if (matchedService && matchedService.types_or_styles && matchedService.types_or_styles.length) {
       for (const style of matchedService.types_or_styles) {
         totalChecks++;
-        if (content.includes(style.toLowerCase())) { passed++; }
-        else { gaps.push({ type: 'style', severity: 'high', message: `Missing fencing type/style: "${style}"` }); }
-      }
-    }
-    // For Home page, check all types across all services
-    if (pageNameLower === 'home' && brief.service_pages) {
-      const allTypes = new Set();
-      brief.service_pages.forEach(sp => {
-        if (sp.types_or_styles) sp.types_or_styles.forEach(t => allTypes.add(t));
-      });
-      for (const t of allTypes) {
-        totalChecks++;
-        if (content.includes(t.toLowerCase())) { passed++; }
-        else { gaps.push({ type: 'style', severity: 'medium', message: `Missing type/style from brief: "${t}"` }); }
+        if (coreTermMatch(style)) { passed++; }
+        else { gaps.push({ type: 'style', severity: 'high', message: `Missing type/style: "${style}"` }); }
       }
     }
 
-    // 3. Check process steps (from matched service page)
+    // 4. For Home page — check MAIN fencing types only (top-level from Fencing Installation page)
+    // Don't check every sub-type from every service page
+    if (isHome && brief.service_pages) {
+      const fencingPage = brief.service_pages.find(sp => (sp.page_name || '').toLowerCase().includes('fencing installation'));
+      if (fencingPage && fencingPage.types_or_styles) {
+        // Only check the primary types (Colorbond, Slat, Pool, Aluminium, Garrison, Timber, Boundary)
+        const PRIMARY_TYPES = ['colorbond', 'slat', 'timber', 'aluminium', 'pool', 'garrison', 'boundary'];
+        for (const style of fencingPage.types_or_styles) {
+          const lower = style.toLowerCase();
+          const isPrimary = PRIMARY_TYPES.some(pt => lower.includes(pt));
+          if (!isPrimary) continue; // Skip compound/generic types for home page
+          totalChecks++;
+          if (coreTermMatch(style)) { passed++; }
+          else { gaps.push({ type: 'style', severity: 'medium', message: `Missing fencing type: "${style}"` }); }
+        }
+      }
+      // Check that each service PAGE is mentioned (by name)
+      for (const sp of brief.service_pages) {
+        totalChecks++;
+        const spWords = sp.page_name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w));
+        if (spWords.length === 0 || spWords.every(w => content.includes(w))) { passed++; }
+        else { gaps.push({ type: 'service', severity: 'medium', message: `Service not mentioned: "${sp.page_name}"` }); }
+      }
+    }
+
+    // 5. Check process steps (from matched service page) — fuzzy match
     if (matchedService && matchedService.process_steps && matchedService.process_steps.length) {
       for (const step of matchedService.process_steps) {
         totalChecks++;
-        // Fuzzy: check if key words from the step appear
-        const stepWords = step.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
-        const matchCount = stepWords.filter(w => content.includes(w)).length;
-        if (matchCount >= Math.ceil(stepWords.length * 0.5)) { passed++; }
+        if (phraseMatch(step)) { passed++; }
         else { gaps.push({ type: 'process', severity: 'medium', message: `Process step not covered: "${step}"` }); }
       }
     }
 
-    // 4. Check differentiators
+    // 6. Check differentiators
     if (brief.differentiators && brief.differentiators.length) {
       for (const diff of brief.differentiators) {
         totalChecks++;
-        const diffWords = diff.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
-        const matchCount = diffWords.filter(w => content.includes(w)).length;
-        if (matchCount >= Math.ceil(diffWords.length * 0.4)) { passed++; }
+        if (phraseMatch(diff)) { passed++; }
         else { gaps.push({ type: 'differentiator', severity: 'medium', message: `Differentiator not emphasized: "${diff}"` }); }
       }
     }
 
-    // 5. Check words to avoid
+    // 7. Check words to avoid (exact match — these should NOT appear)
     if (brief.words_to_avoid && brief.words_to_avoid.length) {
       for (const word of brief.words_to_avoid) {
         totalChecks++;
@@ -19086,14 +19120,12 @@ app.post(['/api/builds/:buildId/site-pages/:pageId/brief-check', '/api/projects/
       }
     }
 
-    // 6. Check about page dot points (for Home and About pages)
-    if ((pageNameLower === 'home' || pageNameLower === 'about') && brief.about_page && brief.about_page.dot_points) {
+    // 8. Check about page dot points (for Home and About pages)
+    if ((isHome || pageNameLower === 'about') && brief.about_page && brief.about_page.dot_points) {
       for (const dp of brief.about_page.dot_points) {
         totalChecks++;
-        const dpWords = dp.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
-        const matchCount = dpWords.filter(w => content.includes(w)).length;
-        if (matchCount >= Math.ceil(dpWords.length * 0.5)) { passed++; }
-        else { gaps.push({ type: 'about', severity: 'medium', message: `About page point missing: "${dp}"` }); }
+        if (phraseMatch(dp)) { passed++; }
+        else { gaps.push({ type: 'about', severity: 'medium', message: `About point missing: "${dp}"` }); }
       }
     }
 
