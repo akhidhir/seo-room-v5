@@ -3065,7 +3065,7 @@ app.post('/api/projects/:id/license/renew', async (req, res) => {
 // List all migrations for the logged-in user
 app.get('/api/migrations', async (req, res) => {
   try {
-    const userId = req.user?.id;
+    const userId = req.auth?.userId;
     const result = await pool.query(
       `SELECT id, name, old_site_url, new_site_url, status, phase, redirects_pushed,
               COALESCE(json_array_length(old_crawl), 0) as old_pages,
@@ -3073,8 +3073,8 @@ app.get('/api/migrations', async (req, res) => {
               COALESCE(json_array_length(url_map), 0) as mapped_urls,
               COALESCE(json_array_length(unmatched_urls), 0) as unmatched,
               wp_url, project_id, created_at, updated_at
-       FROM seo_migrations WHERE user_id = $1 OR (user_id IS NULL AND project_id IS NOT NULL) ORDER BY created_at DESC`,
-      [userId]
+       FROM seo_migrations ORDER BY created_at DESC`,
+      []
     );
     res.json(result.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -3094,7 +3094,7 @@ app.post('/api/migrations', async (req, res) => {
   try {
     const { name, old_site_url, new_site_url, wp_url, wp_username, wp_app_password } = req.body;
     if (!old_site_url || !new_site_url) return res.status(400).json({ error: 'Both old and new site URLs required' });
-    const userId = req.user?.id;
+    const userId = req.auth?.userId || null;
     const result = await pool.query(
       `INSERT INTO seo_migrations (user_id, name, old_site_url, new_site_url, wp_url, wp_username, wp_app_password)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
