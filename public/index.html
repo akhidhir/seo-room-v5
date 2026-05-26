@@ -15780,7 +15780,7 @@
       var [optimising, setOptimising] = React.useState(false);
       var [publishing, setPublishing] = React.useState(false);
       var [savingMeta, setSavingMeta] = React.useState(false);
-      var [targetKeywords, setTargetKeywords] = React.useState((page.keywords || []).map(function(k) { return k.keyword || k; }));
+      var [targetKeywords, setTargetKeywords] = React.useState((page.target_keywords || page.keywords || []).map(function(k) { return typeof k === 'string' ? k : (k.keyword || k); }));
       var [optimisePreview, setOptimisePreview] = React.useState(null);
       var [applyingOptimise, setApplyingOptimise] = React.useState(false);
       var [briefData, setBriefData] = React.useState(null);
