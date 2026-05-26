@@ -16999,7 +16999,7 @@
               )),
               React.createElement('tbody', null, pages.map(function(p, i) {
                 return React.createElement('tr', { key: i },
-                  React.createElement('td', { style: Object.assign({}, tdStyle, { maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }, p.url),
+                  React.createElement('td', { style: Object.assign({}, tdStyle, { wordBreak: 'break-all', fontSize: 12 }) }, p.url),
                   React.createElement('td', { style: tdStyle }, p.title || '-'),
                   React.createElement('td', { style: tdStyle }, p.status ? badge(String(p.status), p.status === 200 ? '#22c55e' : '#ef4444') : '-')
                 );
