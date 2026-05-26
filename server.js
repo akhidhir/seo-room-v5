@@ -3813,7 +3813,7 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
             const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
               method: 'POST',
               headers: { 'Authorization': 'Bearer ' + GPTHUMAN_KEY, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: chunks[i], tone: 'Standard', mode: 'Light' })
+              body: JSON.stringify({ text: chunks[i], tone: 'Standard', mode: 'Balanced' })
             });
             const ghData = await ghResp.json();
             if (ghData.output) {
