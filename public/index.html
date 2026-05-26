@@ -18819,6 +18819,8 @@
       const [pendingSelection, setPendingSelection] = useState(null);
       const [lockedRanges, setLockedRanges] = useState([]);
       const [comments, setComments] = useState(initialComments || []);
+      const [replPopup, setReplPopup] = useState(null); // { top, left, text, suggestions, loading }
+      const replPopupRef = useRef(null);
 
       const settingProgrammatically = useRef(false);
       const onChangeRef = useRef(onChange);
@@ -18854,9 +18856,41 @@
             if (!settingProgrammatically.current && onChangeRef.current) onChangeRef.current(q.root.innerHTML);
           });
           // Track selection so "Add Comment" works even after clicking the button (which blurs editor)
+          // Also trigger replacement popup on text selection
+          let replDebounce = null;
           q.on('selection-change', (range) => {
             if (range && range.length > 0) {
               lastSelectionRef.current = range;
+              // Show replacement popup after a short delay (avoid triggering on every cursor drag)
+              clearTimeout(replDebounce);
+              replDebounce = setTimeout(() => {
+                const sel = q.getSelection();
+                if (!sel || sel.length < 2) { setReplPopup(null); return; }
+                const selectedText = q.getText(sel.index, sel.length).trim();
+                if (!selectedText || selectedText.length < 2 || selectedText.length > 500) { setReplPopup(null); return; }
+                const bounds = q.getBounds(sel.index, sel.length);
+                const editorBounds = editorRef.current.getBoundingClientRect();
+                setReplPopup({
+                  top: bounds.top + bounds.height + 8,
+                  left: Math.min(bounds.left, editorBounds.width - 320),
+                  text: selectedText,
+                  range: { index: sel.index, length: sel.length },
+                  contextBefore: q.getText(Math.max(0, sel.index - 100), Math.min(100, sel.index)),
+                  contextAfter: q.getText(sel.index + sel.length, 100),
+                  suggestions: null,
+                  loading: false
+                });
+              }, 400);
+            } else {
+              // Delay clearing so clicking a suggestion doesn't dismiss the popup
+              clearTimeout(replDebounce);
+              replDebounce = setTimeout(() => {
+                setReplPopup(prev => {
+                  // Keep popup if mouse is over it
+                  if (replPopupRef.current && replPopupRef.current.matches(':hover')) return prev;
+                  return null;
+                });
+              }, 300);
             }
           });
           applyCommentHighlights(q, comments || []);
@@ -18984,6 +19018,33 @@
         setNewCommentText('');
         // Re-apply highlights (switches from blue pending → yellow comment)
         if (quillRef.current) applyCommentHighlights(quillRef.current, [...comments, comment]);
+      }
+
+      // ── Replacement suggestions ──
+      async function fetchReplacements() {
+        if (!replPopup || replPopup.loading || replPopup.suggestions) return;
+        setReplPopup(prev => prev ? { ...prev, loading: true } : null);
+        try {
+          var result = await api('/suggest-replacements', {
+            method: 'POST',
+            body: { selected_text: replPopup.text, context_before: replPopup.contextBefore, context_after: replPopup.contextAfter }
+          });
+          setReplPopup(prev => prev ? { ...prev, suggestions: result.suggestions || [], loading: false } : null);
+        } catch (e) {
+          console.error('[replacements] Error:', e);
+          setReplPopup(prev => prev ? { ...prev, suggestions: [], loading: false, error: e.message } : null);
+        }
+      }
+
+      function applyReplacement(newText) {
+        if (!quillRef.current || !replPopup || !replPopup.range) return;
+        const q = quillRef.current;
+        settingProgrammatically.current = true;
+        q.deleteText(replPopup.range.index, replPopup.range.length, 'user');
+        q.insertText(replPopup.range.index, newText, 'user');
+        settingProgrammatically.current = false;
+        if (onChangeRef.current) onChangeRef.current(q.root.innerHTML);
+        setReplPopup(null);
       }
 
       function resolveComment(id, action, reply) {
@@ -19128,8 +19189,51 @@
           React.createElement('button', { onClick: doReplaceAll, className: 'btn btn-sm', style: { fontSize: 12, padding: '6px 12px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' } }, 'All')
         ),
         React.createElement('div', { style: { display: 'flex', gap: 0, position: 'relative' } },
-          React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-            React.createElement('div', { ref: editorRef })
+          React.createElement('div', { style: { flex: 1, minWidth: 0, position: 'relative' } },
+            React.createElement('div', { ref: editorRef }),
+            // Replacement suggestions popup
+            replPopup && React.createElement('div', {
+              ref: replPopupRef,
+              onMouseDown: function(e) { e.stopPropagation(); },
+              style: { position: 'absolute', top: replPopup.top, left: Math.max(0, replPopup.left), zIndex: 1000, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 0, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', minWidth: 280, maxWidth: 360 }
+            },
+              // Header with selected text
+              React.createElement('div', { style: { padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 } },
+                  React.createElement('i', { className: 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6, color: '#14b8a6' } }), 'Replace'
+                ),
+                React.createElement('button', { onClick: function() { setReplPopup(null); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14, padding: '0 2px' } }, '×')
+              ),
+              // Selected text preview
+              React.createElement('div', { style: { padding: '8px 14px', background: 'rgba(239,68,68,0.08)', fontSize: 13, color: '#ef4444', borderBottom: '1px solid var(--border)' } },
+                '"' + (replPopup.text.length > 60 ? replPopup.text.slice(0, 57) + '...' : replPopup.text) + '"'
+              ),
+              // Suggestions or loading or fetch button
+              !replPopup.suggestions && !replPopup.loading && React.createElement('div', { style: { padding: '10px 14px' } },
+                React.createElement('button', {
+                  onClick: fetchReplacements,
+                  style: { width: '100%', padding: '8px 12px', background: 'linear-gradient(135deg, #14b8a6, #0ea5e9)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+                }, React.createElement('i', { className: 'fa-solid fa-sparkles', style: { marginRight: 6 } }), 'Get AI Suggestions')
+              ),
+              replPopup.loading && React.createElement('div', { style: { padding: '16px 14px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 } },
+                React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 8 } }), 'Generating options...'
+              ),
+              replPopup.suggestions && replPopup.suggestions.length > 0 && React.createElement('div', { style: { padding: '6px 0' } },
+                replPopup.suggestions.map(function(sug, si) {
+                  return React.createElement('div', {
+                    key: si,
+                    onClick: function() { applyReplacement(sug); },
+                    onMouseEnter: function(e) { e.currentTarget.style.background = 'rgba(20,184,166,0.12)'; },
+                    onMouseLeave: function(e) { e.currentTarget.style.background = 'transparent'; },
+                    style: { padding: '8px 14px', cursor: 'pointer', fontSize: 13, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 8, transition: 'background 0.15s' }
+                  },
+                    React.createElement('span', { style: { width: 20, height: 20, borderRadius: '50%', background: 'rgba(20,184,166,0.15)', color: '#14b8a6', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } }, si + 1),
+                    React.createElement('span', { style: { flex: 1 } }, sug)
+                  );
+                })
+              ),
+              replPopup.suggestions && replPopup.suggestions.length === 0 && React.createElement('div', { style: { padding: '12px 14px', color: 'var(--text3)', fontSize: 13, textAlign: 'center' } }, 'No suggestions available')
+            )
           ),
           (sortedActive.length > 0 || pendingSelection) && React.createElement('div', { style: { width: 280, minWidth: 280, position: 'relative', marginLeft: 8 } },
             pendingSelection && React.createElement('div', { style: { position: 'absolute', top: pendingSelection.top || 0, left: 0, right: 0, zIndex: 10 } },

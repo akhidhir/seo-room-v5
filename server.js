@@ -4053,6 +4053,70 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
 });
 
 // ============================================================================
+// TEXT REPLACEMENT SUGGESTIONS — AI-powered word/phrase alternatives
+// ============================================================================
+app.post('/api/suggest-replacements', async (req, res) => {
+  try {
+    const { selected_text, context_before, context_after } = req.body;
+    if (!selected_text || selected_text.trim().length === 0) {
+      return res.status(400).json({ error: 'No text selected' });
+    }
+
+    const isWord = selected_text.trim().split(/\s+/).length <= 3;
+    const prompt = isWord
+      ? `Give exactly 4 alternative words or short phrases to replace "${selected_text}" in this context:
+"...${(context_before || '').slice(-80)} [${selected_text}] ${(context_after || '').slice(0, 80)}..."
+
+Rules:
+- Each alternative must fit grammatically in the sentence
+- Keep similar meaning but different tone/style
+- One option should be more casual/conversational
+- One option should be more professional
+- Match Australian English spelling
+- Return ONLY a JSON array of 4 strings, nothing else
+
+Example: ["option1", "option2", "option3", "option4"]`
+      : `Give exactly 4 alternative ways to write this sentence/phrase:
+"${selected_text}"
+
+Context: "...${(context_before || '').slice(-60)} [SELECTED] ${(context_after || '').slice(0, 60)}..."
+
+Rules:
+- Each alternative must convey the same meaning
+- Vary the tone: conversational, professional, concise, detailed
+- Keep similar length (within 30% of original)
+- Match Australian English spelling
+- Return ONLY a JSON array of 4 strings, nothing else
+
+Example: ["rewrite1", "rewrite2", "rewrite3", "rewrite4"]`;
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 500,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    let suggestions = [];
+    const raw = aiResp.content[0].text.trim();
+    try {
+      // Extract JSON array from response
+      const jsonMatch = raw.match(/\[[\s\S]*?\]/);
+      if (jsonMatch) suggestions = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      console.error('[suggest-replacements] Parse error:', e.message, 'raw:', raw);
+    }
+
+    // Filter out any that are identical to the original
+    suggestions = suggestions.filter(s => s.toLowerCase().trim() !== selected_text.toLowerCase().trim()).slice(0, 4);
+
+    res.json({ suggestions, selected_text });
+  } catch (err) {
+    console.error('[suggest-replacements] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
 // SMART HUMANIZE PIPELINE — Humanize → Brief Check → Surgical Repair → Re-humanize
 // Achieves 80%+ human score while preserving brief compliance
 // ============================================================================
