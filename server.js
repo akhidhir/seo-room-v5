@@ -18826,12 +18826,28 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     // AI notes from brief upload
     const aiNotes = page.ai_notes ? `\nADDITIONAL NOTES:\n${page.ai_notes}` : '';
 
+    // Build full brief text for strict compliance
+    let fullBriefText = '';
+    if (build.brief_raw_text) fullBriefText = build.brief_raw_text;
+    else if (build.copywriting_brief) fullBriefText = JSON.stringify(build.copywriting_brief, null, 2);
+
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
       messages: [{
         role: 'user',
         content: `Write a complete webpage for a ${build.industry || 'business'} website (${build.business_name || build.name}) in ${build.location || 'Australia'}.
+
+${fullBriefText ? '=== COPYWRITING BRIEF (SINGLE SOURCE OF TRUTH) ===\n' + fullBriefText.substring(0, 8000) + '\n=== END BRIEF ===\n' : ''}
+
+BRIEF COMPLIANCE (NON-NEGOTIABLE):
+- The brief is the SINGLE SOURCE OF TRUTH. Only mention services, materials, styles, types, and process steps EXPLICITLY listed in the brief.
+- Do NOT invent ANY services, materials, credentials, certifications, licences, statistics, timelines, or claims not in the brief.
+- If the brief lists specific styles/types (e.g., Colorbond, Slat, Pool, Aluminium, Garrison, Timber), mention ALL of them and ONLY them.
+- If the brief says Nil for certifications/licences/awards, do NOT claim the business is "licensed", "certified", or "award-winning".
+- Use the brief's EXACT terminology — don't substitute (e.g., don't write "composite" if the brief says "Colorbond").
+- Include ALL specific details: years of experience, ALL service types, ALL process steps, ALL material types the brief lists.
+- NEVER invent numbers, timelines, team backgrounds, or suburb-specific claims not in the brief.
 
 CRITICAL: The page topic is "${page.page_name}". ALL content, H1, meta title, and meta description MUST be specifically about "${page.page_name}".
 
@@ -18856,6 +18872,9 @@ REQUIREMENTS:
 - Write for SEO but natural for humans
 - Do NOT include <html>, <head>, or <body> tags — just content HTML starting with <h1>
 - No placeholder text — all content must be specific to this business
+- NEVER repeat the same idea twice. Each paragraph must cover a different topic.
+- Each sentence must add new information. No padding or filler.
+- Use Australian English: colour, centre, organise, specialise
 
 Return ONLY the HTML content, no markdown wrapping.`
       }]
