@@ -16855,6 +16855,12 @@
       var [newWpUrl, setNewWpUrl] = React.useState('');
       var [newWpUser, setNewWpUser] = React.useState('');
       var [newWpPass, setNewWpPass] = React.useState('');
+      var [settingsWpUrl, setSettingsWpUrl] = React.useState('');
+      var [settingsWpUser, setSettingsWpUser] = React.useState('');
+      var [settingsWpPass, setSettingsWpPass] = React.useState('');
+      var [savingSettings, setSavingSettings] = React.useState(false);
+      var [savedSettings, setSavedSettings] = React.useState(false);
+      var [settingsLoaded, setSettingsLoaded] = React.useState(null);
 
       var PHASES = ['crawl', 'match', 'redirects', 'monitor', 'settings'];
       var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', monitor: 'Monitor', settings: 'Settings' };
@@ -17239,18 +17245,21 @@
       function renderSettingsPhase() {
         var m = activeMigration;
         var inputStyle = { width: '100%', padding: '10px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, marginBottom: 12, boxSizing: 'border-box' };
-        var [settingsWpUrl, setSettingsWpUrl] = React.useState(m.wp_url || '');
-        var [settingsWpUser, setSettingsWpUser] = React.useState(m.wp_username || '');
-        var [settingsWpPass, setSettingsWpPass] = React.useState(m.wp_app_password || '');
-        var [saving, setSaving] = React.useState(false);
-        var [saved, setSaved] = React.useState(false);
+
+        // Load settings from migration on first open
+        if (settingsLoaded !== m.id) {
+          setSettingsWpUrl(m.wp_url || '');
+          setSettingsWpUser(m.wp_username || '');
+          setSettingsWpPass(m.wp_app_password || '');
+          setSettingsLoaded(m.id);
+        }
 
         function handleSaveSettings() {
-          setSaving(true); setSaved(false);
+          setSavingSettings(true); setSavedSettings(false);
           api('/migrations/' + m.id, { method: 'PUT', body: { wp_url: settingsWpUrl, wp_username: settingsWpUser, wp_app_password: settingsWpPass } })
-            .then(function(r) { setActiveMigration(Object.assign({}, m, { wp_url: settingsWpUrl, wp_username: settingsWpUser, wp_app_password: settingsWpPass })); setSaved(true); setTimeout(function() { setSaved(false); }, 2000); })
+            .then(function(r) { setActiveMigration(Object.assign({}, m, { wp_url: settingsWpUrl, wp_username: settingsWpUser, wp_app_password: settingsWpPass })); setSavedSettings(true); setTimeout(function() { setSavedSettings(false); }, 2000); })
             .catch(function() {})
-            .finally(function() { setSaving(false); });
+            .finally(function() { setSavingSettings(false); });
         }
 
         return React.createElement('div', { style: { maxWidth: 500 } },
@@ -17263,8 +17272,8 @@
           React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'WP Application Password'),
           React.createElement('input', { type: 'password', value: settingsWpPass, onChange: function(e) { setSettingsWpPass(e.target.value); }, placeholder: 'xxxx xxxx xxxx', style: inputStyle }),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 } },
-            React.createElement('button', { onClick: handleSaveSettings, disabled: saving, style: Object.assign({}, btnStyle, saving ? { opacity: 0.6 } : {}) }, saving ? 'Saving...' : 'Save Credentials'),
-            saved ? React.createElement('span', { style: { color: '#22c55e', fontSize: 13, fontWeight: 600 } }, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Saved!') : null
+            React.createElement('button', { onClick: handleSaveSettings, disabled: savingSettings, style: Object.assign({}, btnStyle, savingSettings ? { opacity: 0.6 } : {}) }, savingSettings ? 'Saving...' : 'Save Credentials'),
+            savedSettings ? React.createElement('span', { style: { color: '#22c55e', fontSize: 13, fontWeight: 600 } }, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Saved!') : null
           )
         );
       }
