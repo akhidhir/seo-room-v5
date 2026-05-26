@@ -3464,20 +3464,35 @@ async function crawlSiteForMigration(siteUrl) {
     } catch (e) { console.log(`[migration-crawl] Sitemap ${smUrl} error: ${e.message}`); }
   }
 
-  // Fallback: try WP REST API
-  if (pageUrls.length === 0) {
-    console.log(`[migration-crawl] No sitemap pages found, trying WP REST API...`);
-    try {
-      const wpPages = await axios.get(`${siteUrl}/wp-json/wp/v2/pages?per_page=100&_fields=link`, { timeout: 10000, headers: { 'User-Agent': CRAWL_UA } });
-      console.log(`[migration-crawl] WP pages: ${wpPages.data.length}`);
-      pageUrls.push(...wpPages.data.map(p => p.link));
-    } catch (e) { console.log(`[migration-crawl] WP pages error: ${e.message}`); }
-    try {
-      const wpPosts = await axios.get(`${siteUrl}/wp-json/wp/v2/posts?per_page=100&_fields=link`, { timeout: 10000, headers: { 'User-Agent': CRAWL_UA } });
-      console.log(`[migration-crawl] WP posts: ${wpPosts.data.length}`);
-      pageUrls.push(...wpPosts.data.map(p => p.link));
-    } catch (e) { console.log(`[migration-crawl] WP posts error: ${e.message}`); }
+  // Also try WP REST API (paginated) — supplements sitemap, catches pages not in sitemap
+  console.log(`[migration-crawl] Trying WP REST API (paginated)...`);
+  async function fetchAllWpType(type) {
+    const allLinks = [];
+    let page = 1;
+    while (true) {
+      try {
+        const resp = await axios.get(`${siteUrl}/wp-json/wp/v2/${type}?per_page=100&page=${page}&_fields=link`, { timeout: 10000, headers: { 'User-Agent': CRAWL_UA } });
+        if (!resp.data || resp.data.length === 0) break;
+        allLinks.push(...resp.data.map(p => p.link));
+        const totalPages = parseInt(resp.headers['x-wp-totalpages'] || '1');
+        console.log(`[migration-crawl] WP ${type} page ${page}/${totalPages}: ${resp.data.length} items`);
+        if (page >= totalPages) break;
+        page++;
+      } catch (e) {
+        if (page === 1) console.log(`[migration-crawl] WP ${type} error: ${e.message}`);
+        break;
+      }
+    }
+    return allLinks;
   }
+  try {
+    const wpPages = await fetchAllWpType('pages');
+    pageUrls.push(...wpPages);
+  } catch (e) { /* logged inside */ }
+  try {
+    const wpPosts = await fetchAllWpType('posts');
+    pageUrls.push(...wpPosts);
+  } catch (e) { /* logged inside */ }
   console.log(`[migration-crawl] Total page URLs found: ${pageUrls.length}`);
 
   // Deduplicate
