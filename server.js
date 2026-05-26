@@ -19789,7 +19789,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
   req.setTimeout(300000);
   res.setTimeout(300000);
   const { projectId, buildId, pageId } = req.params;
-  const { tips, stats, content_score, missing_keywords, focus_keyword } = req.body;
+  const { tips, stats, content_score, missing_keywords, focus_keyword, target_keywords, topic_gaps } = req.body;
   try {
     // Support both /projects/:projectId and /builds/:buildId routes
     let pageResult;
@@ -19926,6 +19926,9 @@ VOICE & STYLE:
 - No formulaic transitions: skip "Moreover", "Furthermore", "Additionally", "In addition", "In conclusion"
 - Include specific local details where relevant (suburbs, WA conditions)
 
+${target_keywords && target_keywords.length > 0 ? 'TARGET KEYWORDS (MUST appear at least once each in the content):\n' + target_keywords.map(k => '- "' + (typeof k === 'string' ? k : k.keyword || k) + '"').join('\n') + '\n' : ''}
+${topic_gaps && topic_gaps.missing_topics && topic_gaps.missing_topics.length > 0 ? 'MANDATORY NEW SECTIONS — The user has ACCEPTED these topics. You MUST add a dedicated H2 or H3 section for EACH one:\n' + topic_gaps.missing_topics.map((t, i) => (i + 1) + '. ADD NEW SECTION: "' + t + '" — write 80-150 words about this topic').join('\n') + '\nFAILURE TO ADD THESE SECTIONS MEANS THE REWRITE IS REJECTED.\n' : ''}
+${topic_gaps && topic_gaps.missing_keywords && topic_gaps.missing_keywords.length > 0 ? 'MANDATORY KEYWORDS — The user has ACCEPTED these keywords. Each MUST appear at least once:\n' + topic_gaps.missing_keywords.map(k => '- "' + k + '"').join('\n') + '\n' : ''}
 BANNED PHRASES:
 "Whether you're looking for", "When it comes to", "In today's", "Look no further", "Your trusted partner", "Dedicated to providing", "Committed to excellence", "One-stop shop", "Hassle-free", "Don't hesitate to", "Feel free to", "A wide range of", "Take it to the next level", "We understand that", "Rest assured", "Peace of mind", "Second to none", "Top-notch", "Are you looking for", "plays a crucial role", "It is important to note", "comprehensive", "innovative", "leverage", "streamline", "cutting-edge", "state-of-the-art", "seamless", "robust", "holistic"
 
