@@ -14533,6 +14533,19 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
     }
     if (!loc.includes('Australia')) loc += ', Australia';
 
+    // Ensure location has proper comma-separated format for DataForSEO
+    // Handle cases like "Perth Western Australia" → "Perth,Western Australia,Australia"
+    if (!loc.includes(',')) {
+      // Try to detect Australian state names and split
+      const stateNames = ['Western Australia', 'New South Wales', 'Victoria', 'Queensland', 'South Australia', 'Tasmania', 'Northern Territory', 'Australian Capital Territory'];
+      for (const state of stateNames) {
+        if (loc.includes(state)) {
+          const city = loc.replace(state, '').trim();
+          loc = city ? city + ', ' + state + ', Australia' : state + ', Australia';
+          break;
+        }
+      }
+    }
     console.log(`[competitor-wordcount] Checking: "${keyword}" in ${loc}`);
     const serpData = await dataForSeoSerp({ keyword, location: loc, depth: 10 });
 
