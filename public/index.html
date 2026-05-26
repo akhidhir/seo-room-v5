@@ -17033,6 +17033,13 @@
         var matched = urlMap.filter(function(u) { return u.new_url; });
         var unmatched = urlMap.filter(function(u) { return !u.new_url; });
         var newPages = m.new_crawl || [];
+        var includedCount = matched.filter(function(u) { return u.included !== false; }).length;
+
+        // Build a lookup of new site pages that have content (title or h1)
+        var newPageHasContent = {};
+        newPages.forEach(function(p) {
+          if (p.title || p.h1) newPageHasContent[p.url] = { title: p.title, h1: p.h1 };
+        });
 
         function updateMapRow(idx, field, val) {
           var copy = urlMap.slice();
@@ -17041,37 +17048,72 @@
           setEditedMap(copy);
         }
 
+        function toggleInclude(idx) {
+          var copy = urlMap.slice();
+          copy[idx] = Object.assign({}, copy[idx]);
+          copy[idx].included = copy[idx].included === false ? true : false;
+          setEditedMap(copy);
+        }
+
+        function selectAll() {
+          var copy = urlMap.map(function(r) { return Object.assign({}, r, { included: true }); });
+          setEditedMap(copy);
+        }
+
+        function deselectAll() {
+          var copy = urlMap.map(function(r) { return Object.assign({}, r, { included: false }); });
+          setEditedMap(copy);
+        }
+
         return React.createElement('div', null,
-          React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 20 } },
+          React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center' } },
             React.createElement('button', { onClick: handleMatch, disabled: matching, style: Object.assign({}, btnStyle, matching ? { opacity: 0.6 } : {}) },
               matching ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'AI Matching...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'Run AI Matching')
             ),
-            urlMap.length > 0 ? React.createElement('button', { onClick: handleSaveMap, style: btnOutline }, React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }), 'Save Changes') : null
+            urlMap.length > 0 ? React.createElement('button', { onClick: handleSaveMap, style: btnOutline }, React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }), 'Save Changes') : null,
+            matched.length > 0 ? React.createElement('span', { style: { fontSize: 13, color: 'var(--text3)', marginLeft: 8 } }, includedCount + '/' + matched.length + ' selected for redirect') : null
           ),
           matched.length > 0 ? React.createElement('div', { className: 'card', style: { padding: 20, marginBottom: 20 } },
-            React.createElement('div', { className: 'card-title', style: { marginBottom: 12 } }, 'Matched URLs (' + matched.length + ')'),
-            React.createElement('div', { style: { maxHeight: 400, overflowY: 'auto' } },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
+              React.createElement('div', { className: 'card-title', style: { margin: 0 } }, 'Matched URLs (' + matched.length + ')'),
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                React.createElement('button', { onClick: selectAll, style: { padding: '4px 10px', fontSize: 11, background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid #22c55e40', borderRadius: 4, cursor: 'pointer', fontWeight: 600 } }, 'Select All'),
+                React.createElement('button', { onClick: deselectAll, style: { padding: '4px 10px', fontSize: 11, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid #ef444440', borderRadius: 4, cursor: 'pointer', fontWeight: 600 } }, 'Deselect All')
+              )
+            ),
+            React.createElement('div', { style: { maxHeight: 500, overflowY: 'auto' } },
               React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
                 React.createElement('thead', null, React.createElement('tr', null,
+                  React.createElement('th', { style: Object.assign({}, thStyle, { width: 40, textAlign: 'center' }) }, React.createElement('i', { className: 'fas fa-check-square', style: { color: 'var(--text3)' } })),
                   React.createElement('th', { style: thStyle }, 'Old URL'),
                   React.createElement('th', { style: Object.assign({}, thStyle, { width: 30, textAlign: 'center' }) }, ''),
                   React.createElement('th', { style: thStyle }, 'New URL'),
                   React.createElement('th', { style: thStyle }, 'Confidence'),
-                  React.createElement('th', { style: thStyle }, 'Reason')
+                  React.createElement('th', { style: thStyle }, 'Status')
                 )),
                 React.createElement('tbody', null, urlMap.map(function(row, i) {
                   if (!row.new_url) return null;
-                  return React.createElement('tr', { key: i },
-                    React.createElement('td', { style: Object.assign({}, tdStyle, { maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }, row.old_url),
+                  var isIncluded = row.included !== false;
+                  var hasContent = row.new_url && newPageHasContent[row.new_url];
+                  return React.createElement('tr', { key: i, style: { opacity: isIncluded ? 1 : 0.45 } },
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center' }) },
+                      React.createElement('input', { type: 'checkbox', checked: isIncluded, onChange: function() { toggleInclude(i); }, style: { cursor: 'pointer', width: 16, height: 16, accentColor: accent } })
+                    ),
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }) }, row.old_url),
                     React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center', color: accent }) }, '→'),
                     React.createElement('td', { style: tdStyle },
                       React.createElement('select', { value: row.new_url || '', onChange: function(e) { updateMapRow(i, 'new_url', e.target.value); }, style: { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 12, maxWidth: 220 } },
-                        React.createElement('option', { value: '' }, '— none —'),
+                        React.createElement('option', { value: '' }, '— skip (no redirect) —'),
                         newPages.map(function(p) { return React.createElement('option', { key: p.url, value: p.url }, p.url); })
                       )
                     ),
                     React.createElement('td', { style: tdStyle }, row.confidence != null ? confBadge(row.confidence) : '-'),
-                    React.createElement('td', { style: Object.assign({}, tdStyle, { fontSize: 12, color: 'var(--text3)' }) }, row.reason || '')
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { fontSize: 12 }) },
+                      hasContent
+                        ? React.createElement('span', { title: 'New page already has content: ' + (hasContent.title || hasContent.h1), style: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: '#f59e0b22', color: '#f59e0b', fontWeight: 600 } },
+                            React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { fontSize: 10 } }), 'Has Content')
+                        : React.createElement('span', { style: { color: '#22c55e', fontSize: 11 } }, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Clear')
+                    )
                   );
                 }))
               )
@@ -17093,10 +17135,12 @@
         var m = activeMigration;
         var urlMap = m.url_map || [];
         var matched = urlMap.filter(function(u) { return u.new_url; });
+        var included = matched.filter(function(u) { return u.included !== false; });
+        var excluded = matched.length - included.length;
         return React.createElement('div', null,
           React.createElement('div', { className: 'card', style: { padding: 24, marginBottom: 20 } },
-            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 8 } }, matched.length + ' matched URLs ready for redirect'),
-            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 20 } }, 'Push 301 redirects and transfer SEO metadata to the new site via WordPress.'),
+            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 8 } }, included.length + ' URLs selected for redirect' + (excluded > 0 ? ' (' + excluded + ' excluded)' : '')),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 20 } }, 'Push 301 redirects and transfer SEO metadata to the new site via WordPress. Only selected URLs from the Match phase will be processed.'),
             React.createElement('div', { style: { display: 'flex', gap: 12 } },
               React.createElement('button', { onClick: handlePushRedirects, disabled: pushingRedirects || matched.length === 0, style: Object.assign({}, btnStyle, (pushingRedirects || matched.length === 0) ? { opacity: 0.6 } : {}) },
                 pushingRedirects ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Pushing...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-directions', style: { marginRight: 6 } }), 'Push Redirects to WordPress')

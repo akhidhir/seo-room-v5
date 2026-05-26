@@ -3276,7 +3276,7 @@ Return valid JSON only, no markdown.`;
         if (!jsonMatch) throw new Error('AI did not return valid JSON');
 
         const matches = JSON.parse(jsonMatch[0]);
-        const urlMap = matches.filter(m => m.new_url && m.confidence > 0);
+        const urlMap = matches.filter(m => m.new_url && m.confidence > 0).map(m => ({ ...m, included: true }));
         const unmatched = matches.filter(m => !m.new_url || m.confidence === 0);
 
         await pool.query(
@@ -3328,6 +3328,7 @@ app.post('/api/projects/:id/migrations/:migrationId/push-redirects', async (req,
 
     for (const match of urlMap) {
       if (!match.old_url || !match.new_url) continue;
+      if (match.included === false) continue; // Skip excluded rows
       try {
         // Extract paths from full URLs
         const oldPath = new URL(match.old_url).pathname;
@@ -3372,6 +3373,7 @@ app.post('/api/projects/:id/migrations/:migrationId/transfer-meta', async (req, 
     const errors = [];
 
     for (const match of urlMap) {
+      if (match.included === false) continue; // Skip excluded rows
       const oldPage = oldPages.find(p => p.url === match.old_url);
       if (!oldPage || (!oldPage.title && !oldPage.meta_desc)) continue;
 
