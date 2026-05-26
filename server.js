@@ -19002,7 +19002,7 @@ app.post(['/api/builds/:buildId/site-pages/:pageId/brief-check', '/api/projects/
       : await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [pageId, projectId]);
     if (pageQ.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
     const page = pageQ.rows[0];
-    const content = (page.draft_content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+    const content = (page.draft_content || '').replace(/<[^>]+>/g, ' ').replace(/[-–—]/g, ' ').replace(/\s+/g, ' ').toLowerCase();
 
     if (!content.trim()) return res.json({ gaps: [{ type: 'error', message: 'Page has no content yet' }], score: 0 });
 
@@ -19021,7 +19021,8 @@ app.post(['/api/builds/:buildId/site-pages/:pageId/brief-check', '/api/projects/
     // Helper: smart phrase match — all significant words (>3 chars) from phrase must appear in content
     const STOP_WORDS = new Set(['with', 'that', 'this', 'from', 'your', 'their', 'they', 'have', 'been', 'will', 'each', 'also', 'more', 'than', 'into', 'over', 'such', 'only', 'very', 'when', 'where', 'which', 'what', 'about', 'across', 'after', 'before', 'between', 'through', 'during', 'without', 'within', 'along', 'among', 'around', 'upon', 'under']);
     function phraseMatch(phrase) {
-      const words = phrase.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w));
+      // Replace hyphens/dashes with spaces before splitting so "high-quality" → "high quality" → ["high", "quality"]
+      const words = phrase.toLowerCase().replace(/[-–—]/g, ' ').replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3 && !STOP_WORDS.has(w));
       if (words.length === 0) return true;
       return words.every(w => content.includes(w));
     }
