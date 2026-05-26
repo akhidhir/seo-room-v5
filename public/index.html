@@ -19663,8 +19663,12 @@
 
       const checkCompetitorWords = async () => {
         console.log('[ContentScore] Check competitors clicked', { focusKeyword, targetKeywords, pageTitle, projectId });
-        const kw = focusKeyword || (targetKeywords && targetKeywords[0]) || pageTitle || '';
-        if (!kw) { console.log('[ContentScore] No keyword found'); return; }
+        if (!focusKeyword && !(targetKeywords && targetKeywords[0])) {
+          alert('Set a focus keyword or add at least one target keyword first — without it, competitor analysis will search for the wrong thing.');
+          return;
+        }
+        const kw = focusKeyword || targetKeywords[0] || '';
+        if (!kw) return;
         if (!projectId) { console.log('[ContentScore] No projectId'); return; }
         if (checkingCompetitors) { console.log('[ContentScore] Already checking'); return; }
         setCheckingCompetitors(true);
