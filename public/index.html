@@ -19835,12 +19835,12 @@
               React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Top 3 Ranking Pages'),
               competitorData.top3.map((c, i) =>
                 React.createElement('div', { key: i, style: { padding: '12px 14px', marginBottom: 6, background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)' } },
-                  React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
-                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                  React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, overflow: 'hidden' } },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1, overflow: 'hidden' } },
                       React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: i === 0 ? '#f59e0b' : i === 1 ? '#94a3b8' : '#cd7f32', background: i === 0 ? 'rgba(245,158,11,0.15)' : 'rgba(148,163,184,0.1)', padding: '2px 8px', borderRadius: 4 } }, '#' + c.position),
-                      React.createElement('span', { style: { fontSize: 14, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 } }, c.domain)
+                      React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 } }, c.domain)
                     ),
-                    React.createElement('span', { style: { fontSize: 15, fontWeight: 700, color: c.words > stats.words ? '#ef4444' : '#22c55e' } }, (c.words || 0).toLocaleString() + ' words')
+                    React.createElement('span', { style: { fontSize: 13, fontWeight: 700, color: c.words > stats.words ? '#ef4444' : '#22c55e', whiteSpace: 'nowrap', flexShrink: 0, marginLeft: 8 } }, (c.words || 0).toLocaleString() + 'w')
                   ),
                   React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 5 } }, c.title || ''),
                   React.createElement('div', { style: { display: 'flex', gap: 8, fontSize: 12, color: 'var(--text3)' } },
