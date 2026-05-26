@@ -15840,8 +15840,6 @@
         if (targetKeywords.indexOf(kw) === -1) {
           setTargetKeywords(targetKeywords.concat([kw]));
         }
-        // Also set as focus keyword so the optimiser and score panel use it
-        setEditMeta(function(prev) { return Object.assign({}, prev, { focus_keyword: kw }); });
         setSuggestedKws([]);
       };
 
