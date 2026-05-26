@@ -19846,7 +19846,11 @@
           else if (pendingTopics > 0 || pendingKeywords > 0) { step = 'Accept or reject the ' + (pendingTopics + pendingKeywords) + ' pending items above'; icon = 'fa-solid fa-list-check'; color = '#f59e0b'; }
           else if (unincludedTopics.length > 0 || unincludedKws.length > 0) { step = 'Click Rewrite to apply your ' + (unincludedTopics.length + unincludedKws.length) + ' accepted choices'; icon = 'fa-solid fa-wand-magic-sparkles'; color = '#f59e0b'; }
           else if (score < 85) { step = 'Click Optimise to boost your score to 85+'; icon = 'fa-solid fa-chart-line'; color = '#f59e0b'; }
-          else { step = 'Content ready — review and edit manually if needed'; icon = 'fa-solid fa-circle-check'; color = '#22c55e'; }
+          else {
+            var errorTips = tips.filter(function(t) { return t.type === 'error' || t.type === 'warn'; });
+            if (errorTips.length > 0) { step = errorTips.length + ' issue' + (errorTips.length > 1 ? 's' : '') + ' remaining — fix manually or click Optimise'; icon = 'fa-solid fa-exclamation-triangle'; color = '#f59e0b'; }
+            else { step = 'Content ready — review and edit manually if needed'; icon = 'fa-solid fa-circle-check'; color = '#22c55e'; }
+          }
           return step ? React.createElement('div', { style: { margin: '12px 0', padding: '10px 12px', background: color + '15', border: '1px solid ' + color + '40', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('i', { className: icon, style: { color: color, fontSize: 14, flexShrink: 0 } }),
             React.createElement('div', { style: { fontSize: 12, fontWeight: 600, color: color, lineHeight: 1.4 } }, 'Next: ' + step)

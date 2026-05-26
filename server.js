@@ -19662,7 +19662,7 @@ ${issuesText || 'None'}
 MISSING KEYWORDS to weave in naturally:
 ${missingKwsText || 'None'}
 
-TARGET KEYWORDS: ${(target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword).join(', ') || 'None'}
+TARGET KEYWORDS (use each 1-2 times MAX, never stuff): ${(target_keywords || []).map(k => typeof k === 'string' ? k : k.keyword).join(', ') || 'None'}
 
 CURRENT CONTENT:
 ${originalHtml}
@@ -19691,13 +19691,14 @@ PRIORITY ORDER — fix ALL of these:
 CRITICAL RULES:
 1. Each "find" MUST be an EXACT substring copied from the content (plain text only, no HTML tags)
 2. Each "find" should be a full sentence or meaningful phrase
-3. The "replace" keeps same meaning but expands with more detail, keywords, and specifics
+3. The "replace" keeps same meaning but expands with more detail and specifics
 4. Do NOT touch headings (H1, H2, H3) — only modify paragraph text
 5. Use 10 to 20 patches — be aggressive about expanding content to hit 1500 words
 6. Do NOT add new sections. Expand EXISTING paragraphs substantially.
 7. Each patch should ADD 20-40 words by expanding the sentence with more detail
 8. NEVER include HTML tags in "find" — only the text between tags
-9. ALWAYS return meta_title and meta_description — never null`
+9. ALWAYS return meta_title and meta_description — never null
+10. ANTI-STUFFING: NEVER repeat any keyword phrase more than 3 times in the ENTIRE content. If focus keyword or target keyword already appears 3+ times, do NOT add it again. Use natural variations instead. Keyword stuffing destroys SEO rankings.`
       }]
     });
 
