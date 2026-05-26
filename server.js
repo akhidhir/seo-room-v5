@@ -18963,7 +18963,20 @@ Return ONLY the HTML content, no markdown wrapping.`
       }]
     });
 
-    const content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    let content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+
+    // Scrub banned words from brief
+    if (brief.words_to_avoid && brief.words_to_avoid.length) {
+      for (const banned of brief.words_to_avoid) {
+        const regex = new RegExp('\\b' + banned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+        if (regex.test(content.replace(/<[^>]+>/g, ' '))) {
+          content = content.replace(/>([^<]+)</g, (match, text) => '>' + text.replace(regex, '') + '<');
+          content = content.replace(/>([^<]+)</g, (m, t) => '>' + t.replace(/\s{2,}/g, ' ').trim() + '<');
+          console.log(`[build-content-gen] Scrubbed banned word "${banned}"`);
+        }
+      }
+    }
+
     const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
 
     await pool.query(
@@ -20227,6 +20240,33 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
     } catch (e) {
       // If not JSON, treat as raw HTML
       result = { content_html: aiResponse.content[0].text.trim(), meta_title: page.meta_title, meta_description: page.meta_description, ai_notes: 'Optimized content' };
+    }
+
+    // Post-process: scrub banned words from brief (AI sometimes ignores "words to avoid")
+    if (result.content_html) {
+      const briefBid = buildId || page.build_id;
+      if (briefBid) {
+        try {
+          const bRes = await pool.query('SELECT copywriting_brief FROM website_builds WHERE id=$1', [briefBid]);
+          const br = (bRes.rows[0] || {}).copywriting_brief;
+          if (br && br.words_to_avoid && br.words_to_avoid.length) {
+            let html = result.content_html;
+            for (const banned of br.words_to_avoid) {
+              // Only replace the banned word itself (case-insensitive, word boundary), not compound words
+              const regex = new RegExp('\\b' + banned.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+              if (regex.test(html.replace(/<[^>]+>/g, ' '))) {
+                // Replace in text content only (preserve HTML tags)
+                html = html.replace(/>([^<]+)</g, (match, text) => {
+                  return '>' + text.replace(regex, '') + '<';
+                });
+                console.log(`[optimise] Scrubbed banned word "${banned}" from content`);
+              }
+            }
+            // Clean up double spaces from removals
+            result.content_html = html.replace(/>([^<]+)</g, (m, t) => '>' + t.replace(/\s{2,}/g, ' ').trim() + '<');
+          }
+        } catch(e) { console.error('[optimise] Ban word scrub error:', e.message); }
+      }
     }
 
     // Post-process: DISABLED — GPTHuman + rule-based humanizer was mangling Opus output
