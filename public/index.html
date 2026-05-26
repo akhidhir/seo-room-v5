@@ -16052,7 +16052,7 @@
             draft_content: proposed.content_html, meta_title: proposed.meta_title, meta_description: proposed.meta_description, stage: 'written'
           }));
           setEditContent(proposed.content_html);
-          setEditMeta({ meta_title: proposed.meta_title, meta_desc: proposed.meta_description, focus_keyword: proposed.focus_keyword || editMeta.focus_keyword });
+          setEditMeta({ meta_title: proposed.meta_title, meta_desc: proposed.meta_description, focus_keyword: editMeta.focus_keyword });
           if (proposed.target_keywords?.length) {
             setTargetKeywords(prev => [...new Set([...(prev || []), ...proposed.target_keywords])]);
           }
