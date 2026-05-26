@@ -19034,7 +19034,7 @@
           React.createElement('div', { style: { flex: 1, minWidth: 0 } },
             React.createElement('div', { ref: editorRef })
           ),
-          React.createElement('div', { style: { width: 280, minWidth: 280, position: 'relative', marginLeft: 8 } },
+          (sortedActive.length > 0 || pendingSelection) && React.createElement('div', { style: { width: 280, minWidth: 280, position: 'relative', marginLeft: 8 } },
             pendingSelection && React.createElement('div', { style: { position: 'absolute', top: pendingSelection.top || 0, left: 0, right: 0, zIndex: 10 } },
               React.createElement('div', { className: 'add-comment-box', style: { margin: 0, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: 12 } },
                 React.createElement('div', { className: 'comment-input-label', style: { fontSize: 12, color: 'var(--text3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 } },
