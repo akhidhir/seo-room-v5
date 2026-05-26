@@ -3480,8 +3480,8 @@ async function crawlSiteForMigration(siteUrl) {
   }
   console.log(`[migration-crawl] Total page URLs found: ${pageUrls.length}`);
 
-  // Cap at 200 pages
-  pageUrls = [...new Set(pageUrls)].slice(0, 200);
+  // Deduplicate
+  pageUrls = [...new Set(pageUrls)];
 
   // Fetch meta for each page (batch of 10)
   for (let i = 0; i < pageUrls.length; i += 10) {
