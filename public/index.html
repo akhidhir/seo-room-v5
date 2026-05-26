@@ -16831,8 +16831,7 @@
     }
 
     // ============ SEO MIGRATION WIZARD ============
-    function SEOMigrationPage({ project }) {
-      var pid = project ? project.id : null;
+    function SEOMigrationPage() {
       var [migrations, setMigrations] = React.useState([]);
       var [activeMigration, setActiveMigration] = React.useState(null);
       var [loading, setLoading] = React.useState(false);
@@ -16853,6 +16852,9 @@
       var [editedMap, setEditedMap] = React.useState(null);
       var [pushResult, setPushResult] = React.useState(null);
       var [transferResult, setTransferResult] = React.useState(null);
+      var [newWpUrl, setNewWpUrl] = React.useState('');
+      var [newWpUser, setNewWpUser] = React.useState('');
+      var [newWpPass, setNewWpPass] = React.useState('');
 
       var PHASES = ['crawl', 'match', 'redirects', 'monitor'];
       var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', monitor: 'Monitor' };
@@ -16866,16 +16868,15 @@
       var tdStyle = { padding: '8px 12px', fontSize: 13, color: 'var(--text)', borderBottom: '1px solid var(--border)' };
 
       function loadMigrations() {
-        if (!pid) return;
         setLoading(true);
-        api('/projects/' + pid + '/migrations').then(function(r) { setMigrations(r || []); }).catch(function() {}).finally(function() { setLoading(false); });
+        api('/migrations').then(function(r) { setMigrations(r || []); }).catch(function() {}).finally(function() { setLoading(false); });
       }
 
       function loadMigration(mid) {
-        api('/projects/' + pid + '/migrations/' + mid).then(function(r) { setActiveMigration(r); if (editedMap === null && r.url_map) setEditedMap(r.url_map); }).catch(function() {});
+        api('/migrations/' + mid).then(function(r) { setActiveMigration(r); if (editedMap === null && r.url_map) setEditedMap(r.url_map); }).catch(function() {});
       }
 
-      React.useEffect(function() { loadMigrations(); return function() { if (pollTimer) clearInterval(pollTimer); }; }, [pid]);
+      React.useEffect(function() { loadMigrations(); return function() { if (pollTimer) clearInterval(pollTimer); }; }, []);
 
       function startPoll(mid) {
         if (pollTimer) clearInterval(pollTimer);
@@ -16895,8 +16896,12 @@
       function handleCreate() {
         if (!newName || !newOldUrl || !newNewUrl) return;
         setCreating(true);
-        api('/projects/' + pid + '/migrations', { method: 'POST', body: { name: newName, old_site_url: newOldUrl, new_site_url: newNewUrl } }).then(function(r) {
-          setShowCreateModal(false); setNewName(''); setNewOldUrl(''); setNewNewUrl(''); loadMigrations();
+        var body = { name: newName, old_site_url: newOldUrl, new_site_url: newNewUrl };
+        if (newWpUrl) body.wp_url = newWpUrl;
+        if (newWpUser) body.wp_username = newWpUser;
+        if (newWpPass) body.wp_app_password = newWpPass;
+        api('/migrations', { method: 'POST', body: body }).then(function(r) {
+          setShowCreateModal(false); setNewName(''); setNewOldUrl(''); setNewNewUrl(''); setNewWpUrl(''); setNewWpUser(''); setNewWpPass(''); loadMigrations();
           if (r && r.id) { setActiveMigration(r); setPhase('crawl'); }
         }).catch(function() {}).finally(function() { setCreating(false); });
       }
@@ -16904,44 +16909,44 @@
       function handleDelete(mid, e) {
         e.stopPropagation();
         if (!confirm('Delete this migration?')) return;
-        api('/projects/' + pid + '/migrations/' + mid, { method: 'DELETE' }).then(function() { loadMigrations(); if (activeMigration && activeMigration.id === mid) setActiveMigration(null); });
+        api('/migrations/' + mid, { method: 'DELETE' }).then(function() { loadMigrations(); if (activeMigration && activeMigration.id === mid) setActiveMigration(null); });
       }
 
       function handleCrawl(which) {
         var mid = activeMigration.id;
         var endpoint = which === 'old' ? '/crawl-old' : '/crawl-new';
         if (which === 'old') setCrawlingOld(true); else setCrawlingNew(true);
-        api('/projects/' + pid + '/migrations/' + mid + endpoint, { method: 'POST' }).then(function() { startPoll(mid); }).catch(function() { if (which === 'old') setCrawlingOld(false); else setCrawlingNew(false); });
+        api('/migrations/' + mid + endpoint, { method: 'POST' }).then(function() { startPoll(mid); }).catch(function() { if (which === 'old') setCrawlingOld(false); else setCrawlingNew(false); });
       }
 
       function handleMatch() {
         var mid = activeMigration.id;
         setMatching(true);
-        api('/projects/' + pid + '/migrations/' + mid + '/match-urls', { method: 'POST' }).then(function() { startPoll(mid); }).catch(function() { setMatching(false); });
+        api('/migrations/' + mid + '/match-urls', { method: 'POST' }).then(function() { startPoll(mid); }).catch(function() { setMatching(false); });
       }
 
       function handleSaveMap() {
         if (!editedMap) return;
-        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/url-map', { method: 'PUT', body: { url_map: editedMap } }).then(function(r) { setActiveMigration(Object.assign({}, activeMigration, { url_map: editedMap })); });
+        api('/migrations/' + activeMigration.id + '/url-map', { method: 'PUT', body: { url_map: editedMap } }).then(function(r) { setActiveMigration(Object.assign({}, activeMigration, { url_map: editedMap })); });
       }
 
       function handlePushRedirects() {
         setPushingRedirects(true); setPushResult(null);
-        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/push-redirects', { method: 'POST' }).then(function(r) { setPushResult(r); loadMigration(activeMigration.id); }).catch(function() { setPushResult({ error: 'Failed' }); }).finally(function() { setPushingRedirects(false); });
+        api('/migrations/' + activeMigration.id + '/push-redirects', { method: 'POST' }).then(function(r) { setPushResult(r); loadMigration(activeMigration.id); }).catch(function() { setPushResult({ error: 'Failed' }); }).finally(function() { setPushingRedirects(false); });
       }
 
       function handleTransferMeta() {
         setTransferringMeta(true); setTransferResult(null);
-        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/transfer-meta', { method: 'POST' }).then(function(r) { setTransferResult(r); }).catch(function() { setTransferResult({ error: 'Failed' }); }).finally(function() { setTransferringMeta(false); });
+        api('/migrations/' + activeMigration.id + '/transfer-meta', { method: 'POST' }).then(function(r) { setTransferResult(r); }).catch(function() { setTransferResult({ error: 'Failed' }); }).finally(function() { setTransferringMeta(false); });
       }
 
       function handleSnapshot(type) {
         setSnapshotting(true);
-        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/snapshot', { method: 'POST', body: { type: type } }).then(function() { loadMigration(activeMigration.id); }).catch(function() {}).finally(function() { setSnapshotting(false); });
+        api('/migrations/' + activeMigration.id + '/snapshot', { method: 'POST', body: { type: type } }).then(function() { loadMigration(activeMigration.id); }).catch(function() {}).finally(function() { setSnapshotting(false); });
       }
 
       function handleLoadReport() {
-        api('/projects/' + pid + '/migrations/' + activeMigration.id + '/report').then(function(r) { setReport(r); }).catch(function() {});
+        api('/migrations/' + activeMigration.id + '/report').then(function(r) { setReport(r); }).catch(function() {});
       }
 
       function openMigration(m) {
@@ -17243,6 +17248,13 @@
             React.createElement('input', { value: newOldUrl, onChange: function(e) { setNewOldUrl(e.target.value); }, placeholder: 'https://old-site.com', style: inputStyle }),
             React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'New Site URL'),
             React.createElement('input', { value: newNewUrl, onChange: function(e) { setNewNewUrl(e.target.value); }, placeholder: 'https://new-site.com', style: inputStyle }),
+            React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginTop: 12, marginBottom: 8, paddingTop: 12, borderTop: '1px solid var(--border)' } }, 'WordPress Credentials (for redirects & meta transfer)'),
+            React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'WordPress URL'),
+            React.createElement('input', { value: newWpUrl, onChange: function(e) { setNewWpUrl(e.target.value); }, placeholder: 'https://new-site.com (optional)', style: inputStyle }),
+            React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'WP Username'),
+            React.createElement('input', { value: newWpUser, onChange: function(e) { setNewWpUser(e.target.value); }, placeholder: 'admin (optional)', style: inputStyle }),
+            React.createElement('label', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4, display: 'block' } }, 'WP Application Password'),
+            React.createElement('input', { type: 'password', value: newWpPass, onChange: function(e) { setNewWpPass(e.target.value); }, placeholder: 'xxxx xxxx xxxx (optional)', style: inputStyle }),
             React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 } },
               React.createElement('button', { onClick: function() { setShowCreateModal(false); }, style: btnOutline }, 'Cancel'),
               React.createElement('button', { onClick: handleCreate, disabled: creating || !newName || !newOldUrl || !newNewUrl, style: Object.assign({}, btnStyle, (creating || !newName || !newOldUrl || !newNewUrl) ? { opacity: 0.6 } : {}) },
@@ -17254,7 +17266,6 @@
       }
 
       // --- Main Render ---
-      if (!pid) return React.createElement('div', { style: { padding: 40, color: 'var(--text3)' } }, 'No project selected');
 
       return React.createElement('div', { style: { padding: '0 0 40px' } },
         // Header
@@ -30436,8 +30447,8 @@
         return <BlogReviewPage token={pathMatch[1]} />;
       }
 
-      // Show loading during project switch (project briefly set to null)
-      if (!project) {
+      // Show loading during project switch (project briefly set to null) — except standalone pages
+      if (!project && activeTab !== 'nw-migration') {
         return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span><span style={{ marginLeft: 12, color: 'var(--text-secondary)' }}>Loading project...</span></div>;
       }
 
@@ -30507,7 +30518,7 @@ case 'action-plan':
           case 'nw-publish':
             return <NewWebsitePipelinePage stage="publish" project={buildMode ? buildProject : project} />;
           case 'nw-migration':
-            return <SEOMigrationPage project={project} />;
+            return <SEOMigrationPage />;
           case 'ow-project':
           case 'ow-sitemap':
             return <OptimiseWebsitePage project={project} view="sitemap" setPage={setActiveTab} />;
@@ -30663,11 +30674,11 @@ case 'action-plan':
                   <button onClick={enterBuildMode} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: '1px dashed var(--border)', background: 'transparent', color: '#22c55e', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                     <i className="fas fa-plus" style={{ fontSize: 13 }}></i> New Website
                   </button>
-                  <button onClick={() => { setActiveTab('nw-migration'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'nw-migration' ? '1px solid #f97316' : '1px dashed var(--border)', background: activeTab === 'nw-migration' ? '#f9731618' : 'transparent', color: '#f97316', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
-                    <i className="fas fa-exchange-alt" style={{ fontSize: 13 }}></i> SEO Migration
-                  </button>
                 </>
               )}
+              <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('nw-migration'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'nw-migration' ? '1px solid #f97316' : '1px dashed var(--border)', background: activeTab === 'nw-migration' ? '#f9731618' : 'transparent', color: '#f97316', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                <i className="fas fa-exchange-alt" style={{ fontSize: 13 }}></i> SEO Migration
+              </button>
             </div>
 
             <div className="sidebar-content">

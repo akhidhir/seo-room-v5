@@ -1033,6 +1033,13 @@ async function initDb() {
       )
     `);
 
+    // Make seo_migrations project_id nullable for standalone migrations
+    await client.query(`ALTER TABLE seo_migrations ALTER COLUMN project_id DROP NOT NULL`).catch(() => {});
+    await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)`).catch(() => {});
+    await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS wp_url TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
+
     // Plagiarism checks table (Copyleaks)
     await client.query(`
       CREATE TABLE IF NOT EXISTS plagiarism_checks (
@@ -3052,6 +3059,253 @@ app.post('/api/projects/:id/license/renew', async (req, res) => {
 // ================================================================
 // SEO MIGRATION — Old site → New site migration management
 // ================================================================
+
+// ── Standalone migration endpoints (no project required) ──
+
+// List all migrations for the logged-in user
+app.get('/api/migrations', async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const result = await pool.query(
+      `SELECT id, name, old_site_url, new_site_url, status, phase, redirects_pushed,
+              COALESCE(json_array_length(old_crawl), 0) as old_pages,
+              COALESCE(json_array_length(new_crawl), 0) as new_pages,
+              COALESCE(json_array_length(url_map), 0) as mapped_urls,
+              COALESCE(json_array_length(unmatched_urls), 0) as unmatched,
+              wp_url, project_id, created_at, updated_at
+       FROM seo_migrations WHERE user_id = $1 OR (user_id IS NULL AND project_id IS NOT NULL) ORDER BY created_at DESC`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get single standalone migration
+app.get('/api/migrations/:migrationId', async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT * FROM seo_migrations WHERE id = $1`, [req.params.migrationId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Migration not found' });
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create standalone migration
+app.post('/api/migrations', async (req, res) => {
+  try {
+    const { name, old_site_url, new_site_url, wp_url, wp_username, wp_app_password } = req.body;
+    if (!old_site_url || !new_site_url) return res.status(400).json({ error: 'Both old and new site URLs required' });
+    const userId = req.user?.id;
+    const result = await pool.query(
+      `INSERT INTO seo_migrations (user_id, name, old_site_url, new_site_url, wp_url, wp_username, wp_app_password)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [userId, name || 'Migration', old_site_url.replace(/\/$/, ''), new_site_url.replace(/\/$/, ''), wp_url || null, wp_username || null, wp_app_password || null]
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete standalone migration
+app.delete('/api/migrations/:migrationId', async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM seo_migrations WHERE id = $1`, [req.params.migrationId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Crawl old site (standalone)
+app.post('/api/migrations/:migrationId/crawl-old', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1`, [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    res.json({ status: 'crawling', message: 'Crawling old site...' });
+    (async () => {
+      try {
+        const pages = await crawlSiteForMigration(migration.old_site_url);
+        await pool.query(`UPDATE seo_migrations SET old_crawl = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(pages), migration.id]);
+        console.log(`[migration] Crawled old site ${migration.old_site_url}: ${pages.length} pages`);
+      } catch (e) { console.error('[migration] Crawl old error:', e.message); }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Crawl new site (standalone)
+app.post('/api/migrations/:migrationId/crawl-new', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1`, [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    res.json({ status: 'crawling', message: 'Crawling new site...' });
+    (async () => {
+      try {
+        const pages = await crawlSiteForMigration(migration.new_site_url);
+        await pool.query(`UPDATE seo_migrations SET new_crawl = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(pages), migration.id]);
+        console.log(`[migration] Crawled new site ${migration.new_site_url}: ${pages.length} pages`);
+      } catch (e) { console.error('[migration] Crawl new error:', e.message); }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// AI Match URLs (standalone)
+app.post('/api/migrations/:migrationId/match-urls', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1`, [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const oldPages = migration.old_crawl || [];
+    const newPages = migration.new_crawl || [];
+    if (oldPages.length === 0 || newPages.length === 0) return res.status(400).json({ error: 'Crawl both sites first' });
+    res.json({ status: 'matching', message: 'AI matching URLs...' });
+    (async () => {
+      try {
+        const oldSummary = oldPages.map(p => `${p.url} | ${p.title} | ${p.h1} | ${p.slug}`).join('\n');
+        const newSummary = newPages.map(p => `${p.url} | ${p.title} | ${p.h1} | ${p.slug}`).join('\n');
+        const prompt = `You are an SEO migration specialist. Match old website URLs to their equivalent new website URLs.\n\nOLD SITE PAGES:\n${oldSummary}\n\nNEW SITE PAGES:\n${newSummary}\n\nFor each old URL, find the best matching new URL based on:\n1. Slug similarity\n2. Title/H1 similarity\n3. Content purpose match\n\nReturn ONLY a JSON array:\n[{"old_url": "...", "new_url": "...", "confidence": 0.0-1.0, "reason": "brief reason"}]\nIf no match, set new_url to null and confidence to 0.\nReturn valid JSON only.`;
+        const aiResp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 8000, messages: [{ role: 'user', content: prompt }] });
+        let text = aiResp.content[0].text.trim();
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) throw new Error('AI did not return valid JSON');
+        const matches = JSON.parse(jsonMatch[0]);
+        const urlMap = matches.filter(m => m.new_url && m.confidence > 0).map(m => ({ ...m, included: true }));
+        const unmatched = matches.filter(m => !m.new_url || m.confidence === 0);
+        await pool.query(`UPDATE seo_migrations SET url_map = $1, unmatched_urls = $2, phase = 'matched', updated_at = NOW() WHERE id = $3`, [JSON.stringify(urlMap), JSON.stringify(unmatched), migration.id]);
+        console.log(`[migration] URL matching done: ${urlMap.length} matched, ${unmatched.length} unmatched`);
+      } catch (e) { console.error('[migration] URL match error:', e.message); }
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update URL map (standalone)
+app.put('/api/migrations/:migrationId/url-map', async (req, res) => {
+  try {
+    const { url_map, unmatched_urls } = req.body;
+    await pool.query(
+      `UPDATE seo_migrations SET url_map = $1, unmatched_urls = COALESCE($2, unmatched_urls), updated_at = NOW() WHERE id = $3`,
+      [JSON.stringify(url_map), unmatched_urls ? JSON.stringify(unmatched_urls) : null, req.params.migrationId]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Push redirects (standalone — uses migration's own WP creds)
+app.post('/api/migrations/:migrationId/push-redirects', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1`, [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const urlMap = migration.url_map || [];
+    if (urlMap.length === 0) return res.status(400).json({ error: 'No URL matches to redirect' });
+
+    // Get WP credentials — from migration itself or from linked project
+    let wpUrl = migration.wp_url;
+    let authHeaders = null;
+    if (wpUrl && migration.wp_username && migration.wp_app_password) {
+      const token = Buffer.from(migration.wp_username + ':' + migration.wp_app_password).toString('base64');
+      authHeaders = { Authorization: 'Basic ' + token };
+    } else if (migration.project_id) {
+      const project = (await pool.query(`SELECT * FROM projects WHERE id=$1`, [migration.project_id])).rows[0];
+      if (project) { wpUrl = project.wp_url?.replace(/\/$/, ''); authHeaders = getWpAuthHeaders(project); }
+    }
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured. Add WP URL, username and app password to the migration.' });
+
+    const axios = require('axios');
+    let pushed = 0;
+    const errors = [];
+    for (const match of urlMap) {
+      if (!match.old_url || !match.new_url) continue;
+      if (match.included === false) continue;
+      try {
+        const oldPath = new URL(match.old_url).pathname;
+        const newPath = match.new_url.startsWith('http') ? new URL(match.new_url).pathname : match.new_url;
+        await axios.post(`${wpUrl}/wp-json/seoroom/v1/redirects`, { source_url: oldPath, target_url: newPath, redirect_type: 301, notes: `Migration: ${match.reason || 'AI matched'}` }, { headers: authHeaders, timeout: 10000 });
+        pushed++;
+      } catch (e) { errors.push({ url: match.old_url, error: e.response?.data?.message || e.message }); }
+    }
+    await pool.query(`UPDATE seo_migrations SET redirects_pushed = $1, phase = 'redirects_pushed', status = 'executing', updated_at = NOW() WHERE id = $2`, [pushed, migration.id]);
+    res.json({ pushed, total: urlMap.length, errors });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Transfer meta (standalone)
+app.post('/api/migrations/:migrationId/transfer-meta', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1`, [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    let wpUrl = migration.wp_url;
+    let authHeaders = null;
+    if (wpUrl && migration.wp_username && migration.wp_app_password) {
+      const token = Buffer.from(migration.wp_username + ':' + migration.wp_app_password).toString('base64');
+      authHeaders = { Authorization: 'Basic ' + token };
+    } else if (migration.project_id) {
+      const project = (await pool.query(`SELECT * FROM projects WHERE id=$1`, [migration.project_id])).rows[0];
+      if (project) { wpUrl = project.wp_url?.replace(/\/$/, ''); authHeaders = getWpAuthHeaders(project); }
+    }
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    const urlMap = migration.url_map || [];
+    const oldPages = migration.old_crawl || [];
+    const axios = require('axios');
+    let transferred = 0;
+    for (const match of urlMap) {
+      if (match.included === false) continue;
+      const oldPage = oldPages.find(p => p.url === match.old_url);
+      if (!oldPage || (!oldPage.title && !oldPage.meta_desc)) continue;
+      try {
+        const newPath = match.new_url.startsWith('http') ? new URL(match.new_url).pathname : match.new_url;
+        const slug = newPath.replace(/\/$/, '').split('/').pop();
+        if (!slug) continue;
+        let wpPage = null;
+        try { const r = await axios.get(`${wpUrl}/wp-json/wp/v2/pages?slug=${slug}&_fields=id`, { headers: authHeaders, timeout: 10000 }); if (r.data.length > 0) wpPage = { id: r.data[0].id, type: 'pages' }; } catch(e) {}
+        if (!wpPage) { try { const r = await axios.get(`${wpUrl}/wp-json/wp/v2/posts?slug=${slug}&_fields=id`, { headers: authHeaders, timeout: 10000 }); if (r.data.length > 0) wpPage = { id: r.data[0].id, type: 'posts' }; } catch(e) {} }
+        if (!wpPage) continue;
+        const meta = {};
+        if (oldPage.title) meta['_yoast_wpseo_title'] = oldPage.title;
+        if (oldPage.meta_desc) meta['_yoast_wpseo_metadesc'] = oldPage.meta_desc;
+        await axios.post(`${wpUrl}/wp-json/wp/v2/${wpPage.type}/${wpPage.id}`, { meta }, { headers: authHeaders, timeout: 10000 });
+        transferred++;
+      } catch (e) { console.error('[migration] Transfer meta error for', match.old_url, e.message); }
+    }
+    res.json({ transferred, total: urlMap.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Snapshot (standalone) — basic snapshot without project-specific data
+app.post('/api/migrations/:migrationId/snapshot', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1`, [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const snapshot = {
+      taken_at: new Date().toISOString(),
+      rankings: [],
+      gsc_pages: [],
+      total_keywords: 0,
+      avg_position: null,
+      note: 'Standalone migration — no project ranking data'
+    };
+    const snapshotField = req.body.type === 'post' ? 'post_snapshot' : 'seo_snapshot';
+    await pool.query(`UPDATE seo_migrations SET ${snapshotField} = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(snapshot), migration.id]);
+    res.json(snapshot);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Report (standalone)
+app.get('/api/migrations/:migrationId/report', async (req, res) => {
+  try {
+    const migration = (await pool.query(`SELECT * FROM seo_migrations WHERE id=$1`, [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const pre = migration.seo_snapshot || {};
+    const post = migration.post_snapshot || {};
+    const urlMap = migration.url_map || [];
+    res.json({
+      redirect_coverage: urlMap.length > 0 ? Math.round((urlMap.filter(m => m.new_url).length / (migration.old_crawl || []).length) * 100) : 0,
+      redirects_pushed: migration.redirects_pushed,
+      old_pages: (migration.old_crawl || []).length,
+      new_pages: (migration.new_crawl || []).length,
+      matched_urls: urlMap.length,
+      unmatched_urls: (migration.unmatched_urls || []).length,
+      pre_avg_position: pre.avg_position || null,
+      post_avg_position: post.avg_position || null,
+      ranking_changes: []
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Project-scoped migration endpoints (legacy) ──
 
 // List migrations for a project
 app.get('/api/projects/:id/migrations', async (req, res) => {
