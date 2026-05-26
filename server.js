@@ -3068,10 +3068,10 @@ app.get('/api/migrations', async (req, res) => {
     const userId = req.auth?.userId;
     const result = await pool.query(
       `SELECT id, name, old_site_url, new_site_url, status, phase, redirects_pushed,
-              COALESCE(json_array_length(old_crawl), 0) as old_pages,
-              COALESCE(json_array_length(new_crawl), 0) as new_pages,
-              COALESCE(json_array_length(url_map), 0) as mapped_urls,
-              COALESCE(json_array_length(unmatched_urls), 0) as unmatched,
+              CASE WHEN old_crawl IS NOT NULL THEN json_array_length(old_crawl) ELSE 0 END as old_pages,
+              CASE WHEN new_crawl IS NOT NULL THEN json_array_length(new_crawl) ELSE 0 END as new_pages,
+              CASE WHEN url_map IS NOT NULL THEN json_array_length(url_map) ELSE 0 END as mapped_urls,
+              CASE WHEN unmatched_urls IS NOT NULL THEN json_array_length(unmatched_urls) ELSE 0 END as unmatched,
               wp_url, project_id, created_at, updated_at
        FROM seo_migrations ORDER BY created_at DESC`,
       []
