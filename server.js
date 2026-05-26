@@ -3774,119 +3774,62 @@ app.post(['/api/projects/:id/humanize-only', '/api/builds/:id/humanize-only'], a
       return res.status(400).json({ error: 'Content too short to humanize' });
     }
 
-    // Step 1: GPTHuman API in Light mode (structural rewriting to beat AI detection)
+    // Step 1: GPTHuman API — per-paragraph humanization (robust, no matching needed)
     let gpthContent = content_html;
     let gpthScore = null;
     let gpthCredits = 0;
     const GPTHUMAN_KEY = process.env.GPTHUMAN_API_KEY;
     if (GPTHUMAN_KEY) {
       try {
-        const plainText = content_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        const wordCount = plainText.split(/\s+/).length;
-        if (plainText.length >= 300) {
-          // Split into chunks if over 1800 words
-          const chunks = [];
-          if (wordCount > 1800) {
-            const sentences = plainText.match(/[^.!?]+[.!?]+/g) || [plainText];
-            let chunk = '';
-            let chunkWords = 0;
-            for (const s of sentences) {
-              const sWords = s.trim().split(/\s+/).length;
-              if (chunkWords + sWords > 1500 && chunk.length >= 300) {
-                chunks.push(chunk.trim());
-                chunk = '';
-                chunkWords = 0;
-              }
-              chunk += s;
-              chunkWords += sWords;
-            }
-            if (chunk.trim().length >= 300) chunks.push(chunk.trim());
-            else if (chunks.length > 0) chunks[chunks.length - 1] += ' ' + chunk.trim();
-            else chunks.push(chunk.trim());
-          } else {
-            chunks.push(plainText);
+        // Extract all <p> tags with their text
+        const pTagRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
+        const paragraphs = [];
+        let pMatch;
+        while ((pMatch = pTagRegex.exec(content_html)) !== null) {
+          const innerHtml = pMatch[2];
+          const innerPlain = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+          if (innerPlain.length >= 50) {  // Only humanize paragraphs with 50+ chars (skip short ones)
+            paragraphs.push({ full: pMatch[0], attrs: pMatch[1], innerHtml, innerPlain });
           }
+        }
 
-          console.log('[humanize] GPTHuman Light mode: ' + chunks.length + ' chunk(s), ' + wordCount + ' words');
-          let humanizedText = '';
-          for (let i = 0; i < chunks.length; i++) {
+        console.log('[humanize] GPTHuman Professional mode: ' + paragraphs.length + ' paragraphs to process');
+        let htmlResult = content_html;
+        let successCount = 0;
+
+        // Process each paragraph individually — 1:1 mapping, no matching needed
+        for (let i = 0; i < paragraphs.length; i++) {
+          const para = paragraphs[i];
+          try {
             const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
               method: 'POST',
               headers: { 'Authorization': 'Bearer ' + GPTHUMAN_KEY, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: chunks[i], tone: 'Standard', mode: 'Professional' })
+              body: JSON.stringify({ text: para.innerPlain, tone: 'Standard', mode: 'Professional' })
             });
             const ghData = await ghResp.json();
-            if (ghData.output) {
-              humanizedText += (i > 0 ? ' ' : '') + ghData.output;
+            if (ghData.output && ghData.output.length > 20) {
+              // Clean the output — remove any double newlines GPTHuman might add
+              const cleanOutput = ghData.output.replace(/\n+/g, ' ').trim();
+              // Safety check: output should be similar length to input (not garbled)
+              const lenRatio = cleanOutput.length / para.innerPlain.length;
+              if (lenRatio > 0.5 && lenRatio < 2.5) {
+                htmlResult = htmlResult.replace(para.full, '<p' + para.attrs + '>' + cleanOutput + '</p>');
+                successCount++;
+              } else {
+                console.log('[humanize] Para ' + (i+1) + ' skipped: lenRatio=' + lenRatio.toFixed(2));
+              }
               gpthScore = ghData.humanScore;
               gpthCredits += (ghData.creditUsage || 0);
-              console.log('[humanize] GPTHuman chunk ' + (i+1) + '/' + chunks.length + ': humanScore=' + ghData.humanScore + ', credits=' + ghData.creditUsage);
-            } else {
-              console.error('[humanize] GPTHuman error chunk ' + i + ':', ghData);
-              humanizedText += (i > 0 ? ' ' : '') + chunks[i];
+            } else if (ghData.error) {
+              console.error('[humanize] GPTHuman para ' + (i+1) + ' error:', ghData.error, ghData.description || '');
             }
-          }
-
-          // Re-inject humanized text into HTML — paragraph-level replacement
-          // Extract plain text from each <p> tag, match to humanized output, replace inner text
-          if (humanizedText && humanizedText.length > 100) {
-            let htmlResult = content_html;
-            const pTagRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
-            const paragraphs = [];
-            let pMatch;
-            while ((pMatch = pTagRegex.exec(content_html)) !== null) {
-              const innerHtml = pMatch[2];
-              const innerPlain = innerHtml.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-              if (innerPlain.length > 30) {
-                paragraphs.push({ full: pMatch[0], attrs: pMatch[1], innerHtml, innerPlain, startIdx: pMatch.index });
-              }
-            }
-            // For each paragraph, find its text in the humanized output and replace
-            let humanRemaining = humanizedText;
-            for (let i = 0; i < paragraphs.length; i++) {
-              const para = paragraphs[i];
-              // Find the first ~40 chars of original paragraph text in humanized output
-              const searchKey = para.innerPlain.substring(0, 40).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              // Look for where this paragraph's humanized version starts
-              // GPTHuman preserves paragraph order, so we scan forward
-              const origWords = para.innerPlain.split(/\s+/);
-              // Find matching region in humanized text by looking for first few unique words
-              const firstWords = origWords.slice(0, 5).join(' ').toLowerCase();
-              const lastWords = origWords.slice(-5).join(' ').toLowerCase();
-              // Simple approach: split humanized text by double-newlines or find paragraph boundaries
-              // Since GPTHuman returns plain text, paragraphs are separated by newlines
-              const humanParas = humanRemaining.split(/\n\n+/).filter(p => p.trim().length > 20);
-              if (humanParas.length > 0) {
-                const humanPara = humanParas[0].trim();
-                // Only replace if the humanized paragraph is reasonably close in length (not garbled)
-                const lenRatio = humanPara.length / para.innerPlain.length;
-                if (lenRatio > 0.5 && lenRatio < 2.0) {
-                  // Replace the inner text of this <p> tag, preserving any inline tags
-                  if (/<(a|strong|em|b|i|span)\b/i.test(para.innerHtml)) {
-                    // Has inline tags — replace just the text content
-                    htmlResult = htmlResult.replace(para.full, '<p' + para.attrs + '>' + humanPara + '</p>');
-                  } else {
-                    htmlResult = htmlResult.replace(para.full, '<p' + para.attrs + '>' + humanPara + '</p>');
-                  }
-                  // Remove used paragraph from remaining humanized text
-                  const usedIdx = humanRemaining.indexOf(humanPara);
-                  if (usedIdx >= 0) {
-                    humanRemaining = humanRemaining.substring(usedIdx + humanPara.length).trim();
-                  }
-                } else {
-                  // Skip this humanized para if length is way off — keep original
-                  console.log('[humanize] Skipping garbled para, lenRatio=' + lenRatio.toFixed(2));
-                  if (humanParas.length > 0) {
-                    const usedIdx = humanRemaining.indexOf(humanParas[0]);
-                    if (usedIdx >= 0) humanRemaining = humanRemaining.substring(usedIdx + humanParas[0].length).trim();
-                  }
-                }
-              }
-            }
-            gpthContent = htmlResult;
-            console.log('[humanize] GPTHuman re-injection: ' + paragraphs.length + ' paragraphs processed');
+          } catch (paraErr) {
+            console.error('[humanize] GPTHuman para ' + (i+1) + ' fetch error:', paraErr.message);
           }
         }
+
+        gpthContent = htmlResult;
+        console.log('[humanize] GPTHuman done: ' + successCount + '/' + paragraphs.length + ' paragraphs humanized, credits=' + gpthCredits);
       } catch (ghErr) {
         console.error('[humanize] GPTHuman API error:', ghErr.message);
       }
