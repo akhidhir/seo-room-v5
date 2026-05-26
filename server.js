@@ -19772,7 +19772,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
       ? await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE build_id=$1 AND id != $2', [buildId, pageId])
       : await pool.query('SELECT id, page_name, slug, focus_keyword FROM site_pages WHERE project_id=$1 AND id != $2', [page.project_id || projectId, pageId]);
 
-    const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + t.text).join('\n');
+    const issuesText = (tips || []).filter(t => t.type === 'error' || t.type === 'warn').map(t => '- ' + (t.msg || t.text || '')).join('\n');
     const missingKwsText = (missing_keywords || []).map(k => k.keyword || k).join(', ');
 
     // Fetch the copywriting brief if this page belongs to a build
