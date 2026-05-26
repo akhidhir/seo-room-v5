@@ -19907,6 +19907,8 @@ CURRENT STATS:
 SCORE ISSUES TO FIX (from dashboard — these are EXACT):
 ${issuesText || 'None'}
 
+${(() => { try { const bg = Array.isArray(page.brief_gaps) ? page.brief_gaps : (typeof page.brief_gaps === 'string' ? JSON.parse(page.brief_gaps) : []); return bg.length > 0 ? 'BRIEF COMPLIANCE GAPS (MUST FIX):\n' + bg.map(g => '- [' + g.severity.toUpperCase() + '] ' + g.message).join('\n') : ''; } catch(e) { return ''; } })()}
+
 MISSING KEYWORDS to weave in naturally:
 ${missingKwsText || 'None'}
 
@@ -20167,6 +20169,8 @@ ${page.draft_content || ''}
 
 ISSUES TO FIX:
 ${issuesText || 'None'}
+
+${(() => { try { const bg = Array.isArray(page.brief_gaps) ? page.brief_gaps : (typeof page.brief_gaps === 'string' ? JSON.parse(page.brief_gaps) : []); return bg.length > 0 ? 'BRIEF COMPLIANCE GAPS (MUST FIX — these were flagged by brief check):\n' + bg.map(g => '- [' + g.severity.toUpperCase() + '] ' + g.message).join('\n') : ''; } catch(e) { return ''; } })()}
 
 MISSING KEYWORDS TO ADD NATURALLY:
 ${missingKwsText || 'None'}
