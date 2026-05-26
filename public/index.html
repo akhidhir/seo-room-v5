@@ -16716,6 +16716,7 @@
               keywords: project && project.keywords ? project.keywords : [],
               targetKeywords: targetKeywords,
               projectId: pid,
+              buildId: project && project.build_id ? project.build_id : null,
               itemId: page.id,
               itemType: 'site_pages',
               pageTitle: page.page_name || page.page_title || '',
@@ -19567,8 +19568,9 @@
       );
     }
 
-    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, itemId, itemType, pageTitle, pageUrl, metaTitle, metaDesc, onSuggestKeywords, suggestingKeywords, suggestedKws, onPickKeyword }) {
+    function ContentScorePanel({ content, focusKeyword, keywords, targetKeywords, onAddKeyword, onRemoveKeyword, onScoreChange, projectId, buildId, itemId, itemType, pageTitle, pageUrl, metaTitle, metaDesc, onSuggestKeywords, suggestingKeywords, suggestedKws, onPickKeyword }) {
       const apiTable = itemType === 'site_pages' ? 'site-pages' : 'content-queue';
+      const scoreApiPrefix = buildId ? '/builds/' + buildId : '/projects/' + projectId;
       const text = useMemo(() => {
         if (!content) return '';
         const div = document.createElement('div');
@@ -19624,7 +19626,7 @@
       // Load saved competitor analysis on mount
       useEffect(() => {
         if (!projectId || !itemId) return;
-        api('/projects/' + projectId + '/' + apiTable + '/' + itemId + '/competitor-analysis')
+        api(scoreApiPrefix + '/' + apiTable + '/' + itemId + '/competitor-analysis')
           .then(r => {
             if (r && r.competitor_analysis) {
               const data = r.competitor_analysis;
@@ -19647,14 +19649,14 @@
 
       const saveCompetitorAnalysis = (data) => {
         if (!projectId || !itemId) return;
-        api('/projects/' + projectId + '/' + apiTable + '/' + itemId + '/save-competitor-analysis', {
+        api(scoreApiPrefix + '/' + apiTable + '/' + itemId + '/save-competitor-analysis', {
           method: 'POST', body: { competitor_analysis: data }
         }).catch(e => console.error('Save competitor analysis failed:', e));
       };
 
       const updateTopicStatus = (type, index, status) => {
         if (!projectId || !itemId) return;
-        api('/projects/' + projectId + '/' + apiTable + '/' + itemId + '/update-topic-status', {
+        api(scoreApiPrefix + '/' + apiTable + '/' + itemId + '/update-topic-status', {
           method: 'POST', body: { type, index, status }
         }).then(r => {
           if (r && r.competitor_analysis) setCompetitorData(r.competitor_analysis);
@@ -19669,11 +19671,11 @@
         }
         const kw = focusKeyword || targetKeywords[0] || '';
         if (!kw) return;
-        if (!projectId) { console.log('[ContentScore] No projectId'); return; }
+        if (!projectId && !buildId) { console.log('[ContentScore] No projectId or buildId'); return; }
         if (checkingCompetitors) { console.log('[ContentScore] Already checking'); return; }
         setCheckingCompetitors(true);
         try {
-          const r = await api('/projects/' + projectId + '/competitor-wordcount', {
+          const r = await api((buildId ? '/builds/' + buildId : '/projects/' + projectId) + '/competitor-wordcount', {
             method: 'POST', body: { keyword: kw, draft_content: content || '' }
           });
           if (r.summary) {

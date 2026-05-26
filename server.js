@@ -14504,13 +14504,19 @@ app.post('/api/projects/:projectId/content-queue/:id/apply-chat', async (req, re
 });
 
 // Competitor word count analysis — check top SERP results for a keyword
-app.post('/api/projects/:projectId/competitor-wordcount', async (req, res) => {
+app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId/competitor-wordcount'], async (req, res) => {
   const { keyword, location } = req.body;
   if (!keyword) return res.status(400).json({ error: 'Missing keyword' });
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
 
   try {
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    let project;
+    if (req.params.buildId) {
+      const build = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [req.params.buildId])).rows[0];
+      project = build || {};
+    } else {
+      project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    }
     let loc = location || project?.location || 'Perth, Western Australia, Australia';
     // Normalize location for SerpAPI — fix common issues
     loc = loc.replace(/\s+,/g, ',').replace(/,\s+/g, ', ').trim();
@@ -17171,12 +17177,14 @@ COMMON SEO GAPS TO CHECK:
   });
 
   // Save competitor analysis
-  app.post(`/api/projects/:projectId/${routeTable}/:id/save-competitor-analysis`, async (req, res) => {
-    const { projectId, id } = req.params;
+  app.post([`/api/projects/:projectId/${routeTable}/:id/save-competitor-analysis`, `/api/builds/:buildId/${routeTable}/:id/save-competitor-analysis`], async (req, res) => {
+    const { projectId, buildId, id } = req.params;
     const { competitor_analysis } = req.body;
     if (!competitor_analysis) return res.status(400).json({ error: 'Missing competitor_analysis' });
+    const scopeCol = buildId ? 'build_id' : 'project_id';
+    const scopeVal = buildId || projectId;
     try {
-      await pool.query(`UPDATE ${dbTable} SET competitor_analysis=$1 WHERE id=$2 AND project_id=$3`, [JSON.stringify(competitor_analysis), id, projectId]);
+      await pool.query(`UPDATE ${dbTable} SET competitor_analysis=$1 WHERE id=$2 AND ${scopeCol}=$3`, [JSON.stringify(competitor_analysis), id, scopeVal]);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -17184,10 +17192,12 @@ COMMON SEO GAPS TO CHECK:
   });
 
   // Load competitor analysis
-  app.get(`/api/projects/:projectId/${routeTable}/:id/competitor-analysis`, async (req, res) => {
-    const { projectId, id } = req.params;
+  app.get([`/api/projects/:projectId/${routeTable}/:id/competitor-analysis`, `/api/builds/:buildId/${routeTable}/:id/competitor-analysis`], async (req, res) => {
+    const { projectId, buildId, id } = req.params;
+    const scopeCol = buildId ? 'build_id' : 'project_id';
+    const scopeVal = buildId || projectId;
     try {
-      const r = await pool.query(`SELECT competitor_analysis FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId]);
+      const r = await pool.query(`SELECT competitor_analysis FROM ${dbTable} WHERE id=$1 AND ${scopeCol}=$2`, [id, scopeVal]);
       if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
       res.json({ competitor_analysis: r.rows[0].competitor_analysis });
     } catch (e) {
@@ -17196,18 +17206,20 @@ COMMON SEO GAPS TO CHECK:
   });
 
   // Update topic status (accept/reject)
-  app.post(`/api/projects/:projectId/${routeTable}/:id/update-topic-status`, async (req, res) => {
-    const { projectId, id } = req.params;
+  app.post([`/api/projects/:projectId/${routeTable}/:id/update-topic-status`, `/api/builds/:buildId/${routeTable}/:id/update-topic-status`], async (req, res) => {
+    const { projectId, buildId, id } = req.params;
     const { type, index, status } = req.body;
     if (!type || index === undefined || !status) return res.status(400).json({ error: 'Missing type, index, or status' });
+    const scopeCol = buildId ? 'build_id' : 'project_id';
+    const scopeVal = buildId || projectId;
     try {
-      const r = await pool.query(`SELECT competitor_analysis FROM ${dbTable} WHERE id=$1 AND project_id=$2`, [id, projectId]);
+      const r = await pool.query(`SELECT competitor_analysis FROM ${dbTable} WHERE id=$1 AND ${scopeCol}=$2`, [id, scopeVal]);
       if (!r.rows[0] || !r.rows[0].competitor_analysis) return res.status(404).json({ error: 'No analysis found' });
       const analysis = r.rows[0].competitor_analysis;
       if (analysis.topicGaps && analysis.topicGaps[type] && analysis.topicGaps[type][index]) {
         analysis.topicGaps[type][index].status = status;
       }
-      await pool.query(`UPDATE ${dbTable} SET competitor_analysis=$1 WHERE id=$2 AND project_id=$3`, [JSON.stringify(analysis), id, projectId]);
+      await pool.query(`UPDATE ${dbTable} SET competitor_analysis=$1 WHERE id=$2 AND ${scopeCol}=$3`, [JSON.stringify(analysis), id, scopeVal]);
       res.json({ ok: true, competitor_analysis: analysis });
     } catch (e) {
       res.status(500).json({ error: e.message });
