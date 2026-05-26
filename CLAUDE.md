@@ -278,18 +278,19 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
-- **Winston AI Plagiarism Check** — Integrated Winston AI API for plagiarism detection in copywriter + build mode. `plagiarism_checks` DB table, synchronous API (no webhooks — instant results). "Plagiarism Check" button in both Build mode and Copywriter action bars, results panel showing score %, word counts (identical/similar), matched sources with percentages, color-coded badges. Credits tracking shown. Env var: `WINSTON_API_KEY`.
-- **SEO Migration page** — 4-phase wizard (Crawl → Match → Redirects → Monitor) under main sidebar. `seo_migrations` table. Crawl old/new sites via sitemap, AI URL matching via Haiku, push 301 redirects to WP plugin, pre/post migration SEO snapshots, comparison report.
-- **License key system** — Plugin license validation, yearly renewal (no stacking), AJAX-based license check, auto-update system.
-- **Discover Local Keywords — Dual Tab (SERP + Maps)** — Rewrote `DiscoverLocalPage` component with two tabs: "Discover SERP" (organic keywords via DataForSEO ranked_keywords) and "Discover Maps" (keywords business ranks for on Google Maps via DataForSEO Maps API). Separate state, loading, and polling for each tab. Per-row delete + bulk delete. Re-scan button.
-- **Smart Generate competitor filtering** — Added 3-layer brand name filtering: (1) competitor name blacklist from `projects.competitors` + `grid_scans.competitors`, (2) SERVICE_ACTION_WORDS whitelist, (3) TRADE_SUFFIXES pattern filter (e.g., "hilton plumbing" = competitor).
-- **SUBURB_GPS expansion** — Expanded from ~50 to 200+ Perth suburbs with GPS coordinates. Used for stripping suburb names from keywords in Smart Generate and Maps grid center lookups.
-- **Maps discovery backend** — New endpoints: `GET/POST /api/projects/:id/discovery/maps/run`, `POST .../discovery/maps/update`. Background job builds keyword list from grid scans + rank tracking + industry templates + organic keywords, checks DataForSEO Maps API with GPS coordinates, fuzzy matches business name.
-- **discovery_cache table extension** — Added `maps_status`, `maps_keywords`, `maps_count`, `maps_cost` columns for dual discovery.
-- **Stale run detection** — Discovery runs stuck at 'running' for >5 minutes auto-reset and allow re-run.
-- **UI improvements** — 15px table font, teal (#14b8a6) uppercase headers, white keyword text, color-coded position badges.
+- **Humanize-only endpoint — pure rule-based** (line ~3735 in server.js): Rewrote from GPTHuman API to zero-cost rule-based humanizer. Techniques: contractions (30+ patterns), synonym micro-swaps (20 patterns), sentence starters (~25% of middle sentences), long sentence splitting, punctuation variation, Australian English corrections. Preserves inline tags. Position-based HTML replacement working backwards. No API calls, no cost.
+- **Australian English dictionary** (line ~3669): `AU_SPELLING` object + `applyAuEnglish(text)` with 50+ US→AU replacements. Case-preserving regex.
+- **GPTHuman API env var**: `GPTHUMAN_API_KEY` — still configured but NOT used by humanize-only endpoint. Was tested and works (achieved 100% human score) but rewrites content too aggressively, violating brief fidelity.
+- **Page Reset — dedicated endpoint**: `POST /api/builds/:buildId/site-pages/:pageId/reset` and `/api/projects/.../reset`. Explicitly clears: `draft_content`, `meta_title`, `meta_description`, `focus_keyword`, `stage='brief'`, `word_count=0`, `ai_notes`, `target_keywords`, `plagiarism_result`, `ai_detection_result`, `page_sections`, `competitor_analysis`, `comments`. No COALESCE — guaranteed clear. Frontend also clears: `setAiResult(null)`, `setPlagiarismResult(null)`, `setTargetKeywords([])`, `setEditMeta` to empty. ContentScorePanel force-remounts via `key={editorKey}`.
+- **Delete Brief button**: `POST /api/builds/:buildId/brief/delete` — clears `copywriting_brief` and `brief_raw_text` on `website_builds`. Red "Delete brief" link on Build Settings page next to "Re-upload brief". Keeps existing pages intact.
+- **Save/Reset fix in Build mode**: `handleSaveEdit` guard changed from `if (!pid) return` to `if (!pid && !project?.build_id) return`. `handleHumanize` URL uses `apiPrefix` instead of hardcoded `/projects/`.
+- **Editor UI changes**: Editor wrapper uses `background: var(--bg)` (not `--card`), `padding: 0`, `overflow: hidden`. Quill toolbar/container both use `var(--bg)` background, `border-radius: 0`. Sidebar reduced to 340px width with `height: calc(100vh - 90px)` for independent scroll. Thin scrollbar CSS (`.score-sidebar`).
 
-### Previous Session
+### UNFIXED — Carry to next session
+- **Sidebar scroll not independent** — Sidebar scrolls with page instead of independently. `position: sticky` + `overflowY: auto` + fixed `height` isn't working as expected. May need JavaScript-based scroll isolation or `position: fixed` approach.
+- **Editor text not full width** — Text doesn't use full available width within the editor column. May need to reduce `.ql-editor` padding or check for hidden max-width constraints.
+
+### Previous Session (was "This Session")
 - **Players Handshake redesign (IN PROGRESS)** — Redesigning `PlayersHandshakePage` to match professional dark-mode SaaS mockup.
 - **Handshake AI parsing fix** — Increased max_tokens 8000→12000, added JSON extraction.
 - **PageSpeed ECONNRESET fix** — Added retries with exponential backoff.
