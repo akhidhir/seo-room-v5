@@ -19838,7 +19838,7 @@
           var acceptedKeywords = hasCompetitors ? (competitorData.topicGaps.missingKeywords || []).filter(function(k) { return k.status === 'accepted'; }) : [];
           var plainContent = hasContent ? content.replace(/<[^>]+>/g, '').toLowerCase() : '';
           var unincludedTopics = acceptedTopics.filter(function(t) { var words = t.text.toLowerCase().split(/\s+/).filter(function(w) { return w.length > 3; }); return words.length > 0 && words.filter(function(w) { return plainContent.includes(w); }).length < Math.ceil(words.length * 0.5); });
-          var unincludedKws = acceptedKeywords.filter(function(k) { return !plainContent.includes(k.text.toLowerCase()); });
+          var unincludedKws = acceptedKeywords.filter(function(k) { var words = k.text.toLowerCase().split(/\s+/).filter(function(w) { return w.length > 3; }); return words.length > 0 && words.filter(function(w) { return plainContent.includes(w); }).length < Math.ceil(words.length * 0.5); });
           var step = null;
           var icon = 'fa-solid fa-arrow-right';
           var color = '#6366f1';
@@ -19969,7 +19969,8 @@
                   competitorData.topicGaps.missingKeywords.map((k, i) => {
                     if (k.status !== 'accepted') return null;
                     const plainContent = (content || '').replace(/<[^>]+>/g, '').toLowerCase();
-                    const included = plainContent.includes(k.text.toLowerCase());
+                    const kwWords = k.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+                    const included = kwWords.length > 0 && kwWords.filter(w => plainContent.includes(w)).length >= Math.ceil(kwWords.length * 0.5);
                     return React.createElement('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, padding: '4px 6px 4px 10px', background: included ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.1)', color: included ? '#22c55e' : '#f59e0b', borderRadius: 6, border: '1px solid ' + (included ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)') } },
                       React.createElement('i', { className: included ? 'fa-solid fa-circle-check' : 'fa-regular fa-circle', style: { fontSize: 11 } }),
                       k.text,
