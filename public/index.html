@@ -7797,7 +7797,7 @@
     }
 
     // ============ WEBSITE SECURITY AUDIT PAGE ============
-    function SecurityAuditPage({ project }) {
+    function SecurityAuditPage({ project, setActiveTab }) {
       const e = React.createElement;
       const [audit, setAudit] = useState(null);
       const [loading, setLoading] = useState(false);
@@ -7859,6 +7859,61 @@
         medium: { label: 'Medium', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b' },
         low: { label: 'Low', bg: 'rgba(107,114,128,0.15)', fg: '#9ca3af' },
         none: { label: '', bg: 'transparent', fg: 'transparent' },
+      };
+
+      const [fixingId, setFixingId] = useState(null);
+      const [fixResult, setFixResult] = useState({}); // { checkId: { ok, message } }
+
+      // Map check IDs to fix endpoints
+      const fixMap = {
+        spam_pages_live: { endpoint: null, label: 'Fix in 404s & Redirects', manual: 'Go to 404s & Redirects page to bulk-410 these spam URLs.' , navTo: 'redirects' },
+        xmlrpc: { endpoint: 'xmlrpc', label: 'Disable XML-RPC', auto: false },
+        wp_plugins_inactive: { endpoint: 'inactive-plugins', label: 'Delete Inactive Plugins', auto: true },
+        wp_plugins_filemanager: { endpoint: 'inactive-plugins', label: 'Delete File Manager Plugin', auto: true },
+        header_x_frame_options: { endpoint: 'headers', label: 'Add Security Headers', auto: false },
+        header_x_content_type_options: { endpoint: 'headers', label: 'Add Security Headers', auto: false },
+        header_strict_transport_security: { endpoint: 'headers', label: 'Add HSTS Header', auto: false },
+        header_referrer_policy: { endpoint: 'headers', label: 'Add Referrer Policy', auto: false },
+        header_permissions_policy: { endpoint: 'headers', label: 'Add Permissions Policy', auto: false },
+        header_content_security_policy: { endpoint: 'headers', label: 'Add CSP Header', auto: false },
+        wp_debug_log: { endpoint: 'debug-log', label: 'Block Debug Log', auto: false },
+        dir_listing: { endpoint: 'dir-listing', label: 'Disable Directory Listing', auto: false },
+        wp_login: { endpoint: null, label: 'Hide Login Page', manual: 'Install the "WPS Hide Login" plugin from WordPress.org to move your login page to a custom URL.' },
+        wp_user_enum: { endpoint: null, label: 'Block User Enumeration', manual: 'Install a security plugin like Wordfence or add this to .htaccess:\n\nRewriteCond %{QUERY_STRING} ^author=\\d+ [NC]\nRewriteRule .* - [F,L]' },
+      };
+
+      const runFix = async (checkId) => {
+        const fix = fixMap[checkId];
+        if (!fix) return;
+
+        // Navigate to another page
+        if (fix.navTo) {
+          setActiveTab(fix.navTo);
+          return;
+        }
+
+        // Manual-only fixes — show instructions
+        if (fix.manual) {
+          setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, message: fix.manual } }));
+          return;
+        }
+        if (!fix.endpoint) return;
+
+        setFixingId(checkId);
+        try {
+          const data = await api(`/projects/${project.id}/security-audit/fix/${fix.endpoint}`, { method: 'POST' });
+          if (data.manual) {
+            setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, message: data.instructions } }));
+          } else if (data.ok) {
+            const msg = data.deleted != null ? `Deleted ${data.deleted} plugin(s)` : data.fixed != null ? `Applied 410 to ${data.fixed} URL(s)` : 'Fixed successfully';
+            setFixResult(prev => ({ ...prev, [checkId]: { ok: true, message: msg } }));
+          } else {
+            setFixResult(prev => ({ ...prev, [checkId]: { ok: false, message: data.error || 'Fix failed' } }));
+          }
+        } catch (err) {
+          setFixResult(prev => ({ ...prev, [checkId]: { ok: false, message: err.message } }));
+        }
+        setFixingId(null);
       };
 
       const [secFilter, setSecFilter] = useState(null); // null = all, 'pass', 'fail', 'warning'
@@ -7954,15 +8009,42 @@
               catChecks.map((check, ci) => {
                 const sc = statusConfig[check.status] || statusConfig.error;
                 const sev = severityConfig[check.severity] || severityConfig.none;
+                const hasFix = fixMap[check.id] && check.status !== 'pass';
+                const fr = fixResult[check.id];
                 return e('div', { key: check.id || ci, style: { padding: '12px 20px', borderBottom: ci < catChecks.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', flexDirection: 'column', gap: 6 } },
                   e('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
                     e('i', { className: sc.icon, style: { color: sc.fg, fontSize: 16, width: 20, textAlign: 'center' } }),
                     e('span', { style: { fontWeight: 600, fontSize: 14, flex: 1 } }, check.name),
+                    // Fix button
+                    hasFix && !fr?.ok && e('button', {
+                      onClick: () => runFix(check.id),
+                      disabled: fixingId === check.id,
+                      style: { padding: '4px 12px', borderRadius: 6, border: 'none', background: fixMap[check.id]?.navTo ? '#f59e0b' : fixMap[check.id]?.auto ? '#22c55e' : '#6366f1', color: '#fff', fontSize: 11, fontWeight: 600, cursor: fixingId === check.id ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }
+                    },
+                      fixingId === check.id ? e('i', { className: 'fas fa-spinner fa-spin' }) :
+                        e('i', { className: fixMap[check.id]?.navTo ? 'fas fa-arrow-right' : fixMap[check.id]?.auto ? 'fas fa-wrench' : 'fas fa-clipboard-list' }),
+                      fixingId === check.id ? ' Fixing...' :
+                        fixMap[check.id]?.navTo ? ' Fix in 404s & Redirects' :
+                        fixMap[check.id]?.auto ? ' Fix' : ' How to Fix'
+                    ),
+                    // Fixed badge
+                    fr?.ok && e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: 'rgba(34,197,94,0.15)', color: '#22c55e' } },
+                      e('i', { className: 'fas fa-check' }), 'Fixed'
+                    ),
                     e('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg } }, sc.label),
                     check.severity !== 'none' && e('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 600, background: sev.bg, color: sev.fg, marginLeft: 4 } }, sev.label)
                   ),
                   e('div', { style: { fontSize: 13, color: 'var(--text3)', paddingLeft: 30, lineHeight: 1.5 } }, check.details),
-                  check.fix && e('div', { style: { fontSize: 12, color: '#22c55e', paddingLeft: 30, marginTop: 2, lineHeight: 1.5, background: 'rgba(34,197,94,0.05)', padding: '8px 12px 8px 30px', borderRadius: 6 } },
+                  // Fix result message
+                  fr && !fr.ok && fr.message && e('div', { style: { fontSize: 12, color: fr.manual ? '#818cf8' : '#ef4444', paddingLeft: 30, marginTop: 4, lineHeight: 1.6, background: fr.manual ? 'rgba(99,102,241,0.05)' : 'rgba(239,68,68,0.05)', padding: '10px 14px 10px 30px', borderRadius: 6, whiteSpace: 'pre-wrap', fontFamily: fr.manual ? 'monospace, monospace' : 'inherit' } },
+                    e('i', { className: fr.manual ? 'fas fa-terminal' : 'fas fa-exclamation-circle', style: { marginRight: 6 } }),
+                    fr.message
+                  ),
+                  fr?.ok && fr.message && e('div', { style: { fontSize: 12, color: '#22c55e', paddingLeft: 30, marginTop: 4, background: 'rgba(34,197,94,0.05)', padding: '8px 12px 8px 30px', borderRadius: 6 } },
+                    e('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), fr.message
+                  ),
+                  // Original fix recommendation (only show if no fix result yet)
+                  !fr && check.fix && e('div', { style: { fontSize: 12, color: '#22c55e', paddingLeft: 30, marginTop: 2, lineHeight: 1.5, background: 'rgba(34,197,94,0.05)', padding: '8px 12px 8px 30px', borderRadius: 6 } },
                     e('i', { className: 'fas fa-lightbulb', style: { marginRight: 6, color: '#22c55e' } }),
                     check.fix
                   )
@@ -31764,7 +31846,7 @@
           case 'internal-linking':
             return <InternalLinkingPage project={project} />;
           case 'security-audit':
-            return <SecurityAuditPage project={project} />;
+            return <SecurityAuditPage project={project} setActiveTab={setActiveTab} />;
           case 'handshake':
             return <PlayersHandshakePage project={project} />;
 case 'action-plan':

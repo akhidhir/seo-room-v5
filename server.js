@@ -36863,6 +36863,153 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==================== SECURITY AUDIT FIX ENDPOINTS ====================
+
+// POST: Bulk 410 spam URLs
+app.post('/api/projects/:projectId/security-audit/fix/spam-410', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Get spam 404s
+    const spamPatterns = /\/(speed-dating|dating|singles|casino|poker|slots|viagra|cialis|pharma|payday|loan|forex|bitcoin|adult|xxx|porn|escort|gambling|weight-loss|diet-pill)/i;
+    const fourRes = await pool.query(
+      `SELECT id, url FROM redirect_404s WHERE project_id=$1`,
+      [req.params.projectId]
+    ).catch(() => ({ rows: [] }));
+
+    const spamItems = fourRes.rows.filter(r => spamPatterns.test(r.url || ''));
+    if (spamItems.length === 0) return res.json({ ok: true, fixed: 0, message: 'No spam URLs found' });
+
+    let fixed = 0;
+    for (const item of spamItems) {
+      try {
+        await callPluginApi(project, `/404s/${item.id}/redirect`, 'POST', { target_url: '', redirect_type: 410 });
+        fixed++;
+      } catch (e) { console.error(`[security-fix] 410 error for ${item.url}:`, e.message); }
+    }
+    res.json({ ok: true, fixed, total: spamItems.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: Disable XML-RPC via .htaccess snippet through WP REST
+app.post('/api/projects/:projectId/security-audit/fix/xmlrpc', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = project.wp_url || `https://${(project.domain || '').replace(/^https?:\/\//, '')}`;
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Create a mu-plugin that disables XML-RPC
+    const muPluginCode = `<?php\n/* Plugin Name: SEO Room - Disable XML-RPC */\nadd_filter('xmlrpc_enabled', '__return_false');\nadd_filter('wp_headers', function($h) { unset($h['X-Pingback']); return $h; });`;
+
+    // Try to write via WP REST API options or custom endpoint
+    // Fallback: add filter via theme functions or seoroom plugin
+    try {
+      const resp = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/mu-plugin`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ filename: 'seoroom-disable-xmlrpc.php', content: muPluginCode }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (resp.ok) return res.json({ ok: true, method: 'mu-plugin' });
+    } catch (e) { /* seoroom-opt not available */ }
+
+    // Fallback: add xmlrpc filter via options table (wp_seoroom_security option)
+    try {
+      const resp = await fetch(`${wpUrl}/wp-json/wp/v2/settings`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ seoroom_disable_xmlrpc: true }),
+        signal: AbortSignal.timeout(10000),
+      });
+      // This won't work without custom option registration, but worth trying
+    } catch (e) { /* skip */ }
+
+    // If we can't do it automatically, return manual instructions
+    res.json({ ok: false, manual: true, instructions: 'Add this to your .htaccess file before the WordPress rules:\n\n<Files xmlrpc.php>\n  Require all denied\n</Files>\n\nOr install the "Disable XML-RPC" plugin from WordPress.org.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: Delete inactive plugins
+app.post('/api/projects/:projectId/security-audit/fix/inactive-plugins', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = project.wp_url || `https://${(project.domain || '').replace(/^https?:\/\//, '')}`;
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // Get plugin list
+    const pluginsResp = await fetch(`${wpUrl}/wp-json/wp/v2/plugins`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+    if (!pluginsResp.ok) return res.status(400).json({ error: 'Could not fetch plugins (check WP credentials)' });
+    const plugins = await pluginsResp.json();
+    const inactive = plugins.filter(p => p.status === 'inactive');
+
+    if (inactive.length === 0) return res.json({ ok: true, deleted: 0, message: 'No inactive plugins' });
+
+    let deleted = 0;
+    const errors = [];
+    for (const plugin of inactive) {
+      try {
+        const slug = plugin.plugin || plugin.textdomain;
+        if (!slug) continue;
+        const delResp = await fetch(`${wpUrl}/wp-json/wp/v2/plugins/${encodeURIComponent(slug)}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+          signal: AbortSignal.timeout(10000),
+        });
+        if (delResp.ok) deleted++;
+        else errors.push(`${plugin.name}: ${delResp.status}`);
+      } catch (e) { errors.push(`${plugin.name}: ${e.message}`); }
+    }
+    res.json({ ok: true, deleted, total: inactive.length, errors: errors.length > 0 ? errors : undefined });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: Add security headers via seoroom plugin or .htaccess
+app.post('/api/projects/:projectId/security-audit/fix/headers', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = project.wp_url || `https://${(project.domain || '').replace(/^https?:\/\//, '')}`;
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    const headers = req.body?.headers || ['x-frame-options', 'x-content-type-options', 'strict-transport-security', 'referrer-policy', 'permissions-policy'];
+
+    // Try via seoroom-opt endpoint
+    try {
+      const resp = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/security-headers`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ headers }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (resp.ok) return res.json({ ok: true, method: 'plugin' });
+    } catch (e) { /* not available */ }
+
+    // Return manual .htaccess instructions
+    const htaccess = `# Security Headers (added by SEO Room)\n<IfModule mod_headers.c>\n  Header always set X-Frame-Options "SAMEORIGIN"\n  Header always set X-Content-Type-Options "nosniff"\n  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"\n  Header always set Referrer-Policy "strict-origin-when-cross-origin"\n  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"\n</IfModule>`;
+    res.json({ ok: false, manual: true, instructions: `Add this to your .htaccess file (before WordPress rules):\n\n${htaccess}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: Block debug.log access
+app.post('/api/projects/:projectId/security-audit/fix/debug-log', async (req, res) => {
+  try {
+    res.json({ ok: false, manual: true, instructions: 'Add this to your .htaccess file:\n\n<Files debug.log>\n  Require all denied\n</Files>\n\nAlso set WP_DEBUG_LOG to false in wp-config.php:\ndefine(\'WP_DEBUG_LOG\', false);' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: Fix directory listing
+app.post('/api/projects/:projectId/security-audit/fix/dir-listing', async (req, res) => {
+  try {
+    res.json({ ok: false, manual: true, instructions: 'Add this line to the top of your .htaccess file:\n\nOptions -Indexes' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Serve index.html for all other routes (SPA fallback)
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
