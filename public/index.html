@@ -9578,20 +9578,35 @@
         return new Date(d).toLocaleDateString();
       };
 
+      const [fourCategory, setFourCategory] = useState('real'); // 'all', 'real', 'bot', 'preview', 'malformed'
+
+      const classify404 = (url) => {
+        const u = (url || '').toLowerCase();
+        // Bot/spam probes
+        const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)/i;
+        const apiProbes = /\/(api|graphql|gql|v[0-9]+\/_?catalog|_next|\.json|swagger|openapi|health|metrics|readyz|livez|\.well-known|feed|rss|sitemap\.xml\.gz|atom)([?\/]|$)/i;
+        if (botPatterns.test(u) || apiProbes.test(u)) return 'bot';
+        // Preview/draft URLs
+        if (/[?&](preview|p)=true|[?&]page_id=\d+&preview/i.test(u)) return 'preview';
+        // Malformed URLs (encoded spaces, double slashes, trailing junk)
+        if (/%20|%2520|\/\/[^:]|\s/.test(u)) return 'malformed';
+        return 'real';
+      };
+
       const load404s = async () => {
         if (!project?.id) return;
         setFourLoading(true);
         try {
           const data = await api(`/projects/${project.id}/plugin/404s`);
-          const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)/i;
           const allItems = (data.items || []).sort((a, b) => (b.hit_count || 0) - (a.hit_count || 0));
-          const items = allItems.filter(item => {
-            const url = (item.url || item.url_path || '').toLowerCase();
-            return !botPatterns.test(url);
-          });
-          setBotFiltered(allItems.length - items.length);
-          setFourOhFours(items);
-          setFourTotal(items.length);
+          // Classify each item
+          const classified = allItems.map(item => ({
+            ...item,
+            _category: classify404(item.url || item.url_path || '')
+          }));
+          setBotFiltered(classified.filter(x => x._category === 'bot').length);
+          setFourOhFours(classified);
+          setFourTotal(classified.length);
         } catch (err) { console.error('Load 404s error:', err); }
         setFourLoading(false);
       };
@@ -9905,23 +9920,50 @@
         { id: 'broken', label: 'Broken Links', icon: 'fas fa-chain-broken' },
       ];
 
-      const unique404Urls = new Set(fourOhFours.map(x => x.url)).size;
-      const last24h = fourOhFours.filter(x => x.last_seen && (Date.now() - new Date(x.last_seen).getTime()) < 86400000).reduce((s, x) => s + parseInt(x.hit_count || 0, 10), 0);
+      const filtered404s = fourCategory === 'all' ? fourOhFours : fourOhFours.filter(x => x._category === fourCategory);
+      const catCounts = { all: fourOhFours.length, real: fourOhFours.filter(x => x._category === 'real').length, bot: fourOhFours.filter(x => x._category === 'bot').length, preview: fourOhFours.filter(x => x._category === 'preview').length, malformed: fourOhFours.filter(x => x._category === 'malformed').length };
+      const unique404Urls = new Set(filtered404s.map(x => x.url)).size;
+      const last24h = filtered404s.filter(x => x.last_seen && (Date.now() - new Date(x.last_seen).getTime()) < 86400000).reduce((s, x) => s + parseInt(x.hit_count || 0, 10), 0);
       const count301 = redirects.filter(x => x.redirect_type === 301 || x.redirect_type === '301').length;
       const count302 = redirects.filter(x => x.redirect_type === 302 || x.redirect_type === '302').length;
       const blInternal = brokenLinks.filter(x => x.link_type === 'internal').length;
       const blExternal = brokenLinks.filter(x => x.link_type === 'external').length;
 
       // ---- 404 Monitor Tab ----
+      const catBadgeConfig = { real: { label: 'Real Page', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444', icon: 'fas fa-file' }, bot: { label: 'Bot Probe', bg: 'rgba(107,114,128,0.15)', fg: '#6b7280', icon: 'fas fa-robot' }, preview: { label: 'Preview', bg: 'rgba(99,102,241,0.15)', fg: '#818cf8', icon: 'fas fa-eye' }, malformed: { label: 'Bad URL', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', icon: 'fas fa-link-slash' } };
+
       const render404Tab = () => e('div', null,
         // Stats row
         e('div', { style: { display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' } },
-          statCard(fourTotal, 'Total 404s', '#ef4444'),
+          statCard(filtered404s.length, 'Total 404s', '#ef4444'),
           statCard(unique404Urls, 'Unique URLs', '#6366f1'),
           statCard(last24h, 'Last 24h Hits', '#f59e0b')
         ),
+        // Category filter chips
+        e('div', { style: { display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' } },
+          [
+            { id: 'real', label: 'Real Pages', icon: 'fas fa-file', color: '#ef4444' },
+            { id: 'bot', label: 'Bot Probes', icon: 'fas fa-robot', color: '#6b7280' },
+            { id: 'preview', label: 'Preview/Draft', icon: 'fas fa-eye', color: '#818cf8' },
+            { id: 'malformed', label: 'Malformed URLs', icon: 'fas fa-link-slash', color: '#f59e0b' },
+            { id: 'all', label: 'All', icon: 'fas fa-list', color: 'var(--text3)' },
+          ].map(cat => e('button', {
+            key: cat.id,
+            onClick: () => setFourCategory(cat.id),
+            style: {
+              padding: '6px 14px', borderRadius: 20, border: fourCategory === cat.id ? `2px solid ${cat.color}` : '1px solid var(--border)',
+              background: fourCategory === cat.id ? (cat.color + '18') : 'transparent',
+              color: fourCategory === cat.id ? cat.color : 'var(--text3)',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6
+            }
+          },
+            e('i', { className: cat.icon, style: { fontSize: 11 } }),
+            cat.label,
+            catCounts[cat.id] > 0 && e('span', { style: { background: fourCategory === cat.id ? cat.color : 'var(--border)', color: fourCategory === cat.id ? '#fff' : 'var(--text3)', padding: '1px 6px', borderRadius: 10, fontSize: 10, marginLeft: 2 } }, catCounts[cat.id])
+          ))
+        ),
         // Action buttons
-        fourOhFours.length > 0 && e('div', { style: { marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
+        filtered404s.length > 0 && e('div', { style: { marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
           e('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
             e('button', { style: btnStyle('#8b5cf6'), onClick: suggestRedirects, disabled: suggestLoading },
               suggestLoading ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-magic' }),
@@ -9938,7 +9980,7 @@
               autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 25).length} Matches`
             ),
             Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
-              `${Object.values(suggestions).filter(Boolean).length}/${fourOhFours.length} matched`
+              `${Object.values(suggestions).filter(Boolean).length}/${filtered404s.length} matched`
             ),
             Object.keys(diagnoses).length > 0 && e('span', { style: { fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '3px 8px', borderRadius: 6 } },
               (() => {
@@ -9991,10 +10033,6 @@
             })()
           ),
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            botFiltered > 0 && e('span', { style: { fontSize: 12, color: 'var(--text3)', background: 'rgba(255,255,255,0.05)', padding: '4px 10px', borderRadius: 6 } },
-              e('i', { className: 'fas fa-robot', style: { marginRight: 4 } }),
-              botFiltered + ' bot URLs hidden'
-            ),
             e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
               clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
               clearingAll ? ' Clearing...' : ' Clear All'
@@ -10004,7 +10042,7 @@
         // Table
         fourLoading ? e('div', { style: { textAlign: 'center', padding: 40 } },
           e('i', { className: 'fas fa-spinner fa-spin', style: { fontSize: 24, color: '#6366f1' } })
-        ) : fourOhFours.length === 0 ? e('div', { style: { ...cardStyle, textAlign: 'center', padding: 40, color: 'var(--text3)' } },
+        ) : filtered404s.length === 0 ? e('div', { style: { ...cardStyle, textAlign: 'center', padding: 40, color: 'var(--text3)' } },
           e('i', { className: 'fas fa-check-circle', style: { fontSize: 32, marginBottom: 8, display: 'block', color: '#22c55e' } }),
           e('div', { style: { fontWeight: 500 } }, 'No 404 errors recorded'),
           e('div', { style: { fontSize: 12, marginTop: 4 } }, 'The SEO Room Connector plugin will log 404s as they occur.')
@@ -10013,6 +10051,7 @@
             e('thead', null,
               e('tr', null,
                 e('th', { style: thStyle }, 'URL'),
+                e('th', { style: { ...thStyle, width: 90 } }, 'Type'),
                 e('th', { style: { ...thStyle, width: 140 } }, 'Root Cause'),
                 e('th', { style: { ...thStyle, width: 80 } }, 'Hits'),
                 e('th', { style: { ...thStyle, width: 100 } }, 'Last Seen'),
@@ -10021,10 +10060,19 @@
               )
             ),
             e('tbody', null,
-              fourOhFours.map((item, i) => e(React.Fragment, { key: item.id || i },
+              filtered404s.map((item, i) => e(React.Fragment, { key: item.id || i },
                 e('tr', { style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
                   e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.url) },
                     e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url))
+                  ),
+                  // Type column
+                  e('td', { style: { ...tdStyle, verticalAlign: 'middle' } },
+                    (() => {
+                      const cfg = catBadgeConfig[item._category] || catBadgeConfig.real;
+                      return e('span', { style: { ...badgeStyle(cfg.bg, cfg.fg), fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                        e('i', { className: cfg.icon, style: { fontSize: 9 } }), cfg.label
+                      );
+                    })()
                   ),
                   // Root Cause column
                   e('td', { style: { ...tdStyle, verticalAlign: 'middle' } },
