@@ -16858,17 +16858,21 @@
         { code: 2554, label: 'New Zealand' },
       ];
 
+      const [searchError, setSearchError] = React.useState('');
+
       const runSearch = async (overrideTab) => {
         const t = overrideTab || tab;
+        setSearchError('');
         if (t === 'volume') {
           const kws = bulkText.split('\n').map(k => k.trim()).filter(Boolean);
           if (!kws.length) return;
           setLoading(true);
           try {
             const r = await api('/api/keyword-research/volume', { method: 'POST', body: { keywords: kws, locationCode } });
+            if (r.error) { setSearchError(r.error); setLoading(false); return; }
             setResults(r.keywords || []);
             setTotalCost(c => c + (r.cost || 0));
-          } catch (e) { console.error(e); }
+          } catch (e) { console.error(e); setSearchError(e.message); }
           setLoading(false);
           return;
         }
@@ -16877,9 +16881,10 @@
         const endpoint = t === 'suggestions' ? 'suggestions' : t === 'related' ? 'related' : 'questions';
         try {
           const r = await api(`/api/keyword-research/${endpoint}`, { method: 'POST', body: { keyword: seed.trim(), locationCode } });
+          if (r.error) { setSearchError(r.error); setLoading(false); return; }
           setResults(r.keywords || []);
           setTotalCost(c => c + (r.cost || 0));
-        } catch (e) { console.error(e); }
+        } catch (e) { console.error(e); setSearchError(e.message); }
         setLoading(false);
         setSelected(new Set());
         setSelectAll(false);
@@ -17030,6 +17035,11 @@
           }, 'Export to Rank Tracking'),
           exportMsg && React.createElement('span', { style: { fontSize: 12, color: '#22c55e', fontWeight: 600 } }, exportMsg),
           React.createElement('span', { style: { marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' } }, results.length + ' keywords')
+        ),
+
+        // Error message
+        searchError && React.createElement('div', { style: { padding: '12px 16px', marginBottom: 12, borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 13 } },
+          React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 8 } }), searchError
         ),
 
         // Results table

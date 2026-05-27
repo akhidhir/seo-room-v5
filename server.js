@@ -36184,6 +36184,7 @@ app.post('/api/projects/:projectId/backlinks/prospects/from-gap', async (req, re
 app.post('/api/keyword-research/suggestions', async (req, res) => {
   if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured' });
   const { keyword, locationCode = 2036, languageCode = 'en', limit = 100 } = req.body;
+  console.log('[kw-research] suggestions request:', { keyword, locationCode });
   if (!keyword) return res.status(400).json({ error: 'keyword required' });
   try {
     const resp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live', {
@@ -36192,6 +36193,9 @@ app.post('/api/keyword-research/suggestions', async (req, res) => {
       body: JSON.stringify([{ keyword, location_code: locationCode, language_code: languageCode, limit, include_seed_keyword: true }])
     });
     const json = await resp.json();
+    const taskStatus = json?.tasks?.[0]?.status_code;
+    const taskMsg = json?.tasks?.[0]?.status_message;
+    console.log('[kw-research] DFS response: status=', taskStatus, 'msg=', taskMsg, 'items=', json?.tasks?.[0]?.result?.[0]?.items?.length || 0);
     const items = json?.tasks?.[0]?.result?.[0]?.items || [];
     const keywords = items.map(i => ({
       keyword: i.keyword_data?.keyword || i.keyword,
@@ -36202,6 +36206,7 @@ app.post('/api/keyword-research/suggestions', async (req, res) => {
       trend: i.keyword_data?.keyword_info?.monthly_searches || [],
     }));
     const cost = json?.tasks?.[0]?.cost || 0;
+    console.log('[kw-research] returning', keywords.length, 'keywords, cost:', cost);
     res.json({ keywords, total: keywords.length, cost });
   } catch (e) { console.error('[kw-research] suggestions error:', e.message); res.status(500).json({ error: e.message }); }
 });
