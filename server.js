@@ -4061,6 +4061,127 @@ function applyAuEnglish(text) {
   return result;
 }
 
+// ── Copy Post-Processor — runs on all AI-generated content before saving ──
+// Fixes common AI writing tics, link issues, and awkward phrasing. Zero AI cost.
+function postProcessCopy(html, domain) {
+  if (!html || typeof html !== 'string') return html;
+  let result = html;
+  const fixes = [];
+
+  // 1. Fix dashboard URLs → project domain
+  // Catches seo-room-v5-production.up.railway.app and any Railway URL
+  if (domain) {
+    const cleanDomain = domain.replace(/\/+$/, '').replace(/^https?:\/\//, '');
+    const domainWithProtocol = domain.startsWith('http') ? domain.replace(/\/+$/, '') : 'https://' + cleanDomain;
+    // Replace any Railway app URL with actual domain
+    const railwayPattern = /https?:\/\/seo-room-v5[^"'\s)>]*/gi;
+    const before1 = result;
+    result = result.replace(railwayPattern, function(match) {
+      try {
+        const path = new URL(match).pathname;
+        return domainWithProtocol + path;
+      } catch (e) { return match; }
+    });
+    if (result !== before1) fixes.push('railway_urls');
+
+    // Also catch any localhost or staging URLs
+    const localhostPattern = /https?:\/\/localhost:\d+[^"'\s)>]*/gi;
+    result = result.replace(localhostPattern, function(match) {
+      try {
+        const path = new URL(match).pathname;
+        return domainWithProtocol + path;
+      } catch (e) { return match; }
+    });
+  }
+
+  // 2. Fix missing space before markdown-style links in HTML: "word[link" → "word [link"
+  // Also handles "word<a" without space
+  result = result.replace(/([a-zA-Z,;])(\[)/g, '$1 $2');
+  result = result.replace(/([a-zA-Z,;])(<a\s)/gi, '$1 $2');
+  if (result !== html) fixes.push('link_spacing');
+
+  // 3. Fix "you've to" → "you have to" (Irish/British, not Australian)
+  const before3 = result;
+  result = result.replace(/\byou've\s+to\b/gi, function(match) {
+    return match.charAt(0) === 'Y' ? 'You have to' : 'you have to';
+  });
+  // Also "we've to" → "we have to"
+  result = result.replace(/\bwe've\s+to\b/gi, function(match) {
+    return match.charAt(0) === 'W' ? 'We have to' : 'we have to';
+  });
+  // "it's to" → "it is to" when meaning "it has to"
+  result = result.replace(/\bthat's\s+to\s+be\b/gi, 'that has to be');
+  if (result !== before3) fixes.push('contraction_fix');
+
+  // 4. Replace "contingent on/upon" → "depending on"
+  const before4 = result;
+  result = result.replace(/\bcontingent\s+(?:on|upon)\b/gi, function(match) {
+    return match.charAt(0) === 'C' ? 'Depending on' : 'depending on';
+  });
+  if (result !== before4) fixes.push('contingent_fix');
+
+  // 5. Reduce excessive "put in" repetition — only in text nodes, not HTML tags
+  // Replace some instances with alternatives, keeping a few for natural voice
+  const putInAlts = ['installed', 'set up', 'placed', 'done', 'carried out', 'completed', 'laid down', 'established'];
+  let putInCount = 0;
+  result = result.replace(/>([^<]+)</g, function(match, text) {
+    return '>' + text.replace(/\bput in\b/gi, function(m) {
+      putInCount++;
+      // Keep every 3rd occurrence as "put in" for natural voice
+      if (putInCount % 3 === 1) return m;
+      const alt = putInAlts[(putInCount - 1) % putInAlts.length];
+      return m.charAt(0) === 'P' ? alt.charAt(0).toUpperCase() + alt.slice(1) : alt;
+    }) + '<';
+  });
+  if (putInCount > 3) fixes.push('put_in_reduction:' + putInCount);
+
+  // 6. Replace overused AI transition words
+  const aiTransitions = [
+    [/\bFurthermore,\s/gi, 'Also, '],
+    [/\bMoreover,\s/gi, 'On top of that, '],
+    [/\bAdditionally,\s/gi, 'Also, '],
+    [/\bIn conclusion,\s/gi, 'All in all, '],
+    [/\bIt is worth noting that\s/gi, ''],
+    [/\bIt's worth noting that\s/gi, ''],
+    [/\bIt is important to note that\s/gi, ''],
+    [/\bIn today's (?:world|age|day and age|landscape|environment),?\s/gi, ''],
+    [/\bWhen it comes to\s/gi, 'For '],
+    [/\bIn order to\s/gi, 'To '],
+    [/\bwhether you're looking for\b/gi, 'if you need'],
+    [/\brest assured\b/gi, 'you can count on us'],
+    [/\bseamless(?:ly)?\b/gi, 'smooth'],
+    [/\bleverage\b/gi, 'use'],
+    [/\butilise\b/gi, 'use'],
+    [/\butilize\b/gi, 'use'],
+    [/\bcommence\b/gi, 'start'],
+    [/\bfacilitate\b/gi, 'help with'],
+    [/\bindispensable\b/gi, 'essential'],
+    [/\bparamount\b/gi, 'important'],
+    [/\bmeticulous(?:ly)?\b/gi, 'careful'],
+    [/\bexemplary\b/gi, 'solid'],
+    [/\bunparalleled\b/gi, 'strong'],
+    [/\bdelve\b/gi, 'look into'],
+    [/\btapestry\b/gi, 'mix'],
+    [/\bnavigate\s+the\s+complexities\b/gi, 'handle'],
+    [/\bgame.changer\b/gi, 'big deal'],
+  ];
+  result = result.replace(/>([^<]+)</g, function(match, text) {
+    let newText = text;
+    for (const [pattern, replacement] of aiTransitions) {
+      newText = newText.replace(pattern, replacement);
+    }
+    return '>' + newText + '<';
+  });
+
+  // 7. Fix double spaces
+  result = result.replace(/>([^<]+)</g, function(match, text) {
+    return '>' + text.replace(/\s{2,}/g, ' ').trim() + '<';
+  });
+
+  if (fixes.length > 0) console.log('[post-process] Fixes applied: ' + fixes.join(', '));
+  return result;
+}
+
 // Humanize Only — RULE-BASED. Zero AI, zero API calls, zero cost.
 // Only job: reduce AI detection signals. Does NOT change the copy's meaning.
 // Techniques: contractions, filler words, punctuation variance, sentence restructuring.
@@ -19563,9 +19684,13 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     // Get all pages for linking context
     const allPages = await pool.query('SELECT id, page_name, slug, is_cornerstone, focus_keyword FROM site_pages WHERE build_id=$1', [buildId]);
 
+    const siteDomain = (build.domain || '').replace(/\/+$/, '');
+    const linkBase = siteDomain ? (siteDomain.startsWith('http') ? siteDomain : 'https://' + siteDomain) : '';
     const linksContext = (page.internal_links || []).map(l => {
       const target = allPages.rows.find(p => p.id === l.target_page_id);
-      return target ? `Link to "${target.page_name}" (${target.slug}) with anchor text "${l.anchor_text}"` : '';
+      if (!target) return '';
+      const href = linkBase ? linkBase + '/' + target.slug + '/' : '/' + target.slug + '/';
+      return `Link to "${target.page_name}" (href="${href}") with anchor text "${l.anchor_text}"`;
     }).filter(Boolean).join('\n');
 
     // Build brief context for AI
@@ -19702,6 +19827,9 @@ Return ONLY the HTML content, no markdown wrapping.`
         }
       }
     }
+
+    // Post-process: fix links, AI tics, awkward phrasing
+    content = postProcessCopy(content, build.domain);
 
     const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
 
@@ -19900,9 +20028,13 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
     const settingsResult = await pool.query('SELECT * FROM content_settings WHERE project_id=$1 AND page_type=$2', [projectId, page.page_type]);
     const settings = settingsResult.rows[0] || { target_word_count: 1500, tone: 'professional', style: 'informative' };
 
+    const projDomain = (project.domain || project.wordpress_url || '').replace(/\/+$/, '');
+    const projLinkBase = projDomain ? (projDomain.startsWith('http') ? projDomain : 'https://' + projDomain) : '';
     const linksContext = (page.internal_links || []).map(l => {
       const target = allPages.rows.find(p => p.id === l.target_page_id);
-      return target ? `Link to "${target.page_name}" (${target.slug}) with anchor text "${l.anchor_text}" — ${l.context || 'naturally in context'}` : '';
+      if (!target) return '';
+      const href = projLinkBase ? projLinkBase + '/' + target.slug + '/' : '/' + target.slug + '/';
+      return `Link to "${target.page_name}" (href="${href}") with anchor text "${l.anchor_text}" — ${l.context || 'naturally in context'}`;
     }).filter(Boolean).join('\n');
 
     const aiResponse = await anthropic.messages.create({
@@ -19948,7 +20080,11 @@ Return ONLY the HTML content, no markdown wrapping.`
       }]
     });
 
-    const content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    let content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+
+    // Post-process: fix links, AI tics, awkward phrasing
+    content = postProcessCopy(content, project.domain || project.wordpress_url);
+
     const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
 
     // Save to DB
@@ -21116,6 +21252,11 @@ Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "
         result.content_html = humanizeHTML(result.content_html);
         result.ai_notes = (result.ai_notes || '') + ' | Rule-based humanizer (API fallback)';
       }
+    }
+
+    // Post-process: fix links, AI tics, awkward phrasing
+    if (result.content_html) {
+      result.content_html = postProcessCopy(result.content_html, project.domain || project.wordpress_url);
     }
 
     res.json(result);
