@@ -16868,7 +16868,7 @@
           if (!kws.length) return;
           setLoading(true);
           try {
-            const r = await api('/api/keyword-research/volume', { method: 'POST', body: { keywords: kws, locationCode } });
+            const r = await api('/keyword-research/volume', { method: 'POST', body: { keywords: kws, locationCode } });
             if (r.error) { setSearchError(r.error); setLoading(false); return; }
             setResults(r.keywords || []);
             setTotalCost(c => c + (r.cost || 0));
@@ -16881,7 +16881,7 @@
         const endpoint = t === 'suggestions' ? 'suggestions' : t === 'related' ? 'related' : 'questions';
         try {
           console.log('[kw-research] calling', endpoint, 'with', seed.trim(), locationCode);
-          const r = await api(`/api/keyword-research/${endpoint}`, { method: 'POST', body: { keyword: seed.trim(), locationCode } });
+          const r = await api(`/keyword-research/${endpoint}`, { method: 'POST', body: { keyword: seed.trim(), locationCode } });
           console.log('[kw-research] response:', JSON.stringify(r).slice(0, 200));
           if (r.error) { setSearchError(r.error); setLoading(false); return; }
           setResults(r.keywords || []);
@@ -16897,7 +16897,7 @@
         setSerpLoading(true);
         setSerpData(null);
         try {
-          const r = await api('/api/keyword-research/serp', { method: 'POST', body: { keyword: kw, locationCode } });
+          const r = await api('/keyword-research/serp', { method: 'POST', body: { keyword: kw, locationCode } });
           setSerpData(r);
           setTotalCost(c => c + (r.cost || 0));
         } catch (e) { console.error(e); }
@@ -16908,7 +16908,7 @@
         if (!exportProject || selected.size === 0) return;
         const kws = results.filter((_, i) => selected.has(i)).map(k => ({ keyword: k.keyword, volume: k.volume, cpc: k.cpc }));
         try {
-          const r = await api('/api/keyword-research/export', { method: 'POST', body: { projectId: parseInt(exportProject), keywords: kws } });
+          const r = await api('/keyword-research/export', { method: 'POST', body: { projectId: parseInt(exportProject), keywords: kws } });
           setExportMsg(`Exported ${r.added} keywords`);
           setTimeout(() => setExportMsg(''), 3000);
         } catch (e) { setExportMsg('Export failed'); }
