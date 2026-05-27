@@ -16837,6 +16837,7 @@
       const [bulkText, setBulkText] = React.useState('');
       const [tab, setTab] = React.useState('suggestions'); // suggestions | related | questions | volume
       const [results, setResults] = React.useState([]);
+      const [cachedResults, setCachedResults] = React.useState({}); // { suggestions: [...], related: [...], ... }
       const [loading, setLoading] = React.useState(false);
       const [totalCost, setTotalCost] = React.useState(0);
       const [selected, setSelected] = React.useState(new Set());
@@ -16863,6 +16864,8 @@
       const runSearch = async (overrideTab) => {
         const t = overrideTab || tab;
         setSearchError('');
+        // Clear cache for other tabs when searching a new keyword (not when auto-switching tabs)
+        if (!overrideTab) setCachedResults(prev => ({ [t]: prev[t] }));
         if (t === 'volume') {
           const kws = bulkText.split('\n').map(k => k.trim()).filter(Boolean);
           if (!kws.length) return;
@@ -16870,7 +16873,9 @@
           try {
             const r = await api('/keyword-research/volume', { method: 'POST', body: { keywords: kws, locationCode } });
             if (r.error) { setSearchError(r.error); setLoading(false); return; }
-            setResults(r.keywords || []);
+            const kws2 = r.keywords || [];
+            setResults(kws2);
+            setCachedResults(prev => ({ ...prev, volume: kws2 }));
             setTotalCost(c => c + (r.cost || 0));
           } catch (e) { console.error(e); setSearchError(e.message); }
           setLoading(false);
@@ -16880,11 +16885,11 @@
         setLoading(true);
         const endpoint = t === 'suggestions' ? 'suggestions' : t === 'related' ? 'related' : 'questions';
         try {
-          console.log('[kw-research] calling', endpoint, 'with', seed.trim(), locationCode);
           const r = await api(`/keyword-research/${endpoint}`, { method: 'POST', body: { keyword: seed.trim(), locationCode } });
-          console.log('[kw-research] response:', JSON.stringify(r).slice(0, 200));
           if (r.error) { setSearchError(r.error); setLoading(false); return; }
-          setResults(r.keywords || []);
+          const kws2 = r.keywords || [];
+          setResults(kws2);
+          setCachedResults(prev => ({ ...prev, [t]: kws2 }));
           setTotalCost(c => c + (r.cost || 0));
         } catch (e) { console.error('[kw-research] error:', e); setSearchError(e.message || 'Request failed'); }
         setLoading(false);
@@ -16978,7 +16983,7 @@
         React.createElement('div', { style: { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0 } },
           tabs.map(t => React.createElement('button', {
             key: t.id,
-            onClick: () => { setTab(t.id); setResults([]); setSelected(new Set()); setSelectAll(false); if (t.id !== 'volume' && seed.trim()) { setTimeout(() => runSearch(t.id), 50); } },
+            onClick: () => { setTab(t.id); setSelected(new Set()); setSelectAll(false); const cached = cachedResults[t.id]; if (cached) { setResults(cached); } else { setResults([]); if (t.id !== 'volume' && seed.trim()) { setTimeout(() => runSearch(t.id), 50); } } },
             style: { padding: '10px 18px', fontSize: 13, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? accent : 'var(--text3)', background: 'none', border: 'none', borderBottom: tab === t.id ? `2px solid ${accent}` : '2px solid transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: -1 }
           }, React.createElement('i', { className: t.icon, style: { fontSize: 12 } }), t.label))
         ),
