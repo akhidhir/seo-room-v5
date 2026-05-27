@@ -6659,6 +6659,10 @@ async function dataForSeoBacklinksSummary(domain) {
   const taskStatus = data.tasks?.[0]?.status_code;
   const taskMsg = data.tasks?.[0]?.status_message;
   console.log(`[backlinks] Summary for "${domain}": task_status=${taskStatus}, msg="${taskMsg}"`);
+  if (taskStatus === 20000 && data.tasks?.[0]?.result?.[0]) {
+    const raw = data.tasks[0].result[0];
+    console.log(`[backlinks] Raw summary fields: backlinks=${raw.backlinks}, external_links_count=${raw.external_links_count}, referring_domains=${raw.referring_domains}, rank=${raw.rank}, dofollow=${raw.external_links_count_dofollow}, nofollow=${raw.external_links_count_nofollow}, broken=${raw.broken_backlinks}, broken_pages=${raw.broken_pages}`);
+  }
 
   // If 40204 (not found), try with www. prefix
   if (taskStatus === 40204 && !domain.startsWith('www.')) {
@@ -6674,15 +6678,15 @@ async function dataForSeoBacklinksSummary(domain) {
     if (ts2 === 20000 && data2.tasks?.[0]?.result?.[0]) {
       const r = data2.tasks[0].result[0];
       return {
-        total_backlinks: r.external_links_count || 0,
+        total_backlinks: r.backlinks || r.external_links_count || 0,
         referring_domains: r.referring_domains || 0,
         referring_ips: r.referring_ips || 0,
         domain_rank: r.rank || 0,
-        dofollow: r.external_links_count_dofollow || 0,
-        nofollow: r.external_links_count_nofollow || 0,
+        dofollow: r.backlinks_nofollow === undefined ? (r.external_links_count_dofollow || 0) : ((r.backlinks || 0) - (r.backlinks_nofollow || 0)),
+        nofollow: r.backlinks_nofollow || r.external_links_count_nofollow || 0,
         gov_backlinks: r.referring_links_tld?.gov || 0,
         edu_backlinks: r.referring_links_tld?.edu || 0,
-        broken_backlinks: r.broken_backlinks || 0,
+        broken_backlinks: r.broken_backlinks || r.broken_pages || 0,
         referring_pages: r.referring_pages || 0,
         cost: (data.cost || 0) + (data2.cost || 0),
         effective_target: 'www.' + domain
@@ -6692,15 +6696,15 @@ async function dataForSeoBacklinksSummary(domain) {
 
   const r = data.tasks?.[0]?.result?.[0] || {};
   return {
-    total_backlinks: r.external_links_count || 0,
+    total_backlinks: r.backlinks || r.external_links_count || 0,
     referring_domains: r.referring_domains || 0,
     referring_ips: r.referring_ips || 0,
     domain_rank: r.rank || 0,
-    dofollow: r.external_links_count_dofollow || 0,
-    nofollow: r.external_links_count_nofollow || 0,
+    dofollow: r.backlinks_nofollow === undefined ? (r.external_links_count_dofollow || 0) : ((r.backlinks || 0) - (r.backlinks_nofollow || 0)),
+    nofollow: r.backlinks_nofollow || r.external_links_count_nofollow || 0,
     gov_backlinks: r.referring_links_tld?.gov || 0,
     edu_backlinks: r.referring_links_tld?.edu || 0,
-    broken_backlinks: r.broken_backlinks || 0,
+    broken_backlinks: r.broken_backlinks || r.broken_pages || 0,
     referring_pages: r.referring_pages || 0,
     cost: data.cost
   };
