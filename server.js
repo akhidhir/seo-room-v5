@@ -36197,7 +36197,8 @@ app.post('/api/keyword-research/suggestions', async (req, res) => {
     const taskMsg = json?.tasks?.[0]?.status_message;
     console.log('[kw-research] DFS response: status=', taskStatus, 'msg=', taskMsg, 'items=', json?.tasks?.[0]?.result?.[0]?.items?.length || 0);
     const items = json?.tasks?.[0]?.result?.[0]?.items || [];
-    const keywords = items.map(i => ({
+    if (items[0]) console.log('[kw-research] sample item keys:', JSON.stringify(items[0]).slice(0, 500));
+    let keywords = items.map(i => ({
       keyword: i.keyword_data?.keyword || i.keyword,
       volume: i.keyword_data?.keyword_info?.search_volume ?? 0,
       cpc: i.keyword_data?.keyword_info?.cpc ?? 0,
@@ -36205,7 +36206,32 @@ app.post('/api/keyword-research/suggestions', async (req, res) => {
       competition_level: i.keyword_data?.keyword_info?.competition_level || '',
       trend: i.keyword_data?.keyword_info?.monthly_searches || [],
     }));
-    const cost = json?.tasks?.[0]?.cost || 0;
+    let cost = json?.tasks?.[0]?.cost || 0;
+
+    // Enrich with search volume if all zeros (Labs API sometimes omits volume)
+    const allZeroVol = keywords.length > 0 && keywords.every(k => !k.volume);
+    if (allZeroVol && keywords.length > 0) {
+      console.log('[kw-research] All volumes zero, enriching via search_volume API...');
+      try {
+        const kwList = keywords.map(k => k.keyword).slice(0, 700);
+        const volResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{ keywords: kwList, location_code: locationCode, language_code: languageCode }])
+        });
+        const volJson = await volResp.json();
+        const volItems = volJson?.tasks?.[0]?.result || [];
+        const volMap = {};
+        volItems.forEach(v => { if (v.keyword) volMap[v.keyword.toLowerCase()] = v; });
+        keywords = keywords.map(k => {
+          const v = volMap[k.keyword.toLowerCase()];
+          return v ? { ...k, volume: v.search_volume ?? 0, cpc: v.cpc ?? k.cpc, competition: v.competition ?? k.competition, competition_level: v.competition_level || k.competition_level } : k;
+        });
+        cost += volJson?.tasks?.[0]?.cost || 0;
+        console.log('[kw-research] Volume enrichment done, sample:', keywords[0]?.keyword, 'vol=', keywords[0]?.volume);
+      } catch (ve) { console.error('[kw-research] Volume enrichment failed:', ve.message); }
+    }
+
     console.log('[kw-research] returning', keywords.length, 'keywords, cost:', cost);
     res.json({ keywords, total: keywords.length, cost });
   } catch (e) { console.error('[kw-research] suggestions error:', e.message); res.status(500).json({ error: e.message }); }
@@ -36224,15 +36250,33 @@ app.post('/api/keyword-research/related', async (req, res) => {
     });
     const json = await resp.json();
     const items = json?.tasks?.[0]?.result?.[0]?.items || [];
-    const keywords = items.map(i => ({
+    let keywords = items.map(i => ({
       keyword: i.keyword_data?.keyword || i.keyword,
       volume: i.keyword_data?.keyword_info?.search_volume ?? 0,
       cpc: i.keyword_data?.keyword_info?.cpc ?? 0,
       competition: i.keyword_data?.keyword_info?.competition ?? 0,
       competition_level: i.keyword_data?.keyword_info?.competition_level || '',
-      se_results: i.keyword_data?.keyword_info?.search_volume ?? 0,
     }));
-    const cost = json?.tasks?.[0]?.cost || 0;
+    let cost = json?.tasks?.[0]?.cost || 0;
+    // Enrich with volume if all zeros
+    const allZero = keywords.length > 0 && keywords.every(k => !k.volume);
+    if (allZero) {
+      try {
+        const volResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{ keywords: keywords.map(k => k.keyword).slice(0, 700), location_code: locationCode, language_code: languageCode }])
+        });
+        const volJson = await volResp.json();
+        const volMap = {};
+        (volJson?.tasks?.[0]?.result || []).forEach(v => { if (v.keyword) volMap[v.keyword.toLowerCase()] = v; });
+        keywords = keywords.map(k => {
+          const v = volMap[k.keyword.toLowerCase()];
+          return v ? { ...k, volume: v.search_volume ?? 0, cpc: v.cpc ?? k.cpc, competition: v.competition ?? k.competition, competition_level: v.competition_level || k.competition_level } : k;
+        });
+        cost += volJson?.tasks?.[0]?.cost || 0;
+      } catch (ve) { console.error('[kw-research] related volume enrichment failed:', ve.message); }
+    }
     res.json({ keywords, total: keywords.length, cost });
   } catch (e) { console.error('[kw-research] related error:', e.message); res.status(500).json({ error: e.message }); }
 });
@@ -36253,7 +36297,7 @@ app.post('/api/keyword-research/questions', async (req, res) => {
     const items = json?.tasks?.[0]?.result?.[0]?.items || [];
     // Filter to only question keywords
     const questionWords = ['who', 'what', 'where', 'when', 'why', 'how', 'is', 'are', 'can', 'do', 'does', 'which', 'should', 'will', 'could', 'would'];
-    const keywords = items
+    let keywords = items
       .filter(i => {
         const kw = (i.keyword_data?.keyword || i.keyword || '').toLowerCase();
         return questionWords.some(q => kw.startsWith(q + ' ')) || kw.includes('?');
@@ -36265,7 +36309,26 @@ app.post('/api/keyword-research/questions', async (req, res) => {
         competition: i.keyword_data?.keyword_info?.competition ?? 0,
         competition_level: i.keyword_data?.keyword_info?.competition_level || '',
       }));
-    const cost = json?.tasks?.[0]?.cost || 0;
+    let cost = json?.tasks?.[0]?.cost || 0;
+    // Enrich with volume if all zeros
+    const allZero = keywords.length > 0 && keywords.every(k => !k.volume);
+    if (allZero) {
+      try {
+        const volResp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+          body: JSON.stringify([{ keywords: keywords.map(k => k.keyword).slice(0, 700), location_code: locationCode, language_code: languageCode }])
+        });
+        const volJson = await volResp.json();
+        const volMap = {};
+        (volJson?.tasks?.[0]?.result || []).forEach(v => { if (v.keyword) volMap[v.keyword.toLowerCase()] = v; });
+        keywords = keywords.map(k => {
+          const v = volMap[k.keyword.toLowerCase()];
+          return v ? { ...k, volume: v.search_volume ?? 0, cpc: v.cpc ?? k.cpc, competition: v.competition ?? k.competition, competition_level: v.competition_level || k.competition_level } : k;
+        });
+        cost += volJson?.tasks?.[0]?.cost || 0;
+      } catch (ve) { console.error('[kw-research] questions volume enrichment failed:', ve.message); }
+    }
     res.json({ keywords, total: keywords.length, cost });
   } catch (e) { console.error('[kw-research] questions error:', e.message); res.status(500).json({ error: e.message }); }
 });
