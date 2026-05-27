@@ -571,6 +571,9 @@ async function initDb() {
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
     // Maps discovery columns on discovery_cache
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ`).catch(() => {});
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS keyword_count INTEGER DEFAULT 0`).catch(() => {});
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS api_cost NUMERIC(10,4) DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_status TEXT DEFAULT 'idle'`).catch(() => {});
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_keywords JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_count INTEGER DEFAULT 0`).catch(() => {});
