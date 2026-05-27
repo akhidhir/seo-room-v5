@@ -36445,7 +36445,7 @@ app.get('/api/projects/:projectId/security-audit/latest', async (req, res) => {
       [req.params.projectId]
     )).rows[0];
     if (!row) return res.json({ status: 'none' });
-    res.json({ status: row.status, data: row.data, created_at: row.created_at, completed_at: row.completed_at, id: row.id });
+    res.json({ status: row.status, data: row.audit_data, created_at: row.created_at, completed_at: row.completed_at, id: row.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -36463,7 +36463,7 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
 
     // Create audit record
     const auditRow = (await pool.query(
-      `INSERT INTO audits (project_id, pillar, status, data, created_at) VALUES ($1, 'security', 'running', '{}', NOW()) RETURNING id`,
+      `INSERT INTO audits (project_id, pillar, status, audit_data, started_at, created_at) VALUES ($1, 'security', 'running', '{}', NOW(), NOW()) RETURNING id`,
       [projectId]
     )).rows[0];
     const auditId = auditRow.id;
@@ -36851,13 +36851,13 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
 
       // Save to DB
       await pool.query(
-        `UPDATE audits SET status='completed', data=$2, completed_at=NOW() WHERE id=$1`,
+        `UPDATE audits SET status='completed', audit_data=$2, completed_at=NOW() WHERE id=$1`,
         [auditId, JSON.stringify({ checks, summary })]
       );
       console.log(`[security-audit] Done for project ${projectId}: ${summary.pass} pass, ${summary.fail} fail, ${summary.warning} warn (score: ${summary.score}%)`);
     })().catch(async (e) => {
       console.error(`[security-audit] Error:`, e.message);
-      await pool.query(`UPDATE audits SET status='error', data=$2 WHERE id=$1`, [auditId, JSON.stringify({ error: e.message })]).catch(() => {});
+      await pool.query(`UPDATE audits SET status='error', audit_data=$2, error_message=$3 WHERE id=$1`, [auditId, JSON.stringify({ error: e.message }), e.message]).catch(() => {});
     });
 
   } catch (e) { res.status(500).json({ error: e.message }); }
