@@ -6656,6 +6656,7 @@ async function dataForSeoBacklinksSummary(domain) {
     body: JSON.stringify([{ target: domain, include_subdomains: true }])
   });
   const data = await resp.json();
+  console.log(`[backlinks] Summary raw status: ${data.status_code}, task status: ${data.tasks?.[0]?.status_code}, result keys:`, Object.keys(data.tasks?.[0]?.result?.[0] || {}));
   const r = data.tasks?.[0]?.result?.[0] || {};
   return {
     total_backlinks: r.external_links_count || 0,
@@ -35919,7 +35920,7 @@ app.post('/api/projects/:projectId/backlinks/scan', async (req, res) => {
     const domain = (proj.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
     if (!domain) return res.status(400).json({ error: 'Project domain not set' });
 
-    console.log(`[backlinks] Starting scan for ${domain}`);
+    console.log(`[backlinks] Starting scan for domain="${domain}"`);
 
     // Run all API calls in parallel
     const [summary, backlinksData, anchorsData, newData, lostData] = await Promise.all([
@@ -35929,6 +35930,9 @@ app.post('/api/projects/:projectId/backlinks/scan', async (req, res) => {
       dataForSeoNewLostBacklinks(domain, 'new', 200),
       dataForSeoNewLostBacklinks(domain, 'lost', 200)
     ]);
+
+    console.log(`[backlinks] Summary:`, JSON.stringify(summary));
+    console.log(`[backlinks] Backlinks count: ${backlinksData.backlinks.length}, Anchors: ${anchorsData.anchors.length}, New: ${newData.count}, Lost: ${lostData.count}`);
 
     // Flag toxic links (low domain rank + suspicious patterns)
     const toxic = backlinksData.backlinks.filter(l =>
