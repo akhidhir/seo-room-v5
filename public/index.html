@@ -24819,6 +24819,7 @@
       const [discoverMapsProvider, setDiscoverMapsProvider] = useState('serpapi');
 
       // Load cached SERP results on mount + poll if running
+      const serpUserTriggered = useRef(false);
       useEffect(() => {
         if (!project?.id) return;
         let pollTimer = null;
@@ -24830,7 +24831,7 @@
               setHasRun(true);
               setLoading(false);
             } else if (r.status === 'running') {
-              setLoading(true);
+              if (serpUserTriggered.current) setLoading(true);
               setHasRun(true);
               pollTimer = setTimeout(load, 3000);
             } else if (r.status === 'error') {
@@ -24844,6 +24845,7 @@
       }, [project?.id]);
 
       // Load cached Maps results on mount + poll if running
+      const mapsUserTriggered = useRef(false);
       useEffect(() => {
         if (!project?.id) return;
         let pollTimer = null;
@@ -24855,7 +24857,8 @@
               setHasMapsRun(true);
               setMapsLoading(false);
             } else if (r.maps_status === 'running') {
-              setMapsLoading(true);
+              // Only show spinner if user explicitly triggered it this session
+              if (mapsUserTriggered.current) setMapsLoading(true);
               setHasMapsRun(true);
               pollTimer = setTimeout(load, 3000);
             } else if (r.maps_status === 'error' || r.maps_status === 'idle') {
@@ -24869,6 +24872,7 @@
       }, [project?.id]);
 
       const discover = async (force = false) => {
+        serpUserTriggered.current = true;
         setLoading(true);
         setHasRun(true);
         try {
@@ -24896,6 +24900,7 @@
 
       const discoverMaps = async (force = false) => {
         if (!force && !await confirmCost(project.id, 'discover_maps', { keywords: 30, provider: discoverMapsProvider })) return;
+        mapsUserTriggered.current = true;
         setMapsLoading(true);
         setHasMapsRun(true);
         try {
@@ -25084,6 +25089,11 @@
           {activeHasRun && !activeLoading && sorted.length === 0 && activeData.length === 0 && (
             <div style={{ textAlign: 'center', padding: 60 }}>
               <div style={{ fontSize: 20, color: 'var(--text3)', marginBottom: 12 }}>No keywords found</div>
+              <div style={{ fontSize: 14, color: 'var(--text3)', marginBottom: 16, maxWidth: 500, margin: '0 auto 16px', lineHeight: 1.5 }}>
+                {tab === 'serp'
+                  ? 'DataForSEO may not have ranking data for this domain yet. Smaller or newer sites can take time to appear in their index. Try the Keyword Research tool for seed-based discovery instead.'
+                  : 'No Maps rankings found. Try adding more service keywords or expanding your search area.'}
+              </div>
               <button className="btn btn-primary" onClick={() => tab === 'serp' ? discover() : discoverMaps()} style={{ fontSize: 14, padding: '8px 20px' }}>
                 <i className="fa-solid fa-arrows-rotate" style={{ marginRight: 6 }} />Run Again
               </button>

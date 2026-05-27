@@ -28675,6 +28675,17 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
       try {
         console.log(`[discovery] Background run for ${domain} (project ${projectId})`);
         const result = await dataForSeoRankedKeywords({ domain, locationCode: 2036, limit: 200, offset: 0 });
+        console.log(`[discovery] DataForSEO returned ${result.keywords.length} keywords (total_count=${result.total_count}) for ${domain}`);
+
+        if (result.keywords.length === 0) {
+          // DataForSEO has no data for this domain — save empty result with message
+          console.log(`[discovery] No ranked keywords found for ${domain} in DataForSEO index`);
+          await pool.query(
+            `UPDATE discovery_cache SET status='done', keywords='[]', total_count=0, cost=$2, discovered_at=NOW(), updated_at=NOW() WHERE project_id=$1`,
+            [projectId, result.cost || 0]
+          );
+          return;
+        }
 
         // Build local signals
         const localSignals = ['near me', 'perth', 'bayswater', 'morley', 'midland', 'wa', 'repair', 'fix', 'shop', 'store', 'service', 'services'];
@@ -28685,13 +28696,24 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
         }
         const locParts = (project.location || '').split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 2);
         for (const part of locParts) { if (!localSignals.includes(part)) localSignals.push(part); }
+        // Add industry/business name parts as signals
+        const bizParts = (project.business_name || '').toLowerCase().split(/\s+/).filter(p => p.length > 2);
+        for (const part of bizParts) { if (!localSignals.includes(part)) localSignals.push(part); }
+        const indParts = (project.industry || '').toLowerCase().split(/[\s,]+/).filter(p => p.length > 2);
+        for (const part of indParts) { if (!localSignals.includes(part)) localSignals.push(part); }
 
-        const localKeywords = result.keywords.filter(kw => {
+        let localKeywords = result.keywords.filter(kw => {
           const kwLower = (kw.keyword || '').toLowerCase();
           return localSignals.some(sig => kwLower.includes(sig));
         }).map(kw => ({ ...kw, local_intent: true }));
 
-        console.log(`[discovery] Found ${localKeywords.length} local keywords out of ${result.keywords.length}`);
+        console.log(`[discovery] Local filter: ${localKeywords.length} of ${result.keywords.length} (signals: ${localSignals.slice(0, 20).join(', ')})`);
+
+        // Fallback: if local filter yields 0 but we have keywords, return ALL keywords
+        if (localKeywords.length === 0 && result.keywords.length > 0) {
+          console.log(`[discovery] Local filter yielded 0 — falling back to all ${result.keywords.length} keywords`);
+          localKeywords = result.keywords.map(kw => ({ ...kw, local_intent: false }));
+        }
 
         // Smart Maps check: pull positions from existing grid_scans + rank_tracking data (free, instant)
         // Then only call API for keywords not already in DB
@@ -28786,7 +28808,7 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
 
         // Save to DB
         await pool.query(
-          `UPDATE discovery_cache SET status='done', keywords=$2, total_count=$3, cost=$4, updated_at=NOW() WHERE project_id=$1`,
+          `UPDATE discovery_cache SET status='done', keywords=$2, total_count=$3, cost=$4, discovered_at=NOW(), updated_at=NOW() WHERE project_id=$1`,
           [projectId, JSON.stringify(localKeywords), localKeywords.length, result.cost || 0]
         );
         await logApiCost(parseInt(projectId), 'discover_serp', 'dataforseo', 1, API_COST_RATES.dataforseo.ranked_keywords, { keywords: localKeywords.length });
