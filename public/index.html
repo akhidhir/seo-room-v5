@@ -29791,13 +29791,18 @@
       const toxicLinks = scan?.toxic_links ? (typeof scan.toxic_links === 'string' ? JSON.parse(scan.toxic_links) : scan.toxic_links) : [];
 
       const cardStyle = { background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', padding: 20 };
-      const statCard = (label, value, icon, color) => (
-        <div style={{ ...cardStyle, textAlign: 'center' }}>
+      const statCard = (label, value, icon, color, onClick) => (
+        <div style={{ ...cardStyle, textAlign: 'center', cursor: onClick ? 'pointer' : 'default', transition: 'border-color 0.2s' }} onClick={onClick} onMouseEnter={e => onClick && (e.currentTarget.style.borderColor = color)} onMouseLeave={e => onClick && (e.currentTarget.style.borderColor = 'var(--border)')}>
           <i className={icon} style={{ fontSize: 20, color, marginBottom: 8, display: 'block' }}></i>
           <div style={{ fontSize: 28, fontWeight: 800, color }}>{typeof value === 'number' ? value.toLocaleString() : value}</div>
           <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginTop: 4 }}>{label}</div>
         </div>
       );
+
+      // Compute dofollow/nofollow from actual backlinks array
+      const dofollowCount = backlinks.filter(b => b.dofollow).length;
+      const nofollowCount = backlinks.filter(b => !b.dofollow).length;
+      const brokenCount = backlinks.filter(b => b.is_broken).length;
 
       const spamBadge = (score) => {
         const colors = { low: '#22c55e', medium: '#f59e0b', high: '#ef4444' };
@@ -29852,26 +29857,26 @@
               {/* OVERVIEW TAB */}
               {tab === 'overview' && <>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-                  {statCard('Total Backlinks', s.total_backlinks || scan?.total_backlinks || 0, 'fas fa-link', accent)}
-                  {statCard('Referring Domains', s.referring_domains || scan?.referring_domains || 0, 'fas fa-globe', '#3b82f6')}
+                  {statCard('Total Backlinks', s.total_backlinks || scan?.total_backlinks || 0, 'fas fa-link', accent, () => setTab('all'))}
+                  {statCard('Referring Domains', s.referring_domains || scan?.referring_domains || 0, 'fas fa-globe', '#3b82f6', () => setTab('all'))}
                   {statCard('Domain Rank', s.domain_rank || scan?.domain_rank || 0, 'fas fa-star', '#f59e0b')}
-                  {statCard('New (30d)', newLinks.length, 'fas fa-plus-circle', '#22c55e')}
-                  {statCard('Lost (30d)', lostLinks.length, 'fas fa-minus-circle', '#ef4444')}
+                  {statCard('New (30d)', newLinks.length, 'fas fa-plus-circle', '#22c55e', () => setTab('all'))}
+                  {statCard('Lost (30d)', lostLinks.length, 'fas fa-minus-circle', '#ef4444', () => setTab('all'))}
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
-                  {/* Dofollow / Nofollow split */}
-                  <div style={cardStyle}>
+                  {/* Dofollow / Nofollow split — computed from actual backlinks array + summary fallback */}
+                  <div style={{ ...cardStyle, cursor: 'pointer' }} onClick={() => setTab('all')}>
                     <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Link Types</div>
                     <div style={{ display: 'flex', gap: 20 }}>
-                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#22c55e' }}>{(s.dofollow || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Dofollow</div></div>
-                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#f59e0b' }}>{(s.nofollow || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Nofollow</div></div>
-                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{(s.broken_backlinks || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Broken</div></div>
+                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#22c55e' }}>{(s.dofollow || dofollowCount || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Dofollow</div></div>
+                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#f59e0b' }}>{(s.nofollow || nofollowCount || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Nofollow</div></div>
+                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{(s.broken_backlinks || brokenCount || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Broken</div></div>
                     </div>
-                    {s.total_backlinks > 0 && <div style={{ marginTop: 12, height: 8, borderRadius: 4, background: 'var(--border)', overflow: 'hidden', display: 'flex' }}>
-                      <div style={{ width: ((s.dofollow || 0) / s.total_backlinks * 100) + '%', background: '#22c55e' }}></div>
-                      <div style={{ width: ((s.nofollow || 0) / s.total_backlinks * 100) + '%', background: '#f59e0b' }}></div>
-                    </div>}
+                    {(s.total_backlinks || backlinks.length) > 0 && (() => { const total = s.total_backlinks || backlinks.length; const df = s.dofollow || dofollowCount || 0; const nf = s.nofollow || nofollowCount || 0; return <div style={{ marginTop: 12, height: 8, borderRadius: 4, background: 'var(--border)', overflow: 'hidden', display: 'flex' }}>
+                      <div style={{ width: (df / total * 100) + '%', background: '#22c55e' }}></div>
+                      <div style={{ width: (nf / total * 100) + '%', background: '#f59e0b' }}></div>
+                    </div>; })()}
                   </div>
 
                   {/* Top Anchors */}

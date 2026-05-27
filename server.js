@@ -6661,7 +6661,8 @@ async function dataForSeoBacklinksSummary(domain) {
   console.log(`[backlinks] Summary for "${domain}": task_status=${taskStatus}, msg="${taskMsg}"`);
   if (taskStatus === 20000 && data.tasks?.[0]?.result?.[0]) {
     const raw = data.tasks[0].result[0];
-    console.log(`[backlinks] Raw summary fields: backlinks=${raw.backlinks}, external_links_count=${raw.external_links_count}, referring_domains=${raw.referring_domains}, rank=${raw.rank}, dofollow=${raw.external_links_count_dofollow}, nofollow=${raw.external_links_count_nofollow}, broken=${raw.broken_backlinks}, broken_pages=${raw.broken_pages}`);
+    console.log(`[backlinks] Raw summary ALL KEYS:`, Object.keys(raw).join(', '));
+    console.log(`[backlinks] Raw summary VALUES:`, JSON.stringify(raw, null, 0).substring(0, 2000));
   }
 
   // If 40204 (not found), try with www. prefix
