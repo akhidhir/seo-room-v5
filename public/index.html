@@ -16880,11 +16880,13 @@
         setLoading(true);
         const endpoint = t === 'suggestions' ? 'suggestions' : t === 'related' ? 'related' : 'questions';
         try {
+          console.log('[kw-research] calling', endpoint, 'with', seed.trim(), locationCode);
           const r = await api(`/api/keyword-research/${endpoint}`, { method: 'POST', body: { keyword: seed.trim(), locationCode } });
+          console.log('[kw-research] response:', JSON.stringify(r).slice(0, 200));
           if (r.error) { setSearchError(r.error); setLoading(false); return; }
           setResults(r.keywords || []);
           setTotalCost(c => c + (r.cost || 0));
-        } catch (e) { console.error(e); setSearchError(e.message); }
+        } catch (e) { console.error('[kw-research] error:', e); setSearchError(e.message || 'Request failed'); }
         setLoading(false);
         setSelected(new Set());
         setSelectAll(false);
