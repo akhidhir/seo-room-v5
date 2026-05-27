@@ -6678,17 +6678,22 @@ async function dataForSeoBacklinksSummary(domain) {
     console.log(`[backlinks] www retry status=${ts2}`);
     if (ts2 === 20000 && data2.tasks?.[0]?.result?.[0]) {
       const r = data2.tasks[0].result[0];
+      const nf = r.referring_links_attributes?.nofollow || 0;
+      const tb = r.backlinks || 0;
       return {
-        total_backlinks: r.backlinks || r.external_links_count || 0,
+        total_backlinks: tb,
         referring_domains: r.referring_domains || 0,
+        referring_domains_nofollow: r.referring_domains_nofollow || 0,
         referring_ips: r.referring_ips || 0,
         domain_rank: r.rank || 0,
-        dofollow: r.backlinks_nofollow === undefined ? (r.external_links_count_dofollow || 0) : ((r.backlinks || 0) - (r.backlinks_nofollow || 0)),
-        nofollow: r.backlinks_nofollow || r.external_links_count_nofollow || 0,
+        dofollow: tb - nf,
+        nofollow: nf,
         gov_backlinks: r.referring_links_tld?.gov || 0,
         edu_backlinks: r.referring_links_tld?.edu || 0,
-        broken_backlinks: r.broken_backlinks || r.broken_pages || 0,
+        broken_backlinks: r.broken_backlinks || 0,
+        broken_pages: r.broken_pages || 0,
         referring_pages: r.referring_pages || 0,
+        spam_score: r.backlinks_spam_score || 0,
         cost: (data.cost || 0) + (data2.cost || 0),
         effective_target: 'www.' + domain
       };
@@ -6696,17 +6701,22 @@ async function dataForSeoBacklinksSummary(domain) {
   }
 
   const r = data.tasks?.[0]?.result?.[0] || {};
+  const nofollowCount = r.referring_links_attributes?.nofollow || 0;
+  const totalBl = r.backlinks || 0;
   return {
-    total_backlinks: r.backlinks || r.external_links_count || 0,
+    total_backlinks: totalBl,
     referring_domains: r.referring_domains || 0,
+    referring_domains_nofollow: r.referring_domains_nofollow || 0,
     referring_ips: r.referring_ips || 0,
     domain_rank: r.rank || 0,
-    dofollow: r.backlinks_nofollow === undefined ? (r.external_links_count_dofollow || 0) : ((r.backlinks || 0) - (r.backlinks_nofollow || 0)),
-    nofollow: r.backlinks_nofollow || r.external_links_count_nofollow || 0,
+    dofollow: totalBl - nofollowCount,
+    nofollow: nofollowCount,
     gov_backlinks: r.referring_links_tld?.gov || 0,
     edu_backlinks: r.referring_links_tld?.edu || 0,
-    broken_backlinks: r.broken_backlinks || r.broken_pages || 0,
+    broken_backlinks: r.broken_backlinks || 0,
+    broken_pages: r.broken_pages || 0,
     referring_pages: r.referring_pages || 0,
+    spam_score: r.backlinks_spam_score || 0,
     cost: data.cost
   };
 }
