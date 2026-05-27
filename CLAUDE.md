@@ -44,7 +44,7 @@ Sandbox can't git push. The workflow is:
 - **Google Search Console API**: searchconsole.googleapis.com — URL Inspection for indexing checks, search analytics for GSC audit
 - **PageSpeed Insights API**: PAGESPEED_API_KEY — Core Web Vitals scoring per page (mobile). Batched 5-at-a-time for speed.
 - **WordPress REST API**: Read (pages/posts via WP REST) + Write (Yoast meta via Application Passwords)
-- **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator, **Discover Maps** (ranked_keywords + Maps SERP checks), **Discover SERP** (ranked_keywords for organic discovery). Could be used for richer GBP/backlink data
+- **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator, **Discover Maps** (ranked_keywords + Maps SERP checks), **Discover SERP** (ranked_keywords for organic discovery), **Backlinks API** (requires separate subscription activation at app.dataforseo.com/backlinks-subscription, $100 min prepaid balance shared across all APIs, ~$0.13 per full scan)
 - **Local Falcon**: ~~Connected~~ **REPLACED by SerpAPI grid scanning**. Can be cancelled ($50/month saved)
 - **Winston AI**: WINSTON_API_KEY — plagiarism detection for copywriter content. Synchronous API (no webhooks). POST to `https://api.gowinston.ai/v2/plagiarism` with Bearer token → instant results. 2 credits per word. Results saved to `plagiarism_checks` table.
 - **Ahrefs**: Via Chrome extension scraping (not API) — needs ingestion endpoint ported from v4
@@ -107,6 +107,18 @@ Sandbox can't git push. The workflow is:
   - **Backend endpoints**: `GET/POST /api/projects/:id/discovery` (SERP), `GET/POST /api/projects/:id/discovery/maps/run` (Maps), `POST .../discovery/update` (SERP delete), `POST .../discovery/maps/update` (Maps delete).
   - **Stale run detection**: If discovery status='running' for >5 minutes, auto-reset and allow re-run.
 
+### BACKLINKS
+- **Backlinks** ✅ WORKING — DataForSEO Backlinks API. 5 tabs: Overview, All Backlinks, Anchors, New, Lost, Toxic Links.
+  - **Overview**: Stat cards (Total Backlinks, Referring Domains, Domain Rank, Dofollow, Nofollow, Broken). Cards clickable → navigate to respective tab. Link Types pie breakdown computed from backlinks array.
+  - **All Backlinks**: Table with Source URL, Anchor, Target, Rank (DFS 0-1000 scale, NOT Ahrefs DR), Dofollow badge, First Seen, Last Seen.
+  - **Anchors**: Grouped by anchor text with backlink count + referring domains count.
+  - **New/Lost**: Filtered by `first_seen` (last 30 days) / `is_lost=true`.
+  - **Toxic Links**: Filtered by `spam_score > 50` from backlinks array.
+  - **Backend**: `POST /api/projects/:id/backlinks/scan` (runs full scan), `GET /api/projects/:id/backlinks` (latest scan), `GET .../backlinks/list` (paginated backlinks), `GET .../backlinks/anchors`, `GET .../backlinks/new`, `GET .../backlinks/lost`, `GET .../backlinks/prospects`.
+  - **DataForSEO field mapping**: `backlinks` = total count, `referring_links_attributes.nofollow` = nofollow count, dofollow = total - nofollow, `broken_backlinks` = broken count, `rank` = DFS domain rank (0-1000). `external_links_count` is OUTBOUND links (not backlinks!).
+  - **Auto-retry with www prefix**: If domain returns task_status=40204 ("not found"), retries with `www.` prefix automatically.
+  - **DB tables**: `backlink_scans` (scan metadata + summary JSONB), `backlink_items` (individual backlinks), `backlink_prospects` (link building prospects).
+
 ### REPORTS
 - **Maps Rankings** ✅ WORKING — Full Local Falcon replacement. AI-powered keyword generator (Haiku suggests service+suburb combos with DataForSEO volume estimation). **SerpAPI Grid Scan**: configurable NxN grid (3×3, 5×5, 7×7) at configurable radius (5-30km). Generates GPS grid around business, calls SerpAPI `google_maps` from each point, calculates ARP/ATRP/SOLV/coverage. **Grid Heatmap**: visual NxN grid with color-coded positions per keyword. **Competitor Gap Analysis**: captures top 3 at each grid point, shows You vs Threats cards with rating/reviews/dominance comparison, review gap bar, and prioritized "What To Do" actions. Bulk select/delete. CSV import/export.
 - **SERP Rankings** — SerpAPI-based keyword tracking
@@ -119,7 +131,7 @@ Sandbox can't git push. The workflow is:
 
 ## Database Tables
 
-projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**, **reviews_cache**, **posts_cache**, **discovery_cache**, **plagiarism_checks**, **seo_migrations**
+projects, users, user_integrations, project_integrations, audits, audit_findings, action_items, rank_keywords, rank_tracking, gsc_keywords, monthly_reports, onpage_audit_cache, **wp_change_history**, **grid_scans**, **reviews_cache**, **posts_cache**, **discovery_cache**, **plagiarism_checks**, **seo_migrations**, **backlink_scans**, **backlink_items**, **backlink_prospects**
 
 ### wp_change_history (Universal WordPress Rollback)
 ```sql
@@ -205,6 +217,27 @@ CREATE TABLE IF NOT EXISTS discovery_cache (
 - `maps_keywords`: Maps discovery results array `[{keyword, position, volume}]`
 - Dual status columns allow independent SERP and Maps discovery runs
 
+### backlink_scans (DataForSEO Backlinks)
+```sql
+CREATE TABLE IF NOT EXISTS backlink_scans (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  total_backlinks INTEGER DEFAULT 0,
+  referring_domains INTEGER DEFAULT 0,
+  domain_rank INTEGER DEFAULT 0,
+  summary JSONB DEFAULT '{}',
+  backlinks JSONB DEFAULT '[]',
+  anchors JSONB DEFAULT '[]',
+  new_backlinks JSONB DEFAULT '[]',
+  lost_backlinks JSONB DEFAULT '[]',
+  api_cost NUMERIC(10,4) DEFAULT 0,
+  scanned_at TIMESTAMPTZ DEFAULT NOW()
+)
+```
+- `summary`: full DataForSEO summary response including `referring_links_attributes`, `referring_links_types`, `broken_backlinks`, etc.
+- `backlinks`: array of `{url_from, url_to, anchor, rank, dofollow, first_seen, last_seen, is_lost, spam_score}`
+- Toxic links: filtered client-side from backlinks where `spam_score > 50`
+
 ### Projects table extra columns
 - `wp_username TEXT` — WordPress Application Password username
 - `wp_app_password TEXT` — WordPress Application Password
@@ -233,6 +266,7 @@ CREATE TABLE IF NOT EXISTS discovery_cache (
 - `dataForSeoRankedKeywords(domain)` — gets organic keywords domain ranks for via DataForSEO labs API
 - `dataForSeoMaps(keyword, lat, lng)` — checks Google Maps results for a keyword at specific GPS coordinates via DataForSEO SERP API
 - Competitor name filtering in Smart Generate: loads from `projects.competitors` (TEXT[]) + `grid_scans.competitors` (JSONB), builds blacklist set, removes safe trade words from blacklist
+- `dataForSeoBacklinks(target, endpoint, filters)` — calls DataForSEO Backlinks API. Endpoints: `/summary/live`, `/backlinks/live`, `/anchors/live`. Auto-retries with `www.` prefix on 40204 (not found). Requires separate backlinks subscription activation.
 
 ### PILLAR_CATEGORIES constant
 ```javascript
@@ -278,28 +312,34 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
-- **Humanize-only endpoint — pure rule-based** (line ~3735 in server.js): Rewrote from GPTHuman API to zero-cost rule-based humanizer. Techniques: contractions (30+ patterns), synonym micro-swaps (20 patterns), sentence starters (~25% of middle sentences), long sentence splitting, punctuation variation, Australian English corrections. Preserves inline tags. Position-based HTML replacement working backwards. No API calls, no cost.
-- **Australian English dictionary** (line ~3669): `AU_SPELLING` object + `applyAuEnglish(text)` with 50+ US→AU replacements. Case-preserving regex.
-- **GPTHuman API env var**: `GPTHUMAN_API_KEY` — still configured but NOT used by humanize-only endpoint. Was tested and works (achieved 100% human score) but rewrites content too aggressively, violating brief fidelity.
-- **Page Reset — dedicated endpoint**: `POST /api/builds/:buildId/site-pages/:pageId/reset` and `/api/projects/.../reset`. Explicitly clears: `draft_content`, `meta_title`, `meta_description`, `focus_keyword`, `stage='brief'`, `word_count=0`, `ai_notes`, `target_keywords`, `plagiarism_result`, `ai_detection_result`, `page_sections`, `competitor_analysis`, `comments`. No COALESCE — guaranteed clear. Frontend also clears: `setAiResult(null)`, `setPlagiarismResult(null)`, `setTargetKeywords([])`, `setEditMeta` to empty. ContentScorePanel force-remounts via `key={editorKey}`.
-- **Delete Brief button**: `POST /api/builds/:buildId/brief/delete` — clears `copywriting_brief` and `brief_raw_text` on `website_builds`. Red "Delete brief" link on Build Settings page next to "Re-upload brief". Keeps existing pages intact.
-- **Save/Reset fix in Build mode**: `handleSaveEdit` guard changed from `if (!pid) return` to `if (!pid && !project?.build_id) return`. `handleHumanize` URL uses `apiPrefix` instead of hardcoded `/projects/`.
-- **Editor UI changes**: Editor wrapper uses `background: var(--bg)` (not `--card`), `padding: 0`, `overflow: hidden`. Quill toolbar/container both use `var(--bg)` background, `border-radius: 0`. Sidebar reduced to 340px width with `height: calc(100vh - 90px)` for independent scroll. Thin scrollbar CSS (`.score-sidebar`).
+- **Backlinks module — full implementation**: DataForSEO Backlinks API integration. 5 tabs (Overview, All Backlinks, Anchors, New, Lost, Toxic Links). Overview stat cards clickable to navigate to tabs. DB tables: `backlink_scans`, `backlink_items`, `backlink_prospects`.
+- **DataForSEO Backlinks field mapping fix**: `external_links_count` is outbound links (0 for most sites), NOT backlinks. Correct fields: `backlinks` (total), `referring_links_attributes.nofollow` (nofollow count), dofollow = total - nofollow. `rank` is DFS scale (0-1000), not Ahrefs DR.
+- **Auto-retry with www prefix**: If domain returns task_status=40204, auto-retries with `www.` prefix.
+- **DataForSEO Backlinks subscription required**: Separate from Labs/SERP APIs. Needs activation at app.dataforseo.com/backlinks-subscription. $100 prepaid balance (shared across all APIs, consumed per-use ~$0.13/scan).
 
 ### UNFIXED — Carry to next session
 - **Sidebar scroll not independent** — Sidebar scrolls with page instead of independently. `position: sticky` + `overflowY: auto` + fixed `height` isn't working as expected. May need JavaScript-based scroll isolation or `position: fixed` approach.
 - **Editor text not full width** — Text doesn't use full available width within the editor column. May need to reduce `.ql-editor` padding or check for hidden max-width constraints.
+- **Backlinks data consistency** — Overview card totals may not match tab counts because summary API returns domain-wide totals but backlinks list API fetches max 500 items. Need to decide: trust summary for totals, list for detail.
 
 ### Previous Session (was "This Session")
-- **Players Handshake redesign (IN PROGRESS)** — Redesigning `PlayersHandshakePage` to match professional dark-mode SaaS mockup.
-- **Handshake AI parsing fix** — Increased max_tokens 8000→12000, added JSON extraction.
-- **PageSpeed ECONNRESET fix** — Added retries with exponential backoff.
-- **Local Intel Reviews & Posts fix** — Bundled seed file (`data/local_intel_seed.json`), DB cache with 30-day TTL.
+- **Humanize-only endpoint — pure rule-based**: Zero-cost rule-based humanizer (contractions, synonym swaps, sentence starters, AU English).
+- **Australian English dictionary**: `AU_SPELLING` with 50+ US→AU replacements.
+- **Page Reset — dedicated endpoint**: Explicit clear of all draft fields.
+- **Delete Brief button**: Clears brief on website_builds.
+- **Save/Reset fix in Build mode**: Guard fix for build_id projects.
+- **Editor UI changes**: Background, padding, sidebar width adjustments.
 
 ### Two Sessions Ago
-- **Action Plan Calendar** — Month/Week/Day views with navigation. Auto-distribute endpoint.
-- **Rule-based Technical Audit Engine** — No AI cost. 15+ technical SEO checks.
-- **Fix buttons on Website Audit** — Green "Fix" for auto-fixable, "Review" for manual.
+- **Players Handshake redesign (IN PROGRESS)** — Professional dark-mode SaaS mockup.
+- **Handshake AI parsing fix** — max_tokens 8000→12000, JSON extraction.
+- **PageSpeed ECONNRESET fix** — Retries with exponential backoff.
+- **Local Intel Reviews & Posts fix** — Bundled seed file, DB cache with 30-day TTL.
+
+### Three Sessions Ago
+- **Action Plan Calendar** — Month/Week/Day views, auto-distribute endpoint.
+- **Rule-based Technical Audit Engine** — No AI cost, 15+ checks.
+- **Fix buttons on Website Audit** — Green "Fix" / "Review" buttons.
 - **Technical fix endpoint** — 7 fix types via WP REST API.
 - **SEO Room Schema plugin** — Replaces seoroom-helper.
 - **Rankings-first architecture** — Audits diagnostic only, rankings drive Action Plan.
