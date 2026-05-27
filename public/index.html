@@ -16861,6 +16861,11 @@
       var [savingSettings, setSavingSettings] = React.useState(false);
       var [savedSettings, setSavedSettings] = React.useState(false);
       var [settingsLoaded, setSettingsLoaded] = React.useState(null);
+      var [patternRules, setPatternRules] = React.useState([]);
+      var [newPattern, setNewPattern] = React.useState('');
+      var [newPatternTarget, setNewPatternTarget] = React.useState('');
+      var [patternPreview, setPatternPreview] = React.useState(null);
+      var [showPatternHelp, setShowPatternHelp] = React.useState(false);
 
       var PHASES = ['crawl', 'match', 'redirects', 'monitor', 'settings'];
       var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', monitor: 'Monitor', settings: 'Settings' };
@@ -17041,12 +17046,16 @@
       function renderMatchPhase() {
         var m = activeMigration;
         var urlMap = editedMap || m.url_map || [];
+        var oldPages = m.old_crawl || [];
+        var newPages = m.new_crawl || [];
         var matched = urlMap.filter(function(u) { return u.new_url; });
         var unmatched = urlMap.filter(function(u) { return !u.new_url; });
-        var newPages = m.new_crawl || [];
         var includedCount = matched.filter(function(u) { return u.included !== false; }).length;
+        var unmatchedOld = oldPages.filter(function(op) {
+          return !urlMap.some(function(r) { return r.old_url === op.url && r.new_url; });
+        });
 
-        // Build a lookup of new site pages that have content (title or h1)
+        // Build a lookup of new site pages
         var newPageHasContent = {};
         newPages.forEach(function(p) {
           if (p.title || p.h1) newPageHasContent[p.url] = { title: p.title, h1: p.h1 };
@@ -17070,23 +17079,235 @@
           var copy = urlMap.map(function(r) { return Object.assign({}, r, { included: true }); });
           setEditedMap(copy);
         }
-
         function deselectAll() {
           var copy = urlMap.map(function(r) { return Object.assign({}, r, { included: false }); });
           setEditedMap(copy);
         }
 
+        // --- Pattern rule helpers ---
+        function addPatternRule() {
+          if (!newPattern.trim() || !newPatternTarget.trim()) return;
+          var rule = { contains: newPattern.trim().toLowerCase(), target: newPatternTarget.trim() };
+          // Count how many old pages match
+          rule.matchCount = oldPages.filter(function(p) { return p.url.toLowerCase().includes(rule.contains); }).length;
+          setPatternRules(patternRules.concat([rule]));
+          setNewPattern('');
+          setNewPatternTarget('');
+        }
+
+        function removePatternRule(idx) {
+          setPatternRules(patternRules.filter(function(_, i) { return i !== idx; }));
+        }
+
+        function previewPatterns() {
+          var preview = [];
+          var matchedUrls = new Set();
+          patternRules.forEach(function(rule) {
+            oldPages.forEach(function(p) {
+              if (!matchedUrls.has(p.url) && p.url.toLowerCase().includes(rule.contains)) {
+                preview.push({ old_url: p.url, new_url: rule.target, rule: rule.contains });
+                matchedUrls.add(p.url);
+              }
+            });
+          });
+          setPatternPreview(preview);
+        }
+
+        function applyPatterns() {
+          var newMap = [];
+          var matchedUrls = new Set();
+          // Apply pattern rules first (order matters — first match wins)
+          patternRules.forEach(function(rule) {
+            oldPages.forEach(function(p) {
+              if (!matchedUrls.has(p.url) && p.url.toLowerCase().includes(rule.contains)) {
+                newMap.push({ old_url: p.url, new_url: rule.target, confidence: 'pattern', included: true, source: 'pattern' });
+                matchedUrls.add(p.url);
+              }
+            });
+          });
+          // Keep any existing manually-matched or AI-matched rows that patterns didn't cover
+          urlMap.forEach(function(row) {
+            if (!matchedUrls.has(row.old_url)) {
+              newMap.push(row);
+              matchedUrls.add(row.old_url);
+            }
+          });
+          // Add remaining unmatched old pages
+          oldPages.forEach(function(p) {
+            if (!matchedUrls.has(p.url)) {
+              newMap.push({ old_url: p.url, new_url: '', confidence: null, included: true });
+            }
+          });
+          setEditedMap(newMap);
+          setPatternPreview(null);
+        }
+
+        // Count per rule
+        var ruleCounts = patternRules.map(function(rule) {
+          return oldPages.filter(function(p) { return p.url.toLowerCase().includes(rule.contains); }).length;
+        });
+        var totalPatternMatches = 0;
+        var patternMatchedSet = new Set();
+        patternRules.forEach(function(rule) {
+          oldPages.forEach(function(p) {
+            if (!patternMatchedSet.has(p.url) && p.url.toLowerCase().includes(rule.contains)) {
+              totalPatternMatches++;
+              patternMatchedSet.add(p.url);
+            }
+          });
+        });
+        var remainingAfterPatterns = oldPages.length - totalPatternMatches;
+
+        var inputStyle = { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 13, width: '100%' };
+
         return React.createElement('div', null,
-          React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center' } },
-            React.createElement('button', { onClick: handleMatch, disabled: matching, style: Object.assign({}, btnStyle, matching ? { opacity: 0.6 } : {}) },
-              matching ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'AI Matching...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'Run AI Matching')
+          // --- STEP 1: Pattern Rules ---
+          React.createElement('div', { className: 'card', style: { padding: 24, marginBottom: 20 } },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+              React.createElement('div', null,
+                React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } },
+                  React.createElement('i', { className: 'fas fa-layer-group', style: { marginRight: 8, color: accent } }),
+                  'Step 1: Pattern Rules'
+                ),
+                React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)' } }, 'Match thousands of URLs at once using URL patterns. Each rule redirects all old URLs containing the keyword to one new URL.')
+              ),
+              React.createElement('button', { onClick: function() { setShowPatternHelp(!showPatternHelp); }, style: { background: 'none', border: 'none', color: accent, cursor: 'pointer', fontSize: 13, fontWeight: 600 } },
+                React.createElement('i', { className: 'fas fa-question-circle', style: { marginRight: 4 } }), showPatternHelp ? 'Hide Help' : 'How it works'
+              )
             ),
-            urlMap.length > 0 ? React.createElement('button', { onClick: handleSaveMap, style: btnOutline }, React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }), 'Save Changes') : null,
-            matched.length > 0 ? React.createElement('span', { style: { fontSize: 13, color: 'var(--text3)', marginLeft: 8 } }, includedCount + '/' + matched.length + ' selected for redirect') : null
+            // Help panel
+            showPatternHelp ? React.createElement('div', { style: { background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.2)', borderRadius: 8, padding: 16, marginBottom: 16, fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 } },
+              React.createElement('div', { style: { fontWeight: 700, color: accent, marginBottom: 8 } }, 'Example: Suburb × Service combo pages'),
+              'If your old site has URLs like:', React.createElement('br'),
+              React.createElement('code', { style: { background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 } }, '/emergency-plumber-joondalup/'),
+              ', ',
+              React.createElement('code', { style: { background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 } }, '/emergency-plumber-morley/'),
+              ', etc.', React.createElement('br'), React.createElement('br'),
+              'Set pattern "contains" to: ',
+              React.createElement('code', { style: { background: 'var(--bg)', padding: '2px 6px', borderRadius: 4, color: accent } }, 'emergency-plumber'),
+              React.createElement('br'),
+              'Set "redirect to" to: ',
+              React.createElement('code', { style: { background: 'var(--bg)', padding: '2px 6px', borderRadius: 4, color: '#22c55e' } }, 'https://sureflow.com.au/services/emergency-plumbing/'),
+              React.createElement('br'), React.createElement('br'),
+              'This single rule will match ALL suburb variants of that service and redirect them to the new service page.',
+              React.createElement('br'),
+              React.createElement('span', { style: { color: 'var(--text3)', fontSize: 12 } }, 'Rules are applied in order — first match wins. Be specific first, broad last.')
+            ) : null,
+
+            // Add rule form
+            React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 30px 1fr auto', gap: 10, alignItems: 'center', marginBottom: 16 } },
+              React.createElement('div', null,
+                React.createElement('label', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4, display: 'block' } }, 'Old URL contains'),
+                React.createElement('input', { value: newPattern, onChange: function(e) { setNewPattern(e.target.value); }, placeholder: 'e.g. emergency-plumber', style: inputStyle,
+                  onKeyDown: function(e) { if (e.key === 'Enter') addPatternRule(); }
+                })
+              ),
+              React.createElement('div', { style: { textAlign: 'center', color: accent, fontSize: 18, fontWeight: 700, paddingTop: 18 } }, '→'),
+              React.createElement('div', null,
+                React.createElement('label', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4, display: 'block' } }, 'Redirect to (new URL)'),
+                newPages.length > 0
+                  ? React.createElement('select', { value: newPatternTarget, onChange: function(e) { setNewPatternTarget(e.target.value); }, style: Object.assign({}, inputStyle, { cursor: 'pointer' }) },
+                      React.createElement('option', { value: '' }, 'Select a new page...'),
+                      newPages.map(function(p) { return React.createElement('option', { key: p.url, value: p.url }, (p.title ? p.title + ' — ' : '') + p.url); })
+                    )
+                  : React.createElement('input', { value: newPatternTarget, onChange: function(e) { setNewPatternTarget(e.target.value); }, placeholder: 'https://sureflow.com.au/services/...', style: inputStyle,
+                      onKeyDown: function(e) { if (e.key === 'Enter') addPatternRule(); }
+                    })
+              ),
+              React.createElement('button', { onClick: addPatternRule, disabled: !newPattern.trim() || !newPatternTarget.trim(), style: Object.assign({}, btnStyle, { marginTop: 18, whiteSpace: 'nowrap' }, (!newPattern.trim() || !newPatternTarget.trim()) ? { opacity: 0.4 } : {}) },
+                React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 6 } }), 'Add Rule'
+              )
+            ),
+
+            // Rules list
+            patternRules.length > 0 ? React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('div', { style: { fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 } }, 'Active Rules (' + patternRules.length + ')'),
+              patternRules.map(function(rule, i) {
+                return React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg)', borderRadius: 6, marginBottom: 4, fontSize: 13 } },
+                  React.createElement('span', { style: { fontWeight: 600, color: 'var(--text3)', width: 24, textAlign: 'center' } }, (i + 1) + '.'),
+                  React.createElement('span', { style: { color: '#f59e0b', fontWeight: 600 } }, 'contains "'),
+                  React.createElement('code', { style: { background: '#f59e0b22', padding: '2px 8px', borderRadius: 4, color: '#f59e0b', fontWeight: 700 } }, rule.contains),
+                  React.createElement('span', { style: { color: '#f59e0b', fontWeight: 600 } }, '"'),
+                  React.createElement('span', { style: { color: accent, fontWeight: 700 } }, '→'),
+                  React.createElement('span', { style: { color: '#22c55e', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, rule.target),
+                  React.createElement('span', { style: { background: accent + '22', color: accent, padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' } }, ruleCounts[i] + ' URLs'),
+                  React.createElement('button', { onClick: function() { removePatternRule(i); }, style: { background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: '2px 6px' } },
+                    React.createElement('i', { className: 'fas fa-trash-alt' })
+                  )
+                );
+              }),
+              // Summary bar
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, padding: '10px 16px', background: 'rgba(20,184,166,0.08)', borderRadius: 8, border: '1px solid rgba(20,184,166,0.15)' } },
+                React.createElement('div', { style: { fontSize: 13 } },
+                  React.createElement('span', { style: { color: accent, fontWeight: 700 } }, totalPatternMatches),
+                  React.createElement('span', { style: { color: 'var(--text3)' } }, ' of ' + oldPages.length + ' old URLs matched'),
+                  remainingAfterPatterns > 0
+                    ? React.createElement('span', { style: { color: '#f59e0b', marginLeft: 12 } }, remainingAfterPatterns + ' remaining — use AI Match or add more rules')
+                    : React.createElement('span', { style: { color: '#22c55e', marginLeft: 12 } }, React.createElement('i', { className: 'fas fa-check-circle', style: { marginRight: 4 } }), 'All URLs covered!')
+                ),
+                React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                  React.createElement('button', { onClick: previewPatterns, style: Object.assign({}, btnOutline, { fontSize: 12, padding: '6px 14px' }) },
+                    React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 6 } }), 'Preview'
+                  ),
+                  React.createElement('button', { onClick: applyPatterns, style: Object.assign({}, btnStyle, { fontSize: 12, padding: '6px 14px' }) },
+                    React.createElement('i', { className: 'fas fa-check', style: { marginRight: 6 } }), 'Apply Patterns'
+                  )
+                )
+              )
+            ) : null,
+
+            // Pattern preview
+            patternPreview ? React.createElement('div', { style: { marginTop: 12 } },
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 } },
+                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: 'var(--text2)' } }, 'Preview: ' + patternPreview.length + ' redirects will be created'),
+                React.createElement('button', { onClick: function() { setPatternPreview(null); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 12 } }, 'Close preview')
+              ),
+              React.createElement('div', { style: { maxHeight: 300, overflowY: 'auto', background: 'var(--bg)', borderRadius: 6, padding: 8 } },
+                React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+                  React.createElement('thead', null, React.createElement('tr', null,
+                    React.createElement('th', { style: Object.assign({}, thStyle, { fontSize: 11 }) }, 'Old URL'),
+                    React.createElement('th', { style: Object.assign({}, thStyle, { width: 30, textAlign: 'center' }) }, ''),
+                    React.createElement('th', { style: Object.assign({}, thStyle, { fontSize: 11 }) }, 'New URL'),
+                    React.createElement('th', { style: Object.assign({}, thStyle, { fontSize: 11 }) }, 'Rule')
+                  )),
+                  React.createElement('tbody', null, patternPreview.slice(0, 100).map(function(row, i) {
+                    return React.createElement('tr', { key: i },
+                      React.createElement('td', { style: Object.assign({}, tdStyle, { fontSize: 11, wordBreak: 'break-all' }) }, row.old_url),
+                      React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center', color: accent }) }, '→'),
+                      React.createElement('td', { style: Object.assign({}, tdStyle, { fontSize: 11, color: '#22c55e' }) }, row.new_url),
+                      React.createElement('td', { style: tdStyle },
+                        React.createElement('code', { style: { fontSize: 10, background: '#f59e0b22', color: '#f59e0b', padding: '1px 6px', borderRadius: 3 } }, row.rule)
+                      )
+                    );
+                  })),
+                  patternPreview.length > 100 ? React.createElement('tfoot', null,
+                    React.createElement('tr', null, React.createElement('td', { colSpan: 4, style: { padding: 10, textAlign: 'center', color: 'var(--text3)', fontSize: 12 } }, '... and ' + (patternPreview.length - 100) + ' more'))
+                  ) : null
+                )
+              )
+            ) : null
           ),
+
+          // --- STEP 2: AI Match (for remaining) ---
+          React.createElement('div', { className: 'card', style: { padding: 24, marginBottom: 20 } },
+            React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } },
+              React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 8, color: '#a78bfa' } }),
+              'Step 2: AI Match (Optional)'
+            ),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 16 } }, 'For pages not covered by pattern rules, AI will try to find the best matching new URL based on slug and title similarity.'),
+            React.createElement('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
+              React.createElement('button', { onClick: handleMatch, disabled: matching, style: Object.assign({}, btnOutline, { borderColor: '#a78bfa', color: '#a78bfa' }, matching ? { opacity: 0.6 } : {}) },
+                matching ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'AI Matching...') : React.createElement('span', null, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 6 } }), 'Run AI Matching')
+              ),
+              urlMap.length > 0 ? React.createElement('button', { onClick: handleSaveMap, style: btnOutline }, React.createElement('i', { className: 'fas fa-save', style: { marginRight: 6 } }), 'Save Changes') : null,
+              matched.length > 0 ? React.createElement('span', { style: { fontSize: 13, color: 'var(--text3)' } }, includedCount + '/' + matched.length + ' selected for redirect') : null
+            )
+          ),
+
+          // --- Results Table ---
           matched.length > 0 ? React.createElement('div', { className: 'card', style: { padding: 20, marginBottom: 20 } },
             React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } },
-              React.createElement('div', { className: 'card-title', style: { margin: 0 } }, 'Matched URLs (' + matched.length + ')'),
+              React.createElement('div', { className: 'card-title', style: { margin: 0 } }, 'Redirect Map (' + matched.length + ' matched)'),
               React.createElement('div', { style: { display: 'flex', gap: 8 } },
                 React.createElement('button', { onClick: selectAll, style: { padding: '4px 10px', fontSize: 11, background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid #22c55e40', borderRadius: 4, cursor: 'pointer', fontWeight: 600 } }, 'Select All'),
                 React.createElement('button', { onClick: deselectAll, style: { padding: '4px 10px', fontSize: 11, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid #ef444440', borderRadius: 4, cursor: 'pointer', fontWeight: 600 } }, 'Deselect All')
@@ -17099,43 +17320,45 @@
                   React.createElement('th', { style: thStyle }, 'Old URL'),
                   React.createElement('th', { style: Object.assign({}, thStyle, { width: 30, textAlign: 'center' }) }, ''),
                   React.createElement('th', { style: thStyle }, 'New URL'),
-                  React.createElement('th', { style: thStyle }, 'Confidence'),
-                  React.createElement('th', { style: thStyle }, 'Status')
+                  React.createElement('th', { style: thStyle }, 'Source')
                 )),
                 React.createElement('tbody', null, urlMap.map(function(row, i) {
                   if (!row.new_url) return null;
                   var isIncluded = row.included !== false;
-                  var hasContent = row.new_url && newPageHasContent[row.new_url];
                   return React.createElement('tr', { key: i, style: { opacity: isIncluded ? 1 : 0.45 } },
                     React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center' }) },
                       React.createElement('input', { type: 'checkbox', checked: isIncluded, onChange: function() { toggleInclude(i); }, style: { cursor: 'pointer', width: 16, height: 16, accentColor: accent } })
                     ),
-                    React.createElement('td', { style: Object.assign({}, tdStyle, { maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }) }, row.old_url),
+                    React.createElement('td', { style: Object.assign({}, tdStyle, { fontSize: 12, wordBreak: 'break-all' }) }, row.old_url),
                     React.createElement('td', { style: Object.assign({}, tdStyle, { textAlign: 'center', color: accent }) }, '→'),
                     React.createElement('td', { style: tdStyle },
-                      React.createElement('select', { value: row.new_url || '', onChange: function(e) { updateMapRow(i, 'new_url', e.target.value); }, style: { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 12, maxWidth: 220 } },
+                      React.createElement('select', { value: row.new_url || '', onChange: function(e) { updateMapRow(i, 'new_url', e.target.value); }, style: { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 8px', fontSize: 12, width: '100%' } },
                         React.createElement('option', { value: '' }, '— skip (no redirect) —'),
                         newPages.map(function(p) { return React.createElement('option', { key: p.url, value: p.url }, p.url); })
                       )
                     ),
-                    React.createElement('td', { style: tdStyle }, row.confidence != null ? confBadge(row.confidence) : '-'),
-                    React.createElement('td', { style: Object.assign({}, tdStyle, { fontSize: 12 }) },
-                      hasContent
-                        ? React.createElement('span', { title: 'New page already has content: ' + (hasContent.title || hasContent.h1), style: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: '#f59e0b22', color: '#f59e0b', fontWeight: 600 } },
-                            React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { fontSize: 10 } }), 'Has Content')
-                        : React.createElement('span', { style: { color: '#22c55e', fontSize: 11 } }, React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Clear')
+                    React.createElement('td', { style: tdStyle },
+                      row.source === 'pattern'
+                        ? React.createElement('span', { style: { padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: accent + '22', color: accent } }, 'Pattern')
+                        : row.confidence != null
+                          ? React.createElement('span', { style: { padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: '#a78bfa22', color: '#a78bfa' } }, 'AI')
+                          : React.createElement('span', { style: { padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: 'var(--border)', color: 'var(--text3)' } }, 'Manual')
                     )
                   );
                 }))
               )
             )
           ) : null,
-          unmatched.length > 0 ? React.createElement('div', { className: 'card', style: { padding: 20 } },
-            React.createElement('div', { className: 'card-title', style: { marginBottom: 12, color: '#ef4444' } }, React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 8 } }), 'Unmatched URLs (' + unmatched.length + ')'),
-            React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
-              unmatched.map(function(row, i) {
-                return React.createElement('span', { key: i, style: { display: 'inline-block', padding: '4px 12px', borderRadius: 6, fontSize: 12, background: '#ef444422', color: '#ef4444' } }, row.old_url);
-              })
+
+          // Unmatched
+          unmatchedOld.length > 0 && urlMap.length > 0 ? React.createElement('div', { className: 'card', style: { padding: 20 } },
+            React.createElement('div', { className: 'card-title', style: { marginBottom: 12, color: '#f59e0b' } }, React.createElement('i', { className: 'fas fa-exclamation-triangle', style: { marginRight: 8 } }), 'Unmatched URLs (' + unmatchedOld.length + ')'),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 12 } }, 'These old URLs have no redirect target. Add pattern rules or use AI matching to cover them.'),
+            React.createElement('div', { style: { maxHeight: 200, overflowY: 'auto' } },
+              unmatchedOld.slice(0, 50).map(function(p, i) {
+                return React.createElement('div', { key: i, style: { padding: '4px 0', fontSize: 12, color: 'var(--text3)', borderBottom: '1px solid var(--border)' } }, p.url);
+              }),
+              unmatchedOld.length > 50 ? React.createElement('div', { style: { padding: 8, textAlign: 'center', color: 'var(--text3)', fontSize: 12 } }, '... and ' + (unmatchedOld.length - 50) + ' more') : null
             )
           ) : null
         );
