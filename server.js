@@ -36178,6 +36178,168 @@ app.post('/api/projects/:projectId/backlinks/prospects/from-gap', async (req, re
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==================== KEYWORD RESEARCH (standalone) ====================
+
+// Keyword Suggestions — returns related keyword ideas from a seed
+app.post('/api/keyword-research/suggestions', async (req, res) => {
+  if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured' });
+  const { keyword, locationCode = 2036, languageCode = 'en', limit = 100 } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'keyword required' });
+  try {
+    const resp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+      body: JSON.stringify([{ keyword, location_code: locationCode, language_code: languageCode, limit, include_seed_keyword: true }])
+    });
+    const json = await resp.json();
+    const items = json?.tasks?.[0]?.result?.[0]?.items || [];
+    const keywords = items.map(i => ({
+      keyword: i.keyword_data?.keyword || i.keyword,
+      volume: i.keyword_data?.keyword_info?.search_volume ?? 0,
+      cpc: i.keyword_data?.keyword_info?.cpc ?? 0,
+      competition: i.keyword_data?.keyword_info?.competition ?? 0,
+      competition_level: i.keyword_data?.keyword_info?.competition_level || '',
+      trend: i.keyword_data?.keyword_info?.monthly_searches || [],
+    }));
+    const cost = json?.tasks?.[0]?.cost || 0;
+    res.json({ keywords, total: keywords.length, cost });
+  } catch (e) { console.error('[kw-research] suggestions error:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// Related Keywords — semantically related keywords
+app.post('/api/keyword-research/related', async (req, res) => {
+  if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured' });
+  const { keyword, locationCode = 2036, languageCode = 'en', limit = 100 } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'keyword required' });
+  try {
+    const resp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/related_keywords/live', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+      body: JSON.stringify([{ keyword, location_code: locationCode, language_code: languageCode, limit }])
+    });
+    const json = await resp.json();
+    const items = json?.tasks?.[0]?.result?.[0]?.items || [];
+    const keywords = items.map(i => ({
+      keyword: i.keyword_data?.keyword || i.keyword,
+      volume: i.keyword_data?.keyword_info?.search_volume ?? 0,
+      cpc: i.keyword_data?.keyword_info?.cpc ?? 0,
+      competition: i.keyword_data?.keyword_info?.competition ?? 0,
+      competition_level: i.keyword_data?.keyword_info?.competition_level || '',
+      se_results: i.keyword_data?.keyword_info?.search_volume ?? 0,
+    }));
+    const cost = json?.tasks?.[0]?.cost || 0;
+    res.json({ keywords, total: keywords.length, cost });
+  } catch (e) { console.error('[kw-research] related error:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// Keyword Questions — question-based keywords (People Also Ask style)
+app.post('/api/keyword-research/questions', async (req, res) => {
+  if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured' });
+  const { keyword, locationCode = 2036, languageCode = 'en', limit = 100 } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'keyword required' });
+  try {
+    const resp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/keyword_suggestions/live', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+      body: JSON.stringify([{ keyword, location_code: locationCode, language_code: languageCode, limit,
+        filters: ['keyword_data.keyword_info.search_volume', '>', 0] }])
+    });
+    const json = await resp.json();
+    const items = json?.tasks?.[0]?.result?.[0]?.items || [];
+    // Filter to only question keywords
+    const questionWords = ['who', 'what', 'where', 'when', 'why', 'how', 'is', 'are', 'can', 'do', 'does', 'which', 'should', 'will', 'could', 'would'];
+    const keywords = items
+      .filter(i => {
+        const kw = (i.keyword_data?.keyword || i.keyword || '').toLowerCase();
+        return questionWords.some(q => kw.startsWith(q + ' ')) || kw.includes('?');
+      })
+      .map(i => ({
+        keyword: i.keyword_data?.keyword || i.keyword,
+        volume: i.keyword_data?.keyword_info?.search_volume ?? 0,
+        cpc: i.keyword_data?.keyword_info?.cpc ?? 0,
+        competition: i.keyword_data?.keyword_info?.competition ?? 0,
+        competition_level: i.keyword_data?.keyword_info?.competition_level || '',
+      }));
+    const cost = json?.tasks?.[0]?.cost || 0;
+    res.json({ keywords, total: keywords.length, cost });
+  } catch (e) { console.error('[kw-research] questions error:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// Bulk Search Volume — get volume for a list of keywords
+app.post('/api/keyword-research/volume', async (req, res) => {
+  if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured' });
+  const { keywords, locationCode = 2036, languageCode = 'en' } = req.body;
+  if (!keywords?.length) return res.status(400).json({ error: 'keywords array required' });
+  try {
+    const resp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+      body: JSON.stringify([{ keywords: keywords.slice(0, 700), location_code: locationCode, language_code: languageCode }])
+    });
+    const json = await resp.json();
+    const items = json?.tasks?.[0]?.result || [];
+    const results = items.map(i => ({
+      keyword: i.keyword,
+      volume: i.search_volume ?? 0,
+      cpc: i.cpc ?? 0,
+      competition: i.competition ?? 0,
+      competition_level: i.competition_level || '',
+      trend: i.monthly_searches || [],
+    }));
+    const cost = json?.tasks?.[0]?.cost || 0;
+    res.json({ keywords: results, total: results.length, cost });
+  } catch (e) { console.error('[kw-research] volume error:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// SERP Overview — check who ranks for a keyword
+app.post('/api/keyword-research/serp', async (req, res) => {
+  if (!DATAFORSEO_AUTH) return res.status(400).json({ error: 'DataForSEO not configured' });
+  const { keyword, locationCode = 2036, languageCode = 'en' } = req.body;
+  if (!keyword) return res.status(400).json({ error: 'keyword required' });
+  try {
+    const resp = await fetch('https://api.dataforseo.com/v3/serp/google/organic/live/regular', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+      body: JSON.stringify([{ keyword, location_code: locationCode, language_code: languageCode, depth: 20 }])
+    });
+    const json = await resp.json();
+    const taskResult = json?.tasks?.[0]?.result?.[0] || {};
+    const items = taskResult.items || [];
+    const organic = items.filter(i => i.type === 'organic').map(i => ({
+      position: i.rank_absolute,
+      url: i.url,
+      title: i.title,
+      domain: i.domain,
+      description: i.description,
+    }));
+    const localPack = items.filter(i => i.type === 'local_pack').length > 0;
+    const featuredSnippet = items.filter(i => i.type === 'featured_snippet').length > 0;
+    const paa = items.filter(i => i.type === 'people_also_ask').flatMap(i => (i.items || []).map(q => q.title));
+    const cost = json?.tasks?.[0]?.cost || 0;
+    res.json({ organic, localPack, featuredSnippet, peopleAlsoAsk: paa, totalResults: taskResult.se_results_count || 0, cost });
+  } catch (e) { console.error('[kw-research] serp error:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// Export keywords to a project's rank tracking
+app.post('/api/keyword-research/export', async (req, res) => {
+  const { projectId, keywords } = req.body; // keywords = [{keyword, volume}]
+  if (!projectId || !keywords?.length) return res.status(400).json({ error: 'projectId and keywords required' });
+  try {
+    let added = 0;
+    for (const kw of keywords) {
+      try {
+        await pool.query(
+          `INSERT INTO rank_keywords (project_id, keyword, search_volume, cpc)
+           VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
+          [projectId, kw.keyword, kw.volume || 0, kw.cpc || 0]
+        );
+        added++;
+      } catch (e) { /* skip dupes */ }
+    }
+    res.json({ ok: true, added });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Serve index.html for all other routes (SPA fallback)
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

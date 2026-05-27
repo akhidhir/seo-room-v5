@@ -16830,6 +16830,311 @@
       );
     }
 
+    // ============ KEYWORD RESEARCH (standalone) ============
+    function KeywordResearchStandalonePage({ allProjects }) {
+      const accent = '#06b6d4'; // cyan
+      const [seed, setSeed] = React.useState('');
+      const [bulkText, setBulkText] = React.useState('');
+      const [tab, setTab] = React.useState('suggestions'); // suggestions | related | questions | volume
+      const [results, setResults] = React.useState([]);
+      const [loading, setLoading] = React.useState(false);
+      const [totalCost, setTotalCost] = React.useState(0);
+      const [selected, setSelected] = React.useState(new Set());
+      const [selectAll, setSelectAll] = React.useState(false);
+      const [sortCol, setSortCol] = React.useState('volume');
+      const [sortDir, setSortDir] = React.useState('desc');
+      const [serpKeyword, setSerpKeyword] = React.useState(null);
+      const [serpData, setSerpData] = React.useState(null);
+      const [serpLoading, setSerpLoading] = React.useState(false);
+      const [exportProject, setExportProject] = React.useState('');
+      const [exportMsg, setExportMsg] = React.useState('');
+      const [locationCode, setLocationCode] = React.useState(2036); // Australia
+
+      const locations = [
+        { code: 2036, label: 'Australia' },
+        { code: 2840, label: 'United States' },
+        { code: 2826, label: 'United Kingdom' },
+        { code: 2124, label: 'Canada' },
+        { code: 2554, label: 'New Zealand' },
+      ];
+
+      const runSearch = async (overrideTab) => {
+        const t = overrideTab || tab;
+        if (t === 'volume') {
+          const kws = bulkText.split('\n').map(k => k.trim()).filter(Boolean);
+          if (!kws.length) return;
+          setLoading(true);
+          try {
+            const r = await api('/api/keyword-research/volume', { method: 'POST', body: { keywords: kws, locationCode } });
+            setResults(r.keywords || []);
+            setTotalCost(c => c + (r.cost || 0));
+          } catch (e) { console.error(e); }
+          setLoading(false);
+          return;
+        }
+        if (!seed.trim()) return;
+        setLoading(true);
+        const endpoint = t === 'suggestions' ? 'suggestions' : t === 'related' ? 'related' : 'questions';
+        try {
+          const r = await api(`/api/keyword-research/${endpoint}`, { method: 'POST', body: { keyword: seed.trim(), locationCode } });
+          setResults(r.keywords || []);
+          setTotalCost(c => c + (r.cost || 0));
+        } catch (e) { console.error(e); }
+        setLoading(false);
+        setSelected(new Set());
+        setSelectAll(false);
+      };
+
+      const openSerp = async (kw) => {
+        setSerpKeyword(kw);
+        setSerpLoading(true);
+        setSerpData(null);
+        try {
+          const r = await api('/api/keyword-research/serp', { method: 'POST', body: { keyword: kw, locationCode } });
+          setSerpData(r);
+          setTotalCost(c => c + (r.cost || 0));
+        } catch (e) { console.error(e); }
+        setSerpLoading(false);
+      };
+
+      const handleExport = async () => {
+        if (!exportProject || selected.size === 0) return;
+        const kws = results.filter((_, i) => selected.has(i)).map(k => ({ keyword: k.keyword, volume: k.volume, cpc: k.cpc }));
+        try {
+          const r = await api('/api/keyword-research/export', { method: 'POST', body: { projectId: parseInt(exportProject), keywords: kws } });
+          setExportMsg(`Exported ${r.added} keywords`);
+          setTimeout(() => setExportMsg(''), 3000);
+        } catch (e) { setExportMsg('Export failed'); }
+      };
+
+      const toggleSelect = (i) => {
+        const s = new Set(selected);
+        s.has(i) ? s.delete(i) : s.add(i);
+        setSelected(s);
+      };
+      const toggleAll = () => {
+        if (selectAll) { setSelected(new Set()); setSelectAll(false); }
+        else { setSelected(new Set(results.map((_, i) => i))); setSelectAll(true); }
+      };
+
+      const sorted = [...results].sort((a, b) => {
+        const av = a[sortCol] ?? 0, bv = b[sortCol] ?? 0;
+        if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        return sortDir === 'asc' ? av - bv : bv - av;
+      });
+
+      const handleSort = (col) => {
+        if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        else { setSortCol(col); setSortDir('desc'); }
+      };
+
+      const tabs = [
+        { id: 'suggestions', label: 'Suggestions', icon: 'fas fa-lightbulb' },
+        { id: 'related', label: 'Related', icon: 'fas fa-project-diagram' },
+        { id: 'questions', label: 'Questions', icon: 'fas fa-question-circle' },
+        { id: 'volume', label: 'Bulk Volume', icon: 'fas fa-list' },
+      ];
+
+      const colHeader = (label, col) => (
+        React.createElement('th', {
+          style: { padding: '10px 12px', textAlign: col === 'keyword' ? 'left' : 'right', cursor: 'pointer', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text3)', userSelect: 'none', whiteSpace: 'nowrap' },
+          onClick: () => handleSort(col)
+        }, label, sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '')
+      );
+
+      return React.createElement('div', { style: { padding: '32px 40px', maxWidth: 1200, margin: '0 auto' } },
+        // Header
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 } },
+          React.createElement('div', null,
+            React.createElement('h1', { style: { fontSize: 24, fontWeight: 800, color: 'var(--text)', margin: 0 } },
+              React.createElement('i', { className: 'fas fa-search', style: { color: accent, marginRight: 10 } }),
+              'Keyword Research'
+            ),
+            React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, marginTop: 4 } }, 'Discover keyword opportunities via DataForSEO')
+          ),
+          totalCost > 0 && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', background: 'var(--card)', padding: '6px 12px', borderRadius: 6 } },
+            'API cost: $', totalCost.toFixed(4)
+          )
+        ),
+
+        // Location selector
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 } },
+          React.createElement('label', { style: { fontSize: 12, fontWeight: 600, color: 'var(--text3)' } }, 'LOCATION'),
+          React.createElement('select', {
+            value: locationCode,
+            onChange: (e) => setLocationCode(parseInt(e.target.value)),
+            style: { padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }
+          }, locations.map(l => React.createElement('option', { key: l.code, value: l.code }, l.label)))
+        ),
+
+        // Tabs
+        React.createElement('div', { style: { display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0 } },
+          tabs.map(t => React.createElement('button', {
+            key: t.id,
+            onClick: () => { setTab(t.id); setResults([]); setSelected(new Set()); setSelectAll(false); },
+            style: { padding: '10px 18px', fontSize: 13, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? accent : 'var(--text3)', background: 'none', border: 'none', borderBottom: tab === t.id ? `2px solid ${accent}` : '2px solid transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: -1 }
+          }, React.createElement('i', { className: t.icon, style: { fontSize: 12 } }), t.label))
+        ),
+
+        // Input area
+        tab === 'volume' ?
+          React.createElement('div', { style: { marginBottom: 16 } },
+            React.createElement('textarea', {
+              value: bulkText,
+              onChange: (e) => setBulkText(e.target.value),
+              placeholder: 'Enter keywords, one per line (max 700)...',
+              rows: 5,
+              style: { width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', fontSize: 14, resize: 'vertical', fontFamily: 'inherit' }
+            }),
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 } },
+              React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)' } }, (bulkText.split('\n').filter(Boolean).length) + ' keywords'),
+              React.createElement('button', {
+                onClick: () => runSearch('volume'),
+                disabled: loading || !bulkText.trim(),
+                style: { padding: '10px 24px', borderRadius: 8, border: 'none', background: accent, color: '#fff', fontSize: 14, fontWeight: 700, cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.6 : 1 }
+              }, loading ? 'Checking...' : 'Get Volume')
+            )
+          )
+        :
+          React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+            React.createElement('input', {
+              type: 'text',
+              value: seed,
+              onChange: (e) => setSeed(e.target.value),
+              onKeyDown: (e) => e.key === 'Enter' && runSearch(),
+              placeholder: 'Enter seed keyword...',
+              style: { flex: 1, padding: '12px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', fontSize: 15, fontFamily: 'inherit' }
+            }),
+            React.createElement('button', {
+              onClick: () => runSearch(),
+              disabled: loading || !seed.trim(),
+              style: { padding: '12px 28px', borderRadius: 8, border: 'none', background: accent, color: '#fff', fontSize: 14, fontWeight: 700, cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.6 : 1, whiteSpace: 'nowrap' }
+            }, loading ? 'Searching...' : 'Research')
+          ),
+
+        // Export bar
+        results.length > 0 && React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '8px 12px', background: 'var(--card)', borderRadius: 8 } },
+          React.createElement('span', { style: { fontSize: 13, color: 'var(--text3)' } }, selected.size + ' selected'),
+          React.createElement('select', {
+            value: exportProject,
+            onChange: (e) => setExportProject(e.target.value),
+            style: { padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 12 }
+          },
+            React.createElement('option', { value: '' }, 'Export to project...'),
+            (allProjects || []).map(p => React.createElement('option', { key: p.id, value: p.id }, p.business_name || p.name))
+          ),
+          React.createElement('button', {
+            onClick: handleExport,
+            disabled: !exportProject || selected.size === 0,
+            style: { padding: '6px 16px', borderRadius: 6, border: 'none', background: selected.size > 0 && exportProject ? '#22c55e' : 'var(--border)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }
+          }, 'Export to Rank Tracking'),
+          exportMsg && React.createElement('span', { style: { fontSize: 12, color: '#22c55e', fontWeight: 600 } }, exportMsg),
+          React.createElement('span', { style: { marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' } }, results.length + ' keywords')
+        ),
+
+        // Results table
+        loading ? React.createElement('div', { style: { textAlign: 'center', padding: 60, color: 'var(--text3)' } },
+          React.createElement('span', { className: 'spinner', style: { width: 24, height: 24, marginBottom: 12, display: 'inline-block' } }),
+          React.createElement('div', null, 'Researching keywords...')
+        ) :
+        results.length > 0 ? React.createElement('div', { style: { overflowX: 'auto' } },
+          React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+            React.createElement('thead', null,
+              React.createElement('tr', { style: { borderBottom: '1px solid var(--border)' } },
+                React.createElement('th', { style: { padding: '10px 8px', width: 36 } },
+                  React.createElement('input', { type: 'checkbox', checked: selectAll, onChange: toggleAll })
+                ),
+                colHeader('Keyword', 'keyword'),
+                colHeader('Volume', 'volume'),
+                colHeader('CPC', 'cpc'),
+                colHeader('Competition', 'competition'),
+                React.createElement('th', { style: { padding: '10px 12px', textAlign: 'center', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text3)' } }, 'SERP')
+              )
+            ),
+            React.createElement('tbody', null,
+              sorted.map((kw, i) => {
+                const origIdx = results.indexOf(kw);
+                return React.createElement('tr', {
+                  key: i,
+                  style: { borderBottom: '1px solid var(--border)', background: selected.has(origIdx) ? 'rgba(6,182,212,0.05)' : 'transparent' }
+                },
+                  React.createElement('td', { style: { padding: '8px', textAlign: 'center' } },
+                    React.createElement('input', { type: 'checkbox', checked: selected.has(origIdx), onChange: () => toggleSelect(origIdx) })
+                  ),
+                  React.createElement('td', { style: { padding: '8px 12px', fontWeight: 600, color: 'var(--text)', fontSize: 14 } }, kw.keyword),
+                  React.createElement('td', { style: { padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: (kw.volume || 0) >= 1000 ? '#22c55e' : (kw.volume || 0) >= 100 ? '#eab308' : 'var(--text3)', fontSize: 14 } },
+                    (kw.volume || 0).toLocaleString()
+                  ),
+                  React.createElement('td', { style: { padding: '8px 12px', textAlign: 'right', color: 'var(--text3)', fontSize: 13 } },
+                    '$' + (kw.cpc || 0).toFixed(2)
+                  ),
+                  React.createElement('td', { style: { padding: '8px 12px', textAlign: 'right' } },
+                    React.createElement('span', { style: {
+                      fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+                      background: (kw.competition || 0) > 0.66 ? 'rgba(239,68,68,0.15)' : (kw.competition || 0) > 0.33 ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)',
+                      color: (kw.competition || 0) > 0.66 ? '#ef4444' : (kw.competition || 0) > 0.33 ? '#eab308' : '#22c55e'
+                    } }, kw.competition_level || ((kw.competition || 0) > 0.66 ? 'High' : (kw.competition || 0) > 0.33 ? 'Medium' : 'Low'))
+                  ),
+                  React.createElement('td', { style: { padding: '8px 12px', textAlign: 'center' } },
+                    React.createElement('button', {
+                      onClick: () => openSerp(kw.keyword),
+                      style: { background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 10px', color: accent, cursor: 'pointer', fontSize: 11, fontWeight: 600 }
+                    }, React.createElement('i', { className: 'fas fa-eye', style: { fontSize: 10, marginRight: 4 } }), 'SERP')
+                  )
+                );
+              })
+            )
+          )
+        ) :
+        !loading && React.createElement('div', { style: { textAlign: 'center', padding: 80, color: 'var(--text3)' } },
+          React.createElement('i', { className: 'fas fa-search', style: { fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.2 } }),
+          React.createElement('div', { style: { fontSize: 15, fontWeight: 600, marginBottom: 4 } }, tab === 'volume' ? 'Paste keywords to check volume' : 'Enter a seed keyword to start'),
+          React.createElement('div', { style: { fontSize: 13 } }, 'Results powered by DataForSEO')
+        ),
+
+        // SERP overlay
+        serpKeyword && React.createElement('div', {
+          style: { position: 'fixed', top: 0, right: 0, width: 420, height: '100vh', background: 'var(--card)', borderLeft: '1px solid var(--border)', zIndex: 1000, overflowY: 'auto', padding: '24px', boxShadow: '-4px 0 20px rgba(0,0,0,0.3)' }
+        },
+          React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 } },
+            React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', margin: 0 } }, 'SERP: ', serpKeyword),
+            React.createElement('button', {
+              onClick: () => { setSerpKeyword(null); setSerpData(null); },
+              style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }
+            }, '✕')
+          ),
+          serpLoading ? React.createElement('div', { style: { textAlign: 'center', padding: 40 } },
+            React.createElement('span', { className: 'spinner', style: { width: 20, height: 20, display: 'inline-block' } })
+          ) :
+          serpData && React.createElement('div', null,
+            // Feature badges
+            React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' } },
+              serpData.localPack && React.createElement('span', { style: { fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 4, background: 'rgba(34,197,94,0.15)', color: '#22c55e' } }, 'Local Pack'),
+              serpData.featuredSnippet && React.createElement('span', { style: { fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 4, background: 'rgba(234,179,8,0.15)', color: '#eab308' } }, 'Featured Snippet'),
+              React.createElement('span', { style: { fontSize: 11, padding: '4px 10px', borderRadius: 4, background: 'var(--bg)', color: 'var(--text3)' } }, (serpData.totalResults || 0).toLocaleString() + ' results')
+            ),
+            // People Also Ask
+            serpData.peopleAlsoAsk?.length > 0 && React.createElement('div', { style: { marginBottom: 16 } },
+              React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 } }, 'People Also Ask'),
+              serpData.peopleAlsoAsk.slice(0, 6).map((q, i) => React.createElement('div', { key: i, style: { fontSize: 13, color: 'var(--text2)', padding: '6px 0', borderBottom: '1px solid var(--border)' } },
+                React.createElement('i', { className: 'fas fa-question-circle', style: { color: accent, marginRight: 6, fontSize: 11 } }), q
+              ))
+            ),
+            // Organic results
+            React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 } }, 'Organic Results'),
+            (serpData.organic || []).map((r, i) => React.createElement('div', { key: i, style: { padding: '10px 0', borderBottom: '1px solid var(--border)' } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                React.createElement('span', { style: { fontSize: 11, fontWeight: 700, color: accent, minWidth: 20 } }, '#' + r.position),
+                React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)' } }, r.domain)
+              ),
+              React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)', marginTop: 2 } }, r.title),
+              r.description && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 } }, (r.description || '').slice(0, 150) + '...')
+            ))
+          )
+        )
+      );
+    }
+
     // ============ SEO MIGRATION WIZARD ============
     function SEOMigrationPage() {
       var [migrations, setMigrations] = React.useState([]);
@@ -31154,7 +31459,7 @@
       }
 
       // Show loading during project switch (project briefly set to null) — except standalone pages
-      if (!project && activeTab !== 'nw-migration') {
+      if (!project && activeTab !== 'nw-migration' && activeTab !== 'kw-research') {
         return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span><span style={{ marginLeft: 12, color: 'var(--text-secondary)' }}>Loading project...</span></div>;
       }
 
@@ -31225,6 +31530,8 @@ case 'action-plan':
             return <NewWebsitePipelinePage stage="publish" project={buildMode ? buildProject : project} />;
           case 'nw-migration':
             return <SEOMigrationPage />;
+          case 'kw-research':
+            return <KeywordResearchStandalonePage allProjects={allProjects} />;
           case 'ow-project':
           case 'ow-sitemap':
             return <OptimiseWebsitePage project={project} view="sitemap" setPage={setActiveTab} />;
@@ -31357,7 +31664,14 @@ case 'action-plan':
                 <i className="fas fa-rocket"></i>
                 <span>SEO Room</span>
               </div>
-              {activeTab === 'nw-migration' ? (
+              {activeTab === 'kw-research' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button onClick={() => { setActiveTab('gbp-audit'); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', padding: '2px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <i className="fas fa-arrow-left" style={{ fontSize: 11 }}></i> Projects
+                  </button>
+                  <span style={{ fontSize: 12, color: '#06b6d4', fontWeight: 700 }}>Keyword Research</span>
+                </div>
+              ) : activeTab === 'nw-migration' ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <button onClick={() => { setActiveTab('gbp-audit'); }} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', padding: '2px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
                     <i className="fas fa-arrow-left" style={{ fontSize: 11 }}></i> Projects
@@ -31378,6 +31692,9 @@ case 'action-plan':
                   </button>
                   <button onClick={() => { setActiveTab('nw-migration'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: '1px dashed var(--border)', background: 'transparent', color: '#f97316', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                     <i className="fas fa-exchange-alt" style={{ fontSize: 13 }}></i> SEO Migration
+                  </button>
+                  <button onClick={() => { setActiveTab('kw-research'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: '1px dashed var(--border)', background: 'transparent', color: '#06b6d4', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                    <i className="fas fa-search" style={{ fontSize: 13 }}></i> Keyword Research
                   </button>
                   {allProjects.length > 1 ? (
                     <select
@@ -31400,7 +31717,15 @@ case 'action-plan':
             </div>
 
             <div className="sidebar-content">
-              {activeTab === 'nw-migration' ? (
+              {activeTab === 'kw-research' ? (
+                <div style={{ padding: '12px 16px' }}>
+                  <div style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: '#06b6d4', marginBottom: 12, textTransform: 'uppercase' }}>Keyword Research</div>
+                  <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>
+                    <i className="fas fa-info-circle" style={{ marginRight: 6, opacity: 0.5 }}></i>
+                    Discover keyword opportunities. Export to any project.
+                  </div>
+                </div>
+              ) : activeTab === 'nw-migration' ? (
                 <div style={{ padding: '12px 16px' }}>
                   <div style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: '#f97316', marginBottom: 12, textTransform: 'uppercase' }}>Migration</div>
                   <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>
@@ -31594,7 +31919,7 @@ case 'action-plan':
                   <i className="fas fa-bars"></i>
                 </button>
                 <div>
-                  <div className="topbar-title">{activeTab === 'nw-migration' ? 'SEO Migration' : buildMode ? (activeBuild?.name || 'New Website Builds') : (project?.name || 'SEO Room')}</div>
+                  <div className="topbar-title">{activeTab === 'kw-research' ? 'Keyword Research' : activeTab === 'nw-migration' ? 'SEO Migration' : buildMode ? (activeBuild?.name || 'New Website Builds') : (project?.name || 'SEO Room')}</div>
                   <div className="topbar-domain">{activeTab === 'nw-migration' ? 'Migrate old site → new site without losing SEO' : buildMode ? (activeBuild?.domain || 'Build mode') : (project?.domain || 'No project selected')}</div>
                 </div>
               </div>
