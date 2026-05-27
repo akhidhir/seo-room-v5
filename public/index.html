@@ -7796,6 +7796,180 @@
       );
     }
 
+    // ============ WEBSITE SECURITY AUDIT PAGE ============
+    function SecurityAuditPage({ project }) {
+      const e = React.createElement;
+      const [audit, setAudit] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [polling, setPolling] = useState(false);
+
+      const loadLatest = async () => {
+        if (!project?.id) return;
+        const data = await api(`/projects/${project.id}/security-audit/latest`);
+        if (data && data.status === 'completed' && data.data) {
+          setAudit(typeof data.data === 'string' ? JSON.parse(data.data) : data.data);
+          setLoading(false);
+          setPolling(false);
+        } else if (data && data.status === 'running') {
+          setPolling(true);
+          setLoading(true);
+          setTimeout(loadLatest, 3000);
+        } else {
+          setAudit(null);
+          setLoading(false);
+        }
+      };
+
+      useEffect(() => { loadLatest(); }, [project?.id]);
+
+      const runAudit = async () => {
+        setLoading(true);
+        setPolling(true);
+        setAudit(null);
+        try {
+          await api(`/projects/${project.id}/security-audit/run`, { method: 'POST' });
+          setTimeout(loadLatest, 2000);
+        } catch (err) {
+          alert('Security audit failed: ' + err.message);
+          setLoading(false);
+          setPolling(false);
+        }
+      };
+
+      const categories = [
+        { id: 'access', label: 'Access Control', icon: 'fas fa-lock', color: '#ef4444' },
+        { id: 'headers', label: 'Security Headers', icon: 'fas fa-shield-halved', color: '#6366f1' },
+        { id: 'ssl', label: 'SSL / HTTPS', icon: 'fas fa-lock', color: '#22c55e' },
+        { id: 'malware', label: 'Malware & Spam', icon: 'fas fa-virus', color: '#f59e0b' },
+        { id: 'plugins', label: 'Plugins', icon: 'fas fa-puzzle-piece', color: '#8b5cf6' },
+        { id: 'config', label: 'Configuration', icon: 'fas fa-gear', color: '#06b6d4' },
+      ];
+
+      const statusConfig = {
+        pass: { label: 'PASS', bg: 'rgba(34,197,94,0.15)', fg: '#22c55e', icon: 'fas fa-check-circle' },
+        fail: { label: 'FAIL', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444', icon: 'fas fa-times-circle' },
+        warning: { label: 'WARN', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
+        error: { label: 'ERROR', bg: 'rgba(107,114,128,0.15)', fg: '#6b7280', icon: 'fas fa-question-circle' },
+        info: { label: 'INFO', bg: 'rgba(99,102,241,0.15)', fg: '#818cf8', icon: 'fas fa-info-circle' },
+      };
+
+      const severityConfig = {
+        critical: { label: 'Critical', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444' },
+        high: { label: 'High', bg: 'rgba(249,115,22,0.15)', fg: '#f97316' },
+        medium: { label: 'Medium', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b' },
+        low: { label: 'Low', bg: 'rgba(107,114,128,0.15)', fg: '#9ca3af' },
+        none: { label: '', bg: 'transparent', fg: 'transparent' },
+      };
+
+      const checks = audit?.checks || [];
+      const summary = audit?.summary || {};
+
+      // Score ring color
+      const scoreColor = summary.score >= 80 ? '#22c55e' : summary.score >= 50 ? '#f59e0b' : '#ef4444';
+
+      return e('div', null,
+        // Header
+        e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
+          e('div', null,
+            e('h2', { style: { margin: 0, fontSize: 22 } },
+              e('i', { className: 'fas fa-shield-halved', style: { marginRight: 10, color: '#ef4444' } }),
+              'Website Security Audit'
+            ),
+            e('div', { style: { fontSize: 14, color: 'var(--text3)', marginTop: 4 } }, 'Check your WordPress site for vulnerabilities, exposed files, and security misconfigurations')
+          ),
+          e('button', { className: 'btn btn-primary', onClick: runAudit, disabled: loading, style: { fontSize: 14, padding: '10px 24px' } },
+            loading ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Scanning...') :
+            e('span', null, e('i', { className: 'fas fa-shield-halved', style: { marginRight: 6 } }), audit ? 'Re-scan' : 'Run Security Audit')
+          )
+        ),
+
+        // Loading state
+        loading && !audit && e('div', { style: { textAlign: 'center', padding: 80 } },
+          e('i', { className: 'fas fa-shield-halved fa-beat', style: { fontSize: 64, color: '#ef4444', marginBottom: 20, display: 'block' } }),
+          e('div', { style: { fontSize: 20, fontWeight: 600, color: 'var(--text1)', marginBottom: 8 } }, 'Running Security Audit...'),
+          e('div', { style: { fontSize: 14, color: 'var(--text3)' } }, 'Checking WordPress, headers, SSL, sitemap, and more. This takes about 30 seconds.')
+        ),
+
+        // Empty state
+        !loading && !audit && e('div', { style: { textAlign: 'center', padding: 80, color: 'var(--text3)' } },
+          e('i', { className: 'fas fa-shield-halved', style: { fontSize: 80, marginBottom: 20, display: 'block', opacity: 0.3 } }),
+          e('div', { style: { fontSize: 24, fontWeight: 700, marginBottom: 8 } }, 'No Security Audit Yet'),
+          e('div', { style: { fontSize: 14, opacity: 0.7, marginBottom: 20 } }, 'Run a security audit to check for vulnerabilities and misconfigurations.'),
+          e('button', { className: 'btn btn-primary', onClick: runAudit, style: { fontSize: 16, padding: '12px 28px' } },
+            e('i', { className: 'fas fa-shield-halved', style: { marginRight: 8 } }), 'Run Security Audit'
+          )
+        ),
+
+        // Results
+        audit && e('div', null,
+          // Summary cards
+          e('div', { style: { display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' } },
+            // Score circle
+            e('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 28px', display: 'flex', alignItems: 'center', gap: 16, minWidth: 200 } },
+              e('div', { style: { width: 64, height: 64, borderRadius: '50%', border: `4px solid ${scoreColor}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 700, color: scoreColor } }, summary.score || 0),
+              e('div', null,
+                e('div', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '0.5px' } }, 'Security Score'),
+                e('div', { style: { fontSize: 13, color: 'var(--text2)', marginTop: 2 } }, `${summary.pass || 0} of ${summary.total || 0} checks passed`)
+              )
+            ),
+            // Stat cards
+            e('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 20px', flex: 1, minWidth: 100 } },
+              e('div', { style: { fontSize: 28, fontWeight: 700, color: '#22c55e' } }, summary.pass || 0),
+              e('div', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)' } }, 'Passed')
+            ),
+            e('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 20px', flex: 1, minWidth: 100 } },
+              e('div', { style: { fontSize: 28, fontWeight: 700, color: '#ef4444' } }, summary.fail || 0),
+              e('div', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)' } }, 'Failed')
+            ),
+            e('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 20px', flex: 1, minWidth: 100 } },
+              e('div', { style: { fontSize: 28, fontWeight: 700, color: '#f59e0b' } }, summary.warning || 0),
+              e('div', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text3)' } }, 'Warnings')
+            ),
+            summary.critical > 0 && e('div', { style: { background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 12, padding: '16px 20px', flex: 1, minWidth: 100 } },
+              e('div', { style: { fontSize: 28, fontWeight: 700, color: '#ef4444' } }, summary.critical),
+              e('div', { style: { fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: '#ef4444' } }, 'Critical Issues')
+            )
+          ),
+
+          // Checks by category
+          categories.map(cat => {
+            const catChecks = checks.filter(c => c.category === cat.id);
+            if (catChecks.length === 0) return null;
+            const hasFails = catChecks.some(c => c.status === 'fail');
+            const hasWarnings = catChecks.some(c => c.status === 'warning');
+            return e('div', { key: cat.id, style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, marginBottom: 16, overflow: 'hidden' } },
+              // Category header
+              e('div', { style: { padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 } },
+                e('i', { className: cat.icon, style: { color: cat.color, fontSize: 16 } }),
+                e('span', { style: { fontWeight: 700, fontSize: 15 } }, cat.label),
+                hasFails && e('span', { style: { background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, marginLeft: 8 } }, 'ISSUES FOUND'),
+                !hasFails && hasWarnings && e('span', { style: { background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, marginLeft: 8 } }, 'WARNINGS'),
+                !hasFails && !hasWarnings && e('span', { style: { background: 'rgba(34,197,94,0.15)', color: '#22c55e', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, marginLeft: 8 } }, 'ALL CLEAR')
+              ),
+              // Checks list
+              catChecks.map((check, ci) => {
+                const sc = statusConfig[check.status] || statusConfig.error;
+                const sev = severityConfig[check.severity] || severityConfig.none;
+                return e('div', { key: check.id || ci, style: { padding: '12px 20px', borderBottom: ci < catChecks.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', flexDirection: 'column', gap: 6 } },
+                  e('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                    e('i', { className: sc.icon, style: { color: sc.fg, fontSize: 16, width: 20, textAlign: 'center' } }),
+                    e('span', { style: { fontWeight: 600, fontSize: 14, flex: 1 } }, check.name),
+                    e('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg } }, sc.label),
+                    check.severity !== 'none' && e('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 600, background: sev.bg, color: sev.fg, marginLeft: 4 } }, sev.label)
+                  ),
+                  e('div', { style: { fontSize: 13, color: 'var(--text3)', paddingLeft: 30, lineHeight: 1.5 } }, check.details),
+                  check.fix && e('div', { style: { fontSize: 12, color: '#22c55e', paddingLeft: 30, marginTop: 2, lineHeight: 1.5, background: 'rgba(34,197,94,0.05)', padding: '8px 12px 8px 30px', borderRadius: 6 } },
+                    e('i', { className: 'fas fa-lightbulb', style: { marginRight: 6, color: '#22c55e' } }),
+                    check.fix
+                  )
+                );
+              })
+            );
+          })
+        )
+      );
+    }
+
     // ============ SPEED & IMAGES PAGE (standalone, moved from Technical Audit) ============
     const _speedCache = {};
     function SpeedAuditPage({ project }) {
@@ -31585,6 +31759,8 @@
             return <RedirectsPage project={project} />;
           case 'internal-linking':
             return <InternalLinkingPage project={project} />;
+          case 'security-audit':
+            return <SecurityAuditPage project={project} />;
           case 'handshake':
             return <PlayersHandshakePage project={project} />;
 case 'action-plan':
@@ -31683,6 +31859,7 @@ case 'action-plan':
             { id: 'redirects', label: '404s & Redirects', icon: 'fas fa-directions' },
             { id: 'internal-linking', label: 'Internal Linking', icon: 'fas fa-link' },
           ] },
+          { id: 'security-audit', label: 'Security Audit', icon: 'fas fa-shield-halved' },
         ]},
         { section: 'BACKLINKS', items: [
           { id: 'backlinks', label: 'Backlinks', icon: 'fas fa-external-link-alt' },
@@ -31991,7 +32168,7 @@ case 'action-plan':
                   <i className="fas fa-bars"></i>
                 </button>
                 <div>
-                  <div className="topbar-title">{activeTab === 'kw-research' ? 'Keyword Research' : activeTab === 'nw-migration' ? 'SEO Migration' : buildMode ? (activeBuild?.name || 'New Website Builds') : (project?.name || 'SEO Room')}</div>
+                  <div className="topbar-title">{activeTab === 'kw-research' ? 'Keyword Research' : activeTab === 'nw-migration' ? 'SEO Migration' : activeTab === 'security-audit' ? 'Website Security Audit' : buildMode ? (activeBuild?.name || 'New Website Builds') : (project?.name || 'SEO Room')}</div>
                   <div className="topbar-domain">{activeTab === 'nw-migration' ? 'Migrate old site → new site without losing SEO' : buildMode ? (activeBuild?.domain || 'Build mode') : (project?.domain || 'No project selected')}</div>
                 </div>
               </div>

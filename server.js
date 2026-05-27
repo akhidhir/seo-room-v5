@@ -1257,6 +1257,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/^\/api\/connector-push\//)) return next();
   // Allow RC grid sync (called by scheduled automation)
   if (req.path.match(/\/api\/projects\/\d+\/rc-grid-sync$/)) return next();
+  // Allow RC sync (called by scheduled automation)
+  if (req.path.match(/\/api\/projects\/\d+\/rc-sync$/)) return next();
   // Allow plugin-verify (WP plugin uses connection code, not JWT)
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
@@ -36430,6 +36432,434 @@ app.post('/api/keyword-research/export', async (req, res) => {
       } catch (e) { /* skip dupes */ }
     }
     res.json({ ok: true, added });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== WEBSITE SECURITY AUDIT ====================
+
+// GET: latest security audit
+app.get('/api/projects/:projectId/security-audit/latest', async (req, res) => {
+  try {
+    const row = (await pool.query(
+      `SELECT * FROM audits WHERE project_id=$1 AND pillar='security' ORDER BY created_at DESC LIMIT 1`,
+      [req.params.projectId]
+    )).rows[0];
+    if (!row) return res.json({ status: 'none' });
+    res.json({ status: row.status, data: row.data, created_at: row.created_at, completed_at: row.completed_at, id: row.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: run security audit
+app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const siteUrl = `https://${domain}`;
+    const wpUrl = project.wp_url || siteUrl;
+    if (!domain) return res.status(400).json({ error: 'No domain configured' });
+
+    // Create audit record
+    const auditRow = (await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, data, created_at) VALUES ($1, 'security', 'running', '{}', NOW()) RETURNING id`,
+      [projectId]
+    )).rows[0];
+    const auditId = auditRow.id;
+
+    res.json({ status: 'running', audit_id: auditId });
+
+    // Run checks in background
+    (async () => {
+      const checks = [];
+      const axios = require('axios');
+
+      const addCheck = (id, name, category, status, severity, details, fix) => {
+        checks.push({ id, name, category, status, severity: status === 'pass' ? 'none' : severity, details, fix });
+      };
+
+      // Helper: fetch with timeout
+      const quickFetch = async (url, opts = {}) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+          const r = await fetch(url, { ...opts, signal: controller.signal, redirect: 'manual' });
+          clearTimeout(timeout);
+          return r;
+        } catch (e) {
+          clearTimeout(timeout);
+          throw e;
+        }
+      };
+
+      // ── 1. WordPress Users Check ──
+      try {
+        const usersResp = await quickFetch(`${wpUrl}/wp-json/wp/v2/users?per_page=100`);
+        if (usersResp.ok) {
+          const users = await usersResp.json();
+          // Check for suspicious users: recently created, generic names, admin roles exposed
+          const suspicious = users.filter(u => {
+            const name = (u.name || '').toLowerCase();
+            const slug = (u.slug || '').toLowerCase();
+            return /^(admin[0-9]*|test|user[0-9]*|wp[_-]?admin|support|editor[0-9]*|backup|temp|default)$/i.test(slug) ||
+                   name.includes('admin') && slug !== project.wp_username?.toLowerCase();
+          });
+          if (suspicious.length > 0) {
+            addCheck('wp_users', 'Suspicious WordPress Users', 'access', 'fail', 'critical',
+              `Found ${suspicious.length} suspicious user(s): ${suspicious.map(u => u.name + ' (' + u.slug + ')').join(', ')}`,
+              'Review these accounts in WordPress Admin → Users. Delete any you don\'t recognize. Change passwords for all admin accounts.'
+            );
+          } else {
+            addCheck('wp_users', 'WordPress Users', 'access', 'pass', 'none',
+              `${users.length} user(s) found, none suspicious`, null);
+          }
+          // Also check: is user enumeration exposed?
+          addCheck('wp_user_enum', 'User Enumeration Exposed', 'access',
+            users.length > 0 ? 'warning' : 'pass',
+            users.length > 0 ? 'medium' : 'none',
+            users.length > 0 ? `WP REST API exposes ${users.length} user account(s) publicly` : 'User enumeration is disabled',
+            users.length > 0 ? 'Install a security plugin (Wordfence, iThemes) to disable user enumeration via REST API, or add a filter to block /wp-json/wp/v2/users for unauthenticated requests.' : null
+          );
+        } else {
+          addCheck('wp_users', 'WordPress Users', 'access', 'pass', 'none',
+            'WP REST API users endpoint is blocked (good)', null);
+          addCheck('wp_user_enum', 'User Enumeration Exposed', 'access', 'pass', 'none',
+            'User enumeration is disabled', null);
+        }
+      } catch (e) {
+        addCheck('wp_users', 'WordPress Users', 'access', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── 2. Login Page Exposed ──
+      try {
+        const loginResp = await quickFetch(`${siteUrl}/wp-login.php`, { method: 'HEAD' });
+        const loginExposed = loginResp.status === 200 || loginResp.status === 302;
+        addCheck('wp_login', 'Login Page Accessible', 'access',
+          loginExposed ? 'warning' : 'pass',
+          loginExposed ? 'medium' : 'none',
+          loginExposed ? '/wp-login.php is publicly accessible' : 'Login page is hidden or protected',
+          loginExposed ? 'Consider hiding the login page with a plugin like WPS Hide Login, or restrict access by IP using .htaccess.' : null
+        );
+      } catch (e) {
+        addCheck('wp_login', 'Login Page Accessible', 'access', 'pass', 'none', 'Login page not accessible', null);
+      }
+
+      // ── 3. XML-RPC Exposed ──
+      try {
+        const xmlrpcResp = await quickFetch(`${siteUrl}/xmlrpc.php`, { method: 'POST',
+          headers: { 'Content-Type': 'text/xml' },
+          body: '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>'
+        });
+        const xmlrpcBody = await xmlrpcResp.text();
+        const xmlrpcActive = xmlrpcBody.includes('methodResponse') && xmlrpcBody.includes('system.listMethods');
+        addCheck('xmlrpc', 'XML-RPC Enabled', 'access',
+          xmlrpcActive ? 'fail' : 'pass',
+          xmlrpcActive ? 'high' : 'none',
+          xmlrpcActive ? 'XML-RPC is active and responding to method calls. This is a common brute-force attack vector.' : 'XML-RPC is disabled or blocked',
+          xmlrpcActive ? 'Disable XML-RPC via a security plugin (Wordfence, Disable XML-RPC), or block it in .htaccess: <Files xmlrpc.php> Require all denied </Files>' : null
+        );
+      } catch (e) {
+        addCheck('xmlrpc', 'XML-RPC Enabled', 'access', 'pass', 'none', 'XML-RPC not accessible', null);
+      }
+
+      // ── 4. Security Headers ──
+      try {
+        const headersResp = await quickFetch(siteUrl);
+        const h = {};
+        headersResp.headers.forEach((v, k) => { h[k.toLowerCase()] = v; });
+
+        const headerChecks = [
+          { key: 'x-frame-options', name: 'X-Frame-Options', severity: 'medium', fix: 'Add header to prevent clickjacking. In .htaccess: Header always set X-Frame-Options "SAMEORIGIN"' },
+          { key: 'x-content-type-options', name: 'X-Content-Type-Options', severity: 'medium', fix: 'Prevents MIME sniffing. Add: Header always set X-Content-Type-Options "nosniff"' },
+          { key: 'strict-transport-security', name: 'HSTS (Strict-Transport-Security)', severity: 'high', fix: 'Forces HTTPS. Add: Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"' },
+          { key: 'content-security-policy', name: 'Content-Security-Policy', severity: 'low', fix: 'Prevents XSS and injection. Complex to configure — start with report-only mode. A security plugin can help.' },
+          { key: 'referrer-policy', name: 'Referrer-Policy', severity: 'low', fix: 'Controls referrer info. Add: Header always set Referrer-Policy "strict-origin-when-cross-origin"' },
+          { key: 'permissions-policy', name: 'Permissions-Policy', severity: 'low', fix: 'Controls browser features. Add: Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"' },
+        ];
+
+        for (const hc of headerChecks) {
+          const present = !!h[hc.key];
+          addCheck('header_' + hc.key.replace(/-/g, '_'), hc.name, 'headers',
+            present ? 'pass' : 'warning',
+            present ? 'none' : hc.severity,
+            present ? `Present: ${h[hc.key]}` : `Missing ${hc.name} header`,
+            present ? null : hc.fix
+          );
+        }
+      } catch (e) {
+        addCheck('headers', 'Security Headers', 'headers', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── 5. HTTPS / SSL Check ──
+      try {
+        const httpsResp = await quickFetch(siteUrl);
+        const isHttps = siteUrl.startsWith('https');
+        addCheck('https', 'HTTPS Enabled', 'ssl', isHttps ? 'pass' : 'fail',
+          isHttps ? 'none' : 'critical',
+          isHttps ? 'Site is served over HTTPS' : 'Site is NOT using HTTPS',
+          isHttps ? null : 'Enable SSL certificate via your hosting provider. Most offer free Let\'s Encrypt certificates.'
+        );
+
+        // Check for mixed content by fetching homepage HTML
+        const htmlText = await httpsResp.text();
+        const mixedContent = (htmlText.match(/http:\/\/[^"'\s]+\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf)/gi) || []);
+        addCheck('mixed_content', 'Mixed Content', 'ssl',
+          mixedContent.length > 0 ? 'warning' : 'pass',
+          mixedContent.length > 0 ? 'medium' : 'none',
+          mixedContent.length > 0 ? `Found ${mixedContent.length} HTTP resource(s) on HTTPS page: ${mixedContent.slice(0, 3).join(', ')}${mixedContent.length > 3 ? '...' : ''}` : 'No mixed content detected on homepage',
+          mixedContent.length > 0 ? 'Replace all http:// URLs with https:// or use protocol-relative URLs. Run search-replace in WordPress database.' : null
+        );
+      } catch (e) {
+        addCheck('https', 'HTTPS Enabled', 'ssl', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── 6. Sitemap Spam Check ──
+      try {
+        const sitemapResp = await quickFetch(`${siteUrl}/sitemap_index.xml`);
+        let sitemapUrls = [];
+        if (sitemapResp.ok) {
+          const sitemapXml = await sitemapResp.text();
+          // Extract sub-sitemaps
+          const subSitemaps = [...sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)].map(m => m[1]);
+          for (const sub of subSitemaps.slice(0, 5)) {
+            try {
+              const subResp = await quickFetch(sub);
+              if (subResp.ok) {
+                const subXml = await subResp.text();
+                const urls = [...subXml.matchAll(/<loc>(.*?)<\/loc>/g)].map(m => m[1]);
+                sitemapUrls.push(...urls);
+              }
+            } catch (e) { /* skip */ }
+          }
+        } else {
+          // Try single sitemap
+          const altResp = await quickFetch(`${siteUrl}/sitemap.xml`);
+          if (altResp.ok) {
+            const xml = await altResp.text();
+            sitemapUrls = [...xml.matchAll(/<loc>(.*?)<\/loc>/g)].map(m => m[1]);
+          }
+        }
+
+        // Check for spam patterns
+        const spamPatterns = /\/(speed-dating|dating|singles|casino|poker|slots|viagra|cialis|pharma|payday|loan|forex|bitcoin-trading|crypto-trading|adult|xxx|porn|escort|gambling|bet-|betting|weight-loss|diet-pill)/i;
+        const spamUrls = sitemapUrls.filter(u => spamPatterns.test(u));
+
+        if (spamUrls.length > 0) {
+          addCheck('sitemap_spam', 'Spam Pages in Sitemap', 'malware', 'fail', 'critical',
+            `Found ${spamUrls.length} suspicious URL(s) in sitemap: ${spamUrls.slice(0, 5).map(u => u.replace(siteUrl, '')).join(', ')}${spamUrls.length > 5 ? '...' : ''}`,
+            'Remove these URLs from your sitemap immediately. Check for injected sitemap files or hacked pages. Regenerate your sitemap using Yoast or Rank Math.'
+          );
+        } else {
+          addCheck('sitemap_spam', 'Spam Pages in Sitemap', 'malware', 'pass', 'none',
+            `Checked ${sitemapUrls.length} URLs in sitemap — no spam detected`, null);
+        }
+      } catch (e) {
+        addCheck('sitemap_spam', 'Spam Pages in Sitemap', 'malware', 'error', 'low', 'Could not check sitemap: ' + e.message, null);
+      }
+
+      // ── 7. Check Spam 404 URLs Still Live ──
+      try {
+        // Get 404s from the plugin table
+        const fourRes = await pool.query(
+          `SELECT url FROM redirect_404s WHERE project_id=$1 ORDER BY hit_count DESC LIMIT 50`,
+          [projectId]
+        ).catch(() => ({ rows: [] }));
+
+        const spamPatterns = /\/(speed-dating|dating|singles|casino|poker|slots|viagra|cialis|pharma|payday|loan|forex|bitcoin|adult|xxx|porn|escort|gambling|weight-loss|diet-pill)/i;
+        const spam404s = fourRes.rows.filter(r => spamPatterns.test(r.url || ''));
+
+        if (spam404s.length > 0) {
+          // Check if any are still serving content (not 404/410)
+          let stillLive = [];
+          for (const row of spam404s.slice(0, 10)) {
+            try {
+              const fullUrl = (row.url || '').startsWith('http') ? row.url : siteUrl + row.url;
+              const resp = await quickFetch(fullUrl, { method: 'HEAD' });
+              if (resp.status >= 200 && resp.status < 400) {
+                stillLive.push(row.url);
+              }
+            } catch (e) { /* timeout = not live */ }
+          }
+
+          if (stillLive.length > 0) {
+            addCheck('spam_pages_live', 'Spam Pages Still Live', 'malware', 'fail', 'critical',
+              `${stillLive.length} spam page(s) are still serving content (not 404): ${stillLive.slice(0, 5).join(', ')}`,
+              'These pages are still accessible! Check for injected files or database entries. Delete the pages and set up 410 responses.'
+            );
+          } else {
+            addCheck('spam_pages_live', 'Spam Pages Status', 'malware', spam404s.length > 0 ? 'warning' : 'pass',
+              spam404s.length > 0 ? 'medium' : 'none',
+              spam404s.length > 0 ? `${spam404s.length} spam URLs in 404 log (all returning 404 — cleanup needed in Google index)` : 'No spam URLs detected in 404 log',
+              spam404s.length > 0 ? 'Set up 410 Gone responses for these URLs and submit removal requests in Google Search Console.' : null
+            );
+          }
+        } else {
+          addCheck('spam_pages_live', 'Spam Pages Status', 'malware', 'pass', 'none', 'No spam URLs detected in 404 log', null);
+        }
+      } catch (e) {
+        addCheck('spam_pages_live', 'Spam Pages Status', 'malware', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── 8. WordPress Plugins Check ──
+      try {
+        const authHeaders = project.wp_username && project.wp_app_password ? {
+          'Authorization': 'Basic ' + Buffer.from(project.wp_username + ':' + project.wp_app_password).toString('base64')
+        } : {};
+        const pluginsResp = await quickFetch(`${wpUrl}/wp-json/wp/v2/plugins`, { headers: authHeaders });
+        if (pluginsResp.ok) {
+          const plugins = await pluginsResp.json();
+          const inactive = plugins.filter(p => p.status === 'inactive');
+          const total = plugins.length;
+
+          // Check for known risky plugins
+          const riskyPatterns = /^(hello-dolly|akismet|really-simple-ssl|wordfence|sucuri|ithemes-security|all-in-one-wp-migration|duplicator|file-manager|wpfile-manager|wp-file-manager)/i;
+          const fileManagers = plugins.filter(p => /file.?manager/i.test(p.plugin || p.name || ''));
+
+          if (fileManagers.length > 0) {
+            addCheck('wp_plugins_filemanager', 'File Manager Plugin Detected', 'plugins', 'fail', 'critical',
+              `File manager plugin(s) found: ${fileManagers.map(p => p.name || p.plugin).join(', ')}. These are major security risks.`,
+              'Remove all file manager plugins immediately. Use SFTP/SSH for file management instead.'
+            );
+          }
+
+          if (inactive.length > 0) {
+            addCheck('wp_plugins_inactive', 'Inactive Plugins', 'plugins', 'warning', 'medium',
+              `${inactive.length} inactive plugin(s) found: ${inactive.map(p => p.name || p.plugin).join(', ')}`,
+              'Delete inactive plugins — they can still be exploited even when deactivated.'
+            );
+          }
+
+          addCheck('wp_plugins_count', 'WordPress Plugins', 'plugins',
+            total > 20 ? 'warning' : 'pass',
+            total > 20 ? 'low' : 'none',
+            `${total} plugin(s) installed, ${total - inactive.length} active`,
+            total > 20 ? 'Consider reducing plugin count. Each plugin is a potential attack surface.' : null
+          );
+        } else if (pluginsResp.status === 401) {
+          addCheck('wp_plugins_count', 'WordPress Plugins', 'plugins', 'info', 'none',
+            'Plugin list requires authentication — add WordPress credentials in Project Settings to enable this check', null);
+        } else {
+          addCheck('wp_plugins_count', 'WordPress Plugins', 'plugins', 'info', 'none',
+            'Could not access plugins endpoint (may require authentication)', null);
+        }
+      } catch (e) {
+        addCheck('wp_plugins_count', 'WordPress Plugins', 'plugins', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── 9. WP Debug / File Editor Check ──
+      try {
+        // Check if debug log is accessible
+        const debugResp = await quickFetch(`${siteUrl}/wp-content/debug.log`, { method: 'HEAD' });
+        if (debugResp.status === 200) {
+          addCheck('wp_debug_log', 'Debug Log Exposed', 'config', 'fail', 'high',
+            'wp-content/debug.log is publicly accessible. This can expose sensitive information.',
+            'Add to .htaccess: <Files debug.log> Require all denied </Files>. Also set WP_DEBUG_LOG to false in wp-config.php on production.'
+          );
+        } else {
+          addCheck('wp_debug_log', 'Debug Log Exposed', 'config', 'pass', 'none', 'Debug log is not publicly accessible', null);
+        }
+      } catch (e) {
+        addCheck('wp_debug_log', 'Debug Log Exposed', 'config', 'pass', 'none', 'Debug log not accessible', null);
+      }
+
+      // ── 10. Directory Listing Check ──
+      try {
+        const dirsToCheck = ['/wp-content/uploads/', '/wp-content/plugins/', '/wp-includes/'];
+        let dirListed = [];
+        for (const dir of dirsToCheck) {
+          try {
+            const dirResp = await quickFetch(siteUrl + dir);
+            if (dirResp.ok) {
+              const html = await dirResp.text();
+              if (html.includes('Index of') || html.includes('Directory listing') || html.includes('<title>Index of')) {
+                dirListed.push(dir);
+              }
+            }
+          } catch (e) { /* skip */ }
+        }
+        addCheck('dir_listing', 'Directory Listing', 'config',
+          dirListed.length > 0 ? 'fail' : 'pass',
+          dirListed.length > 0 ? 'high' : 'none',
+          dirListed.length > 0 ? `Directory listing enabled for: ${dirListed.join(', ')}` : 'Directory listing is disabled',
+          dirListed.length > 0 ? 'Add to .htaccess: Options -Indexes' : null
+        );
+      } catch (e) {
+        addCheck('dir_listing', 'Directory Listing', 'config', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── 11. Google Safe Browsing Check ──
+      try {
+        const GOOGLE_KEY = process.env.PAGESPEED_API_KEY || process.env.GOOGLE_API_KEY;
+        if (GOOGLE_KEY) {
+          const sbResp = await quickFetch('https://safebrowsing.googleapis.com/v4/threatMatches:find?key=' + GOOGLE_KEY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client: { clientId: 'seoroom', clientVersion: '1.0' },
+              threatInfo: {
+                threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE', 'POTENTIALLY_HARMFUL_APPLICATION'],
+                platformTypes: ['ANY_PLATFORM'],
+                threatEntryTypes: ['URL'],
+                threatEntries: [{ url: siteUrl }, { url: siteUrl + '/' }]
+              }
+            })
+          });
+          if (sbResp.ok) {
+            const sbData = await sbResp.json();
+            if (sbData.matches && sbData.matches.length > 0) {
+              addCheck('safe_browsing', 'Google Safe Browsing', 'malware', 'fail', 'critical',
+                `Site is flagged by Google Safe Browsing: ${sbData.matches.map(m => m.threatType).join(', ')}`,
+                'Your site is flagged as dangerous by Google. This severely impacts traffic and trust. Clean the site immediately and submit a review request via Google Search Console → Security Issues.'
+              );
+            } else {
+              addCheck('safe_browsing', 'Google Safe Browsing', 'malware', 'pass', 'none', 'Site is not flagged by Google Safe Browsing', null);
+            }
+          }
+        } else {
+          addCheck('safe_browsing', 'Google Safe Browsing', 'malware', 'info', 'none', 'No Google API key configured — skipped', null);
+        }
+      } catch (e) {
+        addCheck('safe_browsing', 'Google Safe Browsing', 'malware', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── 12. wp-config.php accessible ──
+      try {
+        const configResp = await quickFetch(`${siteUrl}/wp-config.php`, { method: 'HEAD' });
+        // If it returns 200 with content, that's bad. If PHP processes it, it returns blank/200 which is ok.
+        const configBad = configResp.status === 200 && parseInt(configResp.headers.get('content-length') || '0') > 100;
+        addCheck('wp_config', 'wp-config.php Protected', 'config',
+          configBad ? 'fail' : 'pass',
+          configBad ? 'critical' : 'none',
+          configBad ? 'wp-config.php is accessible and may be leaking database credentials' : 'wp-config.php is properly protected',
+          configBad ? 'Add to .htaccess: <Files wp-config.php> Require all denied </Files>' : null
+        );
+      } catch (e) {
+        addCheck('wp_config', 'wp-config.php Protected', 'config', 'pass', 'none', 'wp-config.php not accessible', null);
+      }
+
+      // Calculate summary
+      const summary = {
+        total: checks.length,
+        pass: checks.filter(c => c.status === 'pass').length,
+        fail: checks.filter(c => c.status === 'fail').length,
+        warning: checks.filter(c => c.status === 'warning').length,
+        critical: checks.filter(c => c.severity === 'critical').length,
+        high: checks.filter(c => c.severity === 'high').length,
+        score: Math.round((checks.filter(c => c.status === 'pass').length / Math.max(checks.length, 1)) * 100),
+      };
+
+      // Save to DB
+      await pool.query(
+        `UPDATE audits SET status='completed', data=$2, completed_at=NOW() WHERE id=$1`,
+        [auditId, JSON.stringify({ checks, summary })]
+      );
+      console.log(`[security-audit] Done for project ${projectId}: ${summary.pass} pass, ${summary.fail} fail, ${summary.warning} warn (score: ${summary.score}%)`);
+    })().catch(async (e) => {
+      console.error(`[security-audit] Error:`, e.message);
+      await pool.query(`UPDATE audits SET status='error', data=$2 WHERE id=$1`, [auditId, JSON.stringify({ error: e.message })]).catch(() => {});
+    });
+
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
