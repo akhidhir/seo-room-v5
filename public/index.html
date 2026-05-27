@@ -25056,7 +25056,7 @@
                     <option value="dataforseo">DataForSEO</option>
                   </select>
                 )}
-                <button className="btn btn-primary" onClick={tab === 'serp' ? discover : discoverMaps} style={{ fontSize: 16, padding: '12px 28px' }}>
+                <button className="btn btn-primary" onClick={() => tab === 'serp' ? discover() : discoverMaps()} style={{ fontSize: 16, padding: '12px 28px' }}>
                   <i className={tab === 'serp' ? 'fa-solid fa-chart-line' : 'fa-solid fa-map-location-dot'} style={{ marginRight: 8 }} />
                   {tab === 'serp' ? 'Discover SERP Keywords' : 'Discover Maps Keywords'}
                 </button>
@@ -25084,7 +25084,7 @@
           {activeHasRun && !activeLoading && sorted.length === 0 && activeData.length === 0 && (
             <div style={{ textAlign: 'center', padding: 60 }}>
               <div style={{ fontSize: 20, color: 'var(--text3)', marginBottom: 12 }}>No keywords found</div>
-              <button className="btn btn-primary" onClick={tab === 'serp' ? discover : discoverMaps} style={{ fontSize: 14, padding: '8px 20px' }}>
+              <button className="btn btn-primary" onClick={() => tab === 'serp' ? discover() : discoverMaps()} style={{ fontSize: 14, padding: '8px 20px' }}>
                 <i className="fa-solid fa-arrows-rotate" style={{ marginRight: 6 }} />Run Again
               </button>
             </div>
@@ -25105,7 +25105,7 @@
                     <option value="dataforseo">DataForSEO</option>
                   </select>
                 )}
-                <button className="btn btn-primary" onClick={tab === 'serp' ? discover : discoverMaps} disabled={activeLoading} style={{ fontSize: 13, padding: '8px 16px' }}>
+                <button className="btn btn-primary" onClick={() => tab === 'serp' ? discover() : discoverMaps()} disabled={activeLoading} style={{ fontSize: 13, padding: '8px 16px' }}>
                   {activeLoading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Running...</> : <><i className="fa-solid fa-arrows-rotate" style={{ marginRight: 6 }} />Re-scan</>}
                 </button>
                 <div style={{ fontSize: 15, color: tab === 'serp' ? '#14b8a6' : '#22c55e', fontWeight: 600 }}>{sorted.length} keywords · {selected.size} selected</div>
