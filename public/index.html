@@ -9582,14 +9582,16 @@
 
       const classify404 = (url) => {
         const u = (url || '').toLowerCase();
-        // Bot/spam probes
+        // Extract path only (strip protocol + domain)
+        const p = u.replace(/^https?:\/\/[^\/]+/, '');
+        // Bot/spam probes — match on path only
         const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)/i;
-        const apiProbes = /\/(api|graphql|gql|v[0-9]+\/_?catalog|_next|\.json|swagger|openapi|health|metrics|readyz|livez|\.well-known|feed|rss|sitemap\.xml\.gz|atom)([?\/]|$)/i;
-        if (botPatterns.test(u) || apiProbes.test(u)) return 'bot';
+        const apiProbes = /^\/(api|graphql|gql|v[0-9]+\/_?catalog|_next|swagger|openapi|health|metrics|readyz|livez)([?\/]|$)/i;
+        if (botPatterns.test(p) || apiProbes.test(p)) return 'bot';
         // Preview/draft URLs
         if (/[?&](preview|p)=true|[?&]page_id=\d+&preview/i.test(u)) return 'preview';
-        // Malformed URLs (encoded spaces, double slashes, trailing junk)
-        if (/%20|%2520|\/\/[^:]|\s/.test(u)) return 'malformed';
+        // Malformed URLs (encoded spaces, path double slashes)
+        if (/%20|%2520|\s/.test(p) || /\/\//.test(p)) return 'malformed';
         return 'real';
       };
 
