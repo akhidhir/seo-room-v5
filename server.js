@@ -6656,7 +6656,40 @@ async function dataForSeoBacklinksSummary(domain) {
     body: JSON.stringify([{ target: domain, include_subdomains: true }])
   });
   const data = await resp.json();
-  console.log(`[backlinks] Summary raw status: ${data.status_code}, task status: ${data.tasks?.[0]?.status_code}, result keys:`, Object.keys(data.tasks?.[0]?.result?.[0] || {}));
+  const taskStatus = data.tasks?.[0]?.status_code;
+  const taskMsg = data.tasks?.[0]?.status_message;
+  console.log(`[backlinks] Summary for "${domain}": task_status=${taskStatus}, msg="${taskMsg}"`);
+
+  // If 40204 (not found), try with www. prefix
+  if (taskStatus === 40204 && !domain.startsWith('www.')) {
+    console.log(`[backlinks] Retrying with www.${domain}`);
+    const resp2 = await fetch('https://api.dataforseo.com/v3/backlinks/summary/live', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+      body: JSON.stringify([{ target: 'www.' + domain, include_subdomains: true }])
+    });
+    const data2 = await resp2.json();
+    const ts2 = data2.tasks?.[0]?.status_code;
+    console.log(`[backlinks] www retry status=${ts2}`);
+    if (ts2 === 20000 && data2.tasks?.[0]?.result?.[0]) {
+      const r = data2.tasks[0].result[0];
+      return {
+        total_backlinks: r.external_links_count || 0,
+        referring_domains: r.referring_domains || 0,
+        referring_ips: r.referring_ips || 0,
+        domain_rank: r.rank || 0,
+        dofollow: r.external_links_count_dofollow || 0,
+        nofollow: r.external_links_count_nofollow || 0,
+        gov_backlinks: r.referring_links_tld?.gov || 0,
+        edu_backlinks: r.referring_links_tld?.edu || 0,
+        broken_backlinks: r.broken_backlinks || 0,
+        referring_pages: r.referring_pages || 0,
+        cost: (data.cost || 0) + (data2.cost || 0),
+        effective_target: 'www.' + domain
+      };
+    }
+  }
+
   const r = data.tasks?.[0]?.result?.[0] || {};
   return {
     total_backlinks: r.external_links_count || 0,
@@ -35922,13 +35955,17 @@ app.post('/api/projects/:projectId/backlinks/scan', async (req, res) => {
 
     console.log(`[backlinks] Starting scan for domain="${domain}"`);
 
-    // Run all API calls in parallel
-    const [summary, backlinksData, anchorsData, newData, lostData] = await Promise.all([
-      dataForSeoBacklinksSummary(domain),
-      dataForSeoBacklinks(domain, 500),
-      dataForSeoAnchors(domain, 100),
-      dataForSeoNewLostBacklinks(domain, 'new', 200),
-      dataForSeoNewLostBacklinks(domain, 'lost', 200)
+    // First get summary to determine effective target (might need www. prefix)
+    const summary = await dataForSeoBacklinksSummary(domain);
+    const effectiveDomain = summary.effective_target || domain;
+    if (effectiveDomain !== domain) console.log(`[backlinks] Using effective target: ${effectiveDomain}`);
+
+    // Run remaining API calls in parallel using effective domain
+    const [backlinksData, anchorsData, newData, lostData] = await Promise.all([
+      dataForSeoBacklinks(effectiveDomain, 500),
+      dataForSeoAnchors(effectiveDomain, 100),
+      dataForSeoNewLostBacklinks(effectiveDomain, 'new', 200),
+      dataForSeoNewLostBacklinks(effectiveDomain, 'lost', 200)
     ]);
 
     console.log(`[backlinks] Summary:`, JSON.stringify(summary));
