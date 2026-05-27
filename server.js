@@ -1158,6 +1158,64 @@ async function initDb() {
       )
     `);
 
+    // Backlinks module
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS backlink_scans (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        status TEXT DEFAULT 'idle',
+        total_backlinks INTEGER DEFAULT 0,
+        referring_domains INTEGER DEFAULT 0,
+        domain_rank INTEGER DEFAULT 0,
+        backlinks JSONB DEFAULT '[]',
+        summary JSONB DEFAULT '{}',
+        anchor_texts JSONB DEFAULT '[]',
+        new_backlinks JSONB DEFAULT '[]',
+        lost_backlinks JSONB DEFAULT '[]',
+        toxic_links JSONB DEFAULT '[]',
+        api_cost NUMERIC(10,4) DEFAULT 0,
+        scanned_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_bl_scans_project ON backlink_scans(project_id)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS backlink_gap (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        competitor_domain TEXT NOT NULL,
+        opportunities JSONB DEFAULT '[]',
+        total_opportunities INTEGER DEFAULT 0,
+        scanned_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_bl_gap_project ON backlink_gap(project_id)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS backlink_prospects (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        domain TEXT NOT NULL,
+        url TEXT DEFAULT '',
+        contact_email TEXT DEFAULT '',
+        contact_name TEXT DEFAULT '',
+        domain_rank INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'prospect',
+        source TEXT DEFAULT 'manual',
+        notes TEXT DEFAULT '',
+        outreach_date TIMESTAMPTZ,
+        follow_up_date TIMESTAMPTZ,
+        response TEXT DEFAULT '',
+        link_url TEXT DEFAULT '',
+        link_placed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_bl_prospects_project ON backlink_prospects(project_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_bl_prospects_status ON backlink_prospects(project_id, status)`);
+
   } catch (e) {
     console.error('[boot] Schema init error:', e.message);
     throw e;
@@ -6586,6 +6644,168 @@ async function dataForSeoPlaceDetails({ cid, keyword, location }) {
   // Workaround: search by business name + location and return the first match.
   // The caller should use dataForSeoMaps() with the business name as keyword instead.
   return dataForSeoMaps({ keyword: keyword || cid, location });
+}
+
+// ── DataForSEO Backlinks API helpers ──
+
+async function dataForSeoBacklinksSummary(domain) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
+  const resp = await fetch('https://api.dataforseo.com/v3/backlinks/summary/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{ target: domain, include_subdomains: true }])
+  });
+  const data = await resp.json();
+  const r = data.tasks?.[0]?.result?.[0] || {};
+  return {
+    total_backlinks: r.external_links_count || 0,
+    referring_domains: r.referring_domains || 0,
+    referring_ips: r.referring_ips || 0,
+    domain_rank: r.rank || 0,
+    dofollow: r.external_links_count_dofollow || 0,
+    nofollow: r.external_links_count_nofollow || 0,
+    gov_backlinks: r.referring_links_tld?.gov || 0,
+    edu_backlinks: r.referring_links_tld?.edu || 0,
+    broken_backlinks: r.broken_backlinks || 0,
+    referring_pages: r.referring_pages || 0,
+    cost: data.cost
+  };
+}
+
+async function dataForSeoBacklinks(domain, limit = 500, offset = 0, orderBy) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
+  const body = [{
+    target: domain,
+    include_subdomains: true,
+    limit,
+    offset,
+    mode: 'as_is',
+    filters: null
+  }];
+  if (orderBy) body[0].order_by = [orderBy];
+  const resp = await fetch('https://api.dataforseo.com/v3/backlinks/backlinks/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  const result = data.tasks?.[0]?.result?.[0] || {};
+  const items = result.items || [];
+  return {
+    total_count: result.total_count || 0,
+    backlinks: items.map(i => ({
+      url_from: i.url_from || '',
+      domain_from: i.domain_from || '',
+      url_to: i.url_to || '',
+      anchor: i.anchor || '',
+      dofollow: i.dofollow,
+      domain_from_rank: i.domain_from_rank || 0,
+      page_from_rank: i.page_from_rank || 0,
+      first_seen: i.first_seen,
+      last_seen: i.last_seen,
+      is_lost: i.is_lost || false,
+      item_type: i.item_type || 'anchor',
+      is_broken: i.is_broken || false,
+      url_from_https: i.url_from_https,
+      tld_from: i.tld_from || '',
+      domain_from_is_ip: i.domain_from_is_ip || false,
+      spam_score: i.domain_from_rank < 5 ? 'high' : i.domain_from_rank < 20 ? 'medium' : 'low'
+    })),
+    cost: data.cost
+  };
+}
+
+async function dataForSeoAnchors(domain, limit = 100) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
+  const resp = await fetch('https://api.dataforseo.com/v3/backlinks/anchors/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{ target: domain, include_subdomains: true, limit, order_by: ['backlinks,desc'] }])
+  });
+  const data = await resp.json();
+  const items = data.tasks?.[0]?.result?.[0]?.items || [];
+  return {
+    anchors: items.map(i => ({
+      anchor: i.anchor || '(empty)',
+      backlinks: i.backlinks || 0,
+      referring_domains: i.referring_domains || 0,
+      dofollow: i.dofollow || 0,
+      first_seen: i.first_seen,
+      last_seen: i.last_seen
+    })),
+    cost: data.cost
+  };
+}
+
+async function dataForSeoNewLostBacklinks(domain, type, limit = 200) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
+  // type: 'new' or 'lost'
+  const endpoint = type === 'new' ? 'backlinks/live' : 'backlinks/live';
+  // Use date_from filter for new/lost detection
+  const oneMonthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const filters = type === 'new'
+    ? ['first_seen', '>', oneMonthAgo]
+    : ['is_lost', '=', true];
+  const resp = await fetch('https://api.dataforseo.com/v3/backlinks/backlinks/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{
+      target: domain,
+      include_subdomains: true,
+      limit,
+      mode: 'as_is',
+      filters
+    }])
+  });
+  const data = await resp.json();
+  const items = data.tasks?.[0]?.result?.[0]?.items || [];
+  return {
+    count: items.length,
+    links: items.map(i => ({
+      url_from: i.url_from || '',
+      domain_from: i.domain_from || '',
+      url_to: i.url_to || '',
+      anchor: i.anchor || '',
+      dofollow: i.dofollow,
+      domain_from_rank: i.domain_from_rank || 0,
+      first_seen: i.first_seen,
+      last_seen: i.last_seen,
+      is_lost: i.is_lost || false
+    })),
+    cost: data.cost
+  };
+}
+
+async function dataForSeoBacklinkGap(targetDomain, competitorDomains) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
+  // Use referring_domains_intersection to find where competitors have links but target doesn't
+  const resp = await fetch('https://api.dataforseo.com/v3/backlinks/domain_intersection/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{
+      targets: Object.fromEntries([
+        [targetDomain, { exclude: true }],
+        ...competitorDomains.map((d, i) => [d, { intersect: true }])
+      ]),
+      limit: 200,
+      order_by: ['1.rank,desc']
+    }])
+  });
+  const data = await resp.json();
+  const items = data.tasks?.[0]?.result?.[0]?.items || [];
+  return {
+    opportunities: items.map(i => {
+      const targets = i.targets || {};
+      return {
+        domain: Object.keys(targets)[0] || '',
+        rank: i.rank || 0,
+        competitors_count: Object.keys(targets).length,
+        targets
+      };
+    }),
+    total: data.tasks?.[0]?.result?.[0]?.total_count || 0,
+    cost: data.cost
+  };
 }
 
 // ==================== 11a-ii. UULE v2 Encoder (GPS → Google location param) ====================
@@ -35683,6 +35903,222 @@ app.delete('/api/projects/:projectId/internal-links', async (req, res) => {
     await pool.query('DELETE FROM internal_link_suggestions WHERE project_id=$1', [projectId]);
     await pool.query('DELETE FROM internal_link_audit_cache WHERE project_id=$1', [projectId]);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== BACKLINKS MODULE ====================
+
+// Full backlink scan — summary + backlinks + anchors + new/lost + toxic
+app.post('/api/projects/:projectId/backlinks/scan', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const proj = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!proj) return res.status(404).json({ error: 'Project not found' });
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
+
+    const domain = (proj.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    if (!domain) return res.status(400).json({ error: 'Project domain not set' });
+
+    console.log(`[backlinks] Starting scan for ${domain}`);
+
+    // Run all API calls in parallel
+    const [summary, backlinksData, anchorsData, newData, lostData] = await Promise.all([
+      dataForSeoBacklinksSummary(domain),
+      dataForSeoBacklinks(domain, 500),
+      dataForSeoAnchors(domain, 100),
+      dataForSeoNewLostBacklinks(domain, 'new', 200),
+      dataForSeoNewLostBacklinks(domain, 'lost', 200)
+    ]);
+
+    // Flag toxic links (low domain rank + suspicious patterns)
+    const toxic = backlinksData.backlinks.filter(l =>
+      l.spam_score === 'high' || l.is_broken || l.domain_from_is_ip ||
+      /casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.domain_from) ||
+      /casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.anchor)
+    );
+
+    const totalCost = (summary.cost || 0) + (backlinksData.cost || 0) + (anchorsData.cost || 0) + (newData.cost || 0) + (lostData.cost || 0);
+
+    // Save to DB
+    await pool.query(`
+      INSERT INTO backlink_scans (project_id, status, total_backlinks, referring_domains, domain_rank, backlinks, summary, anchor_texts, new_backlinks, lost_backlinks, toxic_links, api_cost, scanned_at)
+      VALUES ($1, 'complete', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+    `, [
+      projectId, summary.total_backlinks, summary.referring_domains, summary.domain_rank,
+      JSON.stringify(backlinksData.backlinks), JSON.stringify(summary),
+      JSON.stringify(anchorsData.anchors), JSON.stringify(newData.links),
+      JSON.stringify(lostData.links), JSON.stringify(toxic), totalCost
+    ]);
+
+    // Log cost
+    try {
+      await pool.query('INSERT INTO api_costs (project_id, feature, provider, api_calls, cost, details) VALUES ($1, $2, $3, $4, $5, $6)',
+        [projectId, 'backlinks_scan', 'dataforseo', 5, totalCost, JSON.stringify({ domain })]);
+    } catch (e) { /* cost logging optional */ }
+
+    console.log(`[backlinks] Scan complete: ${summary.total_backlinks} backlinks, ${summary.referring_domains} domains, cost: $${totalCost}`);
+
+    res.json({
+      summary,
+      backlinks: backlinksData.backlinks,
+      anchors: anchorsData.anchors,
+      new_backlinks: newData.links,
+      lost_backlinks: lostData.links,
+      toxic_links: toxic,
+      cost: totalCost
+    });
+  } catch (e) {
+    console.error('[backlinks] Scan error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get latest backlink scan
+app.get('/api/projects/:projectId/backlinks', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const scan = (await pool.query('SELECT * FROM backlink_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 1', [projectId])).rows[0];
+    if (!scan) return res.json({ scan: null });
+    res.json({ scan });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get all scans (history)
+app.get('/api/projects/:projectId/backlinks/history', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const scans = await pool.query('SELECT id, status, total_backlinks, referring_domains, domain_rank, api_cost, scanned_at FROM backlink_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 20', [projectId]);
+    res.json({ scans: scans.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Backlink gap analysis
+app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const proj = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!proj) return res.status(404).json({ error: 'Project not found' });
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
+
+    const domain = (proj.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const competitors = req.body.competitors || proj.competitors || [];
+    if (!competitors.length) return res.status(400).json({ error: 'No competitors specified. Add competitors in project settings.' });
+
+    const cleanCompetitors = competitors.map(c => c.replace(/^https?:\/\//, '').replace(/\/+$/, '')).filter(Boolean).slice(0, 5);
+    console.log(`[backlinks] Gap analysis: ${domain} vs ${cleanCompetitors.join(', ')}`);
+
+    const gapResult = await dataForSeoBacklinkGap(domain, cleanCompetitors);
+
+    // Save to DB
+    for (const comp of cleanCompetitors) {
+      const compOpps = gapResult.opportunities.filter(o => {
+        const targets = o.targets || {};
+        return targets[comp];
+      });
+      await pool.query(`
+        INSERT INTO backlink_gap (project_id, competitor_domain, opportunities, total_opportunities, scanned_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT DO NOTHING
+      `, [projectId, comp, JSON.stringify(compOpps), compOpps.length]).catch(() => {
+        pool.query(`INSERT INTO backlink_gap (project_id, competitor_domain, opportunities, total_opportunities, scanned_at) VALUES ($1, $2, $3, $4, NOW())`,
+          [projectId, comp, JSON.stringify(compOpps), compOpps.length]);
+      });
+    }
+
+    // Log cost
+    try {
+      await pool.query('INSERT INTO api_costs (project_id, feature, provider, api_calls, cost, details) VALUES ($1, $2, $3, $4, $5, $6)',
+        [projectId, 'backlink_gap', 'dataforseo', 1, gapResult.cost || 0, JSON.stringify({ domain, competitors: cleanCompetitors })]);
+    } catch (e) { /* optional */ }
+
+    res.json({
+      domain,
+      competitors: cleanCompetitors,
+      opportunities: gapResult.opportunities,
+      total: gapResult.total,
+      cost: gapResult.cost
+    });
+  } catch (e) {
+    console.error('[backlinks] Gap error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get saved gap data
+app.get('/api/projects/:projectId/backlinks/gap', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const gaps = await pool.query('SELECT * FROM backlink_gap WHERE project_id=$1 ORDER BY scanned_at DESC', [projectId]);
+    res.json({ gaps: gaps.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Outreach / Prospects CRUD ──
+
+app.get('/api/projects/:projectId/backlinks/prospects', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const prospects = await pool.query('SELECT * FROM backlink_prospects WHERE project_id=$1 ORDER BY created_at DESC', [projectId]);
+    res.json({ prospects: prospects.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/projects/:projectId/backlinks/prospects', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { domain, url, contact_email, contact_name, domain_rank, source, notes } = req.body;
+  try {
+    const result = await pool.query(
+      `INSERT INTO backlink_prospects (project_id, domain, url, contact_email, contact_name, domain_rank, source, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [projectId, domain || '', url || '', contact_email || '', contact_name || '', domain_rank || 0, source || 'manual', notes || '']
+    );
+    res.json({ prospect: result.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/projects/:projectId/backlinks/prospects/:id', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { status, notes, contact_email, contact_name, outreach_date, follow_up_date, response, link_url, link_placed_at } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE backlink_prospects SET
+        status=COALESCE($3, status), notes=COALESCE($4, notes), contact_email=COALESCE($5, contact_email),
+        contact_name=COALESCE($6, contact_name), outreach_date=COALESCE($7, outreach_date),
+        follow_up_date=COALESCE($8, follow_up_date), response=COALESCE($9, response),
+        link_url=COALESCE($10, link_url), link_placed_at=COALESCE($11, link_placed_at), updated_at=NOW()
+       WHERE id=$1 AND project_id=$2 RETURNING *`,
+      [id, projectId, status, notes, contact_email, contact_name, outreach_date, follow_up_date, response, link_url, link_placed_at]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+    res.json({ prospect: result.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/projects/:projectId/backlinks/prospects/:id', async (req, res) => {
+  const { projectId, id } = req.params;
+  try {
+    await pool.query('DELETE FROM backlink_prospects WHERE id=$1 AND project_id=$2', [id, projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add from gap — bulk add gap opportunities as prospects
+app.post('/api/projects/:projectId/backlinks/prospects/from-gap', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { domains } = req.body; // array of { domain, rank }
+  try {
+    let added = 0;
+    for (const d of (domains || [])) {
+      try {
+        await pool.query(
+          `INSERT INTO backlink_prospects (project_id, domain, domain_rank, source, status)
+           VALUES ($1, $2, $3, 'gap_analysis', 'prospect') ON CONFLICT DO NOTHING`,
+          [projectId, d.domain, d.rank || 0]
+        );
+        added++;
+      } catch (e) { /* skip duplicates */ }
+    }
+    res.json({ ok: true, added });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

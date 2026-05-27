@@ -29701,6 +29701,441 @@
       );
     }
 
+    // ============ BACKLINKS PAGE ============
+    function BacklinksPage({ project }) {
+      const [tab, setTab] = useState('overview');
+      const [scan, setScan] = useState(null);
+      const [scanning, setScanning] = useState(false);
+      const [loading, setLoading] = useState(true);
+      const [prospects, setProspects] = useState([]);
+      const [gapData, setGapData] = useState(null);
+      const [gapLoading, setGapLoading] = useState(false);
+      const [showAddProspect, setShowAddProspect] = useState(false);
+      const [newProspect, setNewProspect] = useState({ domain: '', url: '', contact_email: '', contact_name: '', notes: '' });
+      const [history, setHistory] = useState([]);
+
+      const accent = '#14b8a6';
+      const pid = project?.id;
+
+      const TABS = [
+        { id: 'overview', label: 'Overview', icon: 'fas fa-chart-pie' },
+        { id: 'all', label: 'All Backlinks', icon: 'fas fa-list' },
+        { id: 'gap', label: 'Backlink Gap', icon: 'fas fa-not-equal' },
+        { id: 'outreach', label: 'Outreach', icon: 'fas fa-envelope' },
+        { id: 'toxic', label: 'Toxic Links', icon: 'fas fa-skull-crossbones' },
+      ];
+
+      const loadData = async () => {
+        if (!pid) return;
+        setLoading(true);
+        try {
+          const [scanRes, prospectsRes, histRes] = await Promise.all([
+            api(`/projects/${pid}/backlinks`),
+            api(`/projects/${pid}/backlinks/prospects`),
+            api(`/projects/${pid}/backlinks/history`),
+          ]);
+          if (scanRes.scan) setScan(scanRes.scan);
+          setProspects(prospectsRes.prospects || []);
+          setHistory(histRes.scans || []);
+        } catch (e) { console.error(e); }
+        setLoading(false);
+      };
+
+      useEffect(() => { loadData(); }, [pid]);
+
+      const runScan = async () => {
+        setScanning(true);
+        try {
+          const r = await api(`/projects/${pid}/backlinks/scan`, { method: 'POST' });
+          setScan({ ...scan, ...r, backlinks: r.backlinks, summary: r.summary, anchor_texts: r.anchors, new_backlinks: r.new_backlinks, lost_backlinks: r.lost_backlinks, toxic_links: r.toxic_links, scanned_at: new Date().toISOString() });
+          loadData();
+        } catch (e) { alert('Scan error: ' + e.message); }
+        setScanning(false);
+      };
+
+      const runGap = async () => {
+        setGapLoading(true);
+        try {
+          const r = await api(`/projects/${pid}/backlinks/gap`, { method: 'POST' });
+          setGapData(r);
+        } catch (e) { alert('Gap analysis error: ' + e.message); }
+        setGapLoading(false);
+      };
+
+      const addProspect = async () => {
+        if (!newProspect.domain.trim()) return;
+        await api(`/projects/${pid}/backlinks/prospects`, { method: 'POST', body: newProspect });
+        setNewProspect({ domain: '', url: '', contact_email: '', contact_name: '', notes: '' });
+        setShowAddProspect(false);
+        loadData();
+      };
+
+      const updateProspect = async (id, updates) => {
+        await api(`/projects/${pid}/backlinks/prospects/${id}`, { method: 'PUT', body: updates });
+        loadData();
+      };
+
+      const deleteProspect = async (id) => {
+        if (!confirm('Delete this prospect?')) return;
+        await api(`/projects/${pid}/backlinks/prospects/${id}`, { method: 'DELETE' });
+        loadData();
+      };
+
+      if (!pid) return <div style={{ padding: 40, color: 'var(--text3)' }}>Select a project first</div>;
+
+      const s = scan?.summary ? (typeof scan.summary === 'string' ? JSON.parse(scan.summary) : scan.summary) : {};
+      const backlinks = scan?.backlinks ? (typeof scan.backlinks === 'string' ? JSON.parse(scan.backlinks) : scan.backlinks) : [];
+      const anchors = scan?.anchor_texts ? (typeof scan.anchor_texts === 'string' ? JSON.parse(scan.anchor_texts) : scan.anchor_texts) : [];
+      const newLinks = scan?.new_backlinks ? (typeof scan.new_backlinks === 'string' ? JSON.parse(scan.new_backlinks) : scan.new_backlinks) : [];
+      const lostLinks = scan?.lost_backlinks ? (typeof scan.lost_backlinks === 'string' ? JSON.parse(scan.lost_backlinks) : scan.lost_backlinks) : [];
+      const toxicLinks = scan?.toxic_links ? (typeof scan.toxic_links === 'string' ? JSON.parse(scan.toxic_links) : scan.toxic_links) : [];
+
+      const cardStyle = { background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', padding: 20 };
+      const statCard = (label, value, icon, color) => (
+        <div style={{ ...cardStyle, textAlign: 'center' }}>
+          <i className={icon} style={{ fontSize: 20, color, marginBottom: 8, display: 'block' }}></i>
+          <div style={{ fontSize: 28, fontWeight: 800, color }}>{typeof value === 'number' ? value.toLocaleString() : value}</div>
+          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginTop: 4 }}>{label}</div>
+        </div>
+      );
+
+      const spamBadge = (score) => {
+        const colors = { low: '#22c55e', medium: '#f59e0b', high: '#ef4444' };
+        return <span style={{ padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: (colors[score] || '#666') + '22', color: colors[score] || '#666' }}>{score}</span>;
+      };
+
+      const statusColors = { prospect: '#6b7280', emailed: '#3b82f6', responded: '#f59e0b', placed: '#22c55e', rejected: '#ef4444', 'follow-up': '#8b5cf6' };
+      const statusBadge = (status) => <span style={{ padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: (statusColors[status] || '#666') + '22', color: statusColors[status] || '#666' }}>{status}</span>;
+
+      const thStyle = { textAlign: 'left', padding: '8px 10px', fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, borderBottom: '1px solid var(--border)' };
+      const tdStyle = { padding: '8px 10px', fontSize: 13, borderBottom: '1px solid var(--border)', color: 'var(--text)' };
+      const btnStyle = { padding: '8px 16px', borderRadius: 6, border: 'none', fontWeight: 600, cursor: 'pointer', fontSize: 13, background: accent, color: '#fff' };
+      const btnOutline = { ...btnStyle, background: 'transparent', border: '1px solid ' + accent, color: accent };
+      const inputStyle = { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 13, width: '100%' };
+
+      return (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-external-link-alt" style={{ marginRight: 10, color: accent }}></i>Backlinks</h2>
+              <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>Monitor, audit, and grow your backlink profile</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {scan?.scanned_at && <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>Last scan: {new Date(scan.scanned_at).toLocaleDateString()}</span>}
+              <button onClick={runScan} disabled={scanning} style={{ ...btnStyle, opacity: scanning ? 0.6 : 1 }}>
+                {scanning ? <><span className="spinner" style={{ marginRight: 6 }}></span>Scanning...</> : <><i className="fas fa-sync-alt" style={{ marginRight: 6 }}></i>Scan Backlinks</>}
+              </button>
+            </div>
+          </div>
+
+          {/* Tab bar */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: '10px 16px', border: 'none', background: 'transparent', color: tab === t.id ? accent : 'var(--text3)', fontWeight: tab === t.id ? 700 : 500, fontSize: 13, cursor: 'pointer', borderBottom: tab === t.id ? '2px solid ' + accent : '2px solid transparent', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <i className={t.icon}></i>{t.label}
+                {t.id === 'toxic' && toxicLinks.length > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>{toxicLinks.length}</span>}
+              </button>
+            ))}
+          </div>
+
+          {loading ? <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}><span className="spinner"></span> Loading...</div> :
+          !scan && tab !== 'outreach' ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-external-link-alt" style={{ fontSize: 48, opacity: 0.3, marginBottom: 16, display: 'block' }}></i>
+              <div style={{ fontSize: 16, marginBottom: 16 }}>No backlink data yet</div>
+              <button onClick={runScan} disabled={scanning} style={btnStyle}>
+                <i className="fas fa-sync-alt" style={{ marginRight: 6 }}></i>Run First Scan
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* OVERVIEW TAB */}
+              {tab === 'overview' && <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
+                  {statCard('Total Backlinks', s.total_backlinks || scan?.total_backlinks || 0, 'fas fa-link', accent)}
+                  {statCard('Referring Domains', s.referring_domains || scan?.referring_domains || 0, 'fas fa-globe', '#3b82f6')}
+                  {statCard('Domain Rank', s.domain_rank || scan?.domain_rank || 0, 'fas fa-star', '#f59e0b')}
+                  {statCard('New (30d)', newLinks.length, 'fas fa-plus-circle', '#22c55e')}
+                  {statCard('Lost (30d)', lostLinks.length, 'fas fa-minus-circle', '#ef4444')}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+                  {/* Dofollow / Nofollow split */}
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Link Types</div>
+                    <div style={{ display: 'flex', gap: 20 }}>
+                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#22c55e' }}>{(s.dofollow || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Dofollow</div></div>
+                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#f59e0b' }}>{(s.nofollow || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Nofollow</div></div>
+                      <div><span style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{(s.broken_backlinks || 0).toLocaleString()}</span><div style={{ fontSize: 11, color: 'var(--text3)' }}>Broken</div></div>
+                    </div>
+                    {s.total_backlinks > 0 && <div style={{ marginTop: 12, height: 8, borderRadius: 4, background: 'var(--border)', overflow: 'hidden', display: 'flex' }}>
+                      <div style={{ width: ((s.dofollow || 0) / s.total_backlinks * 100) + '%', background: '#22c55e' }}></div>
+                      <div style={{ width: ((s.nofollow || 0) / s.total_backlinks * 100) + '%', background: '#f59e0b' }}></div>
+                    </div>}
+                  </div>
+
+                  {/* Top Anchors */}
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Top Anchor Texts</div>
+                    {anchors.slice(0, 8).map((a, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{a.anchor || '(empty)'}</span>
+                        <span style={{ color: 'var(--text3)', fontSize: 12 }}>{a.backlinks} links</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* New & Lost */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#22c55e', marginBottom: 12 }}><i className="fas fa-plus-circle" style={{ marginRight: 6 }}></i>New Backlinks ({newLinks.length})</div>
+                    <div style={{ maxHeight: 250, overflowY: 'auto' }}>
+                      {newLinks.slice(0, 20).map((l, i) => (
+                        <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+                          <div style={{ color: accent, fontWeight: 600 }}>{l.domain_from}</div>
+                          <div style={{ color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.anchor || '(no anchor)'}</div>
+                        </div>
+                      ))}
+                      {newLinks.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>No new backlinks in the last 30 days</div>}
+                    </div>
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#ef4444', marginBottom: 12 }}><i className="fas fa-minus-circle" style={{ marginRight: 6 }}></i>Lost Backlinks ({lostLinks.length})</div>
+                    <div style={{ maxHeight: 250, overflowY: 'auto' }}>
+                      {lostLinks.slice(0, 20).map((l, i) => (
+                        <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+                          <div style={{ color: '#ef4444', fontWeight: 600 }}>{l.domain_from}</div>
+                          <div style={{ color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.anchor || '(no anchor)'}</div>
+                        </div>
+                      ))}
+                      {lostLinks.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>No lost backlinks in the last 30 days</div>}
+                    </div>
+                  </div>
+                </div>
+              </>}
+
+              {/* ALL BACKLINKS TAB */}
+              {tab === 'all' && <>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>Showing {backlinks.length} of {(s.total_backlinks || scan?.total_backlinks || 0).toLocaleString()} total backlinks</div>
+                <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+                  <div style={{ maxHeight: 600, overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead><tr>
+                        <th style={thStyle}>From</th>
+                        <th style={thStyle}>To</th>
+                        <th style={thStyle}>Anchor</th>
+                        <th style={thStyle}>DR</th>
+                        <th style={thStyle}>Type</th>
+                        <th style={thStyle}>Spam</th>
+                        <th style={thStyle}>First Seen</th>
+                      </tr></thead>
+                      <tbody>
+                        {backlinks.map((l, i) => (
+                          <tr key={i}>
+                            <td style={{ ...tdStyle, fontSize: 12, maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <a href={l.url_from} target="_blank" rel="noopener" style={{ color: accent, textDecoration: 'none' }}>{l.domain_from}</a>
+                            </td>
+                            <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.url_to}</td>
+                            <td style={{ ...tdStyle, fontSize: 12, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.anchor || '(empty)'}</td>
+                            <td style={tdStyle}><span style={{ fontWeight: 700, color: l.domain_from_rank > 50 ? '#22c55e' : l.domain_from_rank > 20 ? '#f59e0b' : '#ef4444' }}>{l.domain_from_rank}</span></td>
+                            <td style={tdStyle}>{l.dofollow ? <span style={{ color: '#22c55e', fontWeight: 600, fontSize: 11 }}>dofollow</span> : <span style={{ color: '#f59e0b', fontSize: 11 }}>nofollow</span>}</td>
+                            <td style={tdStyle}>{spamBadge(l.spam_score)}</td>
+                            <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{l.first_seen ? new Date(l.first_seen).toLocaleDateString() : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>}
+
+              {/* BACKLINK GAP TAB */}
+              {tab === 'gap' && <>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center' }}>
+                  <button onClick={runGap} disabled={gapLoading} style={{ ...btnStyle, opacity: gapLoading ? 0.6 : 1 }}>
+                    {gapLoading ? <><span className="spinner" style={{ marginRight: 6 }}></span>Analyzing...</> : <><i className="fas fa-not-equal" style={{ marginRight: 6 }}></i>Run Gap Analysis</>}
+                  </button>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>Compares your backlinks with competitors from project settings</span>
+                </div>
+                {gapData ? (
+                  <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+                    <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>
+                        {gapData.total} domains link to competitors but not to you
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>Competitors: {(gapData.competitors || []).join(', ')}</div>
+                    </div>
+                    <div style={{ maxHeight: 500, overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead><tr>
+                          <th style={thStyle}>Domain</th>
+                          <th style={thStyle}>Domain Rank</th>
+                          <th style={thStyle}>Competitors Linked</th>
+                          <th style={thStyle}>Action</th>
+                        </tr></thead>
+                        <tbody>
+                          {(gapData.opportunities || []).map((o, i) => (
+                            <tr key={i}>
+                              <td style={{ ...tdStyle, fontWeight: 600 }}>{o.domain}</td>
+                              <td style={tdStyle}><span style={{ fontWeight: 700, color: o.rank > 50 ? '#22c55e' : o.rank > 20 ? '#f59e0b' : 'var(--text3)' }}>{o.rank}</span></td>
+                              <td style={tdStyle}>{o.competitors_count}</td>
+                              <td style={tdStyle}>
+                                <button onClick={() => {
+                                  setNewProspect({ domain: o.domain, url: '', contact_email: '', contact_name: '', notes: 'From gap analysis' });
+                                  setShowAddProspect(true);
+                                  setTab('outreach');
+                                }} style={{ ...btnOutline, padding: '4px 10px', fontSize: 11 }}>
+                                  <i className="fas fa-plus" style={{ marginRight: 4 }}></i>Add to Outreach
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
+                    <i className="fas fa-not-equal" style={{ fontSize: 32, opacity: 0.3, marginBottom: 12, display: 'block' }}></i>
+                    Run gap analysis to find link opportunities your competitors have
+                  </div>
+                )}
+              </>}
+
+              {/* OUTREACH TAB */}
+              {tab === 'outreach' && <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, color: 'var(--text3)' }}>{prospects.length} prospects</div>
+                  <button onClick={() => setShowAddProspect(!showAddProspect)} style={btnStyle}>
+                    <i className="fas fa-plus" style={{ marginRight: 6 }}></i>Add Prospect
+                  </button>
+                </div>
+
+                {showAddProspect && (
+                  <div style={{ ...cardStyle, marginBottom: 16 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Domain *</label>
+                        <input value={newProspect.domain} onChange={e => setNewProspect({ ...newProspect, domain: e.target.value })} placeholder="example.com" style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Contact Email</label>
+                        <input value={newProspect.contact_email} onChange={e => setNewProspect({ ...newProspect, contact_email: e.target.value })} placeholder="editor@example.com" style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Contact Name</label>
+                        <input value={newProspect.contact_name} onChange={e => setNewProspect({ ...newProspect, contact_name: e.target.value })} placeholder="John Smith" style={inputStyle} />
+                      </div>
+                    </div>
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Notes</label>
+                      <input value={newProspect.notes} onChange={e => setNewProspect({ ...newProspect, notes: e.target.value })} placeholder="Notes about this prospect..." style={inputStyle} />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={addProspect} disabled={!newProspect.domain.trim()} style={{ ...btnStyle, opacity: !newProspect.domain.trim() ? 0.4 : 1 }}>Save Prospect</button>
+                      <button onClick={() => setShowAddProspect(false)} style={btnOutline}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Pipeline stats */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8, marginBottom: 16 }}>
+                  {['prospect', 'emailed', 'follow-up', 'responded', 'placed', 'rejected'].map(st => {
+                    const count = prospects.filter(p => p.status === st).length;
+                    return (
+                      <div key={st} style={{ ...cardStyle, padding: 12, textAlign: 'center' }}>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: statusColors[st] || '#666' }}>{count}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>{st}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+                  <div style={{ maxHeight: 500, overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead><tr>
+                        <th style={thStyle}>Domain</th>
+                        <th style={thStyle}>Contact</th>
+                        <th style={thStyle}>DR</th>
+                        <th style={thStyle}>Status</th>
+                        <th style={thStyle}>Source</th>
+                        <th style={thStyle}>Notes</th>
+                        <th style={thStyle}>Actions</th>
+                      </tr></thead>
+                      <tbody>
+                        {prospects.map((p, i) => (
+                          <tr key={p.id || i}>
+                            <td style={{ ...tdStyle, fontWeight: 600 }}>{p.domain}</td>
+                            <td style={{ ...tdStyle, fontSize: 12 }}>{p.contact_email || p.contact_name || '-'}</td>
+                            <td style={tdStyle}>{p.domain_rank || '-'}</td>
+                            <td style={tdStyle}>
+                              <select value={p.status} onChange={e => updateProspect(p.id, { status: e.target.value })} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', fontSize: 11 }}>
+                                {['prospect', 'emailed', 'follow-up', 'responded', 'placed', 'rejected'].map(s => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                            </td>
+                            <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{p.source || 'manual'}</td>
+                            <td style={{ ...tdStyle, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.notes || '-'}</td>
+                            <td style={tdStyle}>
+                              <button onClick={() => deleteProspect(p.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>
+                                <i className="fas fa-trash-alt"></i>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {prospects.length === 0 && <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No prospects yet. Add one or import from Gap Analysis.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>}
+
+              {/* TOXIC LINKS TAB */}
+              {tab === 'toxic' && <>
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, color: 'var(--text3)' }}>{toxicLinks.length} potentially toxic links found</div>
+                </div>
+                <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+                  <div style={{ maxHeight: 600, overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead><tr>
+                        <th style={thStyle}>From</th>
+                        <th style={thStyle}>Anchor</th>
+                        <th style={thStyle}>DR</th>
+                        <th style={thStyle}>Reason</th>
+                        <th style={thStyle}>First Seen</th>
+                      </tr></thead>
+                      <tbody>
+                        {toxicLinks.map((l, i) => {
+                          const reasons = [];
+                          if (l.spam_score === 'high') reasons.push('Low DR');
+                          if (l.is_broken) reasons.push('Broken');
+                          if (l.domain_from_is_ip) reasons.push('IP-based');
+                          if (/casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.domain_from)) reasons.push('Suspicious domain');
+                          if (/casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.anchor)) reasons.push('Suspicious anchor');
+                          return (
+                            <tr key={i}>
+                              <td style={{ ...tdStyle, fontSize: 12 }}><a href={l.url_from} target="_blank" rel="noopener" style={{ color: '#ef4444', textDecoration: 'none' }}>{l.domain_from}</a></td>
+                              <td style={{ ...tdStyle, fontSize: 12 }}>{l.anchor || '(empty)'}</td>
+                              <td style={tdStyle}><span style={{ fontWeight: 700, color: '#ef4444' }}>{l.domain_from_rank}</span></td>
+                              <td style={tdStyle}>{reasons.map((r, j) => <span key={j} style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: '#ef444422', color: '#ef4444', marginRight: 4 }}>{r}</span>)}</td>
+                              <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{l.first_seen ? new Date(l.first_seen).toLocaleDateString() : '-'}</td>
+                            </tr>
+                          );
+                        })}
+                        {toxicLinks.length === 0 && <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No toxic links found. Your backlink profile looks clean.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>}
+            </>
+          )}
+        </>
+      );
+    }
+
     // ============ COSTS & BUDGET PAGE ============
     function CostsBudgetPage({ project }) {
       const [projectCosts, setProjectCosts] = useState(null);
@@ -30820,6 +31255,8 @@ case 'action-plan':
             return <IntegrationsPage project={project} />;
           case 'costs-budget':
             return <CostsBudgetPage project={project} />;
+          case 'backlinks':
+            return <BacklinksPage project={project} />;
           case 'projects':
             return <ProjectsPage onProjectSwitch={handleProjectSwitch} />;
           default:
@@ -30857,6 +31294,9 @@ case 'action-plan':
             { id: 'redirects', label: '404s & Redirects', icon: 'fas fa-directions' },
             { id: 'internal-linking', label: 'Internal Linking', icon: 'fas fa-link' },
           ] },
+        ]},
+        { section: 'BACKLINKS', items: [
+          { id: 'backlinks', label: 'Backlinks', icon: 'fas fa-external-link-alt' },
         ]},
         { section: 'STRATEGY', items: [
           { id: 'handshake', label: 'Players Handshake', icon: 'fas fa-handshake', localOnly: true },
