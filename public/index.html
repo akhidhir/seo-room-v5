@@ -7887,10 +7887,11 @@
           { text: 'Save changes — your /wp-login.php will now return a 404' },
         ] },
         wp_user_enum: { endpoint: null, label: 'Block User Enumeration', steps: [
-          { text: 'Connect to your site via SFTP or your hosting File Manager' },
-          { text: 'Open the .htaccess file in your WordPress root directory' },
-          { text: 'Add this code BEFORE the WordPress rules (before # BEGIN WordPress):', code: 'RewriteEngine On\nRewriteCond %{QUERY_STRING} ^author=\\d+ [NC]\nRewriteRule .* - [F,L]' },
-          { text: 'Save the file and re-run the security audit to verify' },
+          { text: 'Log in to cPanel → File Manager → navigate to your WordPress root folder (public_html)' },
+          { text: 'Right-click .htaccess → Edit' },
+          { text: 'Find the line that says # BEGIN WordPress — paste this code ABOVE it:', code: '# Block user enumeration (added by SEO Room)\nRewriteEngine On\nRewriteCond %{QUERY_STRING} ^author=\\d+ [NC]\nRewriteRule .* - [F,L]' },
+          { text: 'Click Save Changes' },
+          { text: 'Re-run the security audit to verify' },
         ] },
       };
 
