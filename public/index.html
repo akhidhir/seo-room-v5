@@ -11452,7 +11452,8 @@
       const [loading, setLoading] = useState(true);
       const [running, setRunning] = useState(false);
       const [applying, setApplying] = useState(false);
-      const [tab, setTab] = useState('overview'); // overview, suggestions, graph
+      const [tab, setTab] = useState('overview'); // overview, suggestions
+      const [pageFilter, setPageFilter] = useState('all'); // all, orphan, few_links, ok
       const [filter, setFilter] = useState('pending'); // pending, approved, applied, dismissed, all
       const [selectedIds, setSelectedIds] = useState(new Set());
       const [rateLimitMsg, setRateLimitMsg] = useState('');
@@ -11584,7 +11585,7 @@
 
         // Tabs
         React.createElement('div', { style: { display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid #333' } },
-          ['overview', 'suggestions', 'graph'].map(t =>
+          ['overview', 'suggestions'].map(t =>
             React.createElement('button', {
               key: t,
               onClick: () => setTab(t),
@@ -11592,58 +11593,96 @@
                 padding: '10px 24px', background: 'none', border: 'none', borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
                 color: tab === t ? 'var(--accent)' : '#999', cursor: 'pointer', fontSize: 14, fontWeight: tab === t ? 600 : 400, textTransform: 'uppercase'
               }
-            }, t === 'overview' ? `Overview${stats.total_pages ? ` (${stats.total_pages})` : ''}` : t === 'suggestions' ? `Suggestions (${suggestions.length})` : 'Link Graph')
+            }, t === 'overview' ? `Overview${stats.total_pages ? ` (${stats.total_pages})` : ''}` : `Suggestions (${suggestions.length})`)
           )
         ),
 
         // Tab content
         tab === 'overview' && React.createElement('div', null,
-          // Stats row
-          audit?.audited_at && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 } },
+          // Stats row — clickable cards that filter the table
+          audit?.audited_at && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 } },
             [
-              { label: 'PAGES CRAWLED', value: stats.total_pages || 0, color: 'var(--accent)' },
-              { label: 'INTERNAL LINKS', value: stats.total_internal_links || 0, color: '#3b82f6' },
-              { label: 'ORPHAN PAGES', value: stats.orphan_count || 0, color: stats.orphan_count > 0 ? '#ef4444' : '#22c55e' },
-              { label: 'SUGGESTIONS', value: audit?.suggestions_count || 0, color: '#f59e0b' }
+              { label: 'PAGES CRAWLED', value: stats.total_pages || 0, color: 'var(--accent)', filter: 'all' },
+              { label: 'INTERNAL LINKS', value: stats.total_internal_links || 0, color: '#3b82f6', filter: null },
+              { label: 'ORPHAN PAGES', value: stats.orphan_count || 0, color: stats.orphan_count > 0 ? '#ef4444' : '#22c55e', filter: 'orphan' },
+              { label: 'FEW LINKS', value: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count < 3).length, color: '#f59e0b', filter: 'few_links' }
             ].map((s, i) =>
-              React.createElement('div', { key: i, style: { background: '#1a1a2e', borderRadius: 8, padding: 20, textAlign: 'center' } },
+              React.createElement('div', { key: i, onClick: s.filter ? () => setPageFilter(s.filter) : undefined, style: { background: pageFilter === s.filter ? (s.color + '18') : '#1a1a2e', borderRadius: 8, padding: 20, textAlign: 'center', cursor: s.filter ? 'pointer' : 'default', border: pageFilter === s.filter ? `2px solid ${s.color}` : '2px solid transparent', transition: 'all 0.15s' } },
                 React.createElement('div', { style: { fontSize: 32, fontWeight: 700, color: s.color } }, s.value),
                 React.createElement('div', { style: { fontSize: 11, color: '#999', marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 } }, s.label)
               )
             )
           ),
 
-          // Orphan pages
-          orphans.length > 0 && React.createElement('div', { style: { marginBottom: 24 } },
-            React.createElement('h3', { style: { fontSize: 15, color: '#ef4444', marginBottom: 12 } },
-              React.createElement('i', { className: 'fas fa-unlink', style: { marginRight: 8 } }),
-              `Orphan Pages (${orphans.length}) — No inbound internal links`
-            ),
-            React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden' } },
+          // Filter chips
+          audit?.audited_at && stats.page_details?.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' } },
+            [
+              { id: 'all', label: 'All Pages', count: stats.page_details.length, color: 'var(--accent)', icon: 'fas fa-globe' },
+              { id: 'orphan', label: 'Orphans', count: (stats.page_details || []).filter(p => p.is_orphan).length, color: '#ef4444', icon: 'fas fa-unlink' },
+              { id: 'few_links', label: 'Few Links', count: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count < 3).length, color: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
+              { id: 'ok', label: 'OK', count: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count >= 3).length, color: '#22c55e', icon: 'fas fa-check-circle' }
+            ].map(f => React.createElement('button', {
+              key: f.id,
+              onClick: () => setPageFilter(f.id),
+              style: {
+                padding: '6px 14px', borderRadius: 20, border: pageFilter === f.id ? `2px solid ${f.color}` : '1px solid #333',
+                background: pageFilter === f.id ? (f.color + '18') : 'transparent',
+                color: pageFilter === f.id ? f.color : '#999',
+                fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6
+              }
+            },
+              React.createElement('i', { className: f.icon, style: { fontSize: 11 } }),
+              f.label,
+              f.count > 0 && React.createElement('span', { style: { background: pageFilter === f.id ? f.color : '#333', color: pageFilter === f.id ? '#fff' : '#999', padding: '1px 6px', borderRadius: 10, fontSize: 10, marginLeft: 2 } }, f.count)
+            ))
+          ),
+
+          // Page details table (was in "graph" tab, now always in overview)
+          stats.page_details?.length > 0 && (() => {
+            const filteredPages = pageFilter === 'orphan' ? stats.page_details.filter(p => p.is_orphan)
+              : pageFilter === 'few_links' ? stats.page_details.filter(p => !p.is_orphan && p.outbound_count < 3)
+              : pageFilter === 'ok' ? stats.page_details.filter(p => !p.is_orphan && p.outbound_count >= 3)
+              : stats.page_details;
+            return React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden', marginBottom: 24 } },
               React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
                 React.createElement('thead', null,
                   React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
                     React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Page'),
-                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'right', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Word Count')
+                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Outbound'),
+                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Inbound'),
+                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Words'),
+                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Status')
                   )
                 ),
                 React.createElement('tbody', null,
-                  orphans.map((p, i) =>
+                  filteredPages.length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 5, style: { padding: 30, textAlign: 'center', color: '#666' } }, 'No pages match this filter')) :
+                  filteredPages.sort((a, b) => a.inbound_count - b.inbound_count).map((p, i) =>
                     React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
                       React.createElement('td', { style: { padding: '10px 16px' } },
-                        React.createElement('div', { style: { fontWeight: 500, color: '#fff' } }, p.title),
-                        React.createElement('div', { style: { fontSize: 11, color: '#666', marginTop: 2 } }, p.url)
+                        React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
+                        React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, p.url)
                       ),
-                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'right', color: '#999' } }, p.word_count?.toLocaleString())
+                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
+                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
+                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: '#999' } }, p.word_count?.toLocaleString()),
+                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
+                        React.createElement('span', {
+                          style: {
+                            padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+                            background: p.is_orphan ? '#ef444422' : p.outbound_count < 3 ? '#f59e0b22' : '#22c55e22',
+                            color: p.is_orphan ? '#ef4444' : p.outbound_count < 3 ? '#f59e0b' : '#22c55e'
+                          }
+                        }, p.is_orphan ? 'ORPHAN' : p.outbound_count < 3 ? 'FEW LINKS' : 'OK')
+                      )
                     )
                   )
                 )
               )
-            )
-          ),
+            );
+          })(),
 
-          // Most/Least linked
-          stats.most_linked?.length > 0 && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } },
+          // Most/Least linked panels
+          stats.most_linked?.length > 0 && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 } },
             [
               { title: 'Most Linked Pages', data: stats.most_linked, color: '#22c55e' },
               { title: 'Least Linked Pages', data: stats.least_linked, color: '#ef4444' }
@@ -11811,45 +11850,7 @@
           )
         ),
 
-        // Graph tab
-        tab === 'graph' && React.createElement('div', null,
-          // Page details table
-          stats.page_details?.length > 0 ? React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden' } },
-            React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
-              React.createElement('thead', null,
-                React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Page'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Outbound'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Inbound'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Words'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Status')
-                )
-              ),
-              React.createElement('tbody', null,
-                stats.page_details.sort((a, b) => a.inbound_count - b.inbound_count).map((p, i) =>
-                  React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
-                    React.createElement('td', { style: { padding: '10px 16px' } },
-                      React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
-                      React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, p.url)
-                    ),
-                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
-                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
-                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: '#999' } }, p.word_count?.toLocaleString()),
-                    React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
-                      React.createElement('span', {
-                        style: {
-                          padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
-                          background: p.is_orphan ? '#ef444422' : p.outbound_count < 3 ? '#f59e0b22' : '#22c55e22',
-                          color: p.is_orphan ? '#ef4444' : p.outbound_count < 3 ? '#f59e0b' : '#22c55e'
-                        }
-                      }, p.is_orphan ? 'ORPHAN' : p.outbound_count < 3 ? 'FEW LINKS' : 'OK')
-                    )
-                  )
-                )
-              )
-            )
-          ) : React.createElement('div', { style: { textAlign: 'center', padding: 40, color: '#666' } }, 'Run an audit to see the link graph.')
-        )
+        // Graph tab removed — page table now in overview with filter chips
       );
     }
 
