@@ -36928,7 +36928,16 @@ app.post('/api/projects/:projectId/security-audit/fix/xmlrpc', async (req, res) 
     } catch (e) { /* skip */ }
 
     // If we can't do it automatically, return manual instructions
-    res.json({ ok: false, manual: true, instructions: 'Add this to your .htaccess file before the WordPress rules:\n\n<Files xmlrpc.php>\n  Require all denied\n</Files>\n\nOr install the "Disable XML-RPC" plugin from WordPress.org.' });
+    res.json({ ok: false, manual: true, steps: [
+      { text: 'Option A — Block via .htaccess (recommended):' },
+      { text: 'Connect to your site via SFTP or your hosting File Manager' },
+      { text: 'Open the .htaccess file in your WordPress root directory' },
+      { text: 'Add this code BEFORE the WordPress rules (before # BEGIN WordPress):', code: '<Files xmlrpc.php>\n  Require all denied\n</Files>' },
+      { text: 'Save the file' },
+      { text: 'Option B — Install a plugin:' },
+      { text: 'Go to WordPress Admin → Plugins → Add New → search "Disable XML-RPC" → Install & Activate' },
+      { text: 'Re-run the security audit to verify the fix' },
+    ] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -36990,23 +36999,36 @@ app.post('/api/projects/:projectId/security-audit/fix/headers', async (req, res)
       if (resp.ok) return res.json({ ok: true, method: 'plugin' });
     } catch (e) { /* not available */ }
 
-    // Return manual .htaccess instructions
-    const htaccess = `# Security Headers (added by SEO Room)\n<IfModule mod_headers.c>\n  Header always set X-Frame-Options "SAMEORIGIN"\n  Header always set X-Content-Type-Options "nosniff"\n  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"\n  Header always set Referrer-Policy "strict-origin-when-cross-origin"\n  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"\n</IfModule>`;
-    res.json({ ok: false, manual: true, instructions: `Add this to your .htaccess file (before WordPress rules):\n\n${htaccess}` });
+    // Return structured manual steps
+    res.json({ ok: false, manual: true, steps: [
+      { text: 'Connect to your site via SFTP or use the hosting File Manager' },
+      { text: 'Open the .htaccess file in your WordPress root directory' },
+      { text: 'Add this code BEFORE the WordPress rules (before # BEGIN WordPress):', code: '# Security Headers (added by SEO Room)\n<IfModule mod_headers.c>\n  Header always set X-Frame-Options "SAMEORIGIN"\n  Header always set X-Content-Type-Options "nosniff"\n  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"\n  Header always set Referrer-Policy "strict-origin-when-cross-origin"\n  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"\n</IfModule>' },
+      { text: 'Save the file and re-run the security audit to verify' },
+    ] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // POST: Block debug.log access
 app.post('/api/projects/:projectId/security-audit/fix/debug-log', async (req, res) => {
   try {
-    res.json({ ok: false, manual: true, instructions: 'Add this to your .htaccess file:\n\n<Files debug.log>\n  Require all denied\n</Files>\n\nAlso set WP_DEBUG_LOG to false in wp-config.php:\ndefine(\'WP_DEBUG_LOG\', false);' });
+    res.json({ ok: false, manual: true, steps: [
+      { text: 'Open .htaccess in your WordPress root directory' },
+      { text: 'Add this code to block public access to debug.log:', code: '<Files debug.log>\n  Require all denied\n</Files>' },
+      { text: 'Open wp-config.php and set debug log to false:', code: "define('WP_DEBUG_LOG', false);" },
+      { text: 'Save both files and re-run the security audit to verify' },
+    ] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // POST: Fix directory listing
 app.post('/api/projects/:projectId/security-audit/fix/dir-listing', async (req, res) => {
   try {
-    res.json({ ok: false, manual: true, instructions: 'Add this line to the top of your .htaccess file:\n\nOptions -Indexes' });
+    res.json({ ok: false, manual: true, steps: [
+      { text: 'Open .htaccess in your WordPress root directory' },
+      { text: 'Add this line at the top of the file:', code: 'Options -Indexes' },
+      { text: 'Save the file and re-run the security audit to verify' },
+    ] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

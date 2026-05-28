@@ -7878,8 +7878,20 @@
         header_content_security_policy: { endpoint: 'headers', label: 'Add CSP Header', auto: false },
         wp_debug_log: { endpoint: 'debug-log', label: 'Block Debug Log', auto: false },
         dir_listing: { endpoint: 'dir-listing', label: 'Disable Directory Listing', auto: false },
-        wp_login: { endpoint: null, label: 'Hide Login Page', manual: 'Install the "WPS Hide Login" plugin from WordPress.org to move your login page to a custom URL.' },
-        wp_user_enum: { endpoint: null, label: 'Block User Enumeration', manual: 'Install a security plugin like Wordfence or add this to .htaccess:\n\nRewriteCond %{QUERY_STRING} ^author=\\d+ [NC]\nRewriteRule .* - [F,L]' },
+        wp_login: { endpoint: null, label: 'Hide Login Page', steps: [
+          { text: 'Go to WordPress Admin → Plugins → Add New' },
+          { text: 'Search for "WPS Hide Login" and install it' },
+          { text: 'Activate the plugin' },
+          { text: 'Go to Settings → WPS Hide Login' },
+          { text: 'Set a custom login URL (e.g. /my-secret-login)' },
+          { text: 'Save changes — your /wp-login.php will now return a 404' },
+        ] },
+        wp_user_enum: { endpoint: null, label: 'Block User Enumeration', steps: [
+          { text: 'Connect to your site via SFTP or your hosting File Manager' },
+          { text: 'Open the .htaccess file in your WordPress root directory' },
+          { text: 'Add this code BEFORE the WordPress rules (before # BEGIN WordPress):', code: 'RewriteEngine On\nRewriteCond %{QUERY_STRING} ^author=\\d+ [NC]\nRewriteRule .* - [F,L]' },
+          { text: 'Save the file and re-run the security audit to verify' },
+        ] },
       };
 
       const runFix = async (checkId) => {
@@ -7892,7 +7904,12 @@
           return;
         }
 
-        // Manual-only fixes — show instructions
+        // Manual-only fixes with structured steps (from fixMap)
+        if (fix.steps) {
+          setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, steps: fix.steps } }));
+          return;
+        }
+        // Legacy manual string
         if (fix.manual) {
           setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, message: fix.manual } }));
           return;
@@ -7902,8 +7919,10 @@
         setFixingId(checkId);
         try {
           const data = await api(`/projects/${project.id}/security-audit/fix/${fix.endpoint}`, { method: 'POST' });
-          if (data.manual) {
-            setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, message: data.instructions } }));
+          if (data.manual && data.steps) {
+            setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, steps: data.steps } }));
+          } else if (data.manual) {
+            setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, message: data.instructions || data.message } }));
           } else if (data.ok) {
             const msg = data.deleted != null ? `Deleted ${data.deleted} plugin(s)` : data.fixed != null ? `Applied 410 to ${data.fixed} URL(s)` : 'Fixed successfully';
             setFixResult(prev => ({ ...prev, [checkId]: { ok: true, message: msg } }));
@@ -8035,11 +8054,32 @@
                     check.severity !== 'none' && e('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 600, background: sev.bg, color: sev.fg, marginLeft: 4 } }, sev.label)
                   ),
                   e('div', { style: { fontSize: 13, color: 'var(--text3)', paddingLeft: 30, lineHeight: 1.5 } }, check.details),
-                  // Fix result message
-                  fr && !fr.ok && fr.message && e('div', { style: { fontSize: 12, color: fr.manual ? '#818cf8' : '#ef4444', paddingLeft: 30, marginTop: 4, lineHeight: 1.6, background: fr.manual ? 'rgba(99,102,241,0.05)' : 'rgba(239,68,68,0.05)', padding: '10px 14px 10px 30px', borderRadius: 6, whiteSpace: 'pre-wrap', fontFamily: fr.manual ? 'monospace, monospace' : 'inherit' } },
+                  // Fix result — structured steps
+                  fr && !fr.ok && fr.steps && e('div', { style: { paddingLeft: 30, marginTop: 8, background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 8, padding: '14px 18px', lineHeight: 1.6 } },
+                    e('div', { style: { fontSize: 13, fontWeight: 700, color: '#818cf8', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 } },
+                      e('i', { className: 'fas fa-terminal' }), 'Manual Fix Instructions'
+                    ),
+                    ...fr.steps.map((step, si) => e('div', { key: si, style: { marginBottom: step.code ? 12 : 6 } },
+                      e('div', { style: { fontSize: 13, color: 'var(--text1)', display: 'flex', gap: 8, alignItems: 'flex-start' } },
+                        e('span', { style: { color: '#818cf8', fontWeight: 700, minWidth: 20, flexShrink: 0 } }, `${si + 1}.`),
+                        e('span', null, step.text)
+                      ),
+                      step.code && e('div', { style: { marginTop: 6, marginLeft: 28, position: 'relative' } },
+                        e('pre', { style: { background: '#1e1e2e', color: '#a6e3a1', padding: '12px 14px', borderRadius: 6, fontSize: 12, lineHeight: 1.5, overflowX: 'auto', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', paddingRight: 50 } }, step.code),
+                        e('button', {
+                          onClick: () => { navigator.clipboard.writeText(step.code); },
+                          title: 'Copy to clipboard',
+                          style: { position: 'absolute', top: 6, right: 6, background: 'rgba(255,255,255,0.1)', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px 8px', borderRadius: 4, fontSize: 11 }
+                        }, e('i', { className: 'fas fa-copy' }))
+                      )
+                    ))
+                  ),
+                  // Fix result — plain message (legacy or error)
+                  fr && !fr.ok && !fr.steps && fr.message && e('div', { style: { fontSize: 12, color: fr.manual ? '#818cf8' : '#ef4444', paddingLeft: 30, marginTop: 4, lineHeight: 1.6, background: fr.manual ? 'rgba(99,102,241,0.05)' : 'rgba(239,68,68,0.05)', padding: '10px 14px 10px 30px', borderRadius: 6, whiteSpace: 'pre-wrap', fontFamily: fr.manual ? 'monospace, monospace' : 'inherit' } },
                     e('i', { className: fr.manual ? 'fas fa-terminal' : 'fas fa-exclamation-circle', style: { marginRight: 6 } }),
                     fr.message
                   ),
+                  // Fix success message
                   fr?.ok && fr.message && e('div', { style: { fontSize: 12, color: '#22c55e', paddingLeft: 30, marginTop: 4, background: 'rgba(34,197,94,0.05)', padding: '8px 12px 8px 30px', borderRadius: 6 } },
                     e('i', { className: 'fas fa-check-circle', style: { marginRight: 6 } }), fr.message
                   ),
