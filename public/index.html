@@ -11480,20 +11480,32 @@
         if (!project?.id) return;
         api(`/projects/${project.id}/backlinks`).then(data => {
           const bkMap = {};
-          const items = data?.backlinks || data?.items || [];
+          // API returns { scan: { backlinks: [...] } }
+          const scan = data?.scan;
+          const items = scan?.backlinks || [];
+          console.log(`[internal-linking] Loaded ${items.length} backlinks for authority map`);
           items.forEach(bl => {
-            const target = (bl.url_to || '').replace(/\/$/, '').toLowerCase();
+            // Normalize target URL: strip trailing slash, lowercase, also try with/without www
+            const raw = (bl.url_to || '').toLowerCase();
+            const target = raw.replace(/\/$/, '');
             if (!target) return;
-            // Count unique referring domains
             const fromDomain = (bl.url_from || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '');
             if (!bkMap[target]) bkMap[target] = new Set();
             bkMap[target].add(fromDomain);
+            // Also add without www and with www variants
+            const withoutWww = target.replace(/^(https?:\/\/)www\./, '$1');
+            const withWww = target.replace(/^(https?:\/\/)(?!www\.)/, '$1www.');
+            if (!bkMap[withoutWww]) bkMap[withoutWww] = new Set();
+            bkMap[withoutWww].add(fromDomain);
+            if (!bkMap[withWww]) bkMap[withWww] = new Set();
+            bkMap[withWww].add(fromDomain);
           });
           // Convert sets to counts
           const countMap = {};
           Object.entries(bkMap).forEach(([url, domains]) => { countMap[url] = domains.size; });
+          console.log(`[internal-linking] Authority map: ${Object.keys(countMap).length} URLs`);
           setBacklinkMap(countMap);
-        }).catch(() => {});
+        }).catch(e => { console.error('[internal-linking] Backlinks load error:', e); });
       }, [project?.id]);
 
       useEffect(() => { loadData(); }, [project?.id, filter]);
