@@ -8088,7 +8088,43 @@
                   !fr && check.fix && e('div', { style: { fontSize: 12, color: '#22c55e', paddingLeft: 30, marginTop: 2, lineHeight: 1.5, background: 'rgba(34,197,94,0.05)', padding: '8px 12px 8px 30px', borderRadius: 6 } },
                     e('i', { className: 'fas fa-lightbulb', style: { marginRight: 6, color: '#22c55e' } }),
                     check.fix
-                  )
+                  ),
+                  // Plugin list table (for wp_plugins_count check)
+                  check.plugins && check.plugins.length > 0 && (() => {
+                    const actionColor = { remove: { bg: 'rgba(239,68,68,0.12)', fg: '#ef4444', label: 'Remove', icon: 'fa-trash' }, review: { bg: 'rgba(245,158,11,0.12)', fg: '#f59e0b', label: 'Review', icon: 'fa-eye' }, keep: { bg: 'rgba(34,197,94,0.08)', fg: '#22c55e', label: 'Keep', icon: 'fa-check' } };
+                    const sorted = [...check.plugins].sort((a, b) => { const order = { remove: 0, review: 1, keep: 2 }; return (order[a.action] || 2) - (order[b.action] || 2); });
+                    return e('div', { style: { paddingLeft: 30, marginTop: 10 } },
+                      e('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
+                        e('thead', null,
+                          e('tr', { style: { borderBottom: '1px solid var(--border)' } },
+                            e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' } }, 'Plugin'),
+                            e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', width: 70 } }, 'Status'),
+                            e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', width: 80 } }, 'Action'),
+                            e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' } }, 'Reason'),
+                            e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' } }, 'Impact if Removed')
+                          )
+                        ),
+                        e('tbody', null,
+                          ...sorted.map((pl, pi) => {
+                            const ac = actionColor[pl.action] || actionColor.keep;
+                            return e('tr', { key: pi, style: { borderBottom: '1px solid var(--border)', background: pl.action === 'remove' ? 'rgba(239,68,68,0.03)' : pl.action === 'review' ? 'rgba(245,158,11,0.03)' : 'transparent' } },
+                              e('td', { style: { padding: '8px 10px', fontWeight: 600, color: 'var(--text1)' } }, pl.name),
+                              e('td', { style: { padding: '8px 10px' } },
+                                e('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: pl.status === 'active' ? 'rgba(34,197,94,0.12)' : 'rgba(107,114,128,0.15)', color: pl.status === 'active' ? '#22c55e' : '#9ca3af' } }, pl.status === 'active' ? 'Active' : 'Inactive')
+                              ),
+                              e('td', { style: { padding: '8px 10px' } },
+                                e('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: ac.bg, color: ac.fg } },
+                                  e('i', { className: `fas ${ac.icon}`, style: { fontSize: 9 } }), ac.label
+                                )
+                              ),
+                              e('td', { style: { padding: '8px 10px', color: 'var(--text3)', fontSize: 12 } }, pl.reason),
+                              e('td', { style: { padding: '8px 10px', color: pl.action === 'remove' ? '#ef4444' : pl.action === 'review' ? '#f59e0b' : 'var(--text3)', fontSize: 12 } }, pl.impact || '—')
+                            );
+                          })
+                        )
+                      )
+                    );
+                  })()
                 );
               })
             );
@@ -10070,6 +10106,30 @@
         } catch (err) { console.error('410 error:', err); }
       };
 
+      const [bulk410ing, setBulk410ing] = useState(false);
+      const [bulk410Progress, setBulk410Progress] = useState(null);
+      const bulk410Filtered = async () => {
+        const items = filtered404s.filter(x => x.id);
+        if (!items.length) return;
+        if (!confirm('Apply 410 Gone to all ' + items.length + ' URLs in this filter? This tells search engines these pages are permanently gone.')) return;
+        setBulk410ing(true);
+        setBulk410Progress({ done: 0, total: items.length });
+        let done = 0;
+        for (const item of items) {
+          try {
+            await api('/projects/' + project.id + '/plugin/404s/' + item.id + '/redirect', {
+              method: 'POST',
+              body: { target_url: '', redirect_type: 410 }
+            });
+          } catch (err) { console.error('Bulk 410 error:', err); }
+          done++;
+          setBulk410Progress({ done, total: items.length });
+        }
+        setBulk410ing(false);
+        setBulk410Progress(null);
+        load404s();
+      };
+
       const bulkRedirectOrphans = async (mode) => {
         // mode: 'homepage' or '410'
         var orphanItems = fourOhFours.filter(function(f) {
@@ -10336,6 +10396,15 @@
             })()
           ),
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            // Bulk 410 — show for bot/malformed/all filters (not real/preview)
+            (fourCategory === 'bot' || fourCategory === 'malformed' || fourCategory === 'all') && filtered404s.length > 0 && e('button', {
+              style: { ...btnStyle('#ef4444'), padding: '5px 12px', fontSize: 12, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
+              onClick: bulk410Filtered,
+              disabled: bulk410ing
+            },
+              bulk410ing ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin' }), ` ${bulk410Progress?.done || 0}/${bulk410Progress?.total || 0}`) :
+              e('span', null, e('i', { className: 'fas fa-ban' }), ` Bulk 410 (${filtered404s.length})`)
+            ),
             e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
               clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
               clearingAll ? ' Clearing...' : ' Clear All'

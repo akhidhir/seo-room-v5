@@ -36475,8 +36475,10 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
       const checks = [];
       const axios = require('axios');
 
-      const addCheck = (id, name, category, status, severity, details, fix) => {
-        checks.push({ id, name, category, status, severity: status === 'pass' ? 'none' : severity, details, fix });
+      const addCheck = (id, name, category, status, severity, details, fix, extra) => {
+        const c = { id, name, category, status, severity: status === 'pass' ? 'none' : severity, details, fix };
+        if (extra) Object.assign(c, extra);
+        checks.push(c);
       };
 
       // Helper: fetch with timeout
@@ -36712,14 +36714,73 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
           const inactive = plugins.filter(p => p.status === 'inactive');
           const total = plugins.length;
 
-          // Check for known risky plugins
-          const riskyPatterns = /^(hello-dolly|akismet|really-simple-ssl|wordfence|sucuri|ithemes-security|all-in-one-wp-migration|duplicator|file-manager|wpfile-manager|wp-file-manager)/i;
+          // ── Plugin classification ──
+          // REMOVE: security risks, known vulnerable, unnecessary bloat
+          const REMOVE_PATTERNS = [
+            { pattern: /file.?manager|wpfile|elfinder/i, reason: 'Security risk — gives attackers file access if exploited', impact: 'None. Use cPanel File Manager instead.' },
+            { pattern: /hello.?dolly/i, reason: 'Sample plugin with no function', impact: 'None — it only shows lyrics in the admin dashboard.' },
+            { pattern: /developer/i, reason: 'Developer tool, not needed on production', impact: 'None on frontend.' },
+          ];
+          // REVIEW: might not be needed, duplicates, or risky if misconfigured
+          const REVIEW_PATTERNS = [
+            { pattern: /all-in-one-wp-migration|duplicator|updraft/i, reason: 'Migration/backup tool — should be removed after use', impact: 'No impact if migration is complete. Backup plugins should run only when needed.' },
+            { pattern: /classic-editor/i, reason: 'Only needed if Gutenberg is not used', impact: 'If using Elementor for all pages, safe to remove. If any pages use classic editor, keep it.' },
+            { pattern: /add.?to.?any|shareaholic|share.?button/i, reason: 'Social sharing — often adds bloat + external scripts', impact: 'Social share buttons disappear from pages. Low SEO impact.' },
+            { pattern: /click.?rank|rank.?math.*seo.*auto|seo.?auto/i, reason: 'AI SEO automation — review if actually providing value', impact: 'Any auto-generated content or schema changes stop. Review before removing.' },
+            { pattern: /super.?page.?cache|w3.?total|wp.?super|litespeed.?cache|wp.?fastest/i, reason: 'Cache plugin — check if BerqWP or hosting already handles caching', impact: 'Site may slow down if no other caching layer exists. Keep if BerqWP is not active.' },
+            { pattern: /auto.?image.?alt|auto.?alt/i, reason: 'Auto alt text — check if it generates quality alt text or generic ones', impact: 'Alt text stops auto-generating on new uploads. Existing alt text stays.' },
+            { pattern: /really-simple-ssl/i, reason: 'Often unnecessary if SSL is configured at hosting/cPanel level', impact: 'None if your hosting forces HTTPS. If not, removing could break HTTPS redirect.' },
+            { pattern: /popup|optinmonster|convert.?pro|hustle/i, reason: 'Popup plugin — can hurt Core Web Vitals', impact: 'Popups disappear. May affect lead generation.' },
+            { pattern: /slider|revolution|layer.?slider|smart.?slider/i, reason: 'Slider plugin — heavy, often hurts performance', impact: 'Sliders disappear from pages using them. Check which pages have sliders first.' },
+          ];
+          // KEEP: essential WP infrastructure
+          const KEEP_PATTERNS = [
+            { pattern: /elementor/i, reason: 'Page builder — core to site design' },
+            { pattern: /yoast|rank.?math(?!.*auto)/i, reason: 'SEO plugin — manages meta, schema, sitemaps' },
+            { pattern: /woocommerce/i, reason: 'E-commerce — core functionality' },
+            { pattern: /wordfence|sucuri|ithemes.?security|solid.?security/i, reason: 'Security plugin — active protection' },
+            { pattern: /akismet/i, reason: 'Spam protection for comments/forms' },
+            { pattern: /contact.?form|wpforms|gravity|formidable|ninja.?forms/i, reason: 'Form handler — needed for enquiries' },
+            { pattern: /advanced.?custom|acf|custom.?field/i, reason: 'Custom fields — content depends on it' },
+            { pattern: /berqwp|berq/i, reason: 'Speed optimization — handles CWV automatically' },
+            { pattern: /seo.?room/i, reason: 'SEO Room integration plugin' },
+            { pattern: /google.?site.?kit|google.?analytics/i, reason: 'Analytics tracking' },
+            { pattern: /updraft.*plus/i, reason: 'Backup solution — keep for disaster recovery' },
+          ];
+
+          const classifyPlugin = (p) => {
+            const slug = (p.plugin || p.textdomain || '').toLowerCase();
+            const name = (p.name || '').replace(/<[^>]*>/g, '');
+            const test = slug + ' ' + name;
+            const isActive = p.status === 'active';
+
+            // Inactive plugins are always "remove"
+            if (!isActive) {
+              return { name, slug, status: 'inactive', action: 'remove', reason: 'Inactive — can still be exploited even when deactivated', impact: 'None — plugin is already deactivated.' };
+            }
+
+            for (const r of REMOVE_PATTERNS) {
+              if (r.pattern.test(test)) return { name, slug, status: 'active', action: 'remove', reason: r.reason, impact: r.impact };
+            }
+            for (const r of REVIEW_PATTERNS) {
+              if (r.pattern.test(test)) return { name, slug, status: 'active', action: 'review', reason: r.reason, impact: r.impact };
+            }
+            for (const r of KEEP_PATTERNS) {
+              if (r.pattern.test(test)) return { name, slug, status: 'active', action: 'keep', reason: r.reason, impact: null };
+            }
+            // Default: active + unrecognized = keep
+            return { name, slug, status: 'active', action: 'keep', reason: 'Active plugin', impact: null };
+          };
+
+          const classified = plugins.map(classifyPlugin);
+          const removeCount = classified.filter(c => c.action === 'remove').length;
+          const reviewCount = classified.filter(c => c.action === 'review').length;
           const fileManagers = plugins.filter(p => /file.?manager/i.test(p.plugin || p.name || ''));
 
           if (fileManagers.length > 0) {
             addCheck('wp_plugins_filemanager', 'File Manager Plugin Detected', 'plugins', 'fail', 'critical',
               `File manager plugin(s) found: ${fileManagers.map(p => p.name || p.plugin).join(', ')}. These are major security risks.`,
-              'Remove all file manager plugins immediately. Use SFTP/SSH for file management instead.'
+              'Remove all file manager plugins immediately. Use cPanel File Manager instead.'
             );
           }
 
@@ -36730,11 +36791,12 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
             );
           }
 
-          addCheck('wp_plugins_count', 'WordPress Plugins', 'plugins',
-            total > 20 ? 'warning' : 'pass',
-            total > 20 ? 'low' : 'none',
-            `${total} plugin(s) installed, ${total - inactive.length} active`,
-            total > 20 ? 'Consider reducing plugin count. Each plugin is a potential attack surface.' : null
+          const overallStatus = removeCount > 0 ? 'warning' : reviewCount > 0 ? 'warning' : total > 20 ? 'warning' : 'pass';
+          const overallSeverity = removeCount > 0 ? 'medium' : reviewCount > 0 ? 'low' : total > 20 ? 'low' : 'none';
+          addCheck('wp_plugins_count', 'WordPress Plugins', 'plugins', overallStatus, overallSeverity,
+            `${total} plugin(s) installed, ${total - inactive.length} active` + (removeCount > 0 ? ` — ${removeCount} should be removed` : '') + (reviewCount > 0 ? `, ${reviewCount} to review` : ''),
+            removeCount > 0 || reviewCount > 0 ? 'Expand to see per-plugin recommendations below.' : (total > 20 ? 'Consider reducing plugin count. Each plugin is a potential attack surface.' : null),
+            { plugins: classified }
           );
         } else if (pluginsResp.status === 401) {
           addCheck('wp_plugins_count', 'WordPress Plugins', 'plugins', 'info', 'none',
