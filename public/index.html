@@ -11747,7 +11747,7 @@
                 React.createElement('h4', { style: { fontSize: 13, color: panel.color, marginBottom: 12, textTransform: 'uppercase' } }, panel.title),
                 panel.data.map((p, i) =>
                   React.createElement('div', { key: i, style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #222', fontSize: 13 } },
-                    React.createElement('span', { style: { color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.title || p.url),
+                    React.createElement('span', { style: { color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (p.url || '').replace(/^https?:\/\/[^\/]+/, '') || '/'),
                     React.createElement('span', { style: { color: panel.color, fontWeight: 600, marginLeft: 12 } }, `${p.inbound} inbound`)
                   )
                 )
