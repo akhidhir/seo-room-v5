@@ -9922,7 +9922,7 @@
         // Extract path only (strip protocol + domain)
         const p = u.replace(/^https?:\/\/[^\/]+/, '');
         // Bot/spam probes — match on path only
-        const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)/i;
+        const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)|\/server\/php([?\/]|$)|\/upload[s]?\/server([?\/]|$)|jquery[-.]?file[-.]?upload/i;
         const apiProbes = /^\/(api|graphql|gql|v[0-9]+\/_?catalog|_next|swagger|openapi|health|metrics|readyz|livez)([?\/]|$)/i;
         if (botPatterns.test(p) || apiProbes.test(p)) return 'bot';
         // Preview/draft URLs
@@ -10108,10 +10108,27 @@
 
       const [bulk410ing, setBulk410ing] = useState(false);
       const [bulk410Progress, setBulk410Progress] = useState(null);
-      const bulk410Filtered = async () => {
-        const items = filtered404s.filter(x => x.id);
+      const [selected404s, setSelected404s] = useState(new Set());
+
+      const toggle404Select = (id) => {
+        setSelected404s(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id); else next.add(id);
+          return next;
+        });
+      };
+      const selectAll404s = () => {
+        const ids = filtered404s.filter(x => x.id).map(x => x.id);
+        setSelected404s(prev => prev.size === ids.length ? new Set() : new Set(ids));
+      };
+
+      const bulk410Selected = async () => {
+        const items = selected404s.size > 0
+          ? filtered404s.filter(x => x.id && selected404s.has(x.id))
+          : filtered404s.filter(x => x.id);
         if (!items.length) return;
-        if (!confirm('Apply 410 Gone to all ' + items.length + ' URLs in this filter? This tells search engines these pages are permanently gone.')) return;
+        const label = selected404s.size > 0 ? `${items.length} selected` : `all ${items.length} filtered`;
+        if (!confirm(`Apply 410 Gone to ${label} URL(s)? This tells search engines these pages are permanently gone.`)) return;
         setBulk410ing(true);
         setBulk410Progress({ done: 0, total: items.length });
         let done = 0;
@@ -10127,6 +10144,7 @@
         }
         setBulk410ing(false);
         setBulk410Progress(null);
+        setSelected404s(new Set());
         load404s();
       };
 
@@ -10396,14 +10414,14 @@
             })()
           ),
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            // Bulk 410 — show for bot/malformed/all filters (not real/preview)
-            (fourCategory === 'bot' || fourCategory === 'malformed' || fourCategory === 'all') && filtered404s.length > 0 && e('button', {
+            // Bulk 410 — always available, works on selected or all filtered
+            filtered404s.length > 0 && e('button', {
               style: { ...btnStyle('#ef4444'), padding: '5px 12px', fontSize: 12, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
-              onClick: bulk410Filtered,
+              onClick: bulk410Selected,
               disabled: bulk410ing
             },
               bulk410ing ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin' }), ` ${bulk410Progress?.done || 0}/${bulk410Progress?.total || 0}`) :
-              e('span', null, e('i', { className: 'fas fa-ban' }), ` Bulk 410 (${filtered404s.length})`)
+              e('span', null, e('i', { className: 'fas fa-ban' }), selected404s.size > 0 ? ` 410 Selected (${selected404s.size})` : ` Bulk 410 (${filtered404s.length})`)
             ),
             e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
               clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
@@ -10422,6 +10440,9 @@
           e('table', { style: { width: '100%', borderCollapse: 'collapse' } },
             e('thead', null,
               e('tr', null,
+                e('th', { style: { ...thStyle, width: 36, textAlign: 'center' } },
+                  e('input', { type: 'checkbox', checked: selected404s.size > 0 && selected404s.size === filtered404s.filter(x => x.id).length, onChange: selectAll404s, style: { cursor: 'pointer', accentColor: '#6366f1' } })
+                ),
                 e('th', { style: thStyle }, 'URL'),
                 e('th', { style: { ...thStyle, width: 90 } }, 'Type'),
                 e('th', { style: { ...thStyle, width: 140 } }, 'Root Cause'),
@@ -10433,7 +10454,10 @@
             ),
             e('tbody', null,
               filtered404s.map((item, i) => e(React.Fragment, { key: item.id || i },
-                e('tr', { style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
+                e('tr', { style: { background: selected404s.has(item.id) ? 'rgba(99,102,241,0.08)' : i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.03)' } },
+                  e('td', { style: { ...tdStyle, width: 36, textAlign: 'center' } },
+                    item.id && e('input', { type: 'checkbox', checked: selected404s.has(item.id), onChange: () => toggle404Select(item.id), style: { cursor: 'pointer', accentColor: '#6366f1' } })
+                  ),
                   e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.url) },
                     e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url))
                   ),
