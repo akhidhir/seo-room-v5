@@ -11459,6 +11459,8 @@
       const [rateLimitMsg, setRateLimitMsg] = useState('');
       const [editingId, setEditingId] = useState(null);
       const [editData, setEditData] = useState({});
+      const [pageSearch, setPageSearch] = useState('');
+      const [backlinkMap, setBacklinkMap] = useState({}); // { normalizedUrl: referringDomainCount }
 
       const loadData = async () => {
         try {
@@ -11472,6 +11474,27 @@
         } catch (e) { console.error(e); }
         setLoading(false);
       };
+
+      // Load backlinks to build per-page authority map
+      useEffect(() => {
+        if (!project?.id) return;
+        api(`/projects/${project.id}/backlinks`).then(data => {
+          const bkMap = {};
+          const items = data?.backlinks || data?.items || [];
+          items.forEach(bl => {
+            const target = (bl.url_to || '').replace(/\/$/, '').toLowerCase();
+            if (!target) return;
+            // Count unique referring domains
+            const fromDomain = (bl.url_from || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '');
+            if (!bkMap[target]) bkMap[target] = new Set();
+            bkMap[target].add(fromDomain);
+          });
+          // Convert sets to counts
+          const countMap = {};
+          Object.entries(bkMap).forEach(([url, domains]) => { countMap[url] = domains.size; });
+          setBacklinkMap(countMap);
+        }).catch(() => {});
+      }, [project?.id]);
 
       useEffect(() => { loadData(); }, [project?.id, filter]);
 
@@ -11605,7 +11628,7 @@
               { label: 'PAGES CRAWLED', value: stats.total_pages || 0, color: 'var(--accent)', filter: 'all' },
               { label: 'INTERNAL LINKS', value: stats.total_internal_links || 0, color: '#3b82f6', filter: null },
               { label: 'ORPHAN PAGES', value: stats.orphan_count || 0, color: stats.orphan_count > 0 ? '#ef4444' : '#22c55e', filter: 'orphan' },
-              { label: 'FEW LINKS', value: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count < 3).length, color: '#f59e0b', filter: 'few_links' }
+              { label: 'ZERO AUTHORITY', value: (stats.page_details || []).filter(p => { const n = (p.url || '').replace(/\/$/, '').toLowerCase(); return !backlinkMap[n]; }).length, color: '#f97316', filter: 'zero_authority' }
             ].map((s, i) =>
               React.createElement('div', { key: i, onClick: s.filter ? () => setPageFilter(s.filter) : undefined, style: { background: pageFilter === s.filter ? (s.color + '18') : '#1a1a2e', borderRadius: 8, padding: 20, textAlign: 'center', cursor: s.filter ? 'pointer' : 'default', border: pageFilter === s.filter ? `2px solid ${s.color}` : '2px solid transparent', transition: 'all 0.15s' } },
                 React.createElement('div', { style: { fontSize: 32, fontWeight: 700, color: s.color } }, s.value),
@@ -11614,12 +11637,17 @@
             )
           ),
 
-          // Filter chips
-          audit?.audited_at && stats.page_details?.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' } },
+          // Authority helper — lookup referring domains for a page URL
+          // Filter chips + search bar row
+          audit?.audited_at && stats.page_details?.length > 0 && React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' } },
             [
               { id: 'all', label: 'All Pages', count: stats.page_details.length, color: 'var(--accent)', icon: 'fas fa-globe' },
               { id: 'orphan', label: 'Orphans', count: (stats.page_details || []).filter(p => p.is_orphan).length, color: '#ef4444', icon: 'fas fa-unlink' },
               { id: 'few_links', label: 'Few Links', count: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count < 3).length, color: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
+              { id: 'zero_authority', label: 'Zero Authority', count: (stats.page_details || []).filter(p => {
+                const norm = (p.url || '').replace(/\/$/, '').toLowerCase();
+                return !backlinkMap[norm];
+              }).length, color: '#f97316', icon: 'fas fa-shield-halved' },
               { id: 'ok', label: 'OK', count: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count >= 3).length, color: '#22c55e', icon: 'fas fa-check-circle' }
             ].map(f => React.createElement('button', {
               key: f.id,
@@ -11634,15 +11662,35 @@
               React.createElement('i', { className: f.icon, style: { fontSize: 11 } }),
               f.label,
               f.count > 0 && React.createElement('span', { style: { background: pageFilter === f.id ? f.color : '#333', color: pageFilter === f.id ? '#fff' : '#999', padding: '1px 6px', borderRadius: 10, fontSize: 10, marginLeft: 2 } }, f.count)
-            ))
+            )),
+            // Search bar
+            React.createElement('div', { style: { flex: 1 } }),
+            React.createElement('div', { style: { position: 'relative', minWidth: 200 } },
+              React.createElement('i', { className: 'fas fa-search', style: { position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#666', fontSize: 12 } }),
+              React.createElement('input', {
+                type: 'text', placeholder: 'Search pages...', value: pageSearch,
+                onChange: ev => setPageSearch(ev.target.value),
+                style: { width: '100%', padding: '7px 12px 7px 30px', background: '#0d0d1a', border: '1px solid #333', borderRadius: 8, color: '#fff', fontSize: 12, outline: 'none' }
+              })
+            )
           ),
 
-          // Page details table (was in "graph" tab, now always in overview)
+          // Page details table
           stats.page_details?.length > 0 && (() => {
-            const filteredPages = pageFilter === 'orphan' ? stats.page_details.filter(p => p.is_orphan)
+            const getAuthority = (url) => {
+              const norm = (url || '').replace(/\/$/, '').toLowerCase();
+              return backlinkMap[norm] || 0;
+            };
+            let filteredPages = pageFilter === 'orphan' ? stats.page_details.filter(p => p.is_orphan)
               : pageFilter === 'few_links' ? stats.page_details.filter(p => !p.is_orphan && p.outbound_count < 3)
               : pageFilter === 'ok' ? stats.page_details.filter(p => !p.is_orphan && p.outbound_count >= 3)
+              : pageFilter === 'zero_authority' ? stats.page_details.filter(p => getAuthority(p.url) === 0)
               : stats.page_details;
+            // Apply search
+            if (pageSearch.trim()) {
+              const q = pageSearch.trim().toLowerCase();
+              filteredPages = filteredPages.filter(p => (p.title || '').toLowerCase().includes(q) || (p.url || '').toLowerCase().includes(q));
+            }
             return React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden', marginBottom: 24 } },
               React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
                 React.createElement('thead', null,
@@ -11650,20 +11698,28 @@
                     React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Page'),
                     React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Outbound'),
                     React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Inbound'),
+                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Authority'),
                     React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Words'),
                     React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Status')
                   )
                 ),
                 React.createElement('tbody', null,
-                  filteredPages.length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 5, style: { padding: 30, textAlign: 'center', color: '#666' } }, 'No pages match this filter')) :
-                  filteredPages.sort((a, b) => a.inbound_count - b.inbound_count).map((p, i) =>
-                    React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
+                  filteredPages.length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 6, style: { padding: 30, textAlign: 'center', color: '#666' } }, 'No pages match this filter')) :
+                  filteredPages.sort((a, b) => a.inbound_count - b.inbound_count).map((p, i) => {
+                    const auth = getAuthority(p.url);
+                    return React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
                       React.createElement('td', { style: { padding: '10px 16px' } },
                         React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
                         React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, p.url)
                       ),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
+                      // Authority column — referring domains from backlinks
+                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
+                        React.createElement('span', {
+                          style: { padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: auth === 0 ? '#ef444422' : auth < 3 ? '#f59e0b22' : '#22c55e22', color: auth === 0 ? '#ef4444' : auth < 3 ? '#f59e0b' : '#22c55e' }
+                        }, auth === 0 ? 'NONE' : auth + ' RD')
+                      ),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: '#999' } }, p.word_count?.toLocaleString()),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
                         React.createElement('span', {
@@ -11674,8 +11730,8 @@
                           }
                         }, p.is_orphan ? 'ORPHAN' : p.outbound_count < 3 ? 'FEW LINKS' : 'OK')
                       )
-                    )
-                  )
+                    );
+                  })
                 )
               )
             );
