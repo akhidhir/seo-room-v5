@@ -1248,7 +1248,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/debug/serp-test', '/api/debug/dfs-test', '/api/test-gpthuman'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/debug/serp-test', '/api/debug/maps-test', '/api/debug/dfs-test', '/api/test-gpthuman'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
@@ -29620,12 +29620,56 @@ app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
               (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)))
             );
 
-            if (nameMatch && !maps.position) {
+            const placeDomain = (place.website || place.domain || place.links?.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+            const domainLower = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+            const domainMatch = domainLower && placeDomain && (placeDomain.includes(domainLower) || domainLower.includes(placeDomain));
+
+            if ((nameMatch || domainMatch) && !maps.position) {
               maps = { position: pos, title: place.title, rating: place.rating, reviews: place.reviews, address: place.address };
             }
 
             if (pos <= 3) {
               localPackTop3.push({ position: pos, title: place.title, rating: place.rating, reviews: place.reviews, source: 'local' });
+            }
+          }
+
+          // Fallback: if business not found in local pack top 3, try google_maps engine for full listing
+          if (!maps.position && provider === 'serpapi' && SERPAPI_KEY) {
+            try {
+              const gps = kw.location ? SUBURB_GPS[(kw.location || '').toLowerCase()] : null;
+              const mapsParams = {
+                engine: 'google_maps',
+                q: `${kw.keyword} ${kw.location || ''}`.trim(),
+                google_domain: 'google.com.au',
+                hl: 'en',
+                type: 'search',
+              };
+              if (gps) {
+                mapsParams.ll = `@${gps.lat},${gps.lng},14z`;
+              } else {
+                mapsParams.location = mapsLoc.replace(/,/g, ', ');
+              }
+              if (idx < 3) console.log(`[maps-serpapi] "${kw.keyword}" not in local pack, trying google_maps engine...`);
+              const mapsData = await serpApiSearch(mapsParams);
+              const fullMapResults = mapsData.local_results || [];
+              const mDomain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+              for (let mp = 0; mp < fullMapResults.length; mp++) {
+                const place = fullMapResults[mp];
+                const tLower = (place.title || '').toLowerCase();
+                const tNoSpaces = tLower.replace(/\s+/g, '');
+                const pos = place.position || (mp + 1);
+                const pDomain = (place.website || place.domain || place.links?.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+                const nm = nameLower && (tLower.includes(nameLower) || tNoSpaces.includes(nameNoSpaces) || (nameWords.length >= 2 && nameWords.every(w => tLower.includes(w))));
+                const dm = mDomain && pDomain && (pDomain.includes(mDomain) || mDomain.includes(pDomain));
+                if ((nm || dm) && !maps.position) {
+                  maps = { position: pos, title: place.title, rating: place.rating, reviews: place.reviews, address: place.address };
+                  if (idx < 3) console.log(`[maps-serpapi] "${kw.keyword}" found in google_maps at position ${pos}: "${place.title}"`);
+                  break;
+                }
+              }
+              if (!maps.position && idx < 3) console.log(`[maps-serpapi] "${kw.keyword}" not found in google_maps either (${fullMapResults.length} results)`);
+            } catch (mapsErr) {
+              if (idx < 3) console.log(`[maps-serpapi] google_maps fallback error: ${mapsErr.message}`);
             }
           }
 
@@ -30393,6 +30437,53 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
             }
             if (pos <= 3) {
               localPackTop3.push({ position: pos, title: place.title, rating: place.rating, reviews: place.reviews, source: 'local' });
+            }
+          }
+
+          // Fallback: if business not found in top 3 local pack, do a google_maps search for full listing
+          if (!maps.position && provider === 'serpapi' && SERPAPI_KEY) {
+            try {
+              const mapsGps = gps || projectGps;
+              const mapsParams = {
+                engine: 'google_maps',
+                q: query,
+                google_domain: 'google.com.au',
+                hl: 'en',
+                type: 'search',
+              };
+              if (mapsGps) {
+                mapsParams.ll = `@${mapsGps.lat},${mapsGps.lng},14z`;
+              } else {
+                // Use location text as fallback
+                const locParts = resolvedLoc.split(',');
+                const state = locParts.length >= 2 ? locParts[1] : '';
+                mapsParams.location = detectedSuburb
+                  ? `${detectedSuburb.charAt(0).toUpperCase() + detectedSuburb.slice(1)}, ${state}, Australia`
+                  : resolvedLoc.replace(/,/g, ', ');
+              }
+              if (idx < 3) console.log(`[rank-sync] "${query}" not in local pack top3, trying google_maps engine...`);
+              const mapsData = await serpApiSearch(mapsParams);
+              const mapsResults = mapsData.local_results || [];
+              for (let mp = 0; mp < mapsResults.length; mp++) {
+                const place = mapsResults[mp];
+                const titleLower = (place.title || '').toLowerCase();
+                const titleNoSpaces = titleLower.replace(/\s+/g, '');
+                const pos = place.position || (mp + 1);
+                const placeDomain = (place.website || place.domain || place.links?.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase();
+                const nameMatch = nameLower && (
+                  titleLower.includes(nameLower) || titleNoSpaces.includes(nameNoSpaces) ||
+                  (nameWords.length >= 2 && nameWords.every(w => titleLower.includes(w)))
+                );
+                const domainMatch2 = domain && placeDomain && (placeDomain.includes(domain.toLowerCase()) || domain.toLowerCase().includes(placeDomain));
+                if ((nameMatch || domainMatch2) && !maps.position) {
+                  maps = { position: pos, title: place.title, rating: place.rating, reviews: place.reviews, address: place.address };
+                  if (idx < 3) console.log(`[rank-sync] "${query}" found in google_maps at position ${pos}: "${place.title}"`);
+                  break;
+                }
+              }
+              if (!maps.position && idx < 3) console.log(`[rank-sync] "${query}" not found in google_maps either (${mapsResults.length} results)`);
+            } catch (mapsErr) {
+              if (idx < 3) console.log(`[rank-sync] "${query}" google_maps fallback error: ${mapsErr.message}`);
             }
           }
 
@@ -33325,6 +33416,31 @@ app.get('/api/debug/serp-test', async (req, res) => {
     });
     const local = (data.local_results?.places || data.local_results || []).map(p => ({ pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews }));
     res.json({ query: q, suburb, gps: gps || null, uule: params.uule || null, location: params.location || null, organic, local, searchInfo: data.search_information });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Debug: test google_maps engine (full maps listing, up to 20 results)
+app.get('/api/debug/maps-test', async (req, res) => {
+  if (!SERPAPI_KEY) return res.status(503).json({ error: 'No SERPAPI_KEY' });
+  const q = req.query.q || 'seo agency perth';
+  const suburb = (req.query.suburb || 'perth').toLowerCase();
+  const gps = SUBURB_GPS[suburb];
+  try {
+    const params = { engine: 'google_maps', q, google_domain: 'google.com.au', hl: 'en', type: 'search' };
+    if (gps) {
+      params.ll = `@${gps.lat},${gps.lng},14z`;
+    } else if (req.query.location) {
+      params.location = req.query.location;
+    } else {
+      params.location = 'Perth, Western Australia, Australia';
+    }
+    const data = await serpApiSearch(params);
+    const results = (data.local_results || []).map(p => ({
+      pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews,
+      website: (p.website || p.links?.website || '').substring(0, 60),
+      address: p.address, type: p.type
+    }));
+    res.json({ query: q, suburb, gps: gps || null, ll: params.ll || null, location: params.location || null, total: results.length, results, searchInfo: data.search_information });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
