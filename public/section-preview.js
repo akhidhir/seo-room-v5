@@ -172,63 +172,83 @@
     // Handle NEW sections
     var newSections = sections.filter(function(s){ return s.is_new; });
     if(newSections.length > 0){
-      var footer = document.querySelector('footer, .site-footer, .elementor-location-footer');
-      var contentArea = document.querySelector('.entry-content, .page-content, .post-content, article, main, #content, .site-content, .elementor-section-wrap') || document.body;
-      // Find an existing content section to clone styling from
-      var templateSection = document.querySelector('.elementor-section.elementor-top-section:not(.elementor-section-full_width)') ||
-                            document.querySelector('.elementor-section.elementor-top-section') ||
-                            document.querySelector('section.elementor-section') ||
-                            document.querySelector('.entry-content > *:last-child');
-      var templateStyles = templateSection ? window.getComputedStyle(templateSection) : null;
+      // Find an existing Elementor text section to clone its entire structure
+      var textWidgets = document.querySelectorAll('.elementor-widget-text-editor');
+      var templateWidget = null;
+      var templateSection = null;
+      // Pick a text widget that has substantial content (not a short CTA)
+      for(var tw=0; tw<textWidgets.length; tw++){
+        var txt = textWidgets[tw].textContent.trim();
+        if(txt.length > 200){
+          templateWidget = textWidgets[tw];
+          // Walk up to find the top-level section
+          templateSection = templateWidget.closest('.elementor-top-section') || templateWidget.closest('.elementor-section') || templateWidget.closest('section');
+          break;
+        }
+      }
+
+      // Fallback: find any content section
+      if(!templateSection){
+        templateSection = document.querySelector('.elementor-section.elementor-top-section') || document.querySelector('section');
+      }
+
+      var insertTarget = null;
+      var insertBefore = null;
+      if(templateSection && templateSection.parentNode){
+        // Insert after the last content section, before footer sections
+        var allTopSections = templateSection.parentNode.querySelectorAll(':scope > .elementor-top-section, :scope > section, :scope > div.elementor-section');
+        if(allTopSections.length > 0){
+          var lastContent = allTopSections[allTopSections.length - 1];
+          insertTarget = lastContent.parentNode;
+          insertBefore = lastContent.nextSibling;
+        }
+      }
+      if(!insertTarget){
+        var footer = document.querySelector('footer, .site-footer, .elementor-location-footer');
+        insertTarget = footer ? footer.parentNode : (document.querySelector('.entry-content, article, main') || document.body);
+        insertBefore = footer || null;
+      }
 
       newSections.forEach(function(ns){
-        var block = document.createElement('div');
-        block.className = 'seo-new-block';
-        block.style.position = 'relative';
-        // Copy key layout styles from existing section to match the page design
-        if(templateStyles){
-          block.style.maxWidth = templateStyles.maxWidth || '1140px';
-          block.style.margin = '0 auto';
-          block.style.padding = templateStyles.padding || '40px 20px';
-          block.style.boxSizing = 'border-box';
-          block.style.fontFamily = templateStyles.fontFamily;
-          block.style.fontSize = templateStyles.fontSize || '16px';
-          block.style.lineHeight = templateStyles.lineHeight || '1.6';
-          block.style.color = templateStyles.color || '#333';
+        var block;
+        if(templateSection){
+          // Clone the entire section structure to preserve Elementor's container/column/widget nesting
+          block = templateSection.cloneNode(true);
+          // Remove Elementor IDs to avoid conflicts
+          block.removeAttribute('data-id');
+          block.querySelectorAll('[data-id]').forEach(function(el){ el.removeAttribute('data-id'); });
+          block.querySelectorAll('[id]').forEach(function(el){ el.removeAttribute('id'); });
+          // Clear all existing text content inside the cloned section
+          var innerWidget = block.querySelector('.elementor-widget-text-editor .elementor-widget-container') ||
+                            block.querySelector('.elementor-widget-container') ||
+                            block.querySelector('.elementor-column-wrap .elementor-widget-wrap') ||
+                            block;
+          // Build new content HTML
+          var heading = ns.draft_heading || ns.heading;
+          var newHtml = (heading ? '<h2>'+heading+'</h2>' : '') + (ns.draft_text || '');
+          innerWidget.innerHTML = newHtml;
+          // Remove extra columns/widgets from the clone (keep only the first text widget area)
+          var extraWidgets = block.querySelectorAll('.elementor-widget');
+          for(var ew=1; ew<extraWidgets.length; ew++){
+            if(extraWidgets[ew].parentNode) extraWidgets[ew].parentNode.removeChild(extraWidgets[ew]);
+          }
         } else {
+          // Non-Elementor fallback
+          block = document.createElement('div');
           block.style.maxWidth = '1140px';
-          block.style.margin = '0 auto';
-          block.style.padding = '40px 20px';
-          block.style.lineHeight = '1.6';
+          block.style.margin = '40px auto';
+          block.style.padding = '20px';
+          var heading = ns.draft_heading || ns.heading;
+          block.innerHTML = (heading ? '<h2>'+heading+'</h2>' : '') + (ns.draft_text || '');
         }
-        // Copy heading styles from existing headings
-        var heading = ns.draft_heading || ns.heading;
-        var existingH2 = document.querySelector('h2:not(.seo-new-block h2)');
-        var h2Style = existingH2 ? window.getComputedStyle(existingH2) : null;
-        var headingHtml = '';
-        if(heading){
-          headingHtml = '<h2 style="' +
-            (h2Style ? 'font-family:'+h2Style.fontFamily+';font-size:'+h2Style.fontSize+';font-weight:'+h2Style.fontWeight+';color:'+h2Style.color+';line-height:'+h2Style.lineHeight+';margin:'+h2Style.margin+';' : '') +
-            '">' + heading + '</h2>';
-        }
-        // Copy paragraph styles from existing paragraphs
-        var existingP = document.querySelector('.entry-content p, .elementor-widget-text-editor p, article p');
-        var pStyle = existingP ? window.getComputedStyle(existingP) : null;
-        var draftHtml = ns.draft_text || '';
-        if(pStyle){
-          // Wrap plain text paragraphs with matching styles
-          var pStyleStr = 'font-family:'+pStyle.fontFamily+';font-size:'+pStyle.fontSize+';line-height:'+pStyle.lineHeight+';color:'+pStyle.color+';margin:'+pStyle.margin+';';
-          draftHtml = draftHtml.replace(/<p>/g, '<p style="'+pStyleStr+'">');
-          draftHtml = draftHtml.replace(/<li>/g, '<li style="'+pStyleStr+'">');
-        }
-        block.innerHTML = headingHtml + draftHtml;
+        block.classList.add('seo-new-block');
+        block.style.position = 'relative';
         var badge = document.createElement('div');
         badge.className = 'seo-new-badge';
         badge.textContent = 'NEW SECTION';
         block.appendChild(badge);
-        // Insert before footer or at end of content
-        if(footer && footer.parentNode) footer.parentNode.insertBefore(block, footer);
-        else contentArea.appendChild(block);
+        if(insertBefore) insertTarget.insertBefore(block, insertBefore);
+        else insertTarget.appendChild(block);
         matched++;
       });
     }
