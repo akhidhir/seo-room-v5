@@ -172,83 +172,55 @@
     // Handle NEW sections
     var newSections = sections.filter(function(s){ return s.is_new; });
     if(newSections.length > 0){
-      // Find an existing Elementor text section to clone its entire structure
-      var textWidgets = document.querySelectorAll('.elementor-widget-text-editor');
-      var templateWidget = null;
-      var templateSection = null;
-      // Pick a text widget that has substantial content (not a short CTA)
-      for(var tw=0; tw<textWidgets.length; tw++){
-        var txt = textWidgets[tw].textContent.trim();
-        if(txt.length > 200){
-          templateWidget = textWidgets[tw];
-          // Walk up to find the top-level section
-          templateSection = templateWidget.closest('.elementor-top-section') || templateWidget.closest('.elementor-section') || templateWidget.closest('section');
-          break;
-        }
-      }
+      // Detect Elementor container width from existing sections
+      var eContainer = document.querySelector('.elementor-container');
+      var containerWidth = eContainer ? window.getComputedStyle(eContainer).maxWidth : '1140px';
+      // Get existing text styles from the page
+      var existingP = document.querySelector('.elementor-widget-text-editor p') || document.querySelector('article p') || document.querySelector('p');
+      var existingH2 = document.querySelector('.elementor-widget-text-editor h2') || document.querySelector('article h2') || document.querySelector('h2');
+      var pCSS = existingP ? window.getComputedStyle(existingP) : null;
+      var h2CSS = existingH2 ? window.getComputedStyle(existingH2) : null;
+      var bgColor = document.querySelector('.elementor-section.elementor-top-section') ? window.getComputedStyle(document.querySelector('.elementor-section.elementor-top-section')).backgroundColor : '#fff';
 
-      // Fallback: find any content section
-      if(!templateSection){
-        templateSection = document.querySelector('.elementor-section.elementor-top-section') || document.querySelector('section');
-      }
-
-      var insertTarget = null;
-      var insertBefore = null;
-      if(templateSection && templateSection.parentNode){
-        // Insert after the last content section, before footer sections
-        var allTopSections = templateSection.parentNode.querySelectorAll(':scope > .elementor-top-section, :scope > section, :scope > div.elementor-section');
-        if(allTopSections.length > 0){
-          var lastContent = allTopSections[allTopSections.length - 1];
-          insertTarget = lastContent.parentNode;
-          insertBefore = lastContent.nextSibling;
-        }
-      }
-      if(!insertTarget){
-        var footer = document.querySelector('footer, .site-footer, .elementor-location-footer');
-        insertTarget = footer ? footer.parentNode : (document.querySelector('.entry-content, article, main') || document.body);
-        insertBefore = footer || null;
-      }
+      // Find where to insert — after last main content section, before footer
+      var footer = document.querySelector('footer, .site-footer, .elementor-location-footer');
+      var sectionWrap = document.querySelector('.elementor-section-wrap, [data-elementor-type="wp-page"], [data-elementor-type="wp-post"], .entry-content, article, main');
+      var insertTarget = sectionWrap || (footer ? footer.parentNode : document.body);
+      var insertBefore = footer && insertTarget.contains(footer) ? footer : null;
 
       newSections.forEach(function(ns){
-        var block;
-        if(templateSection){
-          // Clone the entire section structure to preserve Elementor's container/column/widget nesting
-          block = templateSection.cloneNode(true);
-          // Remove Elementor IDs to avoid conflicts
-          block.removeAttribute('data-id');
-          block.querySelectorAll('[data-id]').forEach(function(el){ el.removeAttribute('data-id'); });
-          block.querySelectorAll('[id]').forEach(function(el){ el.removeAttribute('id'); });
-          // Clear all existing text content inside the cloned section
-          var innerWidget = block.querySelector('.elementor-widget-text-editor .elementor-widget-container') ||
-                            block.querySelector('.elementor-widget-container') ||
-                            block.querySelector('.elementor-column-wrap .elementor-widget-wrap') ||
-                            block;
-          // Build new content HTML
-          var heading = ns.draft_heading || ns.heading;
-          var newHtml = (heading ? '<h2>'+heading+'</h2>' : '') + (ns.draft_text || '');
-          innerWidget.innerHTML = newHtml;
-          // Remove extra columns/widgets from the clone (keep only the first text widget area)
-          var extraWidgets = block.querySelectorAll('.elementor-widget');
-          for(var ew=1; ew<extraWidgets.length; ew++){
-            if(extraWidgets[ew].parentNode) extraWidgets[ew].parentNode.removeChild(extraWidgets[ew]);
-          }
-        } else {
-          // Non-Elementor fallback
-          block = document.createElement('div');
-          block.style.maxWidth = '1140px';
-          block.style.margin = '40px auto';
-          block.style.padding = '20px';
-          var heading = ns.draft_heading || ns.heading;
-          block.innerHTML = (heading ? '<h2>'+heading+'</h2>' : '') + (ns.draft_text || '');
+        // Build a section that matches the page's container width and typography
+        var section = document.createElement('section');
+        section.className = 'seo-new-block';
+        section.style.cssText = 'position:relative;padding:50px 20px;background:' + bgColor + ';';
+        var container = document.createElement('div');
+        container.style.cssText = 'max-width:' + containerWidth + ';margin:0 auto;';
+
+        var heading = ns.draft_heading || ns.heading;
+        var headingEl = '';
+        if(heading){
+          headingEl = '<h2 style="' + (h2CSS ? 'font-family:'+h2CSS.fontFamily+';font-size:'+h2CSS.fontSize+';font-weight:'+h2CSS.fontWeight+';color:'+h2CSS.color+';line-height:'+h2CSS.lineHeight+';margin-bottom:20px;' : 'font-size:28px;font-weight:700;margin-bottom:20px;') + '">' + heading + '</h2>';
         }
-        block.classList.add('seo-new-block');
-        block.style.position = 'relative';
+
+        var bodyHtml = ns.draft_text || '';
+        // Apply page's paragraph styling to all p and li tags
+        if(pCSS){
+          var pStyle = 'font-family:'+pCSS.fontFamily+';font-size:'+pCSS.fontSize+';line-height:'+pCSS.lineHeight+';color:'+pCSS.color+';';
+          bodyHtml = bodyHtml.replace(/<p>/g, '<p style="'+pStyle+'">');
+          bodyHtml = bodyHtml.replace(/<li>/g, '<li style="'+pStyle+'">');
+          bodyHtml = bodyHtml.replace(/<h3>/g, '<h3 style="font-family:'+pCSS.fontFamily+';color:'+pCSS.color+';margin:20px 0 10px;">');
+        }
+
+        container.innerHTML = headingEl + bodyHtml;
+        section.appendChild(container);
+
         var badge = document.createElement('div');
         badge.className = 'seo-new-badge';
         badge.textContent = 'NEW SECTION';
-        block.appendChild(badge);
-        if(insertBefore) insertTarget.insertBefore(block, insertBefore);
-        else insertTarget.appendChild(block);
+        section.appendChild(badge);
+
+        if(insertBefore) insertTarget.insertBefore(section, insertBefore);
+        else insertTarget.appendChild(section);
         matched++;
       });
     }
