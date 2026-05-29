@@ -20687,15 +20687,15 @@
       };
 
       const checkCompetitorWords = async () => {
-        console.log('[ContentScore] Check competitors clicked', { focusKeyword, targetKeywords, pageTitle, projectId });
+        console.log('[ContentScore] Check competitors clicked', { focusKeyword, targetKeywords, pageTitle, projectId, buildId });
         if (!focusKeyword && !(targetKeywords && targetKeywords[0])) {
-          alert('Set a focus keyword or add at least one target keyword first — without it, competitor analysis will search for the wrong thing.');
+          alert('Set a focus keyword or add at least one target keyword first.');
           return;
         }
         const kw = focusKeyword || targetKeywords[0] || '';
-        if (!kw) return;
-        if (!projectId && !buildId) { console.log('[ContentScore] No projectId or buildId'); return; }
-        if (checkingCompetitors) { console.log('[ContentScore] Already checking'); return; }
+        if (!kw) { alert('No keyword to check'); return; }
+        if (!projectId && !buildId) { alert('No project ID — cannot check competitors'); return; }
+        if (checkingCompetitors) return;
         setCheckingCompetitors(true);
         try {
           const r = await api((buildId ? '/builds/' + buildId : '/projects/' + projectId) + '/competitor-wordcount', {
@@ -21367,8 +21367,8 @@
         setSuggestingKws(true);
         setSuggestedKws([]);
         try {
-          const pageId = selectedItem.page_id || selectedItem.id;
-          const data = await api(`/projects/${pid}/site-pages/${pageId}/suggest-keywords`, {
+          const itemId = selectedItem.id;
+          const data = await api(`/projects/${pid}/content-queue/${itemId}/suggest-keywords`, {
             method: 'POST',
             body: { page_title: selectedItem.page_title || '', page_url: selectedItem.page_url || '', current_content: editContent || selectedItem.current_content || '' }
           });

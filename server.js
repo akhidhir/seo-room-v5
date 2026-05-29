@@ -21320,6 +21320,51 @@ function humanizeDocument(html) {
 
 // AI Optimise a site page — takes score tips + content, returns improved version
 // Suggest target keywords based on brief + page content
+// Suggest keywords for content-queue items (existing site copywriter)
+app.post('/api/projects/:projectId/content-queue/:itemId/suggest-keywords', async (req, res) => {
+  try {
+    const { projectId, itemId } = req.params;
+    const { current_content, page_title, page_url } = req.body;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [itemId, projectId])).rows[0];
+    const content = current_content || item?.draft_content || item?.current_content || '';
+    const plainContent = content.replace(/<[^>]+>/g, ' ').substring(0, 2000);
+    const title = page_title || item?.page_title || '';
+    const focusKw = item?.draft_focus_keyword || item?.current_focus_keyword || '';
+
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured' });
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: `Suggest 5-8 SEO target keywords for this page.
+
+Business: ${project.business_name || project.name} (${project.industry || 'services'}) in ${project.location || 'Australia'}
+Page: ${title}
+URL: ${page_url || item?.page_url || ''}
+Focus keyword: ${focusKw || 'none'}
+
+Page content preview:
+${plainContent}
+
+Rules:
+- Suggest keywords someone would Google to find this page
+- Mix short-tail (2 words) and long-tail (3-5 words)
+- Include location-based variants if relevant
+- Return ONLY a JSON array of strings: ["keyword 1", "keyword 2", ...]` }]
+    });
+    const text = aiResp.content[0].text.trim();
+    const match = text.match(/\[.*\]/s);
+    let keywords = [];
+    if (match) { try { keywords = JSON.parse(match[0]); } catch(e) {} }
+    res.json({ keywords });
+  } catch (err) {
+    console.error('[suggest-keywords-cq] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post(['/api/projects/:projectId/site-pages/:pageId/suggest-keywords', '/api/builds/:buildId/site-pages/:pageId/suggest-keywords'], async (req, res) => {
   try {
     const { projectId, buildId, pageId } = req.params;
