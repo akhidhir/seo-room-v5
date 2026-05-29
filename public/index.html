@@ -12129,7 +12129,10 @@
       const [changeHistory, setChangeHistory] = useState([]);
       const [showHistory, setShowHistory] = useState(false);
       const [rollingBack, setRollingBack] = useState(null);
-      const [searchQuery, setSearchQuery] = useState('');
+      const [searchQuery, setSearchQuery] = useState(() => {
+        if (window._serpFixSearch) { const q = window._serpFixSearch; window._serpFixSearch = null; return q; }
+        return '';
+      });
       const [statFilter, setStatFilter] = useState(null); // null | 'green' | 'orange' | 'red' | 'missingMeta' | 'noFocus'
       const [editingKeyword, setEditingKeyword] = useState({});
       const [savingKeyword, setSavingKeyword] = useState(null);
@@ -24669,7 +24672,7 @@
                                     {/* PRIMARY: Fix button (left, bigger) */}
                                     <div>
                                       {g.fix_action && g.fix_action.type === 'navigate' && (
-                                        <button className="btn" onClick={e => { e.stopPropagation(); if (setPage) setPage(g.fix_action.page); }}
+                                        <button className="btn" onClick={e => { e.stopPropagation(); if (g.fix_action.search) window._serpFixSearch = g.fix_action.search; if (setPage) setPage(g.fix_action.page); }}
                                           style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, background: '#6366f1', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
                                           <i className="fa-solid fa-arrow-right" style={{ marginRight: 6 }} />{g.fix_action.label}
                                         </button>
