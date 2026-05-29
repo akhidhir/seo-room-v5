@@ -6026,8 +6026,9 @@ app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
           // Schema
           const hasSchema = pageData.schema_types && pageData.schema_types.length > 0;
           if (!hasSchema) {
+            const schemaType = project.is_local_business !== false ? 'LocalBusiness or FAQPage' : 'Organization or FAQPage';
             actions.push({ category: 'technical', title: `Add schema markup`, difficulty: 'easy', impact: 'medium',
-              howTo: `This page has no structured data. Go to SEO Room Dashboard → Website Audit → find this page → click "Fix" on the schema issue. The dashboard will auto-generate LocalBusiness or FAQPage schema and push it to WordPress.` });
+              howTo: `This page has no structured data. Go to SEO Room Dashboard → Website Audit → find this page → click "Fix" on the schema issue. The dashboard will auto-generate ${schemaType} schema and push it to WordPress.` });
           }
 
           // Internal links
@@ -6061,8 +6062,8 @@ app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
         }
       }
 
-      // MAPS-specific actions
-      if (mapsPos && mapsPos > 3) {
+      // MAPS-specific actions — only for local businesses
+      if (project.is_local_business !== false && mapsPos && mapsPos > 3) {
         // GBP-related actions based on audit findings
         const gbpIssues = gbpFindings.filter(f => f.severity === 'critical' || f.severity === 'high');
         if (gbpIssues.length > 0) {
