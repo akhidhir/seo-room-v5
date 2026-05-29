@@ -14585,6 +14585,122 @@ app.post('/api/projects/:projectId/content-queue/:id/import-current', async (req
   }
 });
 
+// ── SEO Validation: check draft content against SERP analysis requirements ──
+app.post('/api/projects/:projectId/content-queue/:id/validate-seo', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const draftHtml = item.draft_content || '';
+    const draftPlain = draftHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const draftWords = draftPlain.split(/\s+/).filter(Boolean).length;
+    const draftLower = draftPlain.toLowerCase();
+    const brief = (item.brief || '').toLowerCase();
+    const currentWords = item.current_word_count || 0;
+
+    // Extract keyword from brief (look for quoted keyword in "SERP Analysis Finding: Keyword "X" ...")
+    const kwMatch = (item.brief || '').match(/keyword\s*"([^"]+)"/i) || (item.brief || '').match(/"([^"]+)"\s*into the content/i);
+    const targetKw = kwMatch ? kwMatch[1].toLowerCase() : (item.current_focus_keyword || item.draft_focus_keyword || '').toLowerCase();
+
+    // Extract target word count from brief
+    const wcMatch = (item.brief || '').match(/at least ([\d,]+) words/i);
+    const targetWc = wcMatch ? parseInt(wcMatch[1].replace(/,/g, '')) : null;
+
+    const checks = [];
+
+    // 1. Word count check
+    if (targetWc) {
+      const passed = draftWords >= targetWc * 0.9; // 90% threshold
+      checks.push({
+        check: 'Word Count',
+        status: passed ? 'pass' : 'fail',
+        message: passed ? `${draftWords.toLocaleString()} words (target: ${targetWc.toLocaleString()})` : `Only ${draftWords.toLocaleString()} words — need at least ${targetWc.toLocaleString()}`,
+        current: draftWords,
+        target: targetWc
+      });
+    } else if (draftWords > 0) {
+      const improved = draftWords > currentWords;
+      checks.push({
+        check: 'Word Count',
+        status: improved ? 'pass' : 'warn',
+        message: `${draftWords.toLocaleString()} words (was ${currentWords.toLocaleString()})`,
+        current: draftWords,
+        previous: currentWords
+      });
+    }
+
+    // 2. Keyword density check
+    if (targetKw && targetKw.length > 2) {
+      const kwCount = draftLower.split(targetKw).length - 1;
+      const density = draftWords > 0 ? (kwCount / draftWords * 100) : 0;
+      const passed = kwCount >= 3 && density >= 0.3;
+      checks.push({
+        check: 'Keyword Density',
+        status: passed ? 'pass' : kwCount > 0 ? 'warn' : 'fail',
+        message: passed ? `"${targetKw}" appears ${kwCount} times (${density.toFixed(1)}% density)` : `"${targetKw}" appears only ${kwCount} times (${density.toFixed(1)}% density) — aim for 3+ mentions`,
+        keyword: targetKw,
+        mentions: kwCount,
+        density: density.toFixed(2) + '%'
+      });
+
+      // 3. Keyword in H1
+      const h1s = (draftHtml.match(/<h1[^>]*>(.*?)<\/h1>/gis) || []).map(h => h.replace(/<[^>]*>/g, '').trim().toLowerCase());
+      const kwInH1 = h1s.some(h => targetKw.split(' ').filter(w => w.length > 2).every(w => h.includes(w)));
+      checks.push({
+        check: 'Keyword in H1',
+        status: kwInH1 ? 'pass' : h1s.length === 0 ? 'fail' : 'warn',
+        message: kwInH1 ? `H1 contains keyword: "${h1s[0]}"` : h1s.length === 0 ? 'No H1 tag found in draft' : `H1 "${h1s[0]}" doesn't contain "${targetKw}"`,
+      });
+
+      // 4. Keyword in H2s
+      const h2s = (draftHtml.match(/<h2[^>]*>(.*?)<\/h2>/gis) || []).map(h => h.replace(/<[^>]*>/g, '').trim().toLowerCase());
+      const kwInH2 = h2s.some(h => targetKw.split(' ').filter(w => w.length > 2).some(w => h.includes(w)));
+      checks.push({
+        check: 'Keyword in H2s',
+        status: kwInH2 ? 'pass' : 'warn',
+        message: kwInH2 ? `Found keyword variations in H2 subheadings` : `No H2 contains "${targetKw}" — add it to at least one subheading`,
+      });
+    }
+
+    // 5. Meta title check
+    if (item.draft_meta_title && targetKw) {
+      const kwInTitle = targetKw.split(' ').filter(w => w.length > 2).every(w => item.draft_meta_title.toLowerCase().includes(w));
+      checks.push({
+        check: 'Meta Title',
+        status: kwInTitle ? 'pass' : 'warn',
+        message: kwInTitle ? `Title contains keyword: "${item.draft_meta_title}"` : `Title "${item.draft_meta_title}" should include "${targetKw}"`,
+      });
+    }
+
+    // 6. Meta description check
+    if (item.draft_meta_desc && targetKw) {
+      const kwInMeta = targetKw.split(' ').filter(w => w.length > 2).every(w => item.draft_meta_desc.toLowerCase().includes(w));
+      const metaLen = item.draft_meta_desc.length;
+      checks.push({
+        check: 'Meta Description',
+        status: kwInMeta && metaLen >= 120 && metaLen <= 160 ? 'pass' : 'warn',
+        message: `${metaLen} chars${kwInMeta ? ', contains keyword' : ', missing keyword'}${metaLen < 120 ? ' — too short' : metaLen > 160 ? ' — too long' : ''}`,
+      });
+    }
+
+    const passed = checks.filter(c => c.status === 'pass').length;
+    const failed = checks.filter(c => c.status === 'fail').length;
+    const warned = checks.filter(c => c.status === 'warn').length;
+    const allPassed = failed === 0;
+
+    res.json({
+      ok: true,
+      ready_to_publish: allPassed,
+      score: checks.length > 0 ? Math.round(passed / checks.length * 100) : 0,
+      checks,
+      summary: allPassed ? 'All SEO checks passed — ready to publish' : `${failed} issue(s) need fixing before publishing`,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Generate AI draft for a content queue item (enhanced with keyword context + internal linking)
 app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req, res) => {
   try {

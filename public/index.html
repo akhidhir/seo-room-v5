@@ -21190,6 +21190,8 @@
       const [showPreview, setShowPreview] = useState(false);
       const [expandWords, setExpandWords] = useState(1500);
       const [generating, setGenerating] = useState(null); // item id being generated
+      const [seoValidation, setSeoValidation] = useState(null); // { checks, ready_to_publish, score }
+      const [validating, setValidating] = useState(false);
       const [batchSelected, setBatchSelected] = useState(new Set());
       const [batchGenerating, setBatchGenerating] = useState(false);
       const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 });
@@ -22022,7 +22024,19 @@
                 },
                 style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
               }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 4 } }), 'Move to CW New'),
-              // Draft stage: Send for Approval
+              // Draft stage: Check SEO + Send for Approval
+              selectedItem.stage === 'drafts' && !isPublished && selectedItem.source === 'serp_analysis' && React.createElement('button', {
+                disabled: validating,
+                onClick: async () => {
+                  setValidating(true); setSeoValidation(null);
+                  try {
+                    const r = await api(`/projects/${pid}/content-queue/${selectedItem.id}/validate-seo`, { method: 'POST' });
+                    setSeoValidation(r);
+                  } catch (e) { setSeoValidation({ error: e.message }); }
+                  setValidating(false);
+                },
+                style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+              }, React.createElement('i', { className: validating ? 'fas fa-spinner fa-spin' : 'fas fa-search', style: { marginRight: 6 } }), validating ? 'Checking...' : 'Check SEO'),
               selectedItem.stage === 'drafts' && !isPublished && React.createElement('button', { onClick: () => handleApprove(selectedItem), style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
                 React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 6 } }), 'Send for Approval'),
               // Approval stage: Request Revision (back to Draft) + Approve (move to Publishing)
@@ -22185,6 +22199,22 @@
             )
           ),
 
+
+          // SEO Validation Results (from SERP Analysis)
+          seoValidation && !seoValidation.error && React.createElement('div', {
+            style: { margin: '12px 0', padding: 16, background: seoValidation.ready_to_publish ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border: '1px solid ' + (seoValidation.ready_to_publish ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'), borderRadius: 8 }
+          },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 } },
+              React.createElement('i', { className: seoValidation.ready_to_publish ? 'fas fa-check-circle' : 'fas fa-exclamation-triangle', style: { color: seoValidation.ready_to_publish ? '#22c55e' : '#ef4444', fontSize: 18 } }),
+              React.createElement('span', { style: { fontWeight: 700, fontSize: 14, color: seoValidation.ready_to_publish ? '#22c55e' : '#ef4444' } }, seoValidation.summary),
+              React.createElement('span', { style: { marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' } }, `Score: ${seoValidation.score}%`)
+            ),
+            (seoValidation.checks || []).map((c, i) => React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 } },
+              React.createElement('i', { className: c.status === 'pass' ? 'fas fa-check' : c.status === 'fail' ? 'fas fa-times' : 'fas fa-exclamation', style: { color: c.status === 'pass' ? '#22c55e' : c.status === 'fail' ? '#ef4444' : '#f59e0b', width: 16 } }),
+              React.createElement('span', { style: { fontWeight: 600, color: 'var(--text)', minWidth: 120 } }, c.check),
+              React.createElement('span', { style: { color: 'var(--text2)' } }, c.message)
+            ))
+          ),
 
           // Plagiarism Check Results
           (plagiarismResult || plagiarismError) && React.createElement('div', {
