@@ -31609,7 +31609,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         fix: `Create a new page at ${siteUrl}/${serviceWords.join('-')}/ with H1 "${keyword}", targeted meta title/description, and 800+ words of content about this topic.`,
         competitor_benchmark: validComps.length > 0 ? `Competitors have dedicated pages: ${validComps.map(c => c.url.replace(/^https?:\/\/(www\.)?/, '').split('?')[0]).join(', ')}` : 'Competitors have dedicated pages for this keyword',
         data: { yours: 'No page', competitors: validComps.map(c => c.url).join(', ') },
-        fix_action: { type: 'navigate', page: 'ow-issues', label: 'Create in Copywriter' }
+        fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Open On-Page Audit' }
       });
       quickWins.push(`Register the URL ${siteUrl}/${serviceWords.join('-')}/ and publish a page targeting "${keyword}" — even 500 words starts the indexation clock.`);
     }
@@ -31660,7 +31660,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
       // ────── 4. H1 TAG ──────
       if (!userPage.h1s || userPage.h1s.length === 0) {
         gaps.push({ category: 'On-Page', issue: 'No H1 tag found on the page', impact: 'high', fix: `Add an H1 tag containing "${keyword}" as the main heading.`, data: { yours: 'Missing H1' },
-          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
+          fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Fix in On-Page Audit' }
         });
       } else if (!userPage.kwInH1) {
         gaps.push({
@@ -31670,7 +31670,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           fix: `Change the H1 to include the target keyword. Example: "${suggestedH1}"`,
           competitor_benchmark: `${validComps.filter(c => c.kwInH1).length}/${validComps.length} competitors have the keyword in H1`,
           data: { yours: userPage.h1s[0], competitors: validComps.map(c => c.h1s?.[0]).filter(Boolean) },
-          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
+          fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Fix in On-Page Audit' }
         });
       }
 
@@ -31685,7 +31685,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           fix: `Expand content to at least ${Math.round(avgCompWords * 1.1).toLocaleString()} words. Add sections covering the same topics competitors cover in their H2s.`,
           competitor_benchmark: validComps.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.wordCount.toLocaleString()} words`).join(', '),
           data: { yours: userWords, competitor_avg: avgCompWords, competitors: validComps.map(c => ({ url: c.url, words: c.wordCount })) },
-          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Open Copywriter' }
+          fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Fix in On-Page Audit' }
         });
       } else if (avgCompWords && userWords < avgCompWords * 0.85) {
         gaps.push({
@@ -31694,7 +31694,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'medium',
           fix: `Add ${Math.round(avgCompWords - userWords).toLocaleString()} more words of relevant content. Focus on topics your competitors cover that you don't.`,
           data: { yours: userWords, competitor_avg: avgCompWords },
-          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Open Copywriter' }
+          fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Fix in On-Page Audit' }
         });
       }
 
@@ -31751,7 +31751,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'low',
           fix: `Add ${Math.max(2, Math.round(avgCompImages * 0.7) - (userPage.images || 0))} more relevant images with descriptive alt text containing "${keyword}" variations.`,
           data: { yours: userPage.images || 0, competitor_avg: avgCompImages },
-          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
+          fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Fix in On-Page Audit' }
         });
       }
       if (userPage.images > 0 && userPage.hasAltTags < userPage.images) {
@@ -31873,7 +31873,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'medium',
           fix: `Naturally work "${keyword}" into the content 3-5 more times. Use it in at least one H2, the intro paragraph, and the conclusion.`,
           data: { mentions: userPage.kwDensity, density: `${density.toFixed(2)}%`, word_count: userPage.wordCount },
-          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
+          fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Fix in On-Page Audit' }
         });
       }
     }
