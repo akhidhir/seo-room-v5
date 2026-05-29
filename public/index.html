@@ -22870,10 +22870,16 @@
                 targetKeywords: targetKeywords,
                 projectId: pid,
                 itemId: selectedItem?.id,
+                itemType: 'content-queue',
                 pageTitle: selectedItem?.page_title || '',
+                pageUrl: selectedItem?.page_url || '',
                 onAddKeyword: (kw) => !targetKeywords.includes(kw) && setTargetKeywords([...targetKeywords, kw]),
                 onRemoveKeyword: (kw) => setTargetKeywords(targetKeywords.filter(k => k !== kw)),
-                onScoreChange: setScoreData
+                onScoreChange: setScoreData,
+                onSuggestKeywords: handleSuggestKeywords,
+                suggestingKeywords: suggestingKws,
+                suggestedKws: suggestedKws,
+                onPickKeyword: handlePickKeyword
               })
             )
           ),
