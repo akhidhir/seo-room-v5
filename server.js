@@ -31609,7 +31609,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         fix: `Create a new page at ${siteUrl}/${serviceWords.join('-')}/ with H1 "${keyword}", targeted meta title/description, and 800+ words of content about this topic.`,
         competitor_benchmark: validComps.length > 0 ? `Competitors have dedicated pages: ${validComps.map(c => c.url.replace(/^https?:\/\/(www\.)?/, '').split('?')[0]).join(', ')}` : 'Competitors have dedicated pages for this keyword',
         data: { yours: 'No page', competitors: validComps.map(c => c.url).join(', ') },
-        fix_action: { type: 'navigate', page: 'ow-queue', label: 'Create in Copywriter' }
+        fix_action: { type: 'queue', page: 'ow-queue', label: 'Send to Copywriter', endpoint: `/api/projects/${projectId}/content-queue`, page_id: null, page_url: `${siteUrl}/${serviceWords.join('-')}/`, page_title: kwTitleCase }
       });
       quickWins.push(`Register the URL ${siteUrl}/${serviceWords.join('-')}/ and publish a page targeting "${keyword}" — even 500 words starts the indexation clock.`);
     }
@@ -31685,7 +31685,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           fix: `Expand content to at least ${Math.round(avgCompWords * 1.1).toLocaleString()} words. Add sections covering the same topics competitors cover in their H2s. Use the Copywriter to draft and preview changes safely.`,
           competitor_benchmark: validComps.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.wordCount.toLocaleString()} words`).join(', '),
           data: { yours: userWords, competitor_avg: avgCompWords, competitors: validComps.map(c => ({ url: c.url, words: c.wordCount })) },
-          fix_action: { type: 'navigate', page: 'ow-queue', label: 'Edit in Copywriter' }
+          fix_action: { type: 'queue', page: 'ow-queue', label: 'Send to Copywriter', endpoint: `/api/projects/${projectId}/content-queue`, page_id: wpPageId, page_url: userPageUrl, page_title: onpageData?.title || userPage.title || '' }
         });
       } else if (avgCompWords && userWords < avgCompWords * 0.85) {
         gaps.push({
@@ -31694,7 +31694,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'medium',
           fix: `Add ${Math.round(avgCompWords - userWords).toLocaleString()} more words of relevant content. Focus on topics your competitors cover that you don't.`,
           data: { yours: userWords, competitor_avg: avgCompWords },
-          fix_action: { type: 'navigate', page: 'ow-queue', label: 'Edit in Copywriter' }
+          fix_action: { type: 'queue', page: 'ow-queue', label: 'Send to Copywriter', endpoint: `/api/projects/${projectId}/content-queue`, page_id: wpPageId, page_url: userPageUrl, page_title: onpageData?.title || userPage.title || '' }
         });
       }
 
@@ -31751,7 +31751,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'low',
           fix: `Add ${Math.max(2, Math.round(avgCompImages * 0.7) - (userPage.images || 0))} more relevant images with descriptive alt text containing "${keyword}" variations.`,
           data: { yours: userPage.images || 0, competitor_avg: avgCompImages },
-          fix_action: { type: 'navigate', page: 'ow-queue', label: 'Edit in Copywriter' }
+          fix_action: { type: 'queue', page: 'ow-queue', label: 'Send to Copywriter', endpoint: `/api/projects/${projectId}/content-queue`, page_id: wpPageId, page_url: userPageUrl, page_title: onpageData?.title || userPage.title || '' }
         });
       }
       if (userPage.images > 0 && userPage.hasAltTags < userPage.images) {
@@ -31873,7 +31873,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'medium',
           fix: `Naturally work "${keyword}" into the content 3-5 more times. Use it in at least one H2, the intro paragraph, and the conclusion. Use the Copywriter to edit with design-safe preview.`,
           data: { mentions: userPage.kwDensity, density: `${density.toFixed(2)}%`, word_count: userPage.wordCount },
-          fix_action: { type: 'navigate', page: 'ow-queue', label: 'Edit in Copywriter' }
+          fix_action: { type: 'queue', page: 'ow-queue', label: 'Send to Copywriter', endpoint: `/api/projects/${projectId}/content-queue`, page_id: wpPageId, page_url: userPageUrl, page_title: onpageData?.title || userPage.title || '' }
         });
       }
     }

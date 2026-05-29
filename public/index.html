@@ -24693,6 +24693,29 @@
                                           <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 6 }} />{g.fix_action.label}
                                         </button>
                                       )}
+                                      {g.fix_action && g.fix_action.type === 'queue' && (
+                                        <button className="btn" onClick={async (e) => {
+                                          e.stopPropagation();
+                                          const btn = e.currentTarget;
+                                          btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="margin-right:6px"></i>Sending...';
+                                          try {
+                                            const brief = `SERP Analysis Finding: ${g.issue}\n\nInstructions: ${g.fix}${g.competitor_benchmark ? '\n\nCompetitor benchmark: ' + g.competitor_benchmark : ''}`;
+                                            const resp = await fetch(window.location.origin + g.fix_action.endpoint, {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+                                              body: JSON.stringify({ page_id: g.fix_action.page_id, page_url: g.fix_action.page_url, page_title: g.fix_action.page_title, brief, source: 'serp_analysis', priority: g.impact || 'medium' })
+                                            });
+                                            const data = await resp.json();
+                                            if (resp.ok || (data.existing_id)) {
+                                              btn.innerHTML = '<i class="fa-solid fa-check" style="margin-right:6px"></i>Sent!'; btn.style.background = '#22c55e';
+                                              setTimeout(() => { if (setPage) setPage(g.fix_action.page); }, 800);
+                                            } else { btn.innerHTML = data.error ? data.error.substring(0, 40) : 'Failed'; btn.disabled = false; }
+                                          } catch (err) { btn.innerHTML = 'Error'; btn.disabled = false; }
+                                        }}
+                                          style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, background: '#6366f1', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
+                                          <i className="fa-solid fa-paper-plane" style={{ marginRight: 6 }} />{g.fix_action.label}
+                                        </button>
+                                      )}
                                     </div>
                                     {/* SECONDARY: Schedule for later (right, smaller) */}
                                     <button className="btn" onClick={e => { e.stopPropagation(); sendGapToActionPlan(kw.keyword, g, gi); }}
