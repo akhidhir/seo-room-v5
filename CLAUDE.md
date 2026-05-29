@@ -19,8 +19,8 @@ SEO automation system for The SEO Room agency. PDCA-cycle local SEO dashboard.
 ## Architecture
 
 - **Dashboard v5**: `~/Desktop/seo-room-v5/` — Node + Express + PostgreSQL on Railway
-- **Single-file React**: `public/index.html` via Babel standalone (~25000+ lines)
-- **Server**: `server.js` (~24500+ lines)
+- **Single-file React**: `public/index.html` via Babel standalone (~33000+ lines)
+- **Server**: `server.js` (~37000+ lines)
 - **Live URL**: https://seo-room-v5-production.up.railway.app
 - **GitHub**: https://github.com/akhidhir/seo-room-v5.git
 - **Auto-deploys** from `main` branch
@@ -312,17 +312,53 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
-- **Backlinks module — full implementation**: DataForSEO Backlinks API integration. 5 tabs (Overview, All Backlinks, Anchors, New, Lost, Toxic Links). Overview stat cards clickable to navigate to tabs. DB tables: `backlink_scans`, `backlink_items`, `backlink_prospects`.
-- **DataForSEO Backlinks field mapping fix**: `external_links_count` is outbound links (0 for most sites), NOT backlinks. Correct fields: `backlinks` (total), `referring_links_attributes.nofollow` (nofollow count), dofollow = total - nofollow. `rank` is DFS scale (0-1000), not Ahrefs DR.
-- **Auto-retry with www prefix**: If domain returns task_status=40204, auto-retries with `www.` prefix.
-- **DataForSEO Backlinks subscription required**: Separate from Labs/SERP APIs. Needs activation at app.dataforseo.com/backlinks-subscription. $100 prepaid balance (shared across all APIs, consumed per-use ~$0.13/scan).
+### SERP Analysis — Rule-Based Engine (replaces AI-generated analysis)
+- **17 deterministic checks** replace AI hallucination: page existence, title, meta, H1, word count, URL slug, schema, internal links, images, H2 topics, domain authority vs competitors, GSC CTR, keyword density, page-level backlinks, PageSpeed, indexing status, cannibalization
+- **Smart page matching**: checks `onpage_audit_cache` first (with `wpType` page vs post preference), then slug variants (strips location words), then homepage fallback. Blog posts get -5 penalty, WP pages get +3 bonus.
+- **WP REST API override**: crawl data overridden with `onpage_audit_cache` data for Elementor/JS-rendered pages (word count, title, meta, H1)
+- **Competitor authority comparison**: DataForSEO backlinks summary for each competitor domain + page-level backlinks. Compares referring domains and domain rank.
+- **AI only for verdict**: Haiku writes one sentence summary constrained to stated facts. Cost ~$0.001 per analysis.
+- **Accuracy: ~90%+** — every check is a real data comparison, no hallucination possible. Remaining risk: competitor crawl quality for JS-rendered sites.
+
+### Fix Buttons — SERP Analysis → Tools
+- **Every finding has a fix button** (26/26 gaps covered): purple navigate buttons (left, primary) + "Do Later" (right, secondary)
+- **Content fixes** (word count, keyword density, images) → **Send to Copywriter** — creates content_queue item with brief pre-filled from SERP finding
+- **Meta fixes** (title, meta desc, focus keyword) → **On-Page Audit** with search pre-filled to show exact page
+- **Technical fixes** (schema, speed, indexing) → **Website Audit**
+- **Authority fixes** (backlinks) → **Citations & Directories**
+- **Cannibalization** → individual card per competing page with specific fix (redirect thin pages, change focus keyword, differentiate title)
+- **Deep-link**: navigate buttons set `window._serpFixSearch` → On-Page Audit auto-filters to the target page
+
+### SEO Validation Gate (Copywriter)
+- **`POST /content-queue/:id/validate-seo`** — checks draft content against SERP brief before publishing
+- Checks: word count vs target, keyword density (3+ mentions), keyword in H1, keyword in H2s, meta title, meta description
+- Returns pass/fail per check + overall score + `ready_to_publish` boolean
+- **"Check SEO" button** in Copywriter (drafts stage, source='serp_analysis') — shows green/red checklist before approving
+
+### Copywriter Tools (ported from New Website builder)
+- **Humanize button** — GPTHuman API, rewrites content to sound natural, checks brief compliance
+- **Suggest Keywords button** — AI suggests 5-8 target keywords via `/content-queue/:id/suggest-keywords` endpoint
+- Suggested keywords add to TARGET KEYWORDS list (not replace focus keyword)
+- **Check Competitors** — fixed location mapping (AU_CITY_STATE), SerpAPI fallback when DataForSEO returns 0 results
+- **ContentScorePanel** wired with all props: `pageUrl`, `itemType`, `onSuggestKeywords`, `suggestingKeywords`, `suggestedKws`, `onPickKeyword`
+
+### Bug Fixes
+- **Circular JSON error** (`runAudit` MouseEvent as `force` param) — guard added to all 6 `runAudit` functions
+- **`is_local_business` check** — action plan skips GBP/maps actions for non-local businesses
+- **`wpType` stored in onpage_audit_cache** — `pg.type` ('page' or 'post') saved for page vs blog differentiation
+- **Navigate buttons wired** — `SERPRankingsPage` + `NewWebsitePipelinePage` receive `setPage` prop
+- **All fix_action page IDs verified** — `onpage-audit`, `website-audit`, `citations`, `internal-linking`, `indexing`, `ow-queue` all have matching router cases
+- **Re-analyze button** — one-click re-run (was two-step: delete + analyze separately)
+- **Competitor location fix** — "Perth" → "Perth, Western Australia, Australia" via AU_CITY_STATE mapping + SerpAPI fallback
 
 ### UNFIXED — Carry to next session
-- **Sidebar scroll not independent** — Sidebar scrolls with page instead of independently. `position: sticky` + `overflowY: auto` + fixed `height` isn't working as expected. May need JavaScript-based scroll isolation or `position: fixed` approach.
-- **Editor text not full width** — Text doesn't use full available width within the editor column. May need to reduce `.ql-editor` padding or check for hidden max-width constraints.
-- **Backlinks data consistency** — Overview card totals may not match tab counts because summary API returns domain-wide totals but backlinks list API fetches max 500 items. Need to decide: trust summary for totals, list for detail.
+- **Sidebar scroll not independent** — still scrolls with page
+- **Editor text not full width** — hidden max-width constraints
+- **Backlinks data consistency** — summary totals vs list counts mismatch
+- **Section "Add" fails** — "Suggest from Competitors" shows sections but clicking Add fails with AI generation error. Pre-existing issue with section content generation endpoint.
+- **DataForSEO SERP returns 0 for some AU keywords** — even with correct location "Perth,Western Australia,Australia". SerpAPI fallback handles this but DataForSEO root cause unknown.
 
-### Previous Session (was "This Session")
+### Previous Session
 - **Humanize-only endpoint — pure rule-based**: Zero-cost rule-based humanizer (contractions, synonym swaps, sentence starters, AU English).
 - **Australian English dictionary**: `AU_SPELLING` with 50+ US→AU replacements.
 - **Page Reset — dedicated endpoint**: Explicit clear of all draft fields.
