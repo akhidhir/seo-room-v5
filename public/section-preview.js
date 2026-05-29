@@ -172,47 +172,44 @@
     // Handle NEW sections
     var newSections = sections.filter(function(s){ return s.is_new; });
     if(newSections.length > 0){
-      // Detect Elementor container width from existing sections
-      var eContainer = document.querySelector('.elementor-container');
-      var containerWidth = eContainer ? window.getComputedStyle(eContainer).maxWidth : '1140px';
-      // Get existing text styles from the page
-      var existingP = document.querySelector('.elementor-widget-text-editor p') || document.querySelector('article p') || document.querySelector('p');
-      var existingH2 = document.querySelector('.elementor-widget-text-editor h2') || document.querySelector('article h2') || document.querySelector('h2');
-      var pCSS = existingP ? window.getComputedStyle(existingP) : null;
-      var h2CSS = existingH2 ? window.getComputedStyle(existingH2) : null;
-      var bgColor = document.querySelector('.elementor-section.elementor-top-section') ? window.getComputedStyle(document.querySelector('.elementor-section.elementor-top-section')).backgroundColor : '#fff';
-
-      // Find where to insert — after last main content section, before footer
+      // Use Elementor's own class structure so the page's CSS styles everything automatically
+      var isElementor = !!document.querySelector('.elementor');
+      var sectionWrap = document.querySelector('.elementor-section-wrap, [data-elementor-type="wp-page"], [data-elementor-type="wp-post"]');
       var footer = document.querySelector('footer, .site-footer, .elementor-location-footer');
-      var sectionWrap = document.querySelector('.elementor-section-wrap, [data-elementor-type="wp-page"], [data-elementor-type="wp-post"], .entry-content, article, main');
-      var insertTarget = sectionWrap || (footer ? footer.parentNode : document.body);
-      var insertBefore = footer && insertTarget.contains(footer) ? footer : null;
+      var insertTarget = sectionWrap || (footer ? footer.parentNode : (document.querySelector('.entry-content, article, main') || document.body));
+      var insertBefore = null;
+      // Insert before footer if it's inside our target
+      if(footer && insertTarget.contains(footer)) insertBefore = footer;
 
       newSections.forEach(function(ns){
-        // Build a section that matches the page's container width and typography
-        var section = document.createElement('section');
-        section.className = 'seo-new-block';
-        section.style.cssText = 'position:relative;padding:50px 20px;background:' + bgColor + ';';
-        var container = document.createElement('div');
-        container.style.cssText = 'max-width:' + containerWidth + ';margin:0 auto;';
-
         var heading = ns.draft_heading || ns.heading;
-        var headingEl = '';
-        if(heading){
-          headingEl = '<h2 style="' + (h2CSS ? 'font-family:'+h2CSS.fontFamily+';font-size:'+h2CSS.fontSize+';font-weight:'+h2CSS.fontWeight+';color:'+h2CSS.color+';line-height:'+h2CSS.lineHeight+';margin-bottom:20px;' : 'font-size:28px;font-weight:700;margin-bottom:20px;') + '">' + heading + '</h2>';
-        }
+        var contentHtml = (heading ? '<h2>'+heading+'</h2>' : '') + (ns.draft_text || '');
 
-        var bodyHtml = ns.draft_text || '';
-        // Apply page's paragraph styling to all p and li tags
-        if(pCSS){
-          var pStyle = 'font-family:'+pCSS.fontFamily+';font-size:'+pCSS.fontSize+';line-height:'+pCSS.lineHeight+';color:'+pCSS.color+';';
-          bodyHtml = bodyHtml.replace(/<p>/g, '<p style="'+pStyle+'">');
-          bodyHtml = bodyHtml.replace(/<li>/g, '<li style="'+pStyle+'">');
-          bodyHtml = bodyHtml.replace(/<h3>/g, '<h3 style="font-family:'+pCSS.fontFamily+';color:'+pCSS.color+';margin:20px 0 10px;">');
+        var section;
+        if(isElementor){
+          // Build a proper Elementor section structure — the page's loaded CSS will style it
+          section = document.createElement('section');
+          section.className = 'elementor-section elementor-top-section elementor-element elementor-section-boxed elementor-section-height-default seo-new-block';
+          section.style.position = 'relative';
+          section.innerHTML =
+            '<div class="elementor-container elementor-column-gap-default">' +
+              '<div class="elementor-column elementor-col-100 elementor-top-column elementor-element">' +
+                '<div class="elementor-widget-wrap elementor-element-populated">' +
+                  '<div class="elementor-element elementor-widget elementor-widget-text-editor">' +
+                    '<div class="elementor-widget-container">' +
+                      contentHtml +
+                    '</div>' +
+                  '</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+        } else {
+          // Non-Elementor fallback
+          section = document.createElement('section');
+          section.className = 'seo-new-block';
+          section.style.cssText = 'max-width:1140px;margin:40px auto;padding:20px;position:relative;';
+          section.innerHTML = contentHtml;
         }
-
-        container.innerHTML = headingEl + bodyHtml;
-        section.appendChild(container);
 
         var badge = document.createElement('div');
         badge.className = 'seo-new-badge';
