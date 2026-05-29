@@ -2465,6 +2465,7 @@
       }, [report, project?.id, loading]);
 
       const runAudit = async (force = false) => {
+        if (force && typeof force !== 'boolean') force = false;
         const costFeature = auditKey === 'gbp-external' ? 'gbp_audit' : auditKey === 'gsc-agent' ? 'gsc_audit' : 'website_audit';
         if (!force && !await confirmCost(project.id, costFeature)) return;
         setLoading(true); setError(''); setReport('');
@@ -5497,6 +5498,7 @@
       }, [project?.id]);
 
       const runAudit = async (force = false) => {
+        if (force && typeof force !== 'boolean') force = false;
         setLoading(true); setError('');
         try {
           const res = await api(`/projects/${project.id}/audits/gbp-internal/run`, { method: 'POST', body: { force } });
@@ -6088,6 +6090,7 @@
       useEffect(() => { if (project?.id) loadFindings(); }, [project?.id]);
 
       const runAudit = async (force = false) => {
+        if (force && typeof force !== 'boolean') force = false;
         setLoading(true); setError('');
         try {
           const res = await api(`/projects/${project.id}/audits/gsc/run`, { method: 'POST', body: { force } });
@@ -7429,6 +7432,7 @@
       };
 
       const runAudit = async (force = false) => {
+        if (force && typeof force !== 'boolean') force = false;
         setLoading(true); setError('');
         try {
           const data = await api(`/projects/${project.id}/audits/technical/run`, { method: 'POST', body: { force } });
@@ -11511,6 +11515,7 @@
       useEffect(() => { loadData(); }, [project?.id, filter]);
 
       const runAudit = async (force = false) => {
+        if (force && typeof force !== 'boolean') force = false;
         setRunning(true);
         setRateLimitMsg('');
         try {
@@ -12191,6 +12196,8 @@
       };
 
       const runAudit = async (force = false) => {
+        // Guard: if called from onClick, force will be a MouseEvent — normalize to boolean
+        if (force && typeof force !== 'boolean') force = false;
         setLoading(true); setError('');
         try {
           const data = await api(`/projects/${project.id}/onpage-audit/run`, { method: 'POST', body: { force } });
@@ -12656,7 +12663,7 @@
                   <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix {selected.size} Page{selected.size !== 1 ? 's' : ''}
                 </button>
               )}
-              <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 13 }}>
+              <button className="btn btn-primary" onClick={() => runAudit()} disabled={loading} style={{ fontSize: 13 }}>
                 {loading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run Audit</>}
               </button>
             </div>
