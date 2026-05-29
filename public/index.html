@@ -23634,7 +23634,7 @@
     }
 
     // ============ SERP RANKINGS PAGE ============
-    function SERPRankingsPage({ project }) {
+    function SERPRankingsPage({ project, setPage }) {
       const { keywords, rankings, merged, syncing, importing, addKeyword, removeKeyword, deleteAllKeywords, importKeywords, importCSV, syncRanks, loadData } = useRankData(project);
       const [newKw, setNewKw] = useState('');
       const [history, setHistory] = useState([]);
@@ -24667,7 +24667,7 @@
                                 {g.status !== 'done' && (
                                   <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
                                     {g.fix_action && g.fix_action.type === 'navigate' && (
-                                      <button className="btn" onClick={e => { e.stopPropagation(); setCurrentPage(g.fix_action.page); }}
+                                      <button className="btn" onClick={e => { e.stopPropagation(); if (setPage) setPage(g.fix_action.page); }}
                                         style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', fontWeight: 600 }}>
                                         <i className="fa-solid fa-arrow-right" style={{ marginRight: 4 }} />{g.fix_action.label}
                                       </button>
@@ -31799,7 +31799,7 @@ case 'action-plan':
           case 'maps-rankings':
             return <MapsRankingsPage project={project} setPage={setActiveTab} />;
           case 'serp-rankings':
-            return <SERPRankingsPage project={project} />;
+            return <SERPRankingsPage project={project} setPage={setActiveTab} />;
           case 'discover-local':
             return <DiscoverLocalPage project={project} />;
           case 'baseline-report':

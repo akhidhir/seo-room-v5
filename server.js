@@ -31806,10 +31806,10 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         category: 'Authority',
         issue: `Authority gap — you have ${domainReferringDomains} referring domains vs competitor avg ${avgCompRD} (${Math.round(gap / avgCompRD * 100)}% behind)`,
         impact: 'high',
-        fix: `You need ~${gap} more referring domains to match competitors. Submit to Australian directories (Yellow Pages, True Local, HotFrog — all free), seek guest posts, get supplier/partner links. Focus on quality over quantity.`,
+        fix: `You need ~${gap} more referring domains to match competitors. Go to Citations to check which Australian directories you're missing (Yellow Pages, True Local, HotFrog — all free). Then seek guest posts and supplier/partner links.`,
         competitor_benchmark: compAuthority.map(c => `${c.domain}: ${c.referring_domains} RD, rank ${c.domain_rank}`).join(' | '),
         data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR },
-        fix_action: { type: 'navigate', page: 'backlinks', label: 'Open Backlinks' }
+        fix_action: { type: 'navigate', page: 'citations', label: 'Open Citations & Directories' }
       });
     } else if (avgCompRD !== null && domainReferringDomains < avgCompRD * 0.8) {
       gaps.push({
@@ -31819,7 +31819,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         fix: `Build ${Math.round(avgCompRD - domainReferringDomains)} more referring domains. Focus on industry-relevant sites and content that naturally attracts links.`,
         competitor_benchmark: compAuthority.map(c => `${c.domain}: ${c.referring_domains} RD`).join(' | '),
         data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR },
-        fix_action: { type: 'navigate', page: 'backlinks', label: 'Open Backlinks' }
+        fix_action: { type: 'navigate', page: 'citations', label: 'Open Citations & Directories' }
       });
     } else if (avgCompRD === null) {
       // Fallback to static thresholds if DataForSEO unavailable
@@ -31899,7 +31899,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             fix: `This specific page needs ${avgCompPageRD - pageRD} more referring domains. Create linkable content on this page (stats, guides, tools). Reach out to sites linking to competitors but not you. Submit to niche directories that link to specific service pages.`,
             competitor_benchmark: compPageRDs.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.rd} RD, ${c.backlinks} backlinks`).join(' | '),
             data: { your_page_rd: pageRD, your_page_backlinks: pageBacklinks, competitor_avg_page_rd: avgCompPageRD },
-            fix_action: { type: 'navigate', page: 'backlinks', label: 'Open Backlinks' }
+            fix_action: { type: 'navigate', page: 'citations', label: 'Open Citations & Directories' }
           });
         } else if (avgCompPageRD > 0 && pageRD < avgCompPageRD * 0.7) {
           gaps.push({
