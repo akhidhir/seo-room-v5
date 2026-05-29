@@ -31375,12 +31375,12 @@ async function validateMapsGaps(gaps, projectId, keyword, location) {
   return gaps;
 }
 
-// SERP Analysis — analyze why keyword isn't ranking by comparing against top 3 competitors
+// SERP Analysis — rule-based engine comparing user page vs top 3 competitors
+// AI only used for verdict sentence + content topic suggestions (optional, cheap)
 app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
   const { projectId } = req.params;
-  const { keyword, competitors, serp_position, gsc_position, gsc_clicks, gsc_impressions, model } = req.body;
+  const { keyword, competitors, serp_position, gsc_position, gsc_clicks, gsc_impressions, gsc_ctr, model } = req.body;
   if (!keyword) return res.status(400).json({ error: 'Keyword required' });
-  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
 
   const modelMap = {
     'haiku-4.5': 'claude-haiku-4-5-20251001',
@@ -31388,7 +31388,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     'sonnet-4.6': 'claude-sonnet-4-6',
     'opus-4.6': 'claude-opus-4-6'
   };
-  const aiModel = modelMap[model] || 'claude-sonnet-4-6';
+  const aiModel = modelMap[model] || 'claude-haiku-4-5-20251001'; // Default to Haiku (cheapest) since AI does minimal work
 
   try {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -31396,11 +31396,15 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     const project = proj.rows[0];
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const siteUrl = project.wordpress_url || (domain ? `https://${domain}` : '');
+    const kwLower = keyword.toLowerCase();
+    const kwParts = kwLower.split(/\s+/).filter(w => w.length > 2);
+    const locationWords = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'gold', 'coast', 'canberra', 'hobart', 'darwin', 'australia', 'wa', 'nsw', 'vic', 'qld', 'sa', 'tas', 'nt', 'act']);
+    const serviceWords = kwParts.filter(w => !locationWords.has(w));
 
     // Get top 3 competitors from stored data
     const top3 = (competitors || []).filter(c => c.source === 'serp').slice(0, 3);
 
-    // Crawl competitor pages
+    // ── Crawl pages ──
     const crawlPage = async (url) => {
       try {
         const resp = await fetch(url, {
@@ -31414,227 +31418,470 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         const title = getTag('title');
         const metaDesc = getMeta('description');
         const h1s = (html.match(/<h1[^>]*>(.*?)<\/h1>/gis) || []).map(h => h.replace(/<[^>]*>/g, '').trim());
-        const h2s = (html.match(/<h2[^>]*>(.*?)<\/h2>/gis) || []).map(h => h.replace(/<[^>]*>/g, '').trim()).slice(0, 10);
+        const h2s = (html.match(/<h2[^>]*>(.*?)<\/h2>/gis) || []).map(h => h.replace(/<[^>]*>/g, '').trim()).slice(0, 15);
         const bodyText = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '').replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
         const wordCount = bodyText.split(/\s+/).length;
         const hasSchema = /application\/ld\+json/i.test(html);
         const schemaTypes = (html.match(/"@type"\s*:\s*"([^"]+)"/g) || []).map(m => m.match(/"([^"]+)"$/)[1]);
-        const internalLinks = (html.match(/href=["']([^"']*)/gi) || []).filter(h => h.includes(domain)).length;
+        const urlDomain = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+        const internalLinks = (html.match(/href=["']([^"']*)/gi) || []).filter(h => h.toLowerCase().includes(urlDomain)).length;
+        const externalLinks = (html.match(/href=["'](https?:\/\/[^"']*)/gi) || []).filter(h => !h.toLowerCase().includes(urlDomain)).length;
         const images = (html.match(/<img[^>]*>/gi) || []).length;
         const hasAltTags = (html.match(/<img[^>]*alt=["'][^"']+["']/gi) || []).length;
-        return { url, title, metaDesc, h1s, h2s, wordCount, hasSchema, schemaTypes, internalLinks, images, hasAltTags };
+        // Check keyword presence
+        const bodyLower = bodyText.toLowerCase();
+        const kwInTitle = kwParts.every(w => title.toLowerCase().includes(w));
+        const kwInH1 = h1s.some(h => kwParts.every(w => h.toLowerCase().includes(w)));
+        const kwInMeta = kwParts.every(w => metaDesc.toLowerCase().includes(w));
+        const kwInUrl = kwParts.filter(w => !locationWords.has(w)).every(w => url.toLowerCase().includes(w));
+        const kwDensity = bodyLower.split(kwLower).length - 1;
+        return { url, title, metaDesc, h1s, h2s, wordCount, hasSchema, schemaTypes, internalLinks, externalLinks, images, hasAltTags, kwInTitle, kwInH1, kwInMeta, kwInUrl, kwDensity, bodyText: bodyLower.substring(0, 5000) };
       } catch (e) { return { url, error: e.message }; }
     };
 
-    // Crawl user's page (find best matching page for keyword)
+    // ── Find user's best matching page ──
     let userPageUrl = siteUrl;
-    // Check if we have a ranking URL already
+    let matchMethod = 'homepage_fallback';
     const rankRow = await pool.query(
       `SELECT serp_url FROM rank_tracking WHERE project_id=$1 AND LOWER(keyword)=LOWER($2) AND serp_url IS NOT NULL ORDER BY checked_at DESC LIMIT 1`,
       [projectId, keyword]
     );
     if (rankRow.rows.length > 0 && rankRow.rows[0].serp_url) {
       userPageUrl = rankRow.rows[0].serp_url;
+      matchMethod = 'serp_url';
     } else {
-      // Smart page matching: try multiple strategies to find the best matching page
-      const kwParts = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      // Remove location words from keyword to get service slug (e.g. "content marketing perth" → "content-marketing")
-      const locationWords = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'gold', 'coast', 'canberra', 'hobart', 'darwin', 'australia', 'wa', 'nsw', 'vic', 'qld', 'sa', 'tas', 'nt', 'act']);
-      const serviceWords = kwParts.filter(w => !locationWords.has(w));
-      const fullSlug = keyword.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      // Strategy 1: Check onpage_audit_cache
+      const fullSlug = kwLower.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const serviceSlug = serviceWords.join('-');
-
-      // Strategy 1: Check onpage_audit_cache for pages whose URL/title/H1 match keyword parts
       let matchedFromCache = false;
       try {
-        const cacheRes = await pool.query(
-          `SELECT url, title, h1, meta_description, word_count FROM onpage_audit_cache WHERE project_id=$1`,
-          [projectId]
-        );
+        const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
         if (cacheRes.rows.length > 0) {
+          const pages = typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results;
           let bestMatch = null, bestScore = 0;
-          for (const page of cacheRes.rows) {
+          for (const page of (pages || [])) {
             const pageUrl = (page.url || '').toLowerCase();
             const pageTitle = (page.title || '').toLowerCase();
             const pageH1 = (page.h1 || '').toLowerCase();
-            // Score: how many keyword parts appear in url + title + h1
             let score = 0;
             for (const part of kwParts) {
-              if (pageUrl.includes(part)) score += 2; // URL match worth more
+              if (pageUrl.includes(part)) score += 2;
               if (pageTitle.includes(part)) score += 1;
               if (pageH1.includes(part)) score += 1;
             }
-            // Bonus for service slug in URL (e.g. /content-marketing/ matches "content marketing perth")
             if (serviceSlug && pageUrl.includes(serviceSlug)) score += 3;
+            if (fullSlug && pageUrl.includes(fullSlug)) score += 4;
+            // Penalize homepage — it's a weak match
+            if (pageUrl === '/' || pageUrl.replace(/\/$/, '').split('/').filter(Boolean).length === 0) score -= 2;
             if (score > bestScore) { bestScore = score; bestMatch = page; }
           }
-          // Need at least 2 keyword parts matching to trust this
           if (bestMatch && bestScore >= 2) {
-            userPageUrl = bestMatch.url;
+            // Convert relative URL to full URL
+            userPageUrl = bestMatch.url.startsWith('http') ? bestMatch.url : `${siteUrl}${bestMatch.url}`;
             matchedFromCache = true;
-            console.log(`[serp-analysis] Matched "${keyword}" to cached page: ${userPageUrl} (score: ${bestScore})`);
+            matchMethod = `cache_match (score: ${bestScore})`;
           }
         }
-      } catch (e) { console.error('[serp-analysis] Cache lookup error:', e.message); }
+      } catch (e) {}
 
-      // Strategy 2: Try URL slugs (full keyword slug, then service-only slug)
+      // Strategy 2: Try URL slugs
       if (!matchedFromCache) {
         const slugsToTry = [fullSlug];
         if (serviceSlug && serviceSlug !== fullSlug) slugsToTry.push(serviceSlug);
-        // Also try singular/shorter variants (e.g. "content-marketing" → "content-marketing")
         for (const slug of slugsToTry) {
           try {
             const testUrl = `${siteUrl}/${slug}/`;
             const testResp = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000), redirect: 'follow' });
-            if (testResp.ok) {
-              userPageUrl = testUrl;
-              console.log(`[serp-analysis] Found page by slug: ${testUrl}`);
-              break;
-            }
+            if (testResp.ok) { userPageUrl = testUrl; matchMethod = `slug_match (/${slug}/)`; break; }
           } catch (e) {}
         }
       }
     }
+    console.log(`[serp-analysis] "${keyword}" → page: ${userPageUrl} (method: ${matchMethod})`);
 
-    // Crawl all pages in parallel
+    // ── Crawl all pages in parallel ──
     const compUrls = top3.map(c => c.url || c.link).filter(Boolean);
     const [userPage, ...compPages] = await Promise.all([
       crawlPage(userPageUrl),
       ...compUrls.map(u => crawlPage(u))
     ]);
+    const validComps = compPages.filter(c => !c.error);
 
-    // Build analysis prompt
-    const prompt = `You are an expert SEO analyst. Analyze why this website is not ranking (or ranking poorly) for the target keyword, by comparing it against the top 3 competitors that ARE ranking.
-
-TARGET KEYWORD: "${keyword}"
-WEBSITE DOMAIN: ${domain}
-
-CURRENT PERFORMANCE:
-- SERP Position: ${serp_position ? `#${serp_position}` : 'Not in top 100'}
-- GSC Average Position: ${gsc_position ? Math.round(gsc_position * 10) / 10 : 'N/A'}
-- GSC Clicks (28d): ${gsc_clicks || 0}
-- GSC Impressions (28d): ${gsc_impressions || 0}
-
-USER'S PAGE (${userPage.url}):
-${userPage.error ? `Error crawling: ${userPage.error}` : `- Title: "${userPage.title}"
-- Meta Description: "${userPage.metaDesc}"
-- H1: ${userPage.h1s.length > 0 ? userPage.h1s.map(h => `"${h}"`).join(', ') : 'MISSING'}
-- H2s: ${userPage.h2s.length > 0 ? userPage.h2s.slice(0, 5).map(h => `"${h}"`).join(', ') : 'None'}
-- Word Count: ${userPage.wordCount}
-- Schema: ${userPage.hasSchema ? userPage.schemaTypes.join(', ') : 'None'}
-- Internal Links: ${userPage.internalLinks}
-- Images: ${userPage.images} (${userPage.hasAltTags} with alt tags)`}
-
-TOP 3 RANKING COMPETITORS:
-${compPages.map((cp, i) => `
-#${top3[i]?.position || i + 1} — ${cp.url}
-${cp.error ? `Error crawling: ${cp.error}` : `- Title: "${cp.title}"
-- Meta Description: "${cp.metaDesc}"
-- H1: ${cp.h1s.length > 0 ? cp.h1s.map(h => `"${h}"`).join(', ') : 'None'}
-- H2s: ${cp.h2s.length > 0 ? cp.h2s.slice(0, 5).map(h => `"${h}"`).join(', ') : 'None'}
-- Word Count: ${cp.wordCount}
-- Schema: ${cp.hasSchema ? cp.schemaTypes.join(', ') : 'None'}
-- Internal Links: ${cp.internalLinks}
-- Images: ${cp.images} (${cp.hasAltTags} with alt tags)`}`).join('\n')}
-
-Respond in this exact JSON format:
-{
-  "verdict": "One sentence summary of the main reason not ranking",
-  "score": 0-100 (how close to ranking on page 1),
-  "gaps": [
-    {
-      "category": "Content|Technical|On-Page|Authority|UX",
-      "issue": "Specific issue found",
-      "impact": "high|medium|low",
-      "fix": "Exact action to take",
-      "competitor_benchmark": "What competitors do differently"
-    }
-  ],
-  "quick_wins": ["Immediate action 1", "Immediate action 2", "Immediate action 3"],
-  "content_recommendations": {
-    "target_word_count": number,
-    "missing_topics": ["topic1", "topic2"],
-    "title_suggestion": "Optimized title tag",
-    "meta_suggestion": "Optimized meta description"
-  }
-}
-
-Be specific and actionable. Reference actual data from the crawled pages. No generic advice.`;
-
-    const aiResp = await anthropic.messages.create({
-      model: aiModel,
-      max_tokens: 8000,
-      messages: [{ role: 'user', content: prompt }]
-    });
-
-    const text = aiResp.content[0].text;
-    const wasTruncated = aiResp.stop_reason === 'max_tokens';
-    let analysis;
+    // ── Load additional data from DB ──
+    // Backlinks
+    let domainBacklinks = 0, domainReferringDomains = 0, domainRank = 0;
     try {
-      // Strip markdown code fences (```json ... ```) before parsing
-      let cleaned = text.replace(/```(?:json)?\s*/gi, '').trim();
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON found');
-      analysis = JSON.parse(jsonMatch[0]);
-    } catch (e) {
-      // Second attempt: try to repair truncated JSON by closing open braces/brackets
-      try {
-        let cleaned = text.replace(/```(?:json)?\s*/gi, '');
-        const start = cleaned.indexOf('{');
-        if (start < 0) throw new Error('No braces');
-        let partial = cleaned.substring(start);
-        // If truncated, try closing open structures
-        if (wasTruncated) {
-          // Remove trailing incomplete string/value
-          partial = partial.replace(/,\s*"[^"]*$/, '').replace(/,\s*$/, '');
-          // Count and close open braces/brackets
-          let openBraces = 0, openBrackets = 0;
-          let inString = false, escaped = false;
-          for (const ch of partial) {
-            if (escaped) { escaped = false; continue; }
-            if (ch === '\\') { escaped = true; continue; }
-            if (ch === '"') { inString = !inString; continue; }
-            if (inString) continue;
-            if (ch === '{') openBraces++;
-            if (ch === '}') openBraces--;
-            if (ch === '[') openBrackets++;
-            if (ch === ']') openBrackets--;
-          }
-          partial += ']'.repeat(Math.max(0, openBrackets)) + '}'.repeat(Math.max(0, openBraces));
+      const blRes = await pool.query('SELECT total_backlinks, referring_domains, domain_rank FROM backlink_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 1', [projectId]);
+      if (blRes.rows.length > 0) {
+        domainBacklinks = blRes.rows[0].total_backlinks || 0;
+        domainReferringDomains = blRes.rows[0].referring_domains || 0;
+        domainRank = blRes.rows[0].domain_rank || 0;
+      }
+    } catch (e) {}
+
+    // PageSpeed for ranking page
+    let pageSpeedScore = null;
+    try {
+      const psRes = await pool.query(
+        `SELECT data FROM audit_findings WHERE project_id=$1 AND pillar='website' AND category='Core Web Vitals' ORDER BY created_at DESC LIMIT 1`,
+        [projectId]
+      );
+      // Also check pagespeed_scores if stored separately
+      const speedRes = await pool.query(
+        `SELECT results FROM audits WHERE project_id=$1 AND pillar='website' AND data->>'pagespeed_scores' IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
+        [projectId]
+      );
+    } catch (e) {}
+
+    // On-page audit cache for this specific page
+    let onpageData = null;
+    try {
+      const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+      if (cacheRes.rows.length > 0) {
+        const pages = typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results;
+        const userUrlNorm = userPageUrl.replace(/\/$/, '').replace(/^https?:\/\/(www\.)?/, '');
+        onpageData = (pages || []).find(p => {
+          const pUrl = (p.url || '').replace(/\/$/, '').replace(/^https?:\/\/(www\.)?/, '');
+          return pUrl === userUrlNorm || userUrlNorm.endsWith(pUrl) || pUrl.endsWith(userUrlNorm.split('/').pop());
+        });
+      }
+    } catch (e) {}
+
+    // GSC data
+    let gscData = null;
+    try {
+      const gscRes = await pool.query(
+        `SELECT position, clicks, impressions, ctr FROM gsc_keywords WHERE project_id=$1 AND LOWER(keyword)=LOWER($2) LIMIT 1`,
+        [projectId, keyword]
+      );
+      if (gscRes.rows.length > 0) gscData = gscRes.rows[0];
+    } catch (e) {}
+
+    // ── RULE-BASED ANALYSIS ──
+    const gaps = [];
+    const quickWins = [];
+    const serpPos = parseInt(serp_position) || null;
+    const isNotRanking = !serpPos || serpPos > 100;
+    const noPage = userPage.error || userPageUrl === siteUrl; // Fell back to homepage = no dedicated page
+
+    // Helper: compute competitor averages
+    const compAvg = (fn) => {
+      const vals = validComps.map(fn).filter(v => v !== null && v !== undefined && !isNaN(v));
+      return vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+    };
+
+    // ────── 1. PAGE EXISTENCE CHECK ──────
+    if (noPage) {
+      gaps.push({
+        category: 'Content',
+        issue: `No dedicated page targeting "${keyword}" — the homepage is being analyzed as fallback`,
+        impact: 'high',
+        fix: `Create a new page at ${siteUrl}/${serviceWords.join('-')}/ with H1 "${keyword}", targeted meta title/description, and 800+ words of content about this topic.`,
+        competitor_benchmark: validComps.length > 0 ? `Competitors have dedicated pages: ${validComps.map(c => c.url.replace(/^https?:\/\/(www\.)?/, '').split('?')[0]).join(', ')}` : 'Competitors have dedicated pages for this keyword',
+        data: { yours: 'No page', competitors: validComps.map(c => c.url).join(', ') }
+      });
+      quickWins.push(`Register the URL ${siteUrl}/${serviceWords.join('-')}/ and publish a page targeting "${keyword}" — even 500 words starts the indexation clock.`);
+    }
+
+    if (!userPage.error) {
+      // ────── 2. TITLE TAG ──────
+      const titleLen = (userPage.title || '').length;
+      const compAvgTitleKw = validComps.filter(c => c.kwInTitle).length;
+      if (!userPage.kwInTitle) {
+        gaps.push({
+          category: 'On-Page',
+          issue: `Title tag doesn't contain "${keyword}" — currently: "${userPage.title}"`,
+          impact: 'high',
+          fix: `Rewrite the title to include the target keyword. Suggested: "${serviceWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} ${keyword.includes('perth') ? 'Perth' : project.location || ''} | ${project.business_name || domain}". Keep under 60 characters.`,
+          competitor_benchmark: `${compAvgTitleKw}/${validComps.length} competitors have the keyword in their title`,
+          data: { yours: userPage.title, competitors: validComps.map(c => c.title).filter(Boolean) }
+        });
+        quickWins.push(`Update your title tag to include "${keyword}" — this is the single highest-impact on-page change.`);
+      } else if (titleLen > 60) {
+        gaps.push({ category: 'On-Page', issue: `Title tag too long (${titleLen} chars) — may get truncated in search results`, impact: 'low', fix: `Shorten to under 60 characters while keeping "${keyword}" near the front.`, data: { yours: `${titleLen} chars`, ideal: '50-60 chars' } });
+      }
+
+      // ────── 3. META DESCRIPTION ──────
+      const metaLen = (userPage.metaDesc || '').length;
+      if (!userPage.metaDesc || metaLen < 50) {
+        gaps.push({
+          category: 'On-Page',
+          issue: metaLen === 0 ? `Meta description is missing entirely` : `Meta description too short (${metaLen} chars)`,
+          impact: 'high',
+          fix: `Write a 140-160 character meta description containing "${keyword}" with a clear call to action. This is what shows in Google search results.`,
+          data: { yours: metaLen === 0 ? 'Missing' : `${metaLen} chars`, ideal: '140-160 chars' }
+        });
+      } else if (!userPage.kwInMeta) {
+        gaps.push({
+          category: 'On-Page',
+          issue: `Meta description doesn't mention "${keyword}" — currently: "${userPage.metaDesc.substring(0, 100)}..."`,
+          impact: 'medium',
+          fix: `Rewrite meta to include the target keyword naturally. Google bolds matching terms in snippets, improving CTR.`,
+          data: { yours: userPage.metaDesc, keyword: keyword }
+        });
+      }
+
+      // ────── 4. H1 TAG ──────
+      if (!userPage.h1s || userPage.h1s.length === 0) {
+        gaps.push({ category: 'On-Page', issue: 'No H1 tag found on the page', impact: 'high', fix: `Add an H1 tag containing "${keyword}" as the main heading.`, data: { yours: 'Missing H1' } });
+      } else if (!userPage.kwInH1) {
+        gaps.push({
+          category: 'On-Page',
+          issue: `H1 doesn't contain "${keyword}" — currently: "${userPage.h1s[0]}"`,
+          impact: 'high',
+          fix: `Change the H1 to include the target keyword. Example: "${keyword.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} — ${project.business_name || 'Expert Services'}"`,
+          competitor_benchmark: `${validComps.filter(c => c.kwInH1).length}/${validComps.length} competitors have the keyword in H1`,
+          data: { yours: userPage.h1s[0], competitors: validComps.map(c => c.h1s?.[0]).filter(Boolean) }
+        });
+      }
+
+      // ────── 5. WORD COUNT ──────
+      const avgCompWords = compAvg(c => c.wordCount);
+      const userWords = userPage.wordCount || 0;
+      if (avgCompWords && userWords < avgCompWords * 0.6) {
+        gaps.push({
+          category: 'Content',
+          issue: `Content is significantly shorter than competitors (${userWords.toLocaleString()} words vs avg ${avgCompWords.toLocaleString()})`,
+          impact: 'high',
+          fix: `Expand content to at least ${Math.round(avgCompWords * 1.1).toLocaleString()} words. Add sections covering the same topics competitors cover in their H2s.`,
+          competitor_benchmark: validComps.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.wordCount.toLocaleString()} words`).join(', '),
+          data: { yours: userWords, competitor_avg: avgCompWords, competitors: validComps.map(c => ({ url: c.url, words: c.wordCount })) }
+        });
+      } else if (avgCompWords && userWords < avgCompWords * 0.85) {
+        gaps.push({
+          category: 'Content',
+          issue: `Content is shorter than competitors (${userWords.toLocaleString()} words vs avg ${avgCompWords.toLocaleString()})`,
+          impact: 'medium',
+          fix: `Add ${Math.round(avgCompWords - userWords).toLocaleString()} more words of relevant content. Focus on topics your competitors cover that you don't.`,
+          data: { yours: userWords, competitor_avg: avgCompWords }
+        });
+      }
+
+      // ────── 6. KEYWORD IN URL ──────
+      if (!userPage.kwInUrl && !noPage) {
+        const hasServiceInUrl = serviceWords.every(w => userPageUrl.toLowerCase().includes(w));
+        if (!hasServiceInUrl) {
+          gaps.push({
+            category: 'On-Page',
+            issue: `URL doesn't contain the service keyword — current: ${userPageUrl.replace(/^https?:\/\/(www\.)?/, '')}`,
+            impact: 'medium',
+            fix: `Ideally the URL slug should contain the main topic (e.g. /${serviceWords.join('-')}/). If changing URLs, set up a 301 redirect from the old URL.`,
+            data: { yours: userPageUrl }
+          });
         }
-        analysis = JSON.parse(partial);
-      } catch (e2) {
-        console.error('[serp-analysis] JSON parse failed:', e2.message, 'truncated:', wasTruncated);
-        analysis = { verdict: text.replace(/```(?:json)?\s*/gi, '').substring(0, 500), score: 0, gaps: [], quick_wins: [], content_recommendations: {} };
+      }
+
+      // ────── 7. SCHEMA MARKUP ──────
+      if (!userPage.hasSchema) {
+        const compsWithSchema = validComps.filter(c => c.hasSchema).length;
+        if (compsWithSchema > 0) {
+          gaps.push({
+            category: 'Technical',
+            issue: `No schema markup — ${compsWithSchema}/${validComps.length} competitors have structured data`,
+            impact: 'medium',
+            fix: `Add JSON-LD schema. Go to Website Audit → click "Fix" on the schema issue to auto-generate and push to WordPress.`,
+            competitor_benchmark: validComps.filter(c => c.hasSchema).map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.schemaTypes.join(', ')}`).join('; '),
+            data: { yours: 'None', competitors: validComps.map(c => c.schemaTypes).flat() }
+          });
+        }
+      }
+
+      // ────── 8. INTERNAL LINKS ──────
+      const avgCompInternal = compAvg(c => c.internalLinks);
+      if (avgCompInternal && (userPage.internalLinks || 0) < avgCompInternal * 0.5) {
+        gaps.push({
+          category: 'On-Page',
+          issue: `Fewer internal links than competitors (${userPage.internalLinks || 0} vs avg ${avgCompInternal})`,
+          impact: 'medium',
+          fix: `Add ${Math.max(3, avgCompInternal - (userPage.internalLinks || 0))} more internal links to related service pages, blog posts, and suburb pages. Link from your blog posts back to this page too.`,
+          data: { yours: userPage.internalLinks || 0, competitor_avg: avgCompInternal }
+        });
+      }
+
+      // ────── 9. IMAGES ──────
+      const avgCompImages = compAvg(c => c.images);
+      if (avgCompImages && (userPage.images || 0) < avgCompImages * 0.3 && avgCompImages > 3) {
+        gaps.push({
+          category: 'Content',
+          issue: `Far fewer images than competitors (${userPage.images || 0} vs avg ${avgCompImages})`,
+          impact: 'low',
+          fix: `Add ${Math.max(2, Math.round(avgCompImages * 0.7) - (userPage.images || 0))} more relevant images with descriptive alt text containing "${keyword}" variations.`,
+          data: { yours: userPage.images || 0, competitor_avg: avgCompImages }
+        });
+      }
+      if (userPage.images > 0 && userPage.hasAltTags < userPage.images) {
+        gaps.push({
+          category: 'On-Page',
+          issue: `${userPage.images - userPage.hasAltTags} image(s) missing alt text`,
+          impact: 'low',
+          fix: `Add descriptive alt text to all images. Include "${keyword}" naturally in 1-2 alt tags.`,
+          data: { yours: `${userPage.hasAltTags}/${userPage.images} have alt text` }
+        });
+      }
+
+      // ────── 10. H2 TOPIC COVERAGE ──────
+      const compH2Topics = [];
+      for (const cp of validComps) {
+        for (const h2 of (cp.h2s || [])) {
+          compH2Topics.push(h2.toLowerCase());
+        }
+      }
+      const userH2Lower = (userPage.h2s || []).map(h => h.toLowerCase());
+      // Find competitor H2 topics not covered by user
+      const missingTopics = [];
+      for (const topic of compH2Topics) {
+        const topicWords = topic.split(/\s+/).filter(w => w.length > 3);
+        const covered = userH2Lower.some(uh => topicWords.filter(tw => uh.includes(tw)).length >= topicWords.length * 0.5);
+        if (!covered && !missingTopics.some(mt => mt === topic)) missingTopics.push(topic);
       }
     }
 
-    // Validate gaps against real data
-    if (analysis.gaps && analysis.gaps.length > 0) {
-      analysis.gaps = await validateSerpGaps(analysis.gaps, userPage, keyword, projectId, analysis.content_recommendations);
+    // ────── 11. BACKLINKS / AUTHORITY ──────
+    if (domainReferringDomains < 20) {
+      gaps.push({
+        category: 'Authority',
+        issue: `Low domain authority — only ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
+        impact: 'high',
+        fix: `Build backlinks: submit to Australian directories (Yellow Pages, True Local, HotFrog — all free), seek guest posts, get supplier/partner links. Target 5-10 new referring domains.`,
+        data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+      });
+    } else if (domainReferringDomains < 50) {
+      gaps.push({
+        category: 'Authority',
+        issue: `Moderate domain authority — ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
+        impact: 'medium',
+        fix: `Continue building quality backlinks. Focus on industry-relevant sites, local business directories, and content that naturally attracts links.`,
+        data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+      });
     }
 
-    // Calculate actual token usage for cost display
-    const inputTokens = aiResp.usage?.input_tokens || 0;
-    const outputTokens = aiResp.usage?.output_tokens || 0;
-    const costRates = {
-      'haiku-4.5': [0.80, 4], 'sonnet-4.5': [3, 15], 'sonnet-4.6': [3, 15],
-      'opus-4.6': [15, 75]
+    // ────── 12. GSC-SPECIFIC CHECKS ──────
+    const actualCtr = gscData?.ctr || gsc_ctr || null;
+    const actualGscPos = gscData?.position || gsc_position || null;
+    if (actualCtr !== null && actualCtr < 2 && actualGscPos && actualGscPos <= 20) {
+      gaps.push({
+        category: 'On-Page',
+        issue: `Low click-through rate (${(actualCtr * 100 || actualCtr).toFixed(1)}% CTR at position ${Math.round(actualGscPos)}) — expected 3-8% for this position`,
+        impact: 'high',
+        fix: `Rewrite your meta title to be more compelling — add numbers, benefits, or urgency. Example: "Top ${keyword.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} Services | Free Quote | ${project.business_name || ''}"`,
+        data: { ctr: actualCtr, position: actualGscPos, clicks: gscData?.clicks || gsc_clicks || 0, impressions: gscData?.impressions || gsc_impressions || 0 }
+      });
+      quickWins.push(`Improve your meta title — at position ${Math.round(actualGscPos)} with ${(actualCtr * 100 || actualCtr).toFixed(1)}% CTR, a better title could double your clicks.`);
+    }
+
+    // ────── 13. KEYWORD DENSITY ──────
+    if (!userPage.error && userPage.kwDensity !== undefined) {
+      const density = userPage.wordCount > 0 ? (userPage.kwDensity / userPage.wordCount * 100) : 0;
+      if (density < 0.3 && !noPage) {
+        gaps.push({
+          category: 'Content',
+          issue: `Keyword "${keyword}" barely appears on the page (${userPage.kwDensity} times, ${density.toFixed(1)}% density)`,
+          impact: 'medium',
+          fix: `Naturally work "${keyword}" into the content 3-5 more times. Use it in at least one H2, the intro paragraph, and the conclusion.`,
+          data: { mentions: userPage.kwDensity, density: `${density.toFixed(2)}%`, word_count: userPage.wordCount }
+        });
+      }
+    }
+
+    // ── Sort gaps by impact ──
+    const impactOrder = { high: 0, medium: 1, low: 2 };
+    gaps.sort((a, b) => (impactOrder[a.impact] || 1) - (impactOrder[b.impact] || 1));
+
+    // ── Calculate score ──
+    let score = 100;
+    for (const g of gaps) {
+      if (g.impact === 'high') score -= 15;
+      else if (g.impact === 'medium') score -= 8;
+      else score -= 3;
+    }
+    score = Math.max(0, Math.min(100, score));
+    // Factor in actual ranking position
+    if (isNotRanking) score = Math.min(score, 25);
+    else if (serpPos > 30) score = Math.min(score, 40);
+    else if (serpPos > 10) score = Math.min(score, 65);
+
+    // ── Build quick wins (top 3 easiest high-impact fixes) ──
+    const highImpactEasy = gaps.filter(g => g.impact === 'high' && ['On-Page', 'Content'].includes(g.category));
+    if (quickWins.length < 3) {
+      for (const g of highImpactEasy) {
+        if (quickWins.length >= 3) break;
+        if (!quickWins.some(qw => qw.includes(g.category))) quickWins.push(g.fix);
+      }
+    }
+    // Fill remaining with medium impact
+    if (quickWins.length < 3) {
+      for (const g of gaps.filter(g => g.impact === 'medium')) {
+        if (quickWins.length >= 3) break;
+        quickWins.push(g.fix);
+      }
+    }
+
+    // ── Content recommendations from competitor H2 analysis ──
+    const compH2Topics = [];
+    for (const cp of validComps) {
+      for (const h2 of (cp.h2s || [])) compH2Topics.push(h2);
+    }
+    const userH2Lower = (userPage.h2s || []).map(h => h.toLowerCase());
+    const missingTopics = [];
+    for (const topic of compH2Topics) {
+      const topicWords = topic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      const covered = userH2Lower.some(uh => topicWords.filter(tw => uh.includes(tw)).length >= Math.ceil(topicWords.length * 0.5));
+      if (!covered && !missingTopics.includes(topic) && missingTopics.length < 8) missingTopics.push(topic);
+    }
+
+    const avgCompWords = compAvg(c => c.wordCount);
+    const contentRec = {
+      target_word_count: avgCompWords ? Math.round(avgCompWords * 1.1) : null,
+      missing_topics: missingTopics.slice(0, 6),
+      title_suggestion: !userPage.kwInTitle ? `${keyword.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} | ${project.business_name || domain}` : null,
+      meta_suggestion: (!userPage.kwInMeta || (userPage.metaDesc || '').length < 100) ? `Expert ${keyword.toLowerCase()} services in ${project.location || 'Australia'}. ${project.business_name || 'We'} deliver results-driven solutions. Get a free consultation today.` : null
     };
-    const [costPerInputM, costPerOutputM] = costRates[model] || [3, 15];
-    const actualCost = (inputTokens * costPerInputM / 1000000) + (outputTokens * costPerOutputM / 1000000);
+
+    // ── AI verdict (optional, cheap — Haiku only) ──
+    let verdict = '';
+    let aiCost = { inputTokens: 0, outputTokens: 0, total: 0 };
+    if (anthropic) {
+      try {
+        const summaryPrompt = `In ONE sentence (max 30 words), summarize the main reason this website is ${isNotRanking ? 'not ranking' : `ranking #${serpPos}`} for "${keyword}". Base it ONLY on these facts:
+- Page analyzed: ${userPageUrl}
+- Keyword in title: ${userPage.kwInTitle ? 'YES' : 'NO'} | in H1: ${userPage.kwInH1 ? 'YES' : 'NO'} | in meta: ${userPage.kwInMeta ? 'YES' : 'NO'}
+- Word count: ${userPage.wordCount || 0} (competitor avg: ${avgCompWords || 'unknown'})
+- Schema: ${userPage.hasSchema ? 'Yes' : 'No'} | Internal links: ${userPage.internalLinks || 0}
+- Referring domains: ${domainReferringDomains} | Domain rank: ${domainRank}/1000
+- Top issues: ${gaps.slice(0, 3).map(g => g.issue.substring(0, 60)).join('; ')}
+Do NOT add information beyond what's listed above. Return ONLY the sentence, nothing else.`;
+
+        const vResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 100,
+          messages: [{ role: 'user', content: summaryPrompt }]
+        });
+        verdict = (vResp.content[0].text || '').trim().replace(/^["']|["']$/g, '');
+        const vIn = vResp.usage?.input_tokens || 0;
+        const vOut = vResp.usage?.output_tokens || 0;
+        aiCost = { inputTokens: vIn, outputTokens: vOut, total: Math.round((vIn * 0.80 / 1000000 + vOut * 4 / 1000000) * 10000) / 10000 };
+      } catch (e) {
+        // AI failed — build verdict from top gap
+        verdict = gaps.length > 0 ? gaps[0].issue : 'Analysis complete — no major issues found.';
+      }
+    } else {
+      verdict = gaps.length > 0 ? gaps[0].issue : 'No issues detected.';
+    }
+
+    // ── Assemble result ──
+    const analysis = { verdict, score, gaps, quick_wins: quickWins, content_recommendations: contentRec };
 
     const result = {
       ok: true,
       keyword,
-      model: aiModel,
+      model: 'rule-based + haiku-verdict',
       analysis,
-      userPage: { url: userPage.url, title: userPage.title, wordCount: userPage.wordCount, error: userPage.error },
+      userPage: { url: userPage.url, title: userPage.title, wordCount: userPage.wordCount, error: userPage.error, matchMethod },
       competitors: compPages.map((cp, i) => ({ position: top3[i]?.position, url: cp.url, title: cp.title, wordCount: cp.wordCount, error: cp.error })),
-      cost: { inputTokens, outputTokens, total: Math.round(actualCost * 10000) / 10000 }
+      cost: aiCost
     };
 
-    // Persist to DB so user doesn't pay twice
+    // Persist
     try {
       await pool.query(`
         INSERT INTO serp_analysis (project_id, keyword, model, analysis, user_page, competitors, cost, analyzed_at)
@@ -31642,7 +31889,7 @@ Be specific and actionable. Reference actual data from the crawled pages. No gen
         ON CONFLICT (project_id, keyword) DO UPDATE SET
           model = EXCLUDED.model, analysis = EXCLUDED.analysis, user_page = EXCLUDED.user_page,
           competitors = EXCLUDED.competitors, cost = EXCLUDED.cost, analyzed_at = NOW()
-      `, [projectId, keyword, aiModel, JSON.stringify(analysis), JSON.stringify(result.userPage), JSON.stringify(result.competitors), JSON.stringify(result.cost)]);
+      `, [projectId, keyword, 'rule-based', JSON.stringify(analysis), JSON.stringify(result.userPage), JSON.stringify(result.competitors), JSON.stringify(result.cost)]);
     } catch (dbErr) { console.error('[serp-analysis] DB save error:', dbErr.message); }
 
     res.json(result);

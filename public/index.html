@@ -24582,6 +24582,7 @@
                           <div style={{ flex: 1 }}>
                             <div style={{ fontSize: 15, fontWeight: 700, color: scoreColor, marginBottom: 4 }}>{scoreLabel}</div>
                             <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>{a.verdict}</div>
+                            {ar.userPage?.url && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}><i className="fa-solid fa-link" style={{ marginRight: 4, fontSize: 9 }} />Analyzed: <a href={ar.userPage.url} target="_blank" rel="noopener" style={{ color: 'var(--accent)' }}>{ar.userPage.url.replace(/^https?:\/\/(www\.)?/, '').substring(0, 50)}</a>{ar.userPage.matchMethod ? ` (${ar.userPage.matchMethod})` : ''}</div>}
                           </div>
                           <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
                             {[
@@ -24644,6 +24645,14 @@
                                 </div>
                                 <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{g.issue}</div>
                                 {g.fix && <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, padding: '6px 10px', background: 'rgba(34,197,94,0.04)', borderRadius: 4 }}><i className="fa-solid fa-wrench" style={{ marginRight: 4, color: '#22c55e', fontSize: 10 }} />{g.fix}</div>}
+                                {g.competitor_benchmark && <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.4, padding: '4px 10px', marginTop: 4, background: 'rgba(99,102,241,0.04)', borderRadius: 4, fontStyle: 'italic' }}><i className="fa-solid fa-chart-bar" style={{ marginRight: 4, color: '#6366f1', fontSize: 10 }} />{g.competitor_benchmark}</div>}
+                                {g.data && <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                                  {Object.entries(g.data).filter(([k, v]) => typeof v !== 'object' && v !== null && v !== undefined).map(([k, v]) => (
+                                    <span key={k} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', color: 'var(--text3)' }}>
+                                      {k.replace(/_/g, ' ')}: <strong style={{ color: 'var(--text2)' }}>{typeof v === 'number' ? v.toLocaleString() : String(v).substring(0, 60)}</strong>
+                                    </span>
+                                  ))}
+                                </div>}
                                 {g.status !== 'done' && (
                                   <div style={{ marginTop: 6, textAlign: 'right' }}>
                                     <button className="btn" onClick={e => { e.stopPropagation(); sendGapToActionPlan(kw.keyword, g, gi); }}
