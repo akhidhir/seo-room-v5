@@ -21718,13 +21718,21 @@
       };
 
       // Section-aware preview
-      const handleSectionPreview = () => {
+      const handleSectionPreview = async () => {
+        await handleSaveEdit().catch(() => {});
+        // Try Elementor-native preview first (100% design match)
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/elementor-preview', { method: 'POST' });
+          if (r.ok && r.preview_url) {
+            window.open(r.preview_url, '_blank');
+            return;
+          }
+        } catch (e) {
+          console.log('[preview] Elementor preview not available, falling back to section-preview:', e.message);
+        }
+        // Fallback to HTML injection preview
         const tkn = localStorage.getItem('token') || '';
-        handleSaveEdit().then(() => {
-          window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/section-preview?token=' + encodeURIComponent(tkn), '_blank');
-        }).catch(() => {
-          window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/section-preview?token=' + encodeURIComponent(tkn), '_blank');
-        });
+        window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/section-preview?token=' + encodeURIComponent(tkn), '_blank');
       };
 
       // ============ SUGGESTION SYSTEM HANDLERS ============
