@@ -11532,6 +11532,7 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       results.push({
         id: pg.id,
         url: url || `${wpBase}/`,
+        wpType: pg.type || 'page', // 'page' or 'post'
         title,
         yoastScore,
         focusKeyword,
@@ -31450,7 +31451,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
       userPageUrl = rankRow.rows[0].serp_url;
       matchMethod = 'serp_url';
     } else {
-      // Strategy 1: Check onpage_audit_cache
+      // Strategy 1: Check onpage_audit_cache — prefer WP pages over blog posts
       const fullSlug = kwLower.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const serviceSlug = serviceWords.join('-');
       let matchedFromCache = false;
@@ -31471,15 +31472,19 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             }
             if (serviceSlug && pageUrl.includes(serviceSlug)) score += 3;
             if (fullSlug && pageUrl.includes(fullSlug)) score += 4;
-            // Penalize homepage — it's a weak match
+            // Penalize homepage
             if (pageUrl === '/' || pageUrl.replace(/\/$/, '').split('/').filter(Boolean).length === 0) score -= 2;
+            // HEAVILY prefer WP pages over blog posts — service pages are the ranking target
+            const isBlogPost = page.wpType === 'post' || /\/(blog|news|articles|category|tag)\//i.test(pageUrl) || /\/\d{4}\/\d{2}\//.test(pageUrl);
+            if (isBlogPost) score -= 5;
+            // Bonus for WP pages (not posts)
+            if (page.wpType === 'page') score += 3;
             if (score > bestScore) { bestScore = score; bestMatch = page; }
           }
           if (bestMatch && bestScore >= 2) {
-            // Convert relative URL to full URL
             userPageUrl = bestMatch.url.startsWith('http') ? bestMatch.url : `${siteUrl}${bestMatch.url}`;
             matchedFromCache = true;
-            matchMethod = `cache_match (score: ${bestScore})`;
+            matchMethod = `cache_match (score: ${bestScore}, type: ${bestMatch.wpType || 'unknown'})`;
           }
         }
       } catch (e) {}
