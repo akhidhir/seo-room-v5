@@ -16159,27 +16159,39 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
       project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
     }
     let loc = location || project?.location || 'Perth, Western Australia, Australia';
-    // Normalize location for SerpAPI — fix common issues
-    loc = loc.replace(/\s+,/g, ',').replace(/,\s+/g, ', ').trim();
-    // SerpAPI needs state as full name, not abbreviation
-    loc = loc.replace(/\bWA\b/, 'Western Australia').replace(/\bNSW\b/, 'New South Wales')
-             .replace(/\bVIC\b/, 'Victoria').replace(/\bQLD\b/, 'Queensland')
-             .replace(/\bSA\b/, 'South Australia').replace(/\bTAS\b/, 'Tasmania')
-             .replace(/\bNT\b/, 'Northern Territory').replace(/\bACT\b/, 'Australian Capital Territory');
-    // If location has suburb + city, use just the city/state for SERP (e.g. "Bayswater, Perth, WA" → "Perth, Western Australia, Australia")
-    const locParts = loc.split(',').map(p => p.trim());
-    if (locParts.length >= 3) {
-      // Try: city, state, country (skip suburb)
-      loc = locParts.slice(1).join(', ');
+    // Map common AU city names to full DataForSEO-compatible format
+    const AU_CITY_STATE = {
+      'perth': 'Perth, Western Australia, Australia',
+      'melbourne': 'Melbourne, Victoria, Australia',
+      'sydney': 'Sydney, New South Wales, Australia',
+      'brisbane': 'Brisbane, Queensland, Australia',
+      'adelaide': 'Adelaide, South Australia, Australia',
+      'gold coast': 'Gold Coast, Queensland, Australia',
+      'canberra': 'Canberra, Australian Capital Territory, Australia',
+      'hobart': 'Hobart, Tasmania, Australia',
+      'darwin': 'Darwin, Northern Territory, Australia',
+      'newcastle': 'Newcastle, New South Wales, Australia',
+      'wollongong': 'Wollongong, New South Wales, Australia',
+      'geelong': 'Geelong, Victoria, Australia',
+    };
+    const locLower = loc.trim().toLowerCase().replace(/,.*/, '').trim(); // Get just the city name
+    if (AU_CITY_STATE[locLower]) {
+      loc = AU_CITY_STATE[locLower];
+    } else {
+      // Normalize location
+      loc = loc.replace(/\s+,/g, ',').replace(/,\s+/g, ', ').trim();
+      loc = loc.replace(/\bWA\b/, 'Western Australia').replace(/\bNSW\b/, 'New South Wales')
+               .replace(/\bVIC\b/, 'Victoria').replace(/\bQLD\b/, 'Queensland')
+               .replace(/\bSA\b/, 'South Australia').replace(/\bTAS\b/, 'Tasmania')
+               .replace(/\bNT\b/, 'Northern Territory').replace(/\bACT\b/, 'Australian Capital Territory');
+      const locParts = loc.split(',').map(p => p.trim());
+      if (locParts.length >= 3) loc = locParts.slice(1).join(', ');
+      const locPartsCheck = loc.split(',').map(p => p.trim());
+      if (locPartsCheck[locPartsCheck.length - 1] !== 'Australia') loc += ', Australia';
     }
-    // Ensure country "Australia" is at the end (not just in state name like "Western Australia")
-    const locPartsCheck = loc.split(',').map(p => p.trim());
-    if (locPartsCheck[locPartsCheck.length - 1] !== 'Australia') loc += ', Australia';
 
     // Ensure location has proper comma-separated format for DataForSEO
-    // Handle cases like "Perth Western Australia" → "Perth,Western Australia,Australia"
     if (!loc.includes(',')) {
-      // Try to detect Australian state names and split
       const stateNames = ['Western Australia', 'New South Wales', 'Victoria', 'Queensland', 'South Australia', 'Tasmania', 'Northern Territory', 'Australian Capital Territory'];
       for (const state of stateNames) {
         if (loc.includes(state)) {
@@ -16191,6 +16203,23 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
     }
     console.log(`[competitor-wordcount] Checking: "${keyword}" in ${loc}`);
     const serpData = await dataForSeoSerp({ keyword, location: loc, depth: 10 });
+    console.log(`[competitor-wordcount] DataForSEO returned: ${serpData.organic_results?.length || 0} organic, source=${serpData.source}, cost=${serpData.cost}`);
+    if (!serpData.organic_results?.length) {
+      console.log(`[competitor-wordcount] No results — trying with SerpAPI fallback`);
+      // Fallback to SerpAPI if DataForSEO returns nothing
+      if (SERPAPI_KEY) {
+        try {
+          const serpParams = { engine: 'google', q: keyword, location: loc, google_domain: 'google.com.au', gl: 'au', hl: 'en', num: 10 };
+          const serpUrl = 'https://serpapi.com/search?' + Object.entries(serpParams).filter(([,v]) => v).map(([k,v]) => k + '=' + encodeURIComponent(v)).join('&') + '&api_key=' + SERPAPI_KEY;
+          const serpResp = await fetch(serpUrl, { signal: AbortSignal.timeout(15000) });
+          const serpJson = await serpResp.json();
+          if (serpJson.organic_results?.length) {
+            serpData.organic_results = serpJson.organic_results.map((r, i) => ({ position: r.position || i+1, title: r.title, link: r.link, snippet: r.snippet, domain: r.displayed_link }));
+            console.log(`[competitor-wordcount] SerpAPI fallback: ${serpData.organic_results.length} results`);
+          }
+        } catch (e) { console.error('[competitor-wordcount] SerpAPI fallback failed:', e.message); }
+      }
+    }
 
     const organicResults = (serpData.organic_results || []).slice(0, 10);
     const competitors = [];
