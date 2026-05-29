@@ -31580,6 +31580,12 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     const gaps = [];
     const quickWins = [];
     const serpPos = parseInt(serp_position) || null;
+    // Prepare fix context: WP page ID + suggested values for direct fixes
+    const wpPageId = onpageData?.id || null;
+    const kwTitleCase = keyword.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const suggestedTitle = `${kwTitleCase} | ${project.business_name || domain}`;
+    const suggestedMeta = `Expert ${keyword.toLowerCase()} services in ${project.location || 'Australia'}. ${project.business_name || 'We'} deliver results-driven solutions. Get a free consultation today.`;
+    const suggestedH1 = `${kwTitleCase} — ${project.business_name || 'Expert Services'}`;
     const isNotRanking = !serpPos || serpPos > 100;
     const noPage = userPage.error || userPageUrl === siteUrl; // Fell back to homepage = no dedicated page
 
@@ -31611,13 +31617,16 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           category: 'On-Page',
           issue: `Title tag doesn't contain "${keyword}" — currently: "${userPage.title}"`,
           impact: 'high',
-          fix: `Rewrite the title to include the target keyword. Suggested: "${serviceWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} ${keyword.includes('perth') ? 'Perth' : project.location || ''} | ${project.business_name || domain}". Keep under 60 characters.`,
+          fix: `Rewrite the title to include the target keyword. Suggested: "${suggestedTitle}". Keep under 60 characters.`,
           competitor_benchmark: `${compAvgTitleKw}/${validComps.length} competitors have the keyword in their title`,
-          data: { yours: userPage.title, competitors: validComps.map(c => c.title).filter(Boolean) }
+          data: { yours: userPage.title, competitors: validComps.map(c => c.title).filter(Boolean) },
+          fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: wpPageId, url: userPageUrl, new_meta_title: suggestedTitle }] }, label: 'Fix Title', suggested: suggestedTitle, field: 'title' } : null
         });
         quickWins.push(`Update your title tag to include "${keyword}" — this is the single highest-impact on-page change.`);
       } else if (titleLen > 60) {
-        gaps.push({ category: 'On-Page', issue: `Title tag too long (${titleLen} chars) — may get truncated in search results`, impact: 'low', fix: `Shorten to under 60 characters while keeping "${keyword}" near the front.`, data: { yours: `${titleLen} chars`, ideal: '50-60 chars' } });
+        gaps.push({ category: 'On-Page', issue: `Title tag too long (${titleLen} chars) — may get truncated in search results`, impact: 'low', fix: `Shorten to under 60 characters while keeping "${keyword}" near the front.`, data: { yours: `${titleLen} chars`, ideal: '50-60 chars' },
+          fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: wpPageId, url: userPageUrl, new_meta_title: suggestedTitle }] }, label: 'Fix Title', suggested: suggestedTitle, field: 'title' } : null
+        });
       }
 
       // ────── 3. META DESCRIPTION ──────
@@ -31628,7 +31637,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: metaLen === 0 ? `Meta description is missing entirely` : `Meta description too short (${metaLen} chars)`,
           impact: 'high',
           fix: `Write a 140-160 character meta description containing "${keyword}" with a clear call to action. This is what shows in Google search results.`,
-          data: { yours: metaLen === 0 ? 'Missing' : `${metaLen} chars`, ideal: '140-160 chars' }
+          data: { yours: metaLen === 0 ? 'Missing' : `${metaLen} chars`, ideal: '140-160 chars' },
+          fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: wpPageId, url: userPageUrl, new_meta_desc: suggestedMeta }] }, label: 'Fix Meta', suggested: suggestedMeta, field: 'meta' } : null
         });
       } else if (!userPage.kwInMeta) {
         gaps.push({
@@ -31636,21 +31646,25 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: `Meta description doesn't mention "${keyword}" — currently: "${userPage.metaDesc.substring(0, 100)}..."`,
           impact: 'medium',
           fix: `Rewrite meta to include the target keyword naturally. Google bolds matching terms in snippets, improving CTR.`,
-          data: { yours: userPage.metaDesc, keyword: keyword }
+          data: { yours: userPage.metaDesc, keyword: keyword },
+          fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: wpPageId, url: userPageUrl, new_meta_desc: suggestedMeta }] }, label: 'Fix Meta', suggested: suggestedMeta, field: 'meta' } : null
         });
       }
 
       // ────── 4. H1 TAG ──────
       if (!userPage.h1s || userPage.h1s.length === 0) {
-        gaps.push({ category: 'On-Page', issue: 'No H1 tag found on the page', impact: 'high', fix: `Add an H1 tag containing "${keyword}" as the main heading.`, data: { yours: 'Missing H1' } });
+        gaps.push({ category: 'On-Page', issue: 'No H1 tag found on the page', impact: 'high', fix: `Add an H1 tag containing "${keyword}" as the main heading.`, data: { yours: 'Missing H1' },
+          fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/technical-fix`, payload: { type: 'h1', page_id: wpPageId, page_url: userPageUrl }, label: 'Fix H1' } : null
+        });
       } else if (!userPage.kwInH1) {
         gaps.push({
           category: 'On-Page',
           issue: `H1 doesn't contain "${keyword}" — currently: "${userPage.h1s[0]}"`,
           impact: 'high',
-          fix: `Change the H1 to include the target keyword. Example: "${keyword.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} — ${project.business_name || 'Expert Services'}"`,
+          fix: `Change the H1 to include the target keyword. Example: "${suggestedH1}"`,
           competitor_benchmark: `${validComps.filter(c => c.kwInH1).length}/${validComps.length} competitors have the keyword in H1`,
-          data: { yours: userPage.h1s[0], competitors: validComps.map(c => c.h1s?.[0]).filter(Boolean) }
+          data: { yours: userPage.h1s[0], competitors: validComps.map(c => c.h1s?.[0]).filter(Boolean) },
+          fix_action: { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' }
         });
       }
 
@@ -31664,7 +31678,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'high',
           fix: `Expand content to at least ${Math.round(avgCompWords * 1.1).toLocaleString()} words. Add sections covering the same topics competitors cover in their H2s.`,
           competitor_benchmark: validComps.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.wordCount.toLocaleString()} words`).join(', '),
-          data: { yours: userWords, competitor_avg: avgCompWords, competitors: validComps.map(c => ({ url: c.url, words: c.wordCount })) }
+          data: { yours: userWords, competitor_avg: avgCompWords, competitors: validComps.map(c => ({ url: c.url, words: c.wordCount })) },
+          fix_action: { type: 'navigate', page: 'optimise-website-copy', label: 'Open Copywriter' }
         });
       } else if (avgCompWords && userWords < avgCompWords * 0.85) {
         gaps.push({
@@ -31672,7 +31687,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: `Content is shorter than competitors (${userWords.toLocaleString()} words vs avg ${avgCompWords.toLocaleString()})`,
           impact: 'medium',
           fix: `Add ${Math.round(avgCompWords - userWords).toLocaleString()} more words of relevant content. Focus on topics your competitors cover that you don't.`,
-          data: { yours: userWords, competitor_avg: avgCompWords }
+          data: { yours: userWords, competitor_avg: avgCompWords },
+          fix_action: { type: 'navigate', page: 'optimise-website-copy', label: 'Open Copywriter' }
         });
       }
 
@@ -31700,7 +31716,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             impact: 'medium',
             fix: `Add JSON-LD schema. Go to Website Audit → click "Fix" on the schema issue to auto-generate and push to WordPress.`,
             competitor_benchmark: validComps.filter(c => c.hasSchema).map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.schemaTypes.join(', ')}`).join('; '),
-            data: { yours: 'None', competitors: validComps.map(c => c.schemaTypes).flat() }
+            data: { yours: 'None', competitors: validComps.map(c => c.schemaTypes).flat() },
+            fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/technical-fix`, payload: { type: 'schema', page_id: wpPageId, page_url: userPageUrl }, label: 'Fix Schema' } : { type: 'navigate', page: 'website-audit', label: 'Open Website Audit' }
           });
         }
       }
@@ -31712,6 +31729,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           category: 'On-Page',
           issue: `Fewer internal links than competitors (${userPage.internalLinks || 0} vs avg ${avgCompInternal})`,
           impact: 'medium',
+          fix_action: { type: 'navigate', page: 'internal-linking', label: 'Open Internal Linking' },
           fix: `Add ${Math.max(3, avgCompInternal - (userPage.internalLinks || 0))} more internal links to related service pages, blog posts, and suburb pages. Link from your blog posts back to this page too.`,
           data: { yours: userPage.internalLinks || 0, competitor_avg: avgCompInternal }
         });
@@ -31785,7 +31803,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         impact: 'high',
         fix: `You need ~${gap} more referring domains to match competitors. Submit to Australian directories (Yellow Pages, True Local, HotFrog — all free), seek guest posts, get supplier/partner links. Focus on quality over quantity.`,
         competitor_benchmark: compAuthority.map(c => `${c.domain}: ${c.referring_domains} RD, rank ${c.domain_rank}`).join(' | '),
-        data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR }
+        data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR },
+        fix_action: { type: 'navigate', page: 'backlinks', label: 'Open Backlinks' }
       });
     } else if (avgCompRD !== null && domainReferringDomains < avgCompRD * 0.8) {
       gaps.push({
@@ -31794,7 +31813,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         impact: 'medium',
         fix: `Build ${Math.round(avgCompRD - domainReferringDomains)} more referring domains. Focus on industry-relevant sites and content that naturally attracts links.`,
         competitor_benchmark: compAuthority.map(c => `${c.domain}: ${c.referring_domains} RD`).join(' | '),
-        data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR }
+        data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR },
+        fix_action: { type: 'navigate', page: 'backlinks', label: 'Open Backlinks' }
       });
     } else if (avgCompRD === null) {
       // Fallback to static thresholds if DataForSEO unavailable
@@ -31825,8 +31845,9 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         category: 'On-Page',
         issue: `Low click-through rate (${(actualCtr * 100 || actualCtr).toFixed(1)}% CTR at position ${Math.round(actualGscPos)}) — expected 3-8% for this position`,
         impact: 'high',
-        fix: `Rewrite your meta title to be more compelling — add numbers, benefits, or urgency. Example: "Top ${keyword.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')} Services | Free Quote | ${project.business_name || ''}"`,
-        data: { ctr: actualCtr, position: actualGscPos, clicks: gscData?.clicks || gsc_clicks || 0, impressions: gscData?.impressions || gsc_impressions || 0 }
+        fix: `Rewrite your meta title to be more compelling — add numbers, benefits, or urgency. Example: "Top ${kwTitleCase} Services | Free Quote | ${project.business_name || ''}"`,
+        data: { ctr: actualCtr, position: actualGscPos, clicks: gscData?.clicks || gsc_clicks || 0, impressions: gscData?.impressions || gsc_impressions || 0 },
+        fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: wpPageId, url: userPageUrl, new_meta_title: `Top ${kwTitleCase} Services | Free Quote | ${project.business_name || domain}` }] }, label: 'Fix Title', field: 'title' } : null
       });
       quickWins.push(`Improve your meta title — at position ${Math.round(actualGscPos)} with ${(actualCtr * 100 || actualCtr).toFixed(1)}% CTR, a better title could double your clicks.`);
     }
@@ -31872,7 +31893,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             impact: 'high',
             fix: `This specific page needs ${avgCompPageRD - pageRD} more referring domains. Create linkable content on this page (stats, guides, tools). Reach out to sites linking to competitors but not you. Submit to niche directories that link to specific service pages.`,
             competitor_benchmark: compPageRDs.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.rd} RD, ${c.backlinks} backlinks`).join(' | '),
-            data: { your_page_rd: pageRD, your_page_backlinks: pageBacklinks, competitor_avg_page_rd: avgCompPageRD }
+            data: { your_page_rd: pageRD, your_page_backlinks: pageBacklinks, competitor_avg_page_rd: avgCompPageRD },
+            fix_action: { type: 'navigate', page: 'backlinks', label: 'Open Backlinks' }
           });
         } else if (avgCompPageRD > 0 && pageRD < avgCompPageRD * 0.7) {
           gaps.push({
@@ -31908,7 +31930,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             issue: `Poor page speed (${perfScore}/100) — Google uses Core Web Vitals as a ranking factor`,
             impact: 'high',
             fix: `This page scores ${perfScore}/100 on mobile. Check if BerqWP is active. Run Website Audit → PageSpeed for specific issues. Common fixes: compress images, defer unused JavaScript, reduce server response time.`,
-            data: { performance_score: perfScore, lcp: speedMatch.cwv?.lcp, cls: speedMatch.cwv?.cls, tbt: speedMatch.cwv?.tbt }
+            data: { performance_score: perfScore, lcp: speedMatch.cwv?.lcp, cls: speedMatch.cwv?.cls, tbt: speedMatch.cwv?.tbt },
+            fix_action: { type: 'navigate', page: 'website-audit', label: 'Open Website Audit' }
           });
         } else if (perfScore !== null && perfScore < 75) {
           gaps.push({
@@ -31943,7 +31966,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             issue: `Page may not be indexed — status: "${coverage || verdict}"`,
             impact: 'high',
             fix: `A page that isn't indexed can't rank at all. Check Indexing page for details. Common fixes: remove noindex tag, fix robots.txt blocks, submit URL in Google Search Console, ensure the page has inbound links.`,
-            data: { verdict: idxMatch.verdict, coverage_state: coverage, last_crawl: idxMatch.lastCrawlTime }
+            data: { verdict: idxMatch.verdict, coverage_state: coverage, last_crawl: idxMatch.lastCrawlTime },
+            fix_action: { type: 'navigate', page: 'indexing', label: 'Open Indexing' }
           });
         }
       }
