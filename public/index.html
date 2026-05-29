@@ -24748,11 +24748,18 @@
                             </button>
                             <button className="btn" onClick={async e => {
                               e.stopPropagation();
-                              if (!confirm('Re-analyze this keyword?')) return;
-                              await api('/projects/' + project.id + '/rank-tracking/analyses/' + encodeURIComponent(kw.keyword), { method: 'DELETE' });
-                              setAnalysisResults(prev => { const n = {...prev}; delete n[kw.keyword]; return n; });
-                              setExpandedAnalysis(null);
-                              setAnalysisChecked(prev => ({...prev, [kw.id]: true}));
+                              const btn = e.currentTarget;
+                              const origHTML = btn.innerHTML;
+                              btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="margin-right:4px"></i>Re-analyzing...';
+                              try {
+                                const r = await api(`/projects/${project.id}/rank-tracking/analyze`, {
+                                  method: 'POST',
+                                  body: { keyword: kw.keyword, competitors: kw.competitors || [], serp_position: kw.serp_position, gsc_position: kw.gsc_position, gsc_clicks: kw.gsc_clicks, gsc_impressions: kw.gsc_impressions, model: analysisModel }
+                                });
+                                if (r.ok) { setAnalysisResults(prev => ({ ...prev, [kw.keyword]: r })); }
+                                else { btn.innerHTML = r.error || 'Failed'; }
+                              } catch (err) { btn.innerHTML = 'Error: ' + err.message; }
+                              btn.disabled = false; btn.innerHTML = origHTML;
                             }} style={{ fontSize: 11, color: '#f59e0b', borderColor: '#f59e0b' }}>
                               <i className="fa-solid fa-rotate" style={{ marginRight: 4 }} />Re-analyze
                             </button>
