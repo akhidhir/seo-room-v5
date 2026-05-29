@@ -358,6 +358,12 @@ const PILLAR_CATEGORIES = {
 - **Section "Add" fails** — "Suggest from Competitors" shows sections but clicking Add fails with AI generation error. Pre-existing issue with section content generation endpoint.
 - **DataForSEO SERP returns 0 for some AU keywords** — even with correct location "Perth,Western Australia,Australia". SerpAPI fallback handles this but DataForSEO root cause unknown.
 
+### Next Session Priorities
+1. **AI Replace popup** — port from New Website editor to existing site Copywriter. Select text → 4 AI alternatives inline. Backend `/suggest-replacements` already works, just need frontend text-selection handler in CopywriterPage editor.
+2. **Accept/reject topics & keywords flow** — competitor topics/keywords show but no accept/reject UI to feed into the Rewrite AI. Port the accept flow from NewWebsitePipelinePage.
+3. **SERP finding as brief for Brief Check** — use the `brief` field (pushed from SERP analysis) as the copywriting brief. Wire Brief Check button to validate content against it.
+4. **Full existing site copywriter flow**: SERP Analysis → Send to Copywriter (brief = finding) → Import Current Copy → Check Competitors → Accept topics → Rewrite → AI Replace → Check SEO → Plagiarism/AI Detection/Humanize → Preview (Design-Safe) → Publish
+
 ### Previous Session
 - **Humanize-only endpoint — pure rule-based**: Zero-cost rule-based humanizer (contractions, synonym swaps, sentence starters, AU English).
 - **Australian English dictionary**: `AU_SPELLING` with 50+ US→AU replacements.
