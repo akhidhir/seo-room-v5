@@ -31557,6 +31557,25 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
       if (gscRes.rows.length > 0) gscData = gscRes.rows[0];
     } catch (e) {}
 
+    // ── Override crawl data with onpage_audit_cache (WP REST API — more reliable for Elementor/JS sites) ──
+    if (onpageData && !userPage.error) {
+      // WP REST API data is authoritative — override crawl where available
+      if (onpageData.wordCount && onpageData.wordCount > userPage.wordCount * 1.3) {
+        console.log(`[serp-analysis] Overriding crawl wordCount ${userPage.wordCount} with WP cache ${onpageData.wordCount}`);
+        userPage.wordCount = onpageData.wordCount;
+      }
+      if (onpageData.metaTitle) userPage.title = onpageData.metaTitle;
+      if (onpageData.metaDesc) userPage.metaDesc = onpageData.metaDesc;
+      if (onpageData.h1) userPage.h1s = [onpageData.h1];
+      if (onpageData.internalLinks !== undefined) userPage.internalLinks = Math.max(userPage.internalLinks || 0, onpageData.internalLinks || 0);
+      if (onpageData.images !== undefined) userPage.images = Math.max(userPage.images || 0, onpageData.images || 0);
+      if (onpageData.imagesWithAlt !== undefined) userPage.hasAltTags = Math.max(userPage.hasAltTags || 0, onpageData.imagesWithAlt || 0);
+      // Recalculate keyword presence with updated data
+      userPage.kwInTitle = kwParts.every(w => (userPage.title || '').toLowerCase().includes(w));
+      userPage.kwInH1 = (userPage.h1s || []).some(h => kwParts.every(w => h.toLowerCase().includes(w)));
+      userPage.kwInMeta = kwParts.every(w => (userPage.metaDesc || '').toLowerCase().includes(w));
+    }
+
     // ── RULE-BASED ANALYSIS ──
     const gaps = [];
     const quickWins = [];
