@@ -31974,43 +31974,73 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     } catch (e) {}
 
     // ────── 17. KEYWORD CANNIBALIZATION ──────
-    // Only flag pages that target the FULL keyword phrase (or exact focus keyword match), not individual common words
+    // Each competing page gets its own gap with a specific fix action
     try {
       const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
       if (cacheRes.rows.length > 0) {
         const pages = typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results;
         const competingPages = [];
-        // Build the service phrase (keyword minus location) for matching
-        const servicePhrase = serviceWords.join(' '); // e.g. "local business seo" from "local business seo perth"
+        const servicePhrase = serviceWords.join(' ');
         for (const page of (pages || [])) {
           const pageUrl = (page.url || '').toLowerCase();
           const pageTitle = (page.title || '').toLowerCase();
           const pageH1 = (page.h1 || '').toLowerCase();
           const pageFocus = (page.focusKeyword || '').toLowerCase();
           const pageUrlFull = page.url?.startsWith('http') ? page.url : `${siteUrl}${page.url}`;
-          if (pageUrlFull.replace(/\/$/, '') === userPageUrl.replace(/\/$/, '')) continue; // Skip the ranking page itself
+          if (pageUrlFull.replace(/\/$/, '') === userPageUrl.replace(/\/$/, '')) continue;
 
-          // Strict matching: must contain the FULL keyword or full service phrase
           const fullKwInTitle = pageTitle.includes(kwLower) || (servicePhrase.length > 5 && pageTitle.includes(servicePhrase));
           const fullKwInH1 = pageH1.includes(kwLower) || (servicePhrase.length > 5 && pageH1.includes(servicePhrase));
           const focusMatch = pageFocus && (pageFocus === kwLower || kwLower === pageFocus || pageFocus.includes(kwLower) || kwLower.includes(pageFocus));
-          // URL slug match (e.g. /local-business-seo-perth/ or /local-business-seo/)
           const serviceSlugCheck = serviceWords.length >= 2 && pageUrl.includes(serviceWords.join('-'));
 
           if (fullKwInTitle || fullKwInH1 || focusMatch || serviceSlugCheck) {
-            competingPages.push({ url: page.url, title: page.title, h1: page.h1, focusKeyword: page.focusKeyword });
+            // Determine WHY this page is competing and what the specific fix is
+            const reasons = [];
+            if (fullKwInTitle) reasons.push('title contains keyword');
+            if (fullKwInH1) reasons.push('H1 contains keyword');
+            if (focusMatch) reasons.push(`focus keyword: "${page.focusKeyword}"`);
+            if (serviceSlugCheck) reasons.push('URL slug matches');
+            competingPages.push({ id: page.id, url: page.url, title: page.title, h1: page.h1, focusKeyword: page.focusKeyword, wordCount: page.wordCount, reasons });
           }
         }
+        // Only flag if reasonable number (max 5)
         if (competingPages.length > 0 && competingPages.length <= 5) {
-          // Only flag if reasonable number — 5+ competing pages means the check is still too broad
-          gaps.push({
-            category: 'On-Page',
-            issue: `Keyword cannibalization — ${competingPages.length} other page(s) also target "${keyword}"`,
-            impact: 'high',
-            fix: `Pick ONE page as the primary target for "${keyword}". On the others, change the focus keyword or add a canonical tag pointing to the primary page.`,
-            competitor_benchmark: `Competing pages: ${competingPages.map(p => p.url).join(', ')}`,
-            data: { competing_pages: competingPages.length, pages: competingPages.slice(0, 5).map(p => p.url).join(', ') }
-          });
+          // One gap per competing page with specific fix
+          for (const cp of competingPages) {
+            const pageShort = (cp.url || '').replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '') || cp.title;
+            const isWeaker = (cp.wordCount || 0) < (userPage.wordCount || 0);
+            const hasDiffFocus = cp.focusKeyword && !cp.focusKeyword.toLowerCase().includes(kwLower) && !kwLower.includes(cp.focusKeyword.toLowerCase());
+
+            // Determine the best fix for this specific page
+            let specificFix, fixAction;
+            if (isWeaker && (cp.wordCount || 0) < 500) {
+              // Thin page competing — consolidate into the main page
+              specificFix = `This page is thin (${cp.wordCount || 0} words) and competes for "${keyword}". Merge its unique content into your primary page, then redirect this URL (301) to the primary page. This consolidates authority.`;
+              fixAction = { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' };
+            } else if (cp.reasons.includes('focus keyword: "' + cp.focusKeyword + '"')) {
+              // Has an explicit focus keyword — change it
+              specificFix = `This page's focus keyword is "${cp.focusKeyword}" which overlaps with "${keyword}". Change the focus keyword to something more specific to this page's actual topic. Then update the title/H1 to match the new focus keyword.`;
+              fixAction = cp.id ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: cp.id, url: cp.url, new_focus_keyword: '' }] }, label: 'Clear Focus KW', field: 'focus' } : { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' };
+            } else if (cp.reasons.includes('title contains keyword') || cp.reasons.includes('H1 contains keyword')) {
+              // Title/H1 overlap — differentiate
+              specificFix = `This page's ${cp.reasons.includes('title contains keyword') ? 'title' : 'H1'} contains "${keyword}" (${cp.reasons.includes('title contains keyword') ? '"' + cp.title + '"' : '"' + cp.h1 + '"'}). Rewrite it to focus on a different angle or sub-topic. Alternatively, add a canonical tag pointing to your primary page for this keyword.`;
+              fixAction = cp.id ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: cp.id, url: cp.url }] }, label: 'Edit Meta', field: 'title' } : { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' };
+            } else {
+              // URL slug match — add canonical
+              specificFix = `This page's URL (${pageShort}) contains the target keyword pattern. Add a canonical tag pointing to your primary page, or differentiate this page's content to target a different keyword.`;
+              fixAction = { type: 'navigate', page: 'website-audit', label: 'Open Website Audit' };
+            }
+
+            gaps.push({
+              category: 'Cannibalization',
+              issue: `Competing page: ${pageShort} — ${cp.reasons.join(', ')}`,
+              impact: 'high',
+              fix: specificFix,
+              data: { page: cp.url, title: cp.title || '', words: cp.wordCount || 0, focus_kw: cp.focusKeyword || 'none' },
+              fix_action: fixAction
+            });
+          }
         }
       }
     } catch (e) {}
