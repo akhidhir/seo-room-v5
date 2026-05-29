@@ -31436,13 +31436,64 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     if (rankRow.rows.length > 0 && rankRow.rows[0].serp_url) {
       userPageUrl = rankRow.rows[0].serp_url;
     } else {
-      // Try keyword slug on the domain
-      const slug = keyword.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      // Smart page matching: try multiple strategies to find the best matching page
+      const kwParts = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      // Remove location words from keyword to get service slug (e.g. "content marketing perth" → "content-marketing")
+      const locationWords = new Set(['perth', 'melbourne', 'sydney', 'brisbane', 'adelaide', 'gold', 'coast', 'canberra', 'hobart', 'darwin', 'australia', 'wa', 'nsw', 'vic', 'qld', 'sa', 'tas', 'nt', 'act']);
+      const serviceWords = kwParts.filter(w => !locationWords.has(w));
+      const fullSlug = keyword.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const serviceSlug = serviceWords.join('-');
+
+      // Strategy 1: Check onpage_audit_cache for pages whose URL/title/H1 match keyword parts
+      let matchedFromCache = false;
       try {
-        const testUrl = `${siteUrl}/${slug}/`;
-        const testResp = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-        if (testResp.ok) userPageUrl = testUrl;
-      } catch (e) {}
+        const cacheRes = await pool.query(
+          `SELECT url, title, h1, meta_description, word_count FROM onpage_audit_cache WHERE project_id=$1`,
+          [projectId]
+        );
+        if (cacheRes.rows.length > 0) {
+          let bestMatch = null, bestScore = 0;
+          for (const page of cacheRes.rows) {
+            const pageUrl = (page.url || '').toLowerCase();
+            const pageTitle = (page.title || '').toLowerCase();
+            const pageH1 = (page.h1 || '').toLowerCase();
+            // Score: how many keyword parts appear in url + title + h1
+            let score = 0;
+            for (const part of kwParts) {
+              if (pageUrl.includes(part)) score += 2; // URL match worth more
+              if (pageTitle.includes(part)) score += 1;
+              if (pageH1.includes(part)) score += 1;
+            }
+            // Bonus for service slug in URL (e.g. /content-marketing/ matches "content marketing perth")
+            if (serviceSlug && pageUrl.includes(serviceSlug)) score += 3;
+            if (score > bestScore) { bestScore = score; bestMatch = page; }
+          }
+          // Need at least 2 keyword parts matching to trust this
+          if (bestMatch && bestScore >= 2) {
+            userPageUrl = bestMatch.url;
+            matchedFromCache = true;
+            console.log(`[serp-analysis] Matched "${keyword}" to cached page: ${userPageUrl} (score: ${bestScore})`);
+          }
+        }
+      } catch (e) { console.error('[serp-analysis] Cache lookup error:', e.message); }
+
+      // Strategy 2: Try URL slugs (full keyword slug, then service-only slug)
+      if (!matchedFromCache) {
+        const slugsToTry = [fullSlug];
+        if (serviceSlug && serviceSlug !== fullSlug) slugsToTry.push(serviceSlug);
+        // Also try singular/shorter variants (e.g. "content-marketing" → "content-marketing")
+        for (const slug of slugsToTry) {
+          try {
+            const testUrl = `${siteUrl}/${slug}/`;
+            const testResp = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000), redirect: 'follow' });
+            if (testResp.ok) {
+              userPageUrl = testUrl;
+              console.log(`[serp-analysis] Found page by slug: ${testUrl}`);
+              break;
+            }
+          } catch (e) {}
+        }
+      }
     }
 
     // Crawl all pages in parallel
