@@ -16172,7 +16172,9 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
       // Try: city, state, country (skip suburb)
       loc = locParts.slice(1).join(', ');
     }
-    if (!loc.includes('Australia')) loc += ', Australia';
+    // Ensure country "Australia" is at the end (not just in state name like "Western Australia")
+    const locPartsCheck = loc.split(',').map(p => p.trim());
+    if (locPartsCheck[locPartsCheck.length - 1] !== 'Australia') loc += ', Australia';
 
     // Ensure location has proper comma-separated format for DataForSEO
     // Handle cases like "Perth Western Australia" → "Perth,Western Australia,Australia"
