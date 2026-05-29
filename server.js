@@ -5829,16 +5829,22 @@ app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
     const project = projRes.rows[0];
     const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
 
-    // 1. Get latest rankings (SERP + Maps)
+    // 1. Get ALL tracked keywords + latest ranking data
     const rankRes = await pool.query(`
-      SELECT DISTINCT ON (rt.keyword, rt.location) rt.keyword, rt.location, rt.serp_position, rt.serp_url, rt.maps_position, rt.maps_title, rt.competitors, rt.checked_at,
+      SELECT rk.keyword, rk.location, rk.search_volume, rk.location_code, rk.language_code,
+             rt.serp_position, rt.serp_url, rt.maps_position, rt.maps_title, rt.competitors, rt.checked_at,
              g.position AS gsc_position, g.clicks AS gsc_clicks, g.impressions AS gsc_impressions, g.ctr AS gsc_ctr
-      FROM rank_tracking rt
-      LEFT JOIN gsc_keywords g ON g.project_id = rt.project_id AND LOWER(g.keyword) = LOWER(rt.keyword)
-      WHERE rt.project_id=$1
-      ORDER BY rt.keyword, rt.location, rt.checked_at DESC
+      FROM rank_keywords rk
+      LEFT JOIN LATERAL (
+        SELECT * FROM rank_tracking rt2 WHERE rt2.project_id = rk.project_id AND LOWER(rt2.keyword) = LOWER(rk.keyword)
+        AND (rt2.location = rk.location OR (rt2.location = '' AND (rk.location IS NULL OR rk.location = '')))
+        ORDER BY rt2.checked_at DESC LIMIT 1
+      ) rt ON true
+      LEFT JOIN gsc_keywords g ON g.project_id = rk.project_id AND LOWER(g.keyword) = LOWER(rk.keyword)
+      WHERE rk.project_id=$1
+      ORDER BY rk.keyword
     `, [projectId]);
-    if (!rankRes.rows.length) return res.status(400).json({ error: 'No ranking data. Run SERP Rankings check first.' });
+    if (!rankRes.rows.length) return res.status(400).json({ error: 'No keywords tracked. Add keywords in SERP Rankings or Maps Rankings first.' });
 
     // 2. Get on-page audit data (Yoast meta, word count, links per page)
     const onpageRes = await pool.query('SELECT * FROM onpage_audit_cache WHERE project_id=$1 ORDER BY updated_at DESC LIMIT 1', [projectId]);
@@ -5905,8 +5911,7 @@ app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
       const mapsPos = rank.maps_position;
       const rankingUrl = rank.serp_url || '';
 
-      // Skip keywords with no data at all
-      if (!serpPos && !mapsPos) continue;
+      // Keywords with no ranking data yet — still include with "check ranking" action
 
       // Find matching on-page data for ranking URL
       let pageData = null;
@@ -5945,13 +5950,16 @@ app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
       try { competitors = typeof rank.competitors === 'string' ? JSON.parse(rank.competitors) : (rank.competitors || []); } catch(e) {}
 
       // ── Determine priority based on position ──
-      let priority = 'low';
-      let priorityScore = 100;
-      if (serpPos) {
+      let priority = 'medium';
+      let priorityScore = 50;
+      if (!serpPos && !mapsPos) {
+        // No ranking data yet — medium priority, needs checking
+        priority = 'medium'; priorityScore = 50;
+      } else if (serpPos) {
         if (serpPos <= 3) { priority = 'monitor'; priorityScore = 0; }
-        else if (serpPos <= 10) { priority = 'high'; priorityScore = 10 - serpPos + 20; } // 4-10: score 17-23
-        else if (serpPos <= 20) { priority = 'high'; priorityScore = 20 - serpPos + 10; } // 11-20: score 10-19
-        else if (serpPos <= 30) { priority = 'medium'; priorityScore = 30 - serpPos + 5; } // 21-30: score 5-14
+        else if (serpPos <= 10) { priority = 'high'; priorityScore = 10 - serpPos + 20; }
+        else if (serpPos <= 20) { priority = 'high'; priorityScore = 20 - serpPos + 10; }
+        else if (serpPos <= 30) { priority = 'medium'; priorityScore = 30 - serpPos + 5; }
         else { priority = 'low'; priorityScore = Math.max(0, 50 - serpPos); }
       }
 
@@ -5983,6 +5991,12 @@ app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
 
       // ── Generate specific actions based on REAL gaps ──
       const actions = [];
+
+      // No ranking data — suggest checking
+      if (!serpPos && !mapsPos) {
+        actions.push({ category: 'review', title: `Check ranking position`, difficulty: 'easy', impact: 'high',
+          howTo: `This keyword hasn't been checked yet. Go to SERP Rankings → click "Check Rankings" to see where you currently rank. Once you have position data, regenerate the Action Plan for specific recommendations.` });
+      }
 
       // SERP actions
       if (serpPos && serpPos > 3) {
@@ -6063,8 +6077,11 @@ app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
         }
       }
 
-      // Only add if we have actions
-      if (actions.length === 0 && priority === 'monitor') continue;
+      // Add actions even for top 3 (monitor)
+      if (actions.length === 0 && priority === 'monitor') {
+        actions.push({ category: 'review', title: `Maintain #${serpPos} position — keep monitoring`, difficulty: 'easy', impact: 'low',
+          howTo: `You're ranking #${serpPos} for this keyword — great! Keep monitoring. Maintain fresh content, keep building backlinks, and respond to reviews. Don't make major changes to the ranking page.` });
+      }
       if (actions.length === 0) {
         actions.push({ category: 'review', title: 'Review ranking — no specific gaps found', difficulty: 'easy', impact: 'low',
           howTo: `This keyword is at position ${serpPos || 'N/A'} (SERP) / ${mapsPos || 'N/A'} (Maps). No specific issues detected from audits. Check competitor pages manually to find content or backlink gaps not covered by our audits.` });
