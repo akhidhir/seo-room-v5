@@ -31845,6 +31845,142 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
       }
     }
 
+    // ────── 14. PAGE-LEVEL BACKLINKS ──────
+    if (DATAFORSEO_AUTH && !noPage && !userPage.error) {
+      try {
+        // Get backlinks for our specific URL
+        const pageTarget = userPageUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const pageBl = await dataForSeoBacklinksSummary(pageTarget);
+        const pageRD = pageBl.referring_domains || 0;
+        const pageBacklinks = pageBl.total_backlinks || 0;
+
+        // Get competitor page-level backlinks
+        const compPageRDs = [];
+        for (const cp of validComps.slice(0, 3)) {
+          try {
+            const cpTarget = cp.url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+            const cpBl = await dataForSeoBacklinksSummary(cpTarget);
+            compPageRDs.push({ url: cp.url, rd: cpBl.referring_domains || 0, backlinks: cpBl.total_backlinks || 0 });
+          } catch (e) { compPageRDs.push({ url: cp.url, rd: 0, backlinks: 0, error: e.message }); }
+        }
+        const avgCompPageRD = compPageRDs.length > 0 ? Math.round(compPageRDs.reduce((s, c) => s + c.rd, 0) / compPageRDs.length) : 0;
+
+        if (avgCompPageRD > 0 && pageRD < avgCompPageRD * 0.3) {
+          gaps.push({
+            category: 'Authority',
+            issue: `Page has far fewer backlinks than competitor pages (${pageRD} referring domains vs avg ${avgCompPageRD})`,
+            impact: 'high',
+            fix: `This specific page needs ${avgCompPageRD - pageRD} more referring domains. Create linkable content on this page (stats, guides, tools). Reach out to sites linking to competitors but not you. Submit to niche directories that link to specific service pages.`,
+            competitor_benchmark: compPageRDs.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.rd} RD, ${c.backlinks} backlinks`).join(' | '),
+            data: { your_page_rd: pageRD, your_page_backlinks: pageBacklinks, competitor_avg_page_rd: avgCompPageRD }
+          });
+        } else if (avgCompPageRD > 0 && pageRD < avgCompPageRD * 0.7) {
+          gaps.push({
+            category: 'Authority',
+            issue: `Page backlinks below competitor average (${pageRD} referring domains vs avg ${avgCompPageRD})`,
+            impact: 'medium',
+            fix: `Build ${Math.round(avgCompPageRD - pageRD)} more links to this specific page. Guest posts, resource page outreach, and internal links from your highest-authority pages help most.`,
+            competitor_benchmark: compPageRDs.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.rd} RD`).join(' | '),
+            data: { your_page_rd: pageRD, competitor_avg_page_rd: avgCompPageRD }
+          });
+        }
+        console.log(`[serp-analysis] Page-level backlinks: ours=${pageRD} RD, comp avg=${avgCompPageRD} RD`);
+      } catch (e) { console.error('[serp-analysis] Page-level backlinks check failed:', e.message); }
+    }
+
+    // ────── 15. PAGESPEED ──────
+    try {
+      const speedRes = await pool.query(
+        `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        [projectId]
+      );
+      const speedPages = speedRes.rows[0]?.audit_data?.pages || [];
+      const userUrlNorm = userPageUrl.replace(/\/$/, '');
+      const speedMatch = speedPages.find(sp => {
+        const spUrl = (sp.url || '').replace(/\/$/, '');
+        return spUrl === userUrlNorm || userUrlNorm.endsWith(spUrl.replace(/^https?:\/\/(www\.)?/, '')) || spUrl.includes(userUrlNorm.split('/').pop());
+      });
+      if (speedMatch) {
+        const perfScore = speedMatch.performance_score || speedMatch.score || null;
+        if (perfScore !== null && perfScore < 50) {
+          gaps.push({
+            category: 'Technical',
+            issue: `Poor page speed (${perfScore}/100) — Google uses Core Web Vitals as a ranking factor`,
+            impact: 'high',
+            fix: `This page scores ${perfScore}/100 on mobile. Check if BerqWP is active. Run Website Audit → PageSpeed for specific issues. Common fixes: compress images, defer unused JavaScript, reduce server response time.`,
+            data: { performance_score: perfScore, lcp: speedMatch.cwv?.lcp, cls: speedMatch.cwv?.cls, tbt: speedMatch.cwv?.tbt }
+          });
+        } else if (perfScore !== null && perfScore < 75) {
+          gaps.push({
+            category: 'Technical',
+            issue: `Below-average page speed (${perfScore}/100) — may affect rankings`,
+            impact: 'low',
+            fix: `Score of ${perfScore}/100 is below the 90+ threshold Google considers "good". Check Website Audit → PageSpeed for optimization opportunities.`,
+            data: { performance_score: perfScore }
+          });
+        }
+      }
+    } catch (e) {}
+
+    // ────── 16. INDEXING STATUS ──────
+    try {
+      const idxRes = await pool.query(
+        `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='indexing' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+        [projectId]
+      );
+      const idxResults = idxRes.rows[0]?.audit_data?.results || [];
+      const userUrlNorm = userPageUrl.replace(/\/$/, '');
+      const idxMatch = idxResults.find(idx => {
+        const idxUrl = (idx.url || '').replace(/\/$/, '');
+        return idxUrl === userUrlNorm || userUrlNorm.endsWith(idxUrl.replace(/^https?:\/\/(www\.)?/, ''));
+      });
+      if (idxMatch) {
+        const verdict = (idxMatch.verdict || '').toUpperCase();
+        const coverage = idxMatch.coverageState || '';
+        if (verdict !== 'PASS' && !coverage.toLowerCase().includes('submitted and indexed')) {
+          gaps.push({
+            category: 'Technical',
+            issue: `Page may not be indexed — status: "${coverage || verdict}"`,
+            impact: 'high',
+            fix: `A page that isn't indexed can't rank at all. Check Indexing page for details. Common fixes: remove noindex tag, fix robots.txt blocks, submit URL in Google Search Console, ensure the page has inbound links.`,
+            data: { verdict: idxMatch.verdict, coverage_state: coverage, last_crawl: idxMatch.lastCrawlTime }
+          });
+        }
+      }
+    } catch (e) {}
+
+    // ────── 17. KEYWORD CANNIBALIZATION ──────
+    try {
+      const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+      if (cacheRes.rows.length > 0) {
+        const pages = typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results;
+        const competingPages = [];
+        for (const page of (pages || [])) {
+          const pageUrl = (page.url || '').toLowerCase();
+          const pageTitle = (page.title || '').toLowerCase();
+          const pageH1 = (page.h1 || '').toLowerCase();
+          const pageFocus = (page.focusKeyword || '').toLowerCase();
+          // Check if this page targets the same keyword (but isn't the ranking page)
+          const pageUrlFull = page.url?.startsWith('http') ? page.url : `${siteUrl}${page.url}`;
+          if (pageUrlFull.replace(/\/$/, '') === userPageUrl.replace(/\/$/, '')) continue; // Skip the ranking page itself
+          const kwMatch = kwParts.filter(w => pageTitle.includes(w) || pageH1.includes(w) || pageFocus.includes(w)).length;
+          if (kwMatch >= kwParts.length * 0.7 || (pageFocus && kwLower.includes(pageFocus))) {
+            competingPages.push({ url: page.url, title: page.title, h1: page.h1, focusKeyword: page.focusKeyword });
+          }
+        }
+        if (competingPages.length > 0) {
+          gaps.push({
+            category: 'On-Page',
+            issue: `Keyword cannibalization — ${competingPages.length} other page(s) also target "${keyword}"`,
+            impact: 'high',
+            fix: `These pages compete with each other for the same keyword: ${competingPages.map(p => p.url).join(', ')}. Pick ONE page as the primary target. On the others: change focus keyword, differentiate the content, or add a canonical tag pointing to the primary page.`,
+            competitor_benchmark: `Google can't decide which page to rank when multiple pages target the same keyword — this splits your authority and usually means none of them rank well.`,
+            data: { competing_pages: competingPages.length, pages: competingPages.map(p => p.url).join(', ') }
+          });
+        }
+      }
+    } catch (e) {}
+
     // ── Sort gaps by impact ──
     const impactOrder = { high: 0, medium: 1, low: 2 };
     gaps.sort((a, b) => (impactOrder[a.impact] || 1) - (impactOrder[b.impact] || 1));
