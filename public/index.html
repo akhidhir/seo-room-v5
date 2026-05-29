@@ -21723,12 +21723,14 @@
         // Try Elementor-native preview first (100% design match)
         try {
           const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/elementor-preview', { method: 'POST' });
-          if (r.ok && r.preview_url) {
+          console.log('[preview] Elementor preview response:', r);
+          if (r && r.preview_url) {
             window.open(r.preview_url, '_blank');
             return;
           }
+          if (r && r.error) console.log('[preview] Elementor preview error:', r.error);
         } catch (e) {
-          console.log('[preview] Elementor preview not available, falling back to section-preview:', e.message);
+          console.log('[preview] Elementor preview failed:', e.message);
         }
         // Fallback to HTML injection preview
         const tkn = localStorage.getItem('token') || '';
