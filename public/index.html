@@ -24621,7 +24621,11 @@
                                   <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: posColor(cp.position || i + 1) + '22', color: posColor(cp.position || i + 1) }}>#{cp.position || i + 1}</span>
                                   <span style={{ fontSize: 13, color: 'var(--text2)' }}>{cp.url ? cp.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : cp.domain || 'Unknown'}</span>
                                 </div>
-                                <span style={{ fontSize: 12, color: 'var(--text3)' }}>{cp.wordCount ? cp.wordCount.toLocaleString() + ' words' : ''}</span>
+                                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                  {cp.referring_domains != null && <span style={{ fontSize: 11, color: '#6366f1', background: 'rgba(99,102,241,0.08)', padding: '2px 6px', borderRadius: 4 }}>{cp.referring_domains.toLocaleString()} RD</span>}
+                                  {cp.domain_rank != null && cp.domain_rank > 0 && <span style={{ fontSize: 11, color: 'var(--text3)', background: 'rgba(255,255,255,0.04)', padding: '2px 6px', borderRadius: 4 }}>DR {cp.domain_rank}</span>}
+                                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>{cp.wordCount ? cp.wordCount.toLocaleString() + ' words' : ''}</span>
+                                </div>
                               </div>
                             ))}
                           </div>

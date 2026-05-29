@@ -31755,23 +31755,66 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
       }
     }
 
-    // ────── 11. BACKLINKS / AUTHORITY ──────
-    if (domainReferringDomains < 20) {
+    // ────── 11. BACKLINKS / AUTHORITY (vs competitors) ──────
+    // Fetch competitor backlink summaries from DataForSEO for real comparison
+    let compAuthority = [];
+    if (DATAFORSEO_AUTH && validComps.length > 0) {
+      try {
+        const compDomains = validComps.map(c => { try { return new URL(c.url).hostname.replace(/^www\./, ''); } catch { return ''; } }).filter(Boolean);
+        const uniqueDomains = [...new Set(compDomains)];
+        const authPromises = uniqueDomains.slice(0, 3).map(async (d) => {
+          try {
+            const summary = await dataForSeoBacklinksSummary(d);
+            return { domain: d, referring_domains: summary.referring_domains || 0, domain_rank: summary.domain_rank || 0 };
+          } catch (e) { return { domain: d, referring_domains: 0, domain_rank: 0, error: e.message }; }
+        });
+        compAuthority = await Promise.all(authPromises);
+        console.log(`[serp-analysis] Competitor authority:`, compAuthority.map(c => `${c.domain}: RD=${c.referring_domains}, DR=${c.domain_rank}`).join(', '));
+      } catch (e) { console.error('[serp-analysis] Competitor authority check failed:', e.message); }
+    }
+
+    const avgCompRD = compAuthority.length > 0 ? Math.round(compAuthority.reduce((s, c) => s + c.referring_domains, 0) / compAuthority.length) : null;
+    const avgCompDR = compAuthority.length > 0 ? Math.round(compAuthority.reduce((s, c) => s + c.domain_rank, 0) / compAuthority.length) : null;
+
+    if (avgCompRD !== null && domainReferringDomains < avgCompRD * 0.5) {
+      // Significantly fewer referring domains than competitors
+      const gap = avgCompRD - domainReferringDomains;
       gaps.push({
         category: 'Authority',
-        issue: `Low domain authority — only ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
+        issue: `Authority gap — you have ${domainReferringDomains} referring domains vs competitor avg ${avgCompRD} (${Math.round(gap / avgCompRD * 100)}% behind)`,
         impact: 'high',
-        fix: `Build backlinks: submit to Australian directories (Yellow Pages, True Local, HotFrog — all free), seek guest posts, get supplier/partner links. Target 5-10 new referring domains.`,
-        data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+        fix: `You need ~${gap} more referring domains to match competitors. Submit to Australian directories (Yellow Pages, True Local, HotFrog — all free), seek guest posts, get supplier/partner links. Focus on quality over quantity.`,
+        competitor_benchmark: compAuthority.map(c => `${c.domain}: ${c.referring_domains} RD, rank ${c.domain_rank}`).join(' | '),
+        data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR }
       });
-    } else if (domainReferringDomains < 50) {
+    } else if (avgCompRD !== null && domainReferringDomains < avgCompRD * 0.8) {
       gaps.push({
         category: 'Authority',
-        issue: `Moderate domain authority — ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
+        issue: `Moderate authority gap — ${domainReferringDomains} referring domains vs competitor avg ${avgCompRD}`,
         impact: 'medium',
-        fix: `Continue building quality backlinks. Focus on industry-relevant sites, local business directories, and content that naturally attracts links.`,
-        data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+        fix: `Build ${Math.round(avgCompRD - domainReferringDomains)} more referring domains. Focus on industry-relevant sites and content that naturally attracts links.`,
+        competitor_benchmark: compAuthority.map(c => `${c.domain}: ${c.referring_domains} RD`).join(' | '),
+        data: { yours: domainReferringDomains, competitor_avg: avgCompRD, your_rank: domainRank, competitor_avg_rank: avgCompDR }
       });
+    } else if (avgCompRD === null) {
+      // Fallback to static thresholds if DataForSEO unavailable
+      if (domainReferringDomains < 20) {
+        gaps.push({
+          category: 'Authority',
+          issue: `Low domain authority — only ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
+          impact: 'high',
+          fix: `Build backlinks: submit to Australian directories (Yellow Pages, True Local, HotFrog — all free), seek guest posts, get supplier/partner links. Target 5-10 new referring domains.`,
+          data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+        });
+      } else if (domainReferringDomains < 50) {
+        gaps.push({
+          category: 'Authority',
+          issue: `Moderate domain authority — ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
+          impact: 'medium',
+          fix: `Continue building quality backlinks. Focus on industry-relevant sites, local business directories, and content that naturally attracts links.`,
+          data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+        });
+      }
     }
 
     // ────── 12. GSC-SPECIFIC CHECKS ──────
@@ -31864,6 +31907,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         const summaryPrompt = `In ONE sentence (max 30 words), summarize the main reason this website is ${isNotRanking ? 'not ranking' : `ranking #${serpPos}`} for "${keyword}". Base it ONLY on these facts:
 - Page analyzed: ${userPageUrl}
 - Keyword in title: ${userPage.kwInTitle ? 'YES' : 'NO'} | in H1: ${userPage.kwInH1 ? 'YES' : 'NO'} | in meta: ${userPage.kwInMeta ? 'YES' : 'NO'}
+- Authority: ${domainReferringDomains} referring domains (rank ${domainRank}) vs competitor avg ${avgCompRD || 'unknown'} RD (rank ${avgCompDR || 'unknown'})
 - Word count: ${userPage.wordCount || 0} (competitor avg: ${avgCompWords || 'unknown'})
 - Schema: ${userPage.hasSchema ? 'Yes' : 'No'} | Internal links: ${userPage.internalLinks || 0}
 - Referring domains: ${domainReferringDomains} | Domain rank: ${domainRank}/1000
@@ -31896,7 +31940,10 @@ Do NOT add information beyond what's listed above. Return ONLY the sentence, not
       model: 'rule-based + haiku-verdict',
       analysis,
       userPage: { url: userPage.url, title: userPage.title, wordCount: userPage.wordCount, error: userPage.error, matchMethod },
-      competitors: compPages.map((cp, i) => ({ position: top3[i]?.position, url: cp.url, title: cp.title, wordCount: cp.wordCount, error: cp.error })),
+      competitors: compPages.map((cp, i) => {
+        const compAuth = compAuthority.find(ca => cp.url && cp.url.includes(ca.domain));
+        return { position: top3[i]?.position, url: cp.url, title: cp.title, wordCount: cp.wordCount, error: cp.error, referring_domains: compAuth?.referring_domains, domain_rank: compAuth?.domain_rank };
+      }),
       cost: aiCost
     };
 
