@@ -568,6 +568,12 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS scheduled_hour INTEGER`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS estimated_hours NUMERIC DEFAULT 0.5`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS keyword TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS keyword_position INTEGER`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS ranking_page TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS difficulty TEXT DEFAULT 'medium'`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS how_to_html TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS audit_data JSONB`).catch(() => {});
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
     // Maps discovery columns on discovery_cache
@@ -5800,6 +5806,311 @@ app.post('/api/action-items/:id/split', async (req, res) => {
 
     res.json({ split: locations.length, created });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== ACTION PLAN: RANKING-BASED GENERATION ====================
+
+// Clear all old action items for a project
+app.delete('/api/projects/:id/action-plan/clear', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM action_items WHERE project_id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate ranking-based action plan — cross-references all audit data
+app.post('/api/projects/:id/action-plan/generate', async (req, res) => {
+  const projectId = req.params.id;
+  try {
+    const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!projRes.rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = projRes.rows[0];
+    const domain = (project.website || project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+
+    // 1. Get latest rankings (SERP + Maps)
+    const rankRes = await pool.query(`
+      SELECT DISTINCT ON (rt.keyword, rt.location) rt.keyword, rt.location, rt.serp_position, rt.serp_url, rt.maps_position, rt.maps_title, rt.competitors, rt.checked_at,
+             g.position AS gsc_position, g.clicks AS gsc_clicks, g.impressions AS gsc_impressions, g.ctr AS gsc_ctr
+      FROM rank_tracking rt
+      LEFT JOIN gsc_keywords g ON g.project_id = rt.project_id AND LOWER(g.keyword) = LOWER(rt.keyword)
+      WHERE rt.project_id=$1
+      ORDER BY rt.keyword, rt.location, rt.checked_at DESC
+    `, [projectId]);
+    if (!rankRes.rows.length) return res.status(400).json({ error: 'No ranking data. Run SERP Rankings check first.' });
+
+    // 2. Get on-page audit data (Yoast meta, word count, links per page)
+    const onpageRes = await pool.query('SELECT * FROM onpage_audit_cache WHERE project_id=$1 ORDER BY updated_at DESC LIMIT 1', [projectId]);
+    const onpagePages = onpageRes.rows[0]?.pages || [];
+
+    // 3. Get website audit findings
+    const websiteFindingsRes = await pool.query(
+      `SELECT * FROM audit_findings WHERE project_id=$1 AND pillar IN ('website','technical') AND status != 'dismissed' ORDER BY created_at DESC`,
+      [projectId]
+    );
+    const websiteFindings = websiteFindingsRes.rows;
+
+    // 4. Get GSC audit findings
+    const gscFindingsRes = await pool.query(
+      `SELECT * FROM audit_findings WHERE project_id=$1 AND pillar IN ('gsc','gsc_agent') AND status != 'dismissed' ORDER BY created_at DESC`,
+      [projectId]
+    );
+    const gscFindings = gscFindingsRes.rows;
+
+    // 5. Get GBP audit findings
+    const gbpFindingsRes = await pool.query(
+      `SELECT * FROM audit_findings WHERE project_id=$1 AND pillar IN ('gbp','gbp_external') AND status != 'dismissed' ORDER BY created_at DESC`,
+      [projectId]
+    );
+    const gbpFindings = gbpFindingsRes.rows;
+
+    // 6. Get backlinks data
+    const blRes = await pool.query('SELECT * FROM backlink_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 1', [projectId]);
+    const backlinks = blRes.rows[0]?.backlinks || [];
+    // Build authority map: url → referring domain count
+    const authorityMap = {};
+    for (const bl of backlinks) {
+      const target = (bl.url_to || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+      const targetWww = 'www.' + target;
+      const source = (bl.url_from || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase();
+      if (!authorityMap[target]) authorityMap[target] = new Set();
+      if (!authorityMap[targetWww]) authorityMap[targetWww] = new Set();
+      authorityMap[target].add(source);
+      authorityMap[targetWww].add(source);
+    }
+
+    // 7. Get PageSpeed data
+    const speedRes = await pool.query(
+      `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+      [projectId]
+    );
+    const speedPages = speedRes.rows[0]?.audit_data?.pages || [];
+
+    // 8. Get grid scan data for maps keywords
+    const gridRes = await pool.query(
+      `SELECT keyword, arp, atrp, solv, found_in, data_points, competitors FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC`,
+      [projectId]
+    );
+    const gridMap = {};
+    for (const g of gridRes.rows) {
+      if (!gridMap[g.keyword.toLowerCase()]) gridMap[g.keyword.toLowerCase()] = g;
+    }
+
+    // ── Build per-keyword analysis ──
+    const actionItems = [];
+    for (const rank of rankRes.rows) {
+      const kwLower = rank.keyword.toLowerCase();
+      const serpPos = rank.serp_position;
+      const mapsPos = rank.maps_position;
+      const rankingUrl = rank.serp_url || '';
+
+      // Skip keywords with no data at all
+      if (!serpPos && !mapsPos) continue;
+
+      // Find matching on-page data for ranking URL
+      let pageData = null;
+      if (rankingUrl) {
+        const rankPath = rankingUrl.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+        pageData = onpagePages.find(p => {
+          const pUrl = (p.url || p.link || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+          return pUrl === rankPath || pUrl === rankPath + '/' || rankPath.includes(pUrl);
+        });
+      }
+
+      // Find PageSpeed for this URL
+      let speedData = null;
+      if (rankingUrl) {
+        speedData = speedPages.find(sp => {
+          const spUrl = (sp.url || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+          const rkUrl = rankingUrl.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+          return spUrl === rkUrl || spUrl.includes(rkUrl) || rkUrl.includes(spUrl);
+        });
+      }
+
+      // Get authority (referring domains) for this URL
+      const urlKey = rankingUrl.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+      const authority = authorityMap[urlKey]?.size || 0;
+
+      // GSC data
+      const gscCtr = rank.gsc_ctr ? parseFloat(rank.gsc_ctr) : null;
+      const gscClicks = rank.gsc_clicks ? parseInt(rank.gsc_clicks) : null;
+      const gscImpressions = rank.gsc_impressions ? parseInt(rank.gsc_impressions) : null;
+
+      // Grid data for maps keywords
+      const gridData = gridMap[kwLower] || null;
+
+      // Competitor data from rank tracking
+      let competitors = [];
+      try { competitors = typeof rank.competitors === 'string' ? JSON.parse(rank.competitors) : (rank.competitors || []); } catch(e) {}
+
+      // ── Determine priority based on position ──
+      let priority = 'low';
+      let priorityScore = 100;
+      if (serpPos) {
+        if (serpPos <= 3) { priority = 'monitor'; priorityScore = 0; }
+        else if (serpPos <= 10) { priority = 'high'; priorityScore = 10 - serpPos + 20; } // 4-10: score 17-23
+        else if (serpPos <= 20) { priority = 'high'; priorityScore = 20 - serpPos + 10; } // 11-20: score 10-19
+        else if (serpPos <= 30) { priority = 'medium'; priorityScore = 30 - serpPos + 5; } // 21-30: score 5-14
+        else { priority = 'low'; priorityScore = Math.max(0, 50 - serpPos); }
+      }
+
+      // Build audit snapshot for this keyword
+      const auditSnapshot = {
+        page: pageData ? {
+          url: pageData.url || pageData.link,
+          title: pageData.yoast_title || pageData.title || '',
+          meta_desc: pageData.yoast_desc || pageData.meta_description || '',
+          word_count: pageData.word_count || 0,
+          h1: pageData.h1 || '',
+          internal_links: pageData.internal_links || 0,
+          external_links: pageData.external_links || 0,
+          images: pageData.images || 0,
+          focus_keyword: pageData.focus_keyword || '',
+          schema_types: pageData.schema_types || [],
+        } : null,
+        speed: speedData ? {
+          score: speedData.performance_score || speedData.score,
+          lcp: speedData.lcp,
+          cls: speedData.cls,
+          tbt: speedData.tbt,
+        } : null,
+        authority,
+        gsc: gscCtr !== null ? { ctr: gscCtr, clicks: gscClicks, impressions: gscImpressions } : null,
+        grid: gridData ? { arp: gridData.arp, solv: gridData.solv, found_in: gridData.found_in, data_points: gridData.data_points } : null,
+        competitors: competitors.slice(0, 3),
+      };
+
+      // ── Generate specific actions based on REAL gaps ──
+      const actions = [];
+
+      // SERP actions
+      if (serpPos && serpPos > 3) {
+        // Content gaps
+        if (pageData) {
+          const wc = pageData.word_count || 0;
+          if (wc < 300) {
+            actions.push({ category: 'content', title: `Add content to ranking page (currently ${wc} words)`, difficulty: 'medium', impact: 'high',
+              howTo: `Your page "${pageData.title || rankingUrl}" has only ${wc} words. Competitors in top 3 typically have 800-1500+ words. Add relevant service descriptions, FAQs, and local area info. Don't add fluff — every paragraph should answer a question a customer would ask.` });
+          } else if (wc < 800) {
+            actions.push({ category: 'content', title: `Expand thin content (${wc} words — aim for 1200+)`, difficulty: 'medium', impact: 'high',
+              howTo: `Your page has ${wc} words. Add an FAQ section (5-8 questions), a "How it works" section, and service details specific to ${rank.location || project.location || 'your area'}. Use headings (H2/H3) to structure the new content.` });
+          }
+
+          // Meta title/desc
+          const metaTitle = pageData.yoast_title || pageData.title || '';
+          if (!metaTitle.toLowerCase().includes(kwLower.split(' ')[0])) {
+            actions.push({ category: 'on-page', title: `Add keyword to meta title`, difficulty: 'easy', impact: 'high',
+              howTo: `Your meta title is "${metaTitle}" — it doesn't contain "${rank.keyword}". Go to WordPress → edit the page → Yoast SEO section → SEO Title. Include the keyword near the start. Example: "${rank.keyword} | ${project.business_name || project.name}"` });
+          }
+          const metaDesc = pageData.yoast_desc || pageData.meta_description || '';
+          if (!metaDesc || metaDesc.length < 50) {
+            actions.push({ category: 'on-page', title: `Write meta description (${metaDesc ? 'too short' : 'missing'})`, difficulty: 'easy', impact: 'medium',
+              howTo: `${metaDesc ? 'Your meta description is only ' + metaDesc.length + ' characters' : 'No meta description set'}. Go to WordPress → edit the page → Yoast SEO → Meta Description. Write 140-160 characters including "${rank.keyword}" and a call to action. This shows in Google search results.` });
+          }
+
+          // Schema
+          const hasSchema = pageData.schema_types && pageData.schema_types.length > 0;
+          if (!hasSchema) {
+            actions.push({ category: 'technical', title: `Add schema markup`, difficulty: 'easy', impact: 'medium',
+              howTo: `This page has no structured data. Go to SEO Room Dashboard → Website Audit → find this page → click "Fix" on the schema issue. The dashboard will auto-generate LocalBusiness or FAQPage schema and push it to WordPress.` });
+          }
+
+          // Internal links
+          if ((pageData.internal_links || 0) < 3) {
+            actions.push({ category: 'on-page', title: `Add internal links (only ${pageData.internal_links || 0} currently)`, difficulty: 'easy', impact: 'medium',
+              howTo: `This page has only ${pageData.internal_links || 0} internal links. Add 3-5 links to related service pages or suburb pages. Link from your blog posts to this page too. Internal links help Google understand what this page is about and pass authority.` });
+          }
+        } else {
+          // No ranking page — might need to create one
+          actions.push({ category: 'content', title: `Create a dedicated page for "${rank.keyword}"`, difficulty: 'hard', impact: 'high',
+            howTo: `You don't have a page specifically targeting "${rank.keyword}". Create a new page in WordPress with: the keyword in the title, H1, and URL slug. Write 1000+ words of unique content about this service/topic. Add internal links from your homepage and related pages.` });
+        }
+
+        // Backlink gap
+        if (authority < 3) {
+          actions.push({ category: 'backlinks', title: `Build backlinks (only ${authority} referring domains)`, difficulty: 'hard', impact: 'high',
+            howTo: `This page has only ${authority} referring domains. Submit to Australian directories: Yellow Pages (free), True Local (free), HotFrog (free), Yelp (free). Ask suppliers/partners to link to this page. Write a guest post mentioning this service. Target 5-10 new links.` });
+        }
+
+        // Speed issues
+        if (speedData && (speedData.performance_score || speedData.score) < 50) {
+          const score = speedData.performance_score || speedData.score;
+          actions.push({ category: 'technical', title: `Fix page speed (score: ${score}/100)`, difficulty: 'medium', impact: 'medium',
+            howTo: `This page scores ${score}/100 on PageSpeed. Check if BerqWP is active (it handles most speed issues automatically). Common fixes: compress large images, defer unused JavaScript, reduce server response time. Run the Website Audit → PageSpeed section for specific issues.` });
+        }
+
+        // CTR issue from GSC
+        if (gscCtr !== null && gscCtr < 2 && serpPos <= 20) {
+          actions.push({ category: 'on-page', title: `Improve click-through rate (${gscCtr.toFixed(1)}% CTR)`, difficulty: 'easy', impact: 'high',
+            howTo: `You're at position ${serpPos} with only ${gscCtr.toFixed(1)}% CTR (expected 3-8% for this position). Rewrite your meta title to be more compelling — add numbers, benefits, or a call to action. Example: "Top ${rank.keyword} Services | Free Quote | ${project.business_name || ''}"` });
+        }
+      }
+
+      // MAPS-specific actions
+      if (mapsPos && mapsPos > 3) {
+        // GBP-related actions based on audit findings
+        const gbpIssues = gbpFindings.filter(f => f.severity === 'critical' || f.severity === 'high');
+        if (gbpIssues.length > 0) {
+          const topIssue = gbpIssues[0];
+          actions.push({ category: 'gbp', title: `Fix GBP issue: ${topIssue.title}`, difficulty: 'easy', impact: 'high',
+            howTo: `${topIssue.description || topIssue.recommendation || 'Check the GBP Audit page for details'}. Go to business.google.com → select your business → make the change. GBP fixes usually take effect within 24-48 hours.` });
+        }
+
+        if (gridData && gridData.solv < 30) {
+          actions.push({ category: 'gbp', title: `Improve local visibility (SOLV: ${gridData.solv?.toFixed(0)}%)`, difficulty: 'hard', impact: 'high',
+            howTo: `Your business appears in the top 3 local results only ${gridData.solv?.toFixed(0)}% of the time for this keyword. Key factors: get more Google reviews (ask happy customers), ensure your GBP categories are specific, add this service to your GBP services list, and build local citations.` });
+        }
+      }
+
+      // Only add if we have actions
+      if (actions.length === 0 && priority === 'monitor') continue;
+      if (actions.length === 0) {
+        actions.push({ category: 'review', title: 'Review ranking — no specific gaps found', difficulty: 'easy', impact: 'low',
+          howTo: `This keyword is at position ${serpPos || 'N/A'} (SERP) / ${mapsPos || 'N/A'} (Maps). No specific issues detected from audits. Check competitor pages manually to find content or backlink gaps not covered by our audits.` });
+      }
+
+      actionItems.push({
+        keyword: rank.keyword,
+        location: rank.location || '',
+        serp_position: serpPos,
+        maps_position: mapsPos,
+        ranking_url: rankingUrl,
+        priority,
+        priority_score: priorityScore,
+        audit_data: auditSnapshot,
+        actions,
+      });
+    }
+
+    // Sort by priority score descending (highest opportunity first)
+    actionItems.sort((a, b) => b.priority_score - a.priority_score);
+
+    // ── Save to action_items table ──
+    // Clear old ranking-based items
+    await pool.query(`DELETE FROM action_items WHERE project_id=$1 AND pillar='ranking'`, [projectId]);
+
+    let saved = 0;
+    for (const item of actionItems) {
+      for (const action of item.actions) {
+        await pool.query(
+          `INSERT INTO action_items (project_id, pillar, keyword, keyword_position, ranking_page, category, title, description, severity, difficulty, how_to_html, audit_data, status, effort, expected_impact)
+           VALUES ($1, 'ranking', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13)`,
+          [projectId, item.keyword, item.serp_position || item.maps_position, item.ranking_url || '',
+           action.category, action.title, action.howTo,
+           item.priority, action.difficulty, action.howTo,
+           JSON.stringify(item.audit_data),
+           action.difficulty === 'easy' ? '30 min' : action.difficulty === 'medium' ? '1-2 hours' : '3+ hours',
+           action.impact || 'medium']
+        );
+        saved++;
+      }
+    }
+
+    console.log(`[action-plan] Generated ${saved} actions for ${actionItems.length} keywords (project ${projectId})`);
+    res.json({ ok: true, keywords: actionItems.length, actions: saved, items: actionItems });
+  } catch (e) {
+    console.error('[action-plan] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

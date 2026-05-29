@@ -14090,695 +14090,352 @@
     }
 
     function UnifiedActionPlanPage({ project, setActiveTab }) {
-      const [viewMode, setViewMode] = useState('list');
-      const [activePillar, setActivePillar] = useState('all');
-      const [filterSeverity, setFilterSeverity] = useState('all');
-      const [filterCategory, setFilterCategory] = useState('all');
-      const [filterAssignee, setFilterAssignee] = useState('all');
-      const [filterStatus, setFilterStatus] = useState('all');
-      const [items, setItems] = useState([]);
+      const [actionItems, setActionItems] = useState([]);
       const [loading, setLoading] = useState(false);
-      const [syncing, setSyncing] = useState(false);
+      const [generating, setGenerating] = useState(false);
       const [error, setError] = useState('');
-      const [sortCol, setSortCol] = useState('severity');
-      const [sortDir, setSortDir] = useState('asc');
-      const [bulkSending, setBulkSending] = useState(false);
-      const [bulkResult, setBulkResult] = useState(null);
-      const [executing, setExecuting] = useState(false);
-      const [execProgress, setExecProgress] = useState(null);
-      const toggleSort = (col) => { if (sortCol === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); } else { setSortCol(col); setSortDir('asc'); } };
-
-      const canAutoExecute = (item) => {
-        const cat = (item._category || item.category || '').toLowerCase();
-        const assignee = (item._assigneeLabel || item.assignee_label || item.execution_type || '').toLowerCase();
-        if (assignee !== 'automated') return null;
-        // Only categories the auto-fix endpoint can actually handle
-        if (cat === 'core web vitals') return 'auto';
-        if (cat === 'schema & data' || cat === 'schema') return 'auto';
-        if (cat === 'site health') return 'auto';
-        // On-page meta fixes (titles, descriptions)
-        const t = ((item.title || '') + ' ' + (item.description || '')).toLowerCase();
-        if (cat === 'on-page issues' && /\b(meta|title|description|keyword|yoast)\b/.test(t)) return 'auto';
-        return null;
-      };
-
-      // pendingSeoRoomCount is below itemsWithAssignee
-
-      const handleExecuteAll = async () => {
-        setExecuting(true); setExecProgress({ done: 0, total: 0, current: '' });
-        try {
-          const executableItems = itemsWithAssignee.filter(i => {
-            const status = (i.status || 'pending').toLowerCase();
-            if (status !== 'pending' || i._assigneeLabel !== 'Automated' || !canAutoExecute(i)) return false;
-            if (activePillar === 'all') return true;
-            return (i._pillar || i.pillar) === activePillar;
-          });
-
-          setExecProgress({ done: 0, total: executableItems.length, current: 'Starting...' });
-
-          let done = 0;
-          for (const item of executableItems) {
-            const label = (item.title || '').substring(0, 60);
-            setExecProgress({ done, total: executableItems.length, current: label });
-
-            try {
-              await api(`/projects/${project.id}/auto-fix`, {
-                method: 'POST',
-                body: { action_item_id: item.id }
-              });
-            } catch (e) { console.error('Fix failed for', label, e); }
-            done++;
-            setExecProgress({ done, total: executableItems.length, current: '' });
-          }
-
-          await loadData();
-        } catch (e) { setError(e.message); }
-        setExecuting(false); setExecProgress(null);
-      };
-
-      const [executingItem, setExecutingItem] = useState(null);
-      const [howToExpanded, setHowToExpanded] = useState({});
-      const [howToData, setHowToData] = useState({});
-      const [howToLoading, setHowToLoading] = useState({});
-      const loadHowTo = async (itemId) => {
-        if (howToExpanded[itemId]) { setHowToExpanded(p => ({ ...p, [itemId]: false })); return; }
-        setHowToExpanded(p => ({ ...p, [itemId]: true }));
-        if (howToData[itemId]) return;
-        setHowToLoading(p => ({ ...p, [itemId]: true }));
-        try {
-          const r = await api(`/action-items/${itemId}/how-to`);
-          setHowToData(p => ({ ...p, [itemId]: r.steps }));
-        } catch(e) { setHowToData(p => ({ ...p, [itemId]: 'Failed to load instructions.' })); }
-        setHowToLoading(p => ({ ...p, [itemId]: false }));
-      };
-
-      const handleExecuteOne = async (item) => {
-        const execType = canAutoExecute(item);
-        if (!execType) return;
-        setExecutingItem(item.id);
-        try {
-          const result = await api(`/projects/${project.id}/auto-fix`, {
-            method: 'POST',
-            body: { action_item_id: item.id }
-          });
-          if (result.applied) {
-            setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
-          } else {
-            setError(result.message || 'Fix not applied — needs manual action');
-            setTimeout(() => setError(''), 8000);
-          }
-        } catch (e) { setError('Execute failed: ' + e.message); }
-        setExecutingItem(null);
-      };
-
-      useEffect(() => { if (project?.id) loadData(); }, [project?.id]);
+      const [filterPriority, setFilterPriority] = useState('all');
+      const [filterCategory, setFilterCategory] = useState('all');
+      const [filterDifficulty, setFilterDifficulty] = useState('all');
+      const [filterStatus, setFilterStatus] = useState('all');
+      const [searchQuery, setSearchQuery] = useState('');
+      const [expandedKw, setExpandedKw] = useState({});
+      const [expandedAction, setExpandedAction] = useState({});
 
       const loadData = async () => {
         setLoading(true); setError('');
         try {
-          const d = await api(`/projects/${project.id}/orchestrator`);
-          const grouped = d.grouped || {};
-          const normPillar = (p) => {
-            const lp = (p || '').toLowerCase();
-            if (lp.includes('gbp')) return 'GBP';
-            if (lp.includes('gsc')) return 'GSC';
-            return 'Website';
-          };
-          const all = [];
-          for (const [pillar, cats] of Object.entries(grouped)) {
-            for (const [cat, tasks] of Object.entries(cats)) {
-              tasks.forEach(t => all.push({ ...t, _category: cat, _pillar: normPillar(pillar), _rawPillar: pillar }));
-            }
-          }
-          // Filter out informational/passing items that aren't actionable
-          const filtered = all.filter(item => {
-            const title = (item.title || '').trim();
-            const desc = (item.description || '').toLowerCase();
-            if (/^pages?\s+(successfully\s+)?crawled/i.test(title)) return false;
-            if (/^total\s+pages?\s+in/i.test(title)) return false;
-            if (/^sitemap\s+present/i.test(title) && !/missing|not found|error/i.test(desc)) return false;
-            if (/^https?\s*[\/ ]\s*ssl/i.test(title) && !/mixed|insecure|expired|error|not /i.test(desc)) return false;
-            if (/✅/.test(title + ' ' + desc) && !/\b(but|however|partial|issue|need|missing|fix|improve)\b/i.test(desc)) return false;
-            if (/\bmonitor\b/i.test(title) && !/\b(fix|add|create|implement|update|change|improve)\b/i.test(desc)) return false;
-            return true;
-          });
-          setItems(filtered);
+          const d = await api(`/projects/${project.id}/action-items?pillar=ranking`);
+          setActionItems(d.action_items || []);
         } catch (e) { setError(e.message); }
         setLoading(false);
       };
+      useEffect(() => { if (project?.id) loadData(); }, [project?.id]);
 
-      const runOrchestrator = async () => {
-        setSyncing(true); setError('');
+      const generatePlan = async () => {
+        setGenerating(true); setError('');
         try {
-          const data = await api(`/projects/${project.id}/orchestrator/run`, { method: 'POST' });
-          if (data?.error) { setError('Orchestrator: ' + data.error); setSyncing(false); return; }
-          if (data?.status === 'running') {
-            // Poll orchestrator/status every 3s until completed or failed, up to 3 minutes
-            let attempts = 0;
-            const maxAttempts = 60;
-            const pollInterval = setInterval(async () => {
-              attempts++;
-              try {
-                const s = await api(`/projects/${project.id}/orchestrator/status`);
-                if (s.status === 'completed') {
-                  clearInterval(pollInterval);
-                  loadData();
-                  setSyncing(false);
-                } else if (s.status === 'failed') {
-                  clearInterval(pollInterval);
-                  setError('Orchestrator failed: ' + (s.error || 'Unknown error — check Railway logs'));
-                  setSyncing(false);
-                } else if (attempts >= maxAttempts) {
-                  clearInterval(pollInterval);
-                  setError('Orchestrator timed out after 3 minutes. Check Railway logs for errors.');
-                  setSyncing(false);
-                }
-              } catch (e) {
-                clearInterval(pollInterval);
-                setSyncing(false);
-                setError('Polling error: ' + e.message);
-              }
-            }, 3000);
-            return;
-          }
-          loadData();
-        } catch (e) { setError('Orchestrator failed: ' + e.message); }
-        setSyncing(false);
+          await api(`/projects/${project.id}/action-plan/generate`, { method: 'POST' });
+          await loadData();
+        } catch (e) { setError(e.message); }
+        setGenerating(false);
       };
 
-      const handleStatusChange = async (actionId, newStatus) => {
+      const clearPlan = async () => {
+        if (!confirm('Clear all action items? This cannot be undone.')) return;
         try {
-          const item = items.find(i => i.id === actionId);
-          const dupIds = item?.duplicate_ids || [];
-          await api(`/action-items/${actionId}`, { method: 'PUT', body: { status: newStatus, duplicate_ids: dupIds } });
-          // Update master + all hidden duplicates in local state
-          const allIds = new Set([actionId, ...dupIds]);
-          setItems(prev => prev.map(i => allIds.has(i.id) ? { ...i, status: newStatus } : i));
+          await api(`/projects/${project.id}/action-plan/clear`, { method: 'DELETE' });
+          setActionItems([]);
         } catch (e) { setError(e.message); }
       };
 
-      const handleBulkSendToCopywriter = async () => {
-        const copywriterItems = itemsWithAssignee.filter(i => (i._assigneeLabel === 'Copywriter Current' || i._assigneeLabel === 'Copywriter New') && (i.status || 'pending') === 'pending');
-        if (!copywriterItems.length) { setBulkResult({ error: 'No pending Copywriter items to send' }); return; }
-        setBulkSending(true); setBulkResult(null);
+      const handleStatusChange = async (id, status) => {
         try {
-          const data = await api(`/projects/${project.id}/content-queue/bulk-from-actions`, {
-            method: 'POST', body: { action_ids: copywriterItems.map(i => i.id) }
-          });
-          setBulkResult(data);
-          loadData(); // reload to show updated statuses
-        } catch (e) { setBulkResult({ error: e.message }); }
-        setBulkSending(false);
+          await api(`/action-items/${id}`, { method: 'PUT', body: { status } });
+          setActionItems(prev => prev.map(i => i.id === id ? { ...i, status } : i));
+        } catch (e) { setError(e.message); }
       };
 
-      const pillars = [
-        { id: 'all', label: 'All', icon: 'fas fa-layer-group', color: 'var(--accent)' },
-        { id: 'GBP', label: 'GBP', icon: 'fas fa-store', color: '#ef4444' },
-        { id: 'GSC', label: 'GSC', icon: 'fas fa-chart-line', color: '#3b82f6' },
-        { id: 'Website', label: 'Website', icon: 'fas fa-globe', color: '#8b5cf6' },
-      ];
-
-      // Compute assignee label for each item (memoized) — DB override takes priority
-      const itemsWithAssignee = useMemo(() => items.map(item => {
-        const dbLabel = item.assignee_label;
-        if (dbLabel && ['Automated', 'Copywriter', 'Copywriter Current', 'Copywriter New', 'Manual'].includes(dbLabel)) {
-          // Legacy "Copywriter" → "Copywriter Current"
-          const normalizedLabel = dbLabel === 'Copywriter' ? 'Copywriter Current' : dbLabel;
-          return { ...item, _assigneeLabel: normalizedLabel };
+      // Group by keyword
+      const grouped = useMemo(() => {
+        const map = {};
+        for (const item of actionItems) {
+          const key = (item.keyword || 'other').toLowerCase() + '|' + (item.ranking_page || '');
+          if (!map[key]) map[key] = { keyword: item.keyword || 'Other', position: item.keyword_position, ranking_page: item.ranking_page, audit_data: null, actions: [] };
+          if (item.audit_data && !map[key].audit_data) {
+            try { map[key].audit_data = typeof item.audit_data === 'string' ? JSON.parse(item.audit_data) : item.audit_data; } catch(e) {}
+          }
+          map[key].actions.push(item);
         }
-        const execInfo = detectExecType(item.description || item.title, item._pillar || item.pillar, item._category || item.category);
-        return { ...item, _assigneeLabel: execInfo.label };
-      }), [items]);
-
-      const pendingSeoRoomCount = useMemo(() => {
-        return itemsWithAssignee.filter(i => {
-          const status = (i.status || 'pending').toLowerCase();
-          if (status !== 'pending') return false;
-          if (i._assigneeLabel !== 'Automated') return false;
-          if (!canAutoExecute(i)) return false;
-          if (activePillar === 'all') return true;
-          return (i._pillar || i.pillar) === activePillar;
-        }).length;
-      }, [itemsWithAssignee, activePillar]);
-
-      // Map pillar + category to audit page label
-      const getAuditPageLabel = (item) => {
-        const pillar = (item._pillar || item.pillar || '').toLowerCase();
-        const cat = (item._category || item.category || '').toLowerCase();
-        if (pillar.includes('gbp')) return 'GBP Audit';
-        if (pillar.includes('gsc')) return 'GSC Audit';
-        if (cat === 'core web vitals') return 'Website Audit';
-        if (cat === 'on-page issues' || cat === 'content quality') return 'Website Audit';
-        if (pillar.includes('website') || pillar.includes('technical')) return 'Website Audit';
-        return 'Website Audit';
-      };
-
-      const PILLAR_VALID_CATS = {
-        GBP: ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'],
-        GSC: ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'],
-        Website: ['Site Health', 'Crawlability', 'Content Quality', 'Core Web Vitals', 'Schema & Data'],
-      };
-      const ALL_VALID_CATS = new Set([...PILLAR_VALID_CATS.GBP, ...PILLAR_VALID_CATS.GSC, ...PILLAR_VALID_CATS.Website]);
-
-      // Reset category filter when pillar changes
-      useEffect(() => { setFilterCategory('all'); }, [activePillar]);
-
-      // Derive unique filter options — categories scoped to active pillar
-      const filterOptions = useMemo(() => {
-        const pillarItems = activePillar === 'all' ? itemsWithAssignee : itemsWithAssignee.filter(i => (i._pillar || i.pillar) === activePillar);
-        const categories = activePillar === 'all'
-          ? [...ALL_VALID_CATS].sort()
-          : (PILLAR_VALID_CATS[activePillar] || []);
-        const severities = [...new Set(itemsWithAssignee.map(i => (i.severity || 'medium').toLowerCase()).filter(Boolean))].sort((a, b) => {
-          const order = { critical: 0, high: 1, medium: 2, low: 3 };
-          return (order[a] ?? 9) - (order[b] ?? 9);
+        return Object.values(map).sort((a, b) => {
+          const pa = a.position || 999;
+          const pb = b.position || 999;
+          if (pa <= 3 && pb <= 3) return pa - pb;
+          if (pa <= 3) return 1;
+          if (pb <= 3) return -1;
+          return pa - pb;
         });
-        const assigneesFromItems = [...new Set(itemsWithAssignee.map(i => i._assigneeLabel).filter(Boolean))];
-        const allAssignees = ['Automated', 'Copywriter Current', 'Copywriter New', 'Manual'];
-        const assignees = allAssignees.filter(a => assigneesFromItems.includes(a) || allAssignees.includes(a));
-        return { categories, severities, assignees };
-      }, [itemsWithAssignee, activePillar]);
+      }, [actionItems]);
 
+      // Filter
       const filtered = useMemo(() => {
-        const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-        const statusOrder = { pending: 0, 'in-progress': 1, done: 2, completed: 2, skipped: 3, ignored: 4 };
-        const result = itemsWithAssignee.filter(i => {
-          if (activePillar !== 'all' && (i._pillar || i.pillar) !== activePillar) return false;
-          if (filterSeverity !== 'all' && (i.severity || 'medium').toLowerCase() !== filterSeverity) return false;
-          if (filterCategory !== 'all' && (i._category || i.category) !== filterCategory) return false;
-          if (filterAssignee !== 'all' && i._assigneeLabel !== filterAssignee) return false;
-          if (filterStatus !== 'all' && (i.status || 'pending') !== filterStatus) return false;
+        return grouped.filter(g => {
+          if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            if (!g.keyword.toLowerCase().includes(q) && !(g.ranking_page || '').toLowerCase().includes(q) && !g.actions.some(a => a.title.toLowerCase().includes(q))) return false;
+          }
+          if (filterPriority !== 'all' && !g.actions.some(a => (a.severity || '').toLowerCase() === filterPriority)) return false;
+          if (filterCategory !== 'all' && !g.actions.some(a => a.category === filterCategory)) return false;
+          if (filterDifficulty !== 'all' && !g.actions.some(a => a.difficulty === filterDifficulty)) return false;
+          if (filterStatus !== 'all' && !g.actions.some(a => (a.status || 'pending') === filterStatus)) return false;
           return true;
         });
-        result.sort((a, b) => {
-          let va, vb;
-          if (sortCol === 'severity') { va = sevOrder[(a.severity || 'medium').toLowerCase()] ?? 2; vb = sevOrder[(b.severity || 'medium').toLowerCase()] ?? 2; }
-          else if (sortCol === 'title') { va = (a.title || '').toLowerCase(); vb = (b.title || '').toLowerCase(); }
-          else if (sortCol === 'pillar') { va = (a._pillar || a.pillar || ''); vb = (b._pillar || b.pillar || ''); }
-          else if (sortCol === 'category') { va = (a._category || a.category || ''); vb = (b._category || b.category || ''); }
-          else if (sortCol === 'assignee') { va = (a._assigneeLabel || ''); vb = (b._assigneeLabel || ''); }
-          else if (sortCol === 'status') { va = statusOrder[(a.status || 'pending')] ?? 0; vb = statusOrder[(b.status || 'pending')] ?? 0; }
-          else { va = 0; vb = 0; }
-          if (va < vb) return sortDir === 'asc' ? -1 : 1;
-          if (va > vb) return sortDir === 'asc' ? 1 : -1;
-          return 0;
-        });
-        return result;
-      }, [itemsWithAssignee, activePillar, filterSeverity, filterCategory, filterAssignee, filterStatus, sortCol, sortDir]);
+      }, [grouped, searchQuery, filterPriority, filterCategory, filterDifficulty, filterStatus]);
 
-      const activeFilterCount = [filterSeverity, filterCategory, filterAssignee, filterStatus].filter(f => f !== 'all').length;
-
-      const clearFilters = () => { setFilterSeverity('all'); setFilterCategory('all'); setFilterAssignee('all'); setFilterStatus('all'); };
-
+      // Stats
       const stats = useMemo(() => {
-        const base = activePillar === 'all' ? itemsWithAssignee : itemsWithAssignee.filter(i => (i._pillar || i.pillar) === activePillar);
-        const total = base.length;
-        const critical = base.filter(i => (i.severity || '').toLowerCase() === 'critical').length;
-        const high = base.filter(i => (i.severity || '').toLowerCase() === 'high').length;
-        const ignored = base.filter(i => i.status === 'ignored').length;
-        const skipped = base.filter(i => i.status === 'skipped').length;
-        const pending = base.filter(i => i.status === 'pending').length;
-        const done = base.filter(i => i.status === 'done' || i.status === 'completed').length;
-        const inProgress = base.filter(i => i.status === 'in-progress').length;
-        return { total, critical, high, pending, done, inProgress, ignored, skipped };
-      }, [itemsWithAssignee, activePillar]);
+        const total = actionItems.length;
+        const done = actionItems.filter(i => i.status === 'done' || i.status === 'completed').length;
+        const high = actionItems.filter(i => (i.severity || '').toLowerCase() === 'high').length;
+        return { total, done, high, keywords: grouped.length, progress: total ? Math.round((done / total) * 100) : 0 };
+      }, [actionItems, grouped]);
 
-      const sevColors = { critical: '#ef4444', high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
-      const pillarLabels = { GBP: 'GBP', GSC: 'GSC', Website: 'Website', gbp_external: 'GBP', gsc_agent: 'GSC', website: 'Website', gbp: 'GBP', gsc: 'GSC', technical: 'Website' };
-      const pillarColors = { GBP: '#ef4444', GSC: '#3b82f6', Website: '#8b5cf6', gbp_external: '#ef4444', gsc_agent: '#3b82f6', website: '#8b5cf6', gbp: '#ef4444', gsc: '#3b82f6', technical: '#8b5cf6' };
+      const priorityColors = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e', monitor: '#6366f1' };
+      const categoryColors = { content: '#8b5cf6', 'on-page': '#3b82f6', backlinks: '#f59e0b', technical: '#ef4444', gbp: '#14b8a6', review: '#6b7280' };
+      const categoryIcons = { content: 'fas fa-file-alt', 'on-page': 'fas fa-code', backlinks: 'fas fa-link', technical: 'fas fa-cog', gbp: 'fas fa-map-marker-alt', review: 'fas fa-search' };
+      const difficultyLabels = { easy: 'Quick Win', medium: 'Some Work', hard: 'Big Effort' };
+      const difficultyColors = { easy: '#22c55e', medium: '#f59e0b', hard: '#ef4444' };
+
+      const posBadge = (pos) => {
+        if (!pos) return React.createElement('span', { style: { color: 'var(--text3)', fontSize: 14 } }, '—');
+        let bg = '#ef4444';
+        if (pos <= 3) bg = '#22c55e';
+        else if (pos <= 10) bg = '#f59e0b';
+        else if (pos <= 20) bg = '#f97316';
+        return React.createElement('span', { style: { background: bg, color: '#fff', padding: '4px 12px', borderRadius: 20, fontSize: 14, fontWeight: 700, letterSpacing: 0.5 } }, '#' + pos);
+      };
 
       return (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          {/* Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28, flexWrap: 'wrap', gap: 12 }}>
             <div>
-              <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
-                <i className="fas fa-tasks" style={{ marginRight: 10, color: 'var(--accent)' }} />Action Plan
+              <h2 style={{ fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>
+                <i className="fas fa-bullseye" style={{ marginRight: 12, color: '#14b8a6' }} />Action Plan
               </h2>
-              <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
-                All findings from audits — Automated, Copywriter, or Manual
+              <p style={{ color: 'var(--text3)', fontSize: 15, marginTop: 6 }}>
+                Ranking-based actions — every task is grounded in real audit data
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div style={{ display: 'flex', background: 'var(--bg2)', borderRadius: 10, padding: 3, marginRight: 10, border: '1px solid var(--border)' }}>
-                <button onClick={() => setViewMode('list')} style={{ padding: '10px 22px', borderRadius: 8, fontSize: 14, fontWeight: 700, border: 'none', cursor: 'pointer', background: viewMode === 'list' ? 'var(--accent)' : 'transparent', color: viewMode === 'list' ? '#fff' : 'var(--text1)', transition: 'all 0.2s', letterSpacing: '0.3px' }}>
-                  <i className="fas fa-list" style={{ marginRight: 7 }} />List
-                </button>
-                <button onClick={() => setViewMode('calendar')} style={{ padding: '10px 22px', borderRadius: 8, fontSize: 14, fontWeight: 700, border: 'none', cursor: 'pointer', background: viewMode === 'calendar' ? 'var(--accent)' : 'transparent', color: viewMode === 'calendar' ? '#fff' : 'var(--text1)', transition: 'all 0.2s', letterSpacing: '0.3px' }}>
-                  <i className="fas fa-calendar-alt" style={{ marginRight: 7 }} />Calendar
-                </button>
-              </div>
-              <button className="btn" onClick={runOrchestrator} disabled={syncing} style={{ fontSize: 13, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text1)' }}>
-                {syncing ? <><span className="spinner"></span> Syncing...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />Sync from Audits</>}
-              </button>
-              {pendingSeoRoomCount > 0 && (
-                <button className="btn" onClick={handleExecuteAll} disabled={executing} style={{ fontSize: 13, background: '#22c55e', color: '#fff', border: 'none' }}>
-                  {executing ? <><span className="spinner"></span> Executing...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Start All Automated ({pendingSeoRoomCount})</>}
+            <div style={{ display: 'flex', gap: 8 }}>
+              {actionItems.length > 0 && (
+                <button onClick={clearPlan} style={{ padding: '10px 16px', fontSize: 14, background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', color: 'var(--text3)' }}>
+                  <i className="fas fa-trash" style={{ marginRight: 6 }} />Clear
                 </button>
               )}
+              <button className="btn btn-primary" onClick={generatePlan} disabled={generating} style={{ padding: '10px 20px', fontSize: 15, fontWeight: 700, borderRadius: 8 }}>
+                {generating ? <><span className="spinner"></span> Analyzing Rankings...</> : <><i className="fas fa-magic" style={{ marginRight: 8 }} />Generate Action Plan</>}
+              </button>
             </div>
           </div>
 
-          {/* Execute progress overlay */}
-          {executing && execProgress && (
-            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 20px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16 }}>
-              <span className="spinner"></span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>Executing {execProgress.done}/{execProgress.total}</div>
-                {execProgress.current && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{execProgress.current}</div>}
+          {/* Progress bar */}
+          {stats.total > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14 }}>
+                <span style={{ color: 'var(--text2)' }}><strong>{stats.done}</strong> of <strong>{stats.total}</strong> actions completed across <strong>{stats.keywords}</strong> keywords</span>
+                <span style={{ color: '#14b8a6', fontWeight: 700, fontSize: 16 }}>{stats.progress}%</span>
               </div>
-              <div style={{ width: 120, height: 6, background: 'var(--bg2)', borderRadius: 3, overflow: 'hidden' }}>
-                <div style={{ width: `${execProgress.total ? (execProgress.done / execProgress.total * 100) : 0}%`, height: '100%', background: '#22c55e', borderRadius: 3, transition: 'width 0.3s' }} />
+              <div style={{ height: 10, background: 'var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{ width: stats.progress + '%', height: '100%', background: 'linear-gradient(90deg, #14b8a6, #22c55e)', borderRadius: 8, transition: 'width 0.5s' }} />
               </div>
             </div>
           )}
 
-          {viewMode === 'calendar' && (
-            <ActionPlanCalendar project={project} items={itemsWithAssignee} onStatusChange={handleStatusChange} onReload={loadData} />
-          )}
+          {error && <div style={{ padding: 14, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 14, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 8 }} />{error}</div>}
 
-          {viewMode === 'list' && (<React.Fragment>
-          {/* Stats cards — match audit pages */}
-          {(() => {
-            const auditStats = [
-              { label: 'GBP AUDIT', icon: 'fas fa-map-marker-alt', color: '#ef4444', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GBP Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GBP Audit' && (i.status || 'pending') === 'pending').length },
-              { label: 'GSC AUDIT', icon: 'fas fa-chart-line', color: '#3b82f6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GSC Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'GSC Audit' && (i.status || 'pending') === 'pending').length },
-              { label: 'WEBSITE AUDIT', icon: 'fas fa-spider', color: '#8b5cf6', count: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit').length, pending: itemsWithAssignee.filter(i => getAuditPageLabel(i) === 'Website Audit' && (i.status || 'pending') === 'pending').length },
-              { label: 'PENDING', icon: 'fas fa-clock', color: '#f59e0b', count: stats.pending, pending: stats.pending },
-              { label: 'DONE', icon: 'fas fa-check-circle', color: '#22c55e', count: stats.done, pending: 0 },
-              { label: 'SKIPPED', icon: 'fas fa-forward', color: '#94a3b8', count: stats.skipped, pending: 0 },
-              { label: 'IGNORED', icon: 'fas fa-eye-slash', color: '#6b7280', count: stats.ignored, pending: 0 },
-            ];
-            return (
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${auditStats.length}, 1fr)`, gap: 8, marginBottom: 14 }}>
-                {auditStats.map(s => (
-                  <div key={s.label} style={{ background: 'var(--card)', borderRadius: 8, border: '1px solid var(--border)', padding: '10px 12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: s.color }}>{s.count}</div>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text3)', letterSpacing: 1, marginTop: 2 }}>
-                      <i className={s.icon} style={{ marginRight: 4, fontSize: 8 }} />{s.label}
-                    </div>
-                    {s.pending > 0 && s.label !== 'PENDING' && s.label !== 'DONE' && (
-                      <div style={{ fontSize: 9, color: '#f59e0b', marginTop: 1 }}>{s.pending} pending</div>
-                    )}
-                  </div>
+          {/* Filters */}
+          {stats.total > 0 && (
+            <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+              {/* Search */}
+              <div style={{ position: 'relative', flex: '1 1 200px', maxWidth: 300 }}>
+                <i className="fas fa-search" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text3)', fontSize: 13 }} />
+                <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search keywords or actions..."
+                  style={{ width: '100%', padding: '10px 12px 10px 36px', fontSize: 14, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)', boxSizing: 'border-box' }} />
+              </div>
+              {/* Priority chips */}
+              <div style={{ display: 'flex', gap: 6 }}>
+                {['all', 'high', 'medium', 'low'].map(p => (
+                  <button key={p} onClick={() => setFilterPriority(p)}
+                    style={{ padding: '7px 14px', fontSize: 13, fontWeight: filterPriority === p ? 700 : 500,
+                      background: filterPriority === p ? (p === 'all' ? 'var(--accent)' : priorityColors[p] || 'var(--accent)') : 'var(--card)',
+                      color: filterPriority === p ? '#fff' : 'var(--text2)',
+                      border: filterPriority === p ? 'none' : '1px solid var(--border)', borderRadius: 20, cursor: 'pointer', textTransform: 'capitalize' }}>
+                    {p === 'all' ? 'All Priority' : p}
+                  </button>
                 ))}
               </div>
-            );
-          })()}
-
-          {/* Pillar tabs */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-            {pillars.map(p => (
-              <button key={p.id} onClick={() => setActivePillar(p.id)}
-                style={{ padding: '6px 12px', borderRadius: 6, border: activePillar === p.id ? `2px solid ${p.color}` : '1px solid var(--border)',
-                  background: activePillar === p.id ? `${p.color}15` : 'var(--card)', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                  color: activePillar === p.id ? p.color : 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5 }}>
-                <i className={p.icon} style={{ fontSize: 11 }} />{p.label}
-                <span style={{ fontSize: 11, opacity: 0.7 }}>
-                  ({p.id === 'all' ? items.length : items.filter(i => (i._pillar || i.pillar) === p.id).length})
-                </span>
-              </button>
-            ))}
-          </div>
-
-          {/* Filter bar */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginRight: 4 }}><i className="fas fa-filter" style={{ marginRight: 4 }} />Filters:</span>
-            {[
-              { value: filterSeverity, set: setFilterSeverity, label: 'Priority', options: filterOptions.severities },
-              { value: filterCategory, set: setFilterCategory, label: 'Category', options: filterOptions.categories },
-              { value: filterAssignee, set: setFilterAssignee, label: 'Type', options: filterOptions.assignees },
-              { value: filterStatus, set: setFilterStatus, label: 'Status', options: ['pending', 'in-progress', 'done', 'skipped', 'ignored'] },
-            ].map(f => (
-              <select key={f.label} value={f.value} onChange={e => f.set(e.target.value)}
-                style={{ fontSize: 12, padding: '5px 8px', background: f.value !== 'all' ? 'var(--accent)' : 'var(--card)', border: '1px solid var(--border)', borderRadius: 6,
-                  color: f.value !== 'all' ? '#fff' : 'var(--text2)', cursor: 'pointer', fontWeight: f.value !== 'all' ? 600 : 400 }}>
-                <option value="all">{f.label}</option>
-                {f.options.map(o => <option key={o} value={o} style={{ background: 'var(--card)', color: 'var(--text1)' }}>{o.charAt(0).toUpperCase() + o.slice(1)}</option>)}
+              {/* Category filter */}
+              <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}
+                style={{ padding: '8px 12px', fontSize: 13, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)' }}>
+                <option value="all">All Categories</option>
+                {['content', 'on-page', 'backlinks', 'technical', 'gbp', 'review'].map(c => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
               </select>
-            ))}
-            {activeFilterCount > 0 && (
-              <button onClick={clearFilters} style={{ fontSize: 11, padding: '5px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text3)', cursor: 'pointer' }}>
-                <i className="fas fa-times" style={{ marginRight: 4 }} />Clear ({activeFilterCount})
-              </button>
-            )}
-            <span style={{ marginLeft: 'auto', fontSize: 13, color: activeFilterCount > 0 ? 'var(--text1)' : 'var(--text3)', fontWeight: activeFilterCount > 0 ? 600 : 400, background: activeFilterCount > 0 ? 'var(--bg2)' : 'transparent', padding: '4px 10px', borderRadius: 6 }}>
-              {filtered.length}{filtered.length !== stats.total ? ` of ${stats.total}` : ''} items
-            </span>
-          </div>
-
-          {/* Bulk Copywriter action */}
-          {(() => {
-            const cwPending = itemsWithAssignee.filter(i => (i._assigneeLabel === 'Copywriter Current' || i._assigneeLabel === 'Copywriter New' || i._assigneeLabel === 'Copywriter') && (i.status || 'pending') === 'pending').length;
-            if (cwPending === 0) return null;
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '10px 16px', background: '#8b5cf615', border: '1px solid #8b5cf630', borderRadius: 8 }}>
-                <i className="fas fa-pen-fancy" style={{ color: '#8b5cf6', fontSize: 14 }} />
-                <span style={{ fontSize: 13, color: 'var(--text1)' }}><strong>{cwPending}</strong> pending Copywriter tasks</span>
-                <button onClick={handleBulkSendToCopywriter} disabled={bulkSending}
-                  style={{ marginLeft: 'auto', padding: '6px 14px', fontSize: 12, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 6, cursor: bulkSending ? 'wait' : 'pointer', opacity: bulkSending ? 0.7 : 1 }}>
-                  {bulkSending ? <><span className="spinner" style={{ marginRight: 6 }}></span>Sending...</> : <><i className="fas fa-paper-plane" style={{ marginRight: 6 }} />Send All to Copywriter</>}
-                </button>
-              </div>
-            );
-          })()}
-          {bulkResult && !bulkResult.error && (
-            <div style={{ padding: 12, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, color: '#22c55e', fontSize: 13, marginBottom: 16 }}>
-              <i className="fas fa-check-circle" style={{ marginRight: 6 }} />
-              Sent {bulkResult.created} items to Copywriter{bulkResult.details?.created?.some(c => c.destination === 'new_website') ? ` (${bulkResult.details.created.filter(c => c.destination === 'new_website').length} → New Website)` : ''}{bulkResult.skipped > 0 ? ` (${bulkResult.skipped} skipped — already in queue)` : ''}
-              <button onClick={() => setBulkResult(null)} style={{ float: 'right', background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', fontSize: 12 }}><i className="fas fa-times" /></button>
+              {/* Difficulty filter */}
+              <select value={filterDifficulty} onChange={e => setFilterDifficulty(e.target.value)}
+                style={{ padding: '8px 12px', fontSize: 13, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)' }}>
+                <option value="all">All Difficulty</option>
+                <option value="easy">Quick Win</option>
+                <option value="medium">Some Work</option>
+                <option value="hard">Big Effort</option>
+              </select>
+              {/* Status filter */}
+              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+                style={{ padding: '8px 12px', fontSize: 13, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text1)' }}>
+                <option value="all">All Status</option>
+                <option value="pending">To Do</option>
+                <option value="in-progress">In Progress</option>
+                <option value="done">Done</option>
+              </select>
             </div>
           )}
-          {bulkResult?.error && (
-            <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}>
-              <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{bulkResult.error}
-              <button onClick={() => setBulkResult(null)} style={{ float: 'right', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}><i className="fas fa-times" /></button>
-            </div>
-          )}
-
-          {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
 
           {loading && (
-            <div style={{ textAlign: 'center', padding: 40 }}>
+            <div style={{ textAlign: 'center', padding: 60 }}>
               <span className="spinner-large"></span>
-              <div style={{ marginTop: 12, color: 'var(--text3)' }}>Loading action items...</div>
+              <div style={{ marginTop: 16, color: 'var(--text3)', fontSize: 15 }}>Loading action plan...</div>
             </div>
           )}
 
-          {!loading && filtered.length > 0 && (
-            <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                    {[
-                      { key: 'severity', label: 'PRIORITY', w: 110, align: 'left' },
-                      { key: 'title', label: 'ACTION', w: null, align: 'left' },
-                      ...(activePillar === 'all' ? [{ key: 'pillar', label: 'PILLAR', w: 100, align: 'left' }] : []),
-                      { key: 'category', label: 'CATEGORY', w: 170, align: 'left' },
-                      { key: 'assignee', label: 'TYPE', w: 130, align: 'left' },
-                      { key: 'status', label: 'STATUS', w: 120, align: 'center' },
-                    ].map(col => (
-                      <th key={col.key} onClick={col.key !== 'action' ? () => toggleSort(col.key) : undefined}
-                        style={{ padding: '12px 14px', textAlign: col.align, fontSize: 11, fontWeight: 700, color: sortCol === col.key ? 'var(--accent)' : 'var(--text3)', width: col.w || undefined, cursor: col.key !== 'action' ? 'pointer' : 'default', userSelect: 'none', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                        {col.label}
-                        {sortCol === col.key && <i className={`fas fa-caret-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 5, fontSize: 10 }} />}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((item) => {
-                    const sev = (item.severity || 'medium').toLowerCase();
-                    const sevColor = sevColors[sev] || '#f59e0b';
-                    const assigneeLabel = item._assigneeLabel || 'Manual';
-                    const aColor = assigneeLabel === 'Automated' ? '#22c55e' : assigneeLabel === 'Copywriter Current' ? '#8b5cf6' : assigneeLabel === 'Copywriter New' ? '#a855f7' : '#6b7280';
-                    const aIcon = assigneeLabel === 'Automated' ? 'fas fa-robot' : assigneeLabel === 'Copywriter Current' ? 'fas fa-pen-fancy' : assigneeLabel === 'Copywriter New' ? 'fas fa-file-circle-plus' : 'fas fa-user';
-                    const itemPillar = item._pillar || item.pillar;
-                    return (
-                      <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '14px 14px', verticalAlign: 'top' }}>
-                          <span style={{ color: sevColor, fontWeight: 700, fontSize: 13, textTransform: 'capitalize' }}>{item.severity || 'Medium'}</span>
-                        </td>
-                        <td style={{ padding: '14px 18px', verticalAlign: 'top', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.5, color: 'var(--text1)' }}>
-                            {item.title}
-                            {item.is_duplicate && <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 700, padding: '3px 7px', borderRadius: 4, background: '#8b5cf620', color: '#8b5cf6', verticalAlign: 'middle' }} title={`Consolidates ${item.duplicate_ids.length} duplicate(s) — fixing this fixes all`}>DP ×{item.duplicate_ids.length}</span>}
+          {/* Keyword cards */}
+          {!loading && filtered.map((group, gi) => {
+            const isExpanded = expandedKw[gi] !== false; // default expanded for first 5
+            const firstLoad = expandedKw[gi] === undefined && gi < 5;
+            const open = firstLoad || isExpanded;
+            const doneCount = group.actions.filter(a => a.status === 'done' || a.status === 'completed').length;
+            const totalCount = group.actions.length;
+            const pColor = priorityColors[(group.actions[0]?.severity || 'medium').toLowerCase()] || '#f59e0b';
+
+            return (
+              <div key={gi} style={{ marginBottom: 16, background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                {/* Keyword header — always visible */}
+                <div onClick={() => setExpandedKw(p => ({ ...p, [gi]: !open }))}
+                  style={{ padding: '16px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 16, borderBottom: open ? '1px solid var(--border)' : 'none' }}>
+                  <i className={open ? 'fas fa-chevron-down' : 'fas fa-chevron-right'} style={{ color: 'var(--text3)', fontSize: 12, width: 14 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text1)', letterSpacing: -0.3 }}>{group.keyword}</div>
+                    {group.ranking_page && (
+                      <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 3 }}>
+                        <i className="fas fa-link" style={{ marginRight: 6, fontSize: 11 }} />
+                        {group.ranking_page.replace(/^https?:\/\//, '').replace(/^www\./, '').substring(0, 60)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    {/* Position badge */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, fontWeight: 600 }}>SERP</div>
+                      {posBadge(group.position)}
+                    </div>
+                    {/* Audit data badges */}
+                    {group.audit_data?.page && (
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, fontWeight: 600 }}>WORDS</div>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: (group.audit_data.page.word_count || 0) < 500 ? '#ef4444' : 'var(--text1)' }}>{group.audit_data.page.word_count || 0}</span>
+                      </div>
+                    )}
+                    {group.audit_data?.authority !== undefined && (
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, fontWeight: 600 }}>LINKS</div>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: group.audit_data.authority < 3 ? '#ef4444' : 'var(--text1)' }}>{group.audit_data.authority} RD</span>
+                      </div>
+                    )}
+                    {group.audit_data?.speed?.score != null && (
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, fontWeight: 600 }}>SPEED</div>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: group.audit_data.speed.score < 50 ? '#ef4444' : group.audit_data.speed.score < 90 ? '#f59e0b' : '#22c55e' }}>{group.audit_data.speed.score}</span>
+                      </div>
+                    )}
+                    {/* Progress mini */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4, fontWeight: 600 }}>DONE</div>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: doneCount === totalCount ? '#22c55e' : 'var(--text2)' }}>{doneCount}/{totalCount}</span>
+                    </div>
+                    {/* Priority dot */}
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: pColor }} />
+                  </div>
+                </div>
+
+                {/* Expanded: actions list */}
+                {open && (
+                  <div style={{ padding: '0' }}>
+                    {group.actions.map((action, ai) => {
+                      const catColor = categoryColors[action.category] || '#6b7280';
+                      const catIcon = categoryIcons[action.category] || 'fas fa-tasks';
+                      const diffColor = difficultyColors[action.difficulty] || '#f59e0b';
+                      const diffLabel = difficultyLabels[action.difficulty] || action.difficulty;
+                      const status = (action.status || 'pending').toLowerCase();
+                      const isActionExpanded = expandedAction[action.id];
+
+                      return (
+                        <div key={action.id} style={{ borderBottom: ai < group.actions.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          {/* Action row */}
+                          <div style={{ padding: '14px 20px 14px 50px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                            {/* Category icon */}
+                            <div style={{ width: 36, height: 36, borderRadius: 8, background: catColor + '20', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              <i className={catIcon} style={{ color: catColor, fontSize: 14 }} />
+                            </div>
+                            {/* Title + category */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text1)', lineHeight: 1.4 }}>{action.title}</div>
+                              <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: catColor + '20', color: catColor, fontWeight: 600, textTransform: 'uppercase' }}>{action.category}</span>
+                                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: diffColor + '20', color: diffColor, fontWeight: 600 }}>{diffLabel}</span>
+                                {action.effort && <span style={{ fontSize: 11, color: 'var(--text3)' }}><i className="fas fa-clock" style={{ marginRight: 4, fontSize: 10 }} />{action.effort}</span>}
+                              </div>
+                            </div>
+                            {/* How-to toggle */}
+                            <button onClick={() => setExpandedAction(p => ({ ...p, [action.id]: !p[action.id] }))}
+                              style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, background: isActionExpanded ? '#14b8a620' : 'var(--bg)', border: '1px solid ' + (isActionExpanded ? '#14b8a6' : 'var(--border)'), borderRadius: 8, cursor: 'pointer', color: isActionExpanded ? '#14b8a6' : 'var(--text2)', whiteSpace: 'nowrap' }}>
+                              <i className={isActionExpanded ? 'fas fa-times' : 'fas fa-question-circle'} style={{ marginRight: 6, fontSize: 12 }} />
+                              {isActionExpanded ? 'Close' : 'How To'}
+                            </button>
+                            {/* Status */}
+                            <select value={status === 'completed' ? 'done' : status} onChange={e => handleStatusChange(action.id, e.target.value)}
+                              style={{ padding: '8px 12px', fontSize: 14, fontWeight: 600, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8,
+                                color: status === 'done' || status === 'completed' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : 'var(--text2)' }}>
+                              <option value="pending">To Do</option>
+                              <option value="in-progress">In Progress</option>
+                              <option value="done">Done</option>
+                            </select>
                           </div>
-                          <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, marginTop: 4 }}>{item.description}</div>
-                          {(() => {
-                            const pLower = (item._pillar || item.pillar || '').toLowerCase();
-                            const isGBP = pLower.includes('gbp');
-                            const isGSC = pLower.includes('gsc');
-                            const cat = (item._category || item.category || '').toLowerCase().replace(/\s*&\s*/g, ' ').replace(/\s+/g, '-');
-                            let navPage = '', navLabel = '', navIcon = '', navColor = '';
-                            if (isGBP) { navPage = 'ext-sec-' + cat; navLabel = 'View in GBP Audit'; navIcon = 'fas fa-store'; navColor = '#ef4444'; }
-                            else if (isGSC) { navPage = 'gsc-sec-' + cat; navLabel = 'View in GSC Audit'; navIcon = 'fas fa-chart-line'; navColor = '#3b82f6'; }
-                            else { navPage = 'web-sec-' + cat; navLabel = 'View in Website Audit'; navIcon = 'fas fa-globe'; navColor = '#8b5cf6'; }
-                            return <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-                              <button onClick={() => { window.__highlightFinding = (item.title || '').trim(); setActiveTab(navPage); setTimeout(() => { window.__highlightFinding = null; }, 8000); }} style={{ fontSize: 14, padding: '6px 16px', background: navColor + '15', border: '1px solid ' + navColor + '30', borderRadius: 5, color: navColor, cursor: 'pointer', fontWeight: 600 }}><i className={navIcon} style={{ marginRight: 6, fontSize: 13 }} />{navLabel}</button>
-                              {(assigneeLabel === 'Manual' || assigneeLabel === 'Copywriter') && <button onClick={() => loadHowTo(item.id)} style={{ fontSize: 14, padding: '6px 16px', background: howToExpanded[item.id] ? '#f59e0b20' : 'var(--bg2)', border: '1px solid ' + (howToExpanded[item.id] ? '#f59e0b40' : 'var(--border)'), borderRadius: 5, color: howToExpanded[item.id] ? '#f59e0b' : 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className={howToLoading[item.id] ? 'fas fa-spinner fa-spin' : 'fas fa-lightbulb'} style={{ marginRight: 6, fontSize: 13 }} />{howToExpanded[item.id] ? 'Hide Steps' : 'How To'}</button>}
-                              {/\b(?:for|:)\s+.+\s*[+&,]\s*.+/.test(item.title || '') && <button onClick={async () => {
-                                try {
-                                  const data = await api(`/action-items/${item.id}/split`, { method: 'POST' });
-                                  if (data.created) { loadData(); }
-                                } catch(err) { console.error('Split failed:', err); }
-                              }} style={{ fontSize: 14, padding: '6px 16px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text2)', cursor: 'pointer', fontWeight: 600 }}><i className="fas fa-code-branch" style={{ marginRight: 6, fontSize: 13 }} />Split</button>}
-                            </div>;
-                          })()}
-                          {howToExpanded[item.id] && (
-                            <div style={{ marginTop: 8, padding: '14px 18px', background: '#f59e0b08', border: '1px solid #f59e0b20', borderRadius: 6, fontSize: 14, lineHeight: 1.8, color: 'var(--text1)', whiteSpace: 'pre-wrap' }}>
-                              {howToLoading[item.id] ? <span><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Generating instructions...</span> : (howToData[item.id] || '').split(/((?:https?:\/\/|www\.)[^\s,)]+)/g).map((part, idx) => /^(?:https?:\/\/|www\.)/.test(part) ? <a key={idx} href={part.startsWith('www.') ? 'https://' + part : part} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6', textDecoration: 'underline' }}>{part}</a> : part)}
+                          {/* How-to expanded */}
+                          {isActionExpanded && (
+                            <div style={{ padding: '0 20px 16px 86px' }}>
+                              <div style={{ background: 'var(--bg)', borderRadius: 10, padding: '16px 20px', border: '1px solid var(--border)' }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: '#14b8a6', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+                                  <i className="fas fa-lightbulb" style={{ marginRight: 8 }} />Step-by-Step Guide
+                                </div>
+                                <div style={{ fontSize: 14, lineHeight: 1.8, color: 'var(--text1)', whiteSpace: 'pre-wrap' }}>
+                                  {action.how_to_html || action.description || 'No instructions available.'}
+                                </div>
+                              </div>
                             </div>
                           )}
-                        </td>
-                        {activePillar === 'all' && (
-                          <td style={{ padding: '14px', verticalAlign: 'top' }}>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: pillarColors[itemPillar] || 'var(--text3)', background: `${pillarColors[itemPillar] || 'var(--text3)'}15`, padding: '4px 10px', borderRadius: 5 }}>
-                              {pillarLabels[itemPillar] || itemPillar}
-                            </span>
-                          </td>
-                        )}
-                        <td style={{ padding: '14px', verticalAlign: 'top', fontSize: 12, color: 'var(--text2)' }}>{item._category || item.category}</td>
-                        <td style={{ padding: '10px 8px', verticalAlign: 'top', fontSize: 13, whiteSpace: 'nowrap' }}>
-                          <select value={assigneeLabel} onChange={async (e) => {
-                            const newLabel = e.target.value;
-                            const execMap = { Automated: 'automated', 'Copywriter Current': 'copywriter', 'Copywriter New': 'copywriter_new', Manual: 'manual' };
-                            try {
-                              await api(`/action-items/${item.id}`, { method: 'PUT', body: { execution_type: execMap[newLabel], assignee_label: newLabel } });
-                              setItems(prev => prev.map(i => i.id === item.id ? { ...i, execution_type: execMap[newLabel], assignee_label: newLabel } : i));
-                              // Auto-send to appropriate queue when switching to Copywriter
-                              if (newLabel === 'Copywriter Current' || newLabel === 'Copywriter New') {
-                                try {
-                                  await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
-                                } catch(cqErr) { console.warn('Auto-send to copywriter:', cqErr); }
-                              }
-                            } catch(err) { console.error(err); }
-                          }} style={{ fontSize: 13, padding: '5px 8px', background: 'transparent', border: '1px solid transparent', borderRadius: 5, color: aColor, cursor: 'pointer', fontWeight: 600, minWidth: 0, maxWidth: 150 }}
-                            onMouseEnter={e => e.target.style.borderColor = 'var(--border)'} onMouseLeave={e => e.target.style.borderColor = 'transparent'}>
-                            <option value="Automated" style={{ color: '#22c55e' }}>Automated</option>
-                            <option value="Copywriter Current" style={{ color: '#8b5cf6' }}>CW Current</option>
-                            <option value="Copywriter New" style={{ color: '#a855f7' }}>CW New</option>
-                            <option value="Manual" style={{ color: '#6b7280' }}>Manual</option>
-                          </select>
-                        </td>
-                        <td style={{ padding: '10px 8px', textAlign: 'center', verticalAlign: 'top' }}>
-                          {(() => {
-                            const status = (item.status || 'pending').toLowerCase();
-                            // AUTOMATED: Run button or Done checkmark
-                            if (assigneeLabel === 'Automated') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              if (status === 'skipped') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 11, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
-                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-cog fa-spin" style={{ fontSize: 11 }} /> Running</span>;
-                              const canExec = canAutoExecute(item);
-                              if (canExec) return (
-                                <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
-                                  <button onClick={() => handleExecuteOne(item)} disabled={executingItem === item.id}
-                                    style={{ padding: '7px 18px', fontSize: 15, fontWeight: 600, background: '#22c55e', color: '#fff', border: 'none', borderRadius: 5, cursor: executingItem === item.id ? 'wait' : 'pointer', opacity: executingItem === item.id ? 0.7 : 1, whiteSpace: 'nowrap' }}>
-                                    {executingItem === item.id ? <span className="spinner" style={{ width: 16, height: 16 }}></span> : <><i className="fas fa-play" style={{ marginRight: 5, fontSize: 13 }} />Start</>}
-                                  </button>
-                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip — not important right now"
-                                    style={{ padding: '7px 10px', fontSize: 13, background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, cursor: 'pointer', color: 'var(--text3)' }}>
-                                    <i className="fas fa-forward" />
-                                  </button>
-                                </div>
-                              );
-                              // Non-executable automated items: send to copywriter or start manually
-                              return (
-                                <div style={{ display: 'flex', gap: 6 }}>
-                                  <button onClick={async () => {
-                                    try {
-                                      await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
-                                      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
-                                    } catch(err) { console.error('Send to copywriter:', err); }
-                                  }}
-                                    style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                    <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send to Copy
-                                  </button>
-                                  <select value="not-started" onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                    style={{ fontSize: 12, padding: '5px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text3)' }}>
-                                    <option value="not-started">Not Started</option>
-                                    <option value="in-progress">In Progress</option>
-                                    <option value="done">Done</option>
-                                    <option value="skipped">Skip</option>
-                                    <option value="ignored">Ignore</option>
-                                  </select>
-                                </div>
-                              );
-                            }
-                            // COPYWRITER CURRENT: Send to content queue
-                            if (assigneeLabel === 'Copywriter Current') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              if (status === 'skipped') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 11, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
-                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-pen-fancy" style={{ fontSize: 11 }} /> Queued</span>;
-                              return (
-                                <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
-                                  <button onClick={async () => {
-                                    try {
-                                      await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
-                                      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
-                                    } catch(err) { console.error('Send to copywriter:', err); }
-                                  }}
-                                    style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                    <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
-                                  </button>
-                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip — not important right now"
-                                    style={{ padding: '5px 10px', fontSize: 13, background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, cursor: 'pointer', color: 'var(--text3)' }}>
-                                    <i className="fas fa-forward" />
-                                  </button>
-                                </div>
-                              );
-                            }
-                            // COPYWRITER NEW: Send to site_pages (new website)
-                            if (assigneeLabel === 'Copywriter New') {
-                              if (status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check-circle" /> Done</span>;
-                              if (status === 'skipped') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#94a3b8', fontWeight: 600 }}><i className="fas fa-forward" /> Skipped <button onClick={() => handleStatusChange(item.id, 'pending')} style={{ marginLeft: 4, fontSize: 11, background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', color: 'var(--text3)' }}>Undo</button></span>;
-                              if (status === 'in-progress') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#f59e0b', fontWeight: 600 }}><i className="fas fa-file-circle-plus" style={{ fontSize: 11 }} /> Queued</span>;
-                              return (
-                                <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
-                                  <button onClick={async () => {
-                                    try {
-                                      await api(`/projects/${project.id}/content-queue/bulk-from-actions`, { method: 'POST', body: { action_ids: [item.id] } });
-                                      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'in-progress' } : i));
-                                    } catch(err) { console.error('Send to copywriter:', err); }
-                                  }}
-                                    style={{ padding: '5px 14px', fontSize: 13, fontWeight: 600, background: '#a855f7', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                    <i className="fas fa-paper-plane" style={{ marginRight: 4, fontSize: 11 }} />Send
-                                  </button>
-                                  <button onClick={() => handleStatusChange(item.id, 'skipped')} title="Skip — not important right now"
-                                    style={{ padding: '5px 10px', fontSize: 13, background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, cursor: 'pointer', color: 'var(--text3)' }}>
-                                    <i className="fas fa-forward" />
-                                  </button>
-                                </div>
-                              );
-                            }
-                            // MANUAL: status dropdown (Not Started / In Progress / Done)
-                            return (
-                              <select value={status === 'pending' ? 'not-started' : status} onChange={e => handleStatusChange(item.id, e.target.value === 'not-started' ? 'pending' : e.target.value)}
-                                style={{ fontSize: 15, padding: '7px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 5, color: status === 'done' ? '#22c55e' : status === 'in-progress' ? '#f59e0b' : status === 'skipped' ? '#94a3b8' : status === 'ignored' ? '#ef4444' : 'var(--text1)' }}>
-                                <option value="not-started">Not Started</option>
-                                <option value="in-progress">In Progress</option>
-                                <option value="done">Done</option>
-                                <option value="skipped">Skip</option>
-                                <option value="ignored">Ignore</option>
-                              </select>
-                            );
-                          })()}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Empty state */}
+          {!loading && actionItems.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 80, color: 'var(--text3)' }}>
+              <i className="fas fa-bullseye" style={{ fontSize: 56, marginBottom: 20, display: 'block', opacity: 0.2 }} />
+              <div style={{ fontSize: 20, marginBottom: 10, fontWeight: 600 }}>No Action Plan Yet</div>
+              <div style={{ fontSize: 15, marginBottom: 24, maxWidth: 500, margin: '0 auto 24px' }}>
+                Click "Generate Action Plan" to analyze your rankings and create specific, data-backed actions for each keyword.
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text3)', maxWidth: 400, margin: '0 auto' }}>
+                Make sure you've run: SERP Rankings check, Website Audit, On-Page Audit, and Backlinks scan first — the more data, the better the plan.
+              </div>
             </div>
           )}
 
-          {!loading && filtered.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-              <i className="fas fa-tasks" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
-              <div style={{ fontSize: 16, marginBottom: 8 }}>No action items yet</div>
-              <div style={{ fontSize: 13 }}>Run your audits first. Findings sync automatically to the Action Plan.</div>
+          {/* No results for filter */}
+          {!loading && actionItems.length > 0 && filtered.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
+              <i className="fas fa-filter" style={{ fontSize: 32, marginBottom: 12, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 15 }}>No keywords match your filters</div>
+              <button onClick={() => { setFilterPriority('all'); setFilterCategory('all'); setFilterDifficulty('all'); setFilterStatus('all'); setSearchQuery(''); }}
+                style={{ marginTop: 12, padding: '8px 16px', fontSize: 13, background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+                Clear Filters
+              </button>
             </div>
           )}
-          </React.Fragment>)}
         </div>
       );
     }
