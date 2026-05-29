@@ -31950,32 +31950,42 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     } catch (e) {}
 
     // ────── 17. KEYWORD CANNIBALIZATION ──────
+    // Only flag pages that target the FULL keyword phrase (or exact focus keyword match), not individual common words
     try {
       const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
       if (cacheRes.rows.length > 0) {
         const pages = typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results;
         const competingPages = [];
+        // Build the service phrase (keyword minus location) for matching
+        const servicePhrase = serviceWords.join(' '); // e.g. "local business seo" from "local business seo perth"
         for (const page of (pages || [])) {
           const pageUrl = (page.url || '').toLowerCase();
           const pageTitle = (page.title || '').toLowerCase();
           const pageH1 = (page.h1 || '').toLowerCase();
           const pageFocus = (page.focusKeyword || '').toLowerCase();
-          // Check if this page targets the same keyword (but isn't the ranking page)
           const pageUrlFull = page.url?.startsWith('http') ? page.url : `${siteUrl}${page.url}`;
           if (pageUrlFull.replace(/\/$/, '') === userPageUrl.replace(/\/$/, '')) continue; // Skip the ranking page itself
-          const kwMatch = kwParts.filter(w => pageTitle.includes(w) || pageH1.includes(w) || pageFocus.includes(w)).length;
-          if (kwMatch >= kwParts.length * 0.7 || (pageFocus && kwLower.includes(pageFocus))) {
+
+          // Strict matching: must contain the FULL keyword or full service phrase
+          const fullKwInTitle = pageTitle.includes(kwLower) || (servicePhrase.length > 5 && pageTitle.includes(servicePhrase));
+          const fullKwInH1 = pageH1.includes(kwLower) || (servicePhrase.length > 5 && pageH1.includes(servicePhrase));
+          const focusMatch = pageFocus && (pageFocus === kwLower || kwLower === pageFocus || pageFocus.includes(kwLower) || kwLower.includes(pageFocus));
+          // URL slug match (e.g. /local-business-seo-perth/ or /local-business-seo/)
+          const serviceSlugCheck = serviceWords.length >= 2 && pageUrl.includes(serviceWords.join('-'));
+
+          if (fullKwInTitle || fullKwInH1 || focusMatch || serviceSlugCheck) {
             competingPages.push({ url: page.url, title: page.title, h1: page.h1, focusKeyword: page.focusKeyword });
           }
         }
-        if (competingPages.length > 0) {
+        if (competingPages.length > 0 && competingPages.length <= 5) {
+          // Only flag if reasonable number — 5+ competing pages means the check is still too broad
           gaps.push({
             category: 'On-Page',
             issue: `Keyword cannibalization — ${competingPages.length} other page(s) also target "${keyword}"`,
             impact: 'high',
-            fix: `These pages compete with each other for the same keyword: ${competingPages.map(p => p.url).join(', ')}. Pick ONE page as the primary target. On the others: change focus keyword, differentiate the content, or add a canonical tag pointing to the primary page.`,
-            competitor_benchmark: `Google can't decide which page to rank when multiple pages target the same keyword — this splits your authority and usually means none of them rank well.`,
-            data: { competing_pages: competingPages.length, pages: competingPages.map(p => p.url).join(', ') }
+            fix: `Pick ONE page as the primary target for "${keyword}". On the others, change the focus keyword or add a canonical tag pointing to the primary page.`,
+            competitor_benchmark: `Competing pages: ${competingPages.map(p => p.url).join(', ')}`,
+            data: { competing_pages: competingPages.length, pages: competingPages.slice(0, 5).map(p => p.url).join(', ') }
           });
         }
       }
@@ -31999,18 +32009,19 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
     else if (serpPos > 10) score = Math.min(score, 65);
 
     // ── Build quick wins (top 3 easiest high-impact fixes) ──
-    const highImpactEasy = gaps.filter(g => g.impact === 'high' && ['On-Page', 'Content'].includes(g.category));
+    // Skip cannibalization from quick wins (too verbose), skip Authority (not quick)
+    const highImpactEasy = gaps.filter(g => g.impact === 'high' && ['On-Page', 'Content', 'Technical'].includes(g.category) && !g.issue.includes('cannibalization'));
     if (quickWins.length < 3) {
       for (const g of highImpactEasy) {
         if (quickWins.length >= 3) break;
-        if (!quickWins.some(qw => qw.includes(g.category))) quickWins.push(g.fix);
+        if (!quickWins.some(qw => qw.includes(g.category))) quickWins.push(g.fix.substring(0, 250));
       }
     }
     // Fill remaining with medium impact
     if (quickWins.length < 3) {
-      for (const g of gaps.filter(g => g.impact === 'medium')) {
+      for (const g of gaps.filter(g => g.impact === 'medium' && !g.issue.includes('cannibalization'))) {
         if (quickWins.length >= 3) break;
-        quickWins.push(g.fix);
+        quickWins.push(g.fix.substring(0, 250));
       }
     }
 
