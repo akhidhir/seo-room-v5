@@ -20701,7 +20701,9 @@
           const r = await api((buildId ? '/builds/' + buildId : '/projects/' + projectId) + '/competitor-wordcount', {
             method: 'POST', body: { keyword: kw, draft_content: content || '' }
           });
-          if (r.summary) {
+          if (r.error) {
+            alert('Competitor check error: ' + r.error);
+          } else if (r.summary) {
             // Convert topic gap arrays to objects with status
             if (r.topicGaps) {
               if (r.topicGaps.missing_topics) r.topicGaps.missingTopics = r.topicGaps.missing_topics.map(t => ({ text: t, status: 'pending' }));
@@ -20712,6 +20714,8 @@
             setCompetitorData(r);
             setWordTarget(r.summary.recommended || 1500);
             saveCompetitorAnalysis(r);
+          } else {
+            alert('Competitor check returned no data. Response: ' + JSON.stringify(r).substring(0, 200));
           }
         } catch (e) { console.error('Competitor check failed:', e); alert('Competitor check failed: ' + (e.message || e)); }
         setCheckingCompetitors(false);
@@ -21382,8 +21386,8 @@
       };
 
       const handlePickKeyword = (kw) => {
-        setEditMeta(prev => ({ ...prev, focus_keyword: kw }));
-        setSuggestedKws([]);
+        // Add to target keywords list, don't replace focus keyword
+        if (!targetKeywords.includes(kw)) setTargetKeywords(prev => [...prev, kw]);
       };
 
       // Plagiarism check handler
