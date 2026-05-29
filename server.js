@@ -31659,7 +31659,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
       // ────── 4. H1 TAG ──────
       if (!userPage.h1s || userPage.h1s.length === 0) {
         gaps.push({ category: 'On-Page', issue: 'No H1 tag found on the page', impact: 'high', fix: `Add an H1 tag containing "${keyword}" as the main heading.`, data: { yours: 'Missing H1' },
-          fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/technical-fix`, payload: { type: 'h1', page_id: wpPageId, page_url: userPageUrl }, label: 'Fix H1' } : null
+          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
         });
       } else if (!userPage.kwInH1) {
         gaps.push({
@@ -31669,7 +31669,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           fix: `Change the H1 to include the target keyword. Example: "${suggestedH1}"`,
           competitor_benchmark: `${validComps.filter(c => c.kwInH1).length}/${validComps.length} competitors have the keyword in H1`,
           data: { yours: userPage.h1s[0], competitors: validComps.map(c => c.h1s?.[0]).filter(Boolean) },
-          fix_action: { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' }
+          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
         });
       }
 
@@ -31684,7 +31684,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           fix: `Expand content to at least ${Math.round(avgCompWords * 1.1).toLocaleString()} words. Add sections covering the same topics competitors cover in their H2s.`,
           competitor_benchmark: validComps.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.wordCount.toLocaleString()} words`).join(', '),
           data: { yours: userWords, competitor_avg: avgCompWords, competitors: validComps.map(c => ({ url: c.url, words: c.wordCount })) },
-          fix_action: { type: 'navigate', page: 'optimise-website-copy', label: 'Open Copywriter' }
+          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Open Copywriter' }
         });
       } else if (avgCompWords && userWords < avgCompWords * 0.85) {
         gaps.push({
@@ -31693,7 +31693,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           impact: 'medium',
           fix: `Add ${Math.round(avgCompWords - userWords).toLocaleString()} more words of relevant content. Focus on topics your competitors cover that you don't.`,
           data: { yours: userWords, competitor_avg: avgCompWords },
-          fix_action: { type: 'navigate', page: 'optimise-website-copy', label: 'Open Copywriter' }
+          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Open Copywriter' }
         });
       }
 
@@ -31722,7 +31722,7 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             fix: `Add JSON-LD schema. Go to Website Audit → click "Fix" on the schema issue to auto-generate and push to WordPress.`,
             competitor_benchmark: validComps.filter(c => c.hasSchema).map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.schemaTypes.join(', ')}`).join('; '),
             data: { yours: 'None', competitors: validComps.map(c => c.schemaTypes).flat() },
-            fix_action: wpPageId ? { type: 'api', endpoint: `/api/projects/${projectId}/technical-fix`, payload: { type: 'schema', page_id: wpPageId, page_url: userPageUrl }, label: 'Fix Schema' } : { type: 'navigate', page: 'website-audit', label: 'Open Website Audit' }
+            fix_action: { type: 'navigate', page: 'website-audit', label: 'Fix in Website Audit' }
           });
         }
       }
@@ -32020,19 +32020,15 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             // Determine the best fix for this specific page
             let specificFix, fixAction;
             if (isWeaker && (cp.wordCount || 0) < 500) {
-              // Thin page competing — consolidate into the main page
               specificFix = `This page is thin (${cp.wordCount || 0} words) and competes for "${keyword}". Merge its unique content into your primary page, then redirect this URL (301) to the primary page. This consolidates authority.`;
-              fixAction = { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' };
+              fixAction = { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' };
             } else if (cp.reasons.includes('focus keyword: "' + cp.focusKeyword + '"')) {
-              // Has an explicit focus keyword — change it
-              specificFix = `This page's focus keyword is "${cp.focusKeyword}" which overlaps with "${keyword}". Change the focus keyword to something more specific to this page's actual topic. Then update the title/H1 to match the new focus keyword.`;
-              fixAction = cp.id ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: cp.id, url: cp.url, new_focus_keyword: '' }] }, label: 'Clear Focus KW', field: 'focus' } : { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' };
+              specificFix = `This page's focus keyword is "${cp.focusKeyword}" which overlaps with "${keyword}". Go to On-Page Audit & Fix → find this page → change its focus keyword to something specific to its actual topic.`;
+              fixAction = { type: 'navigate', page: 'onpage-audit', label: 'Open On-Page Audit' };
             } else if (cp.reasons.includes('title contains keyword') || cp.reasons.includes('H1 contains keyword')) {
-              // Title/H1 overlap — differentiate
-              specificFix = `This page's ${cp.reasons.includes('title contains keyword') ? 'title' : 'H1'} contains "${keyword}" (${cp.reasons.includes('title contains keyword') ? '"' + cp.title + '"' : '"' + cp.h1 + '"'}). Rewrite it to focus on a different angle or sub-topic. Alternatively, add a canonical tag pointing to your primary page for this keyword.`;
-              fixAction = cp.id ? { type: 'api', endpoint: `/api/projects/${projectId}/onpage-audit/fix`, payload: { fixes: [{ id: cp.id, url: cp.url }] }, label: 'Edit Meta', field: 'title' } : { type: 'navigate', page: 'optimise-website-copy', label: 'Edit in Copywriter' };
+              specificFix = `This page's ${cp.reasons.includes('title contains keyword') ? 'title' : 'H1'} contains "${keyword}". Go to On-Page Audit & Fix → find this page → rewrite the title/H1 to focus on a different angle.`;
+              fixAction = { type: 'navigate', page: 'onpage-audit', label: 'Open On-Page Audit' };
             } else {
-              // URL slug match — add canonical
               specificFix = `This page's URL (${pageShort}) contains the target keyword pattern. Add a canonical tag pointing to your primary page, or differentiate this page's content to target a different keyword.`;
               fixAction = { type: 'navigate', page: 'website-audit', label: 'Open Website Audit' };
             }

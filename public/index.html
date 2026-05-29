@@ -18409,7 +18409,7 @@
     }
 
     // ============ NEW WEBSITE — PIPELINE (Queue / Review / Publish) ============
-    function NewWebsitePipelinePage({ stage, project }) {
+    function NewWebsitePipelinePage({ stage, project, setPage }) {
       var pid = project ? project.id : null;
       var apiPrefix = project?.build_id ? '/builds/' + project.build_id : '/projects/' + pid;
       var [pages, setPages] = React.useState([]);
@@ -18464,7 +18464,7 @@
           ].map(function(s) {
             return React.createElement('div', {
               key: s.key,
-              onClick: function() { setCurrentPage(s.page); },
+              onClick: function() { if (setPage) setPage(s.page); },
               style: { padding: '12px 16px', textAlign: 'center', background: stage === s.key ? 'var(--accent)' : 'var(--card)', color: stage === s.key ? 'white' : 'var(--text2)', cursor: 'pointer', transition: 'all 0.2s' }
             },
               React.createElement('i', { className: s.icon, style: { marginRight: 6, fontSize: 11 } }),
@@ -31772,11 +31772,11 @@ case 'action-plan':
           case 'nw-staging':
             return <SiteStagingPage project={buildMode ? buildProject : project} />;
           case 'nw-queue':
-            return <NewWebsitePipelinePage stage="queue" project={buildMode ? buildProject : project} />;
+            return <NewWebsitePipelinePage stage="queue" project={buildMode ? buildProject : project} setPage={setActiveTab} />;
           case 'nw-review':
-            return <NewWebsitePipelinePage stage="review" project={buildMode ? buildProject : project} />;
+            return <NewWebsitePipelinePage stage="review" project={buildMode ? buildProject : project} setPage={setActiveTab} />;
           case 'nw-publish':
-            return <NewWebsitePipelinePage stage="publish" project={buildMode ? buildProject : project} />;
+            return <NewWebsitePipelinePage stage="publish" project={buildMode ? buildProject : project} setPage={setActiveTab} />;
           case 'nw-migration':
             return <SEOMigrationPage />;
           case 'kw-research':
