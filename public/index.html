@@ -24665,35 +24665,38 @@
                                   ))}
                                 </div>}
                                 {g.status !== 'done' && (
-                                  <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-                                    {g.fix_action && g.fix_action.type === 'navigate' && (
-                                      <button className="btn" onClick={e => { e.stopPropagation(); if (setPage) setPage(g.fix_action.page); }}
-                                        style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', fontWeight: 600 }}>
-                                        <i className="fa-solid fa-arrow-right" style={{ marginRight: 4 }} />{g.fix_action.label}
-                                      </button>
-                                    )}
-                                    {g.fix_action && g.fix_action.type === 'api' && (
-                                      <button className="btn" onClick={async (e) => {
-                                        e.stopPropagation();
-                                        const btn = e.currentTarget;
-                                        const origText = btn.innerHTML;
-                                        btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="margin-right:4px"></i>Fixing...';
-                                        try {
-                                          const resp = await fetch(window.location.origin + g.fix_action.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') }, body: JSON.stringify(g.fix_action.payload) });
-                                          const data = await resp.json();
-                                          if (resp.ok) { btn.innerHTML = '<i class="fa-solid fa-check" style="margin-right:4px"></i>Fixed!'; btn.style.background = 'rgba(34,197,94,0.15)'; btn.style.color = '#22c55e'; btn.style.borderColor = 'rgba(34,197,94,0.3)'; }
-                                          else { btn.innerHTML = data.error ? data.error.substring(0, 30) : 'Failed'; btn.disabled = false; }
-                                        } catch (err) { btn.innerHTML = 'Error'; btn.disabled = false; }
-                                      }}
-                                        style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: 'rgba(34,197,94,0.1)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)', fontWeight: 600 }}>
-                                        <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />{g.fix_action.label}
-                                      </button>
-                                    )}
+                                  <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    {/* PRIMARY: Fix button (left, bigger) */}
+                                    <div>
+                                      {g.fix_action && g.fix_action.type === 'navigate' && (
+                                        <button className="btn" onClick={e => { e.stopPropagation(); if (setPage) setPage(g.fix_action.page); }}
+                                          style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, background: '#6366f1', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
+                                          <i className="fa-solid fa-arrow-right" style={{ marginRight: 6 }} />{g.fix_action.label}
+                                        </button>
+                                      )}
+                                      {g.fix_action && g.fix_action.type === 'api' && (
+                                        <button className="btn" onClick={async (e) => {
+                                          e.stopPropagation();
+                                          const btn = e.currentTarget;
+                                          btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="margin-right:6px"></i>Fixing...';
+                                          try {
+                                            const resp = await fetch(window.location.origin + g.fix_action.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') }, body: JSON.stringify(g.fix_action.payload) });
+                                            const data = await resp.json();
+                                            if (resp.ok) { btn.innerHTML = '<i class="fa-solid fa-check" style="margin-right:6px"></i>Fixed!'; btn.style.background = '#22c55e'; }
+                                            else { btn.innerHTML = data.error ? data.error.substring(0, 30) : 'Failed'; btn.disabled = false; }
+                                          } catch (err) { btn.innerHTML = 'Error'; btn.disabled = false; }
+                                        }}
+                                          style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, background: '#22c55e', color: '#fff', border: 'none', fontWeight: 700, cursor: 'pointer' }}>
+                                          <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 6 }} />{g.fix_action.label}
+                                        </button>
+                                      )}
+                                    </div>
+                                    {/* SECONDARY: Schedule for later (right, smaller) */}
                                     <button className="btn" onClick={e => { e.stopPropagation(); sendGapToActionPlan(kw.keyword, g, gi); }}
                                       disabled={sentToActionPlan[kw.keyword + '::' + gi]}
-                                      style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: sentToActionPlan[kw.keyword + '::' + gi] ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)', color: sentToActionPlan[kw.keyword + '::' + gi] ? '#22c55e' : '#f59e0b', border: '1px solid ' + (sentToActionPlan[kw.keyword + '::' + gi] ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'), fontWeight: 600 }}>
-                                      <i className={'fa-solid ' + (sentToActionPlan[kw.keyword + '::' + gi] ? 'fa-check' : 'fa-paper-plane')} style={{ marginRight: 4 }} />
-                                      {sentToActionPlan[kw.keyword + '::' + gi] ? 'Sent' : 'Send to Action Plan'}
+                                      style={{ fontSize: 10, padding: '4px 8px', borderRadius: 6, background: 'transparent', color: sentToActionPlan[kw.keyword + '::' + gi] ? '#22c55e' : 'var(--text3)', border: '1px solid var(--border)', fontWeight: 500 }}>
+                                      <i className={'fa-solid ' + (sentToActionPlan[kw.keyword + '::' + gi] ? 'fa-check' : 'fa-clock')} style={{ marginRight: 3 }} />
+                                      {sentToActionPlan[kw.keyword + '::' + gi] ? 'Scheduled' : 'Do Later'}
                                     </button>
                                   </div>
                                 )}

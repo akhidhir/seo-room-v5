@@ -31608,7 +31608,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
         impact: 'high',
         fix: `Create a new page at ${siteUrl}/${serviceWords.join('-')}/ with H1 "${keyword}", targeted meta title/description, and 800+ words of content about this topic.`,
         competitor_benchmark: validComps.length > 0 ? `Competitors have dedicated pages: ${validComps.map(c => c.url.replace(/^https?:\/\/(www\.)?/, '').split('?')[0]).join(', ')}` : 'Competitors have dedicated pages for this keyword',
-        data: { yours: 'No page', competitors: validComps.map(c => c.url).join(', ') }
+        data: { yours: 'No page', competitors: validComps.map(c => c.url).join(', ') },
+        fix_action: { type: 'navigate', page: 'ow-issues', label: 'Create in Copywriter' }
       });
       quickWins.push(`Register the URL ${siteUrl}/${serviceWords.join('-')}/ and publish a page targeting "${keyword}" — even 500 words starts the indexation clock.`);
     }
@@ -31706,7 +31707,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             issue: `URL doesn't contain the service keyword — current: ${userPageUrl.replace(/^https?:\/\/(www\.)?/, '')}`,
             impact: 'medium',
             fix: `Ideally the URL slug should contain the main topic (e.g. /${serviceWords.join('-')}/). If changing URLs, set up a 301 redirect from the old URL.`,
-            data: { yours: userPageUrl }
+            data: { yours: userPageUrl },
+            fix_action: { type: 'navigate', page: 'website-audit', label: 'Open Website Audit' }
           });
         }
       }
@@ -31748,7 +31750,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: `Far fewer images than competitors (${userPage.images || 0} vs avg ${avgCompImages})`,
           impact: 'low',
           fix: `Add ${Math.max(2, Math.round(avgCompImages * 0.7) - (userPage.images || 0))} more relevant images with descriptive alt text containing "${keyword}" variations.`,
-          data: { yours: userPage.images || 0, competitor_avg: avgCompImages }
+          data: { yours: userPage.images || 0, competitor_avg: avgCompImages },
+          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
         });
       }
       if (userPage.images > 0 && userPage.hasAltTags < userPage.images) {
@@ -31757,7 +31760,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: `${userPage.images - userPage.hasAltTags} image(s) missing alt text`,
           impact: 'low',
           fix: `Add descriptive alt text to all images. Include "${keyword}" naturally in 1-2 alt tags.`,
-          data: { yours: `${userPage.hasAltTags}/${userPage.images} have alt text` }
+          data: { yours: `${userPage.hasAltTags}/${userPage.images} have alt text` },
+          fix_action: { type: 'navigate', page: 'onpage-audit', label: 'Open On-Page Audit' }
         });
       }
 
@@ -31829,7 +31833,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: `Low domain authority — only ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
           impact: 'high',
           fix: `Build backlinks: submit to Australian directories (Yellow Pages, True Local, HotFrog — all free), seek guest posts, get supplier/partner links. Target 5-10 new referring domains.`,
-          data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+          data: { referring_domains: domainReferringDomains, domain_rank: domainRank },
+          fix_action: { type: 'navigate', page: 'citations', label: 'Open Citations & Directories' }
         });
       } else if (domainReferringDomains < 50) {
         gaps.push({
@@ -31837,7 +31842,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: `Moderate domain authority — ${domainReferringDomains} referring domains (Domain Rank: ${domainRank}/1000)`,
           impact: 'medium',
           fix: `Continue building quality backlinks. Focus on industry-relevant sites, local business directories, and content that naturally attracts links.`,
-          data: { referring_domains: domainReferringDomains, domain_rank: domainRank }
+          data: { referring_domains: domainReferringDomains, domain_rank: domainRank },
+          fix_action: { type: 'navigate', page: 'citations', label: 'Open Citations & Directories' }
         });
       }
     }
@@ -31866,7 +31872,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
           issue: `Keyword "${keyword}" barely appears on the page (${userPage.kwDensity} times, ${density.toFixed(1)}% density)`,
           impact: 'medium',
           fix: `Naturally work "${keyword}" into the content 3-5 more times. Use it in at least one H2, the intro paragraph, and the conclusion.`,
-          data: { mentions: userPage.kwDensity, density: `${density.toFixed(2)}%`, word_count: userPage.wordCount }
+          data: { mentions: userPage.kwDensity, density: `${density.toFixed(2)}%`, word_count: userPage.wordCount },
+          fix_action: { type: 'navigate', page: 'ow-issues', label: 'Edit in Copywriter' }
         });
       }
     }
@@ -31908,7 +31915,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             impact: 'medium',
             fix: `Build ${Math.round(avgCompPageRD - pageRD)} more links to this specific page. Guest posts, resource page outreach, and internal links from your highest-authority pages help most.`,
             competitor_benchmark: compPageRDs.map(c => `${c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]}: ${c.rd} RD`).join(' | '),
-            data: { your_page_rd: pageRD, competitor_avg_page_rd: avgCompPageRD }
+            data: { your_page_rd: pageRD, competitor_avg_page_rd: avgCompPageRD },
+            fix_action: { type: 'navigate', page: 'citations', label: 'Open Citations & Directories' }
           });
         }
         console.log(`[serp-analysis] Page-level backlinks: ours=${pageRD} RD, comp avg=${avgCompPageRD} RD`);
@@ -31944,7 +31952,8 @@ app.post('/api/projects/:projectId/rank-tracking/analyze', async (req, res) => {
             issue: `Below-average page speed (${perfScore}/100) — may affect rankings`,
             impact: 'low',
             fix: `Score of ${perfScore}/100 is below the 90+ threshold Google considers "good". Check Website Audit → PageSpeed for optimization opportunities.`,
-            data: { performance_score: perfScore }
+            data: { performance_score: perfScore },
+            fix_action: { type: 'navigate', page: 'website-audit', label: 'Open PageSpeed' }
           });
         }
       }
