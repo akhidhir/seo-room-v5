@@ -20713,7 +20713,7 @@
             setWordTarget(r.summary.recommended || 1500);
             saveCompetitorAnalysis(r);
           }
-        } catch (e) { console.error('Competitor check failed:', e); }
+        } catch (e) { console.error('Competitor check failed:', e); alert('Competitor check failed: ' + (e.message || e)); }
         setCheckingCompetitors(false);
       };
 
