@@ -21204,6 +21204,9 @@
       const [reAnalysing, setReAnalysing] = useState(false);
       const [editorKey, setEditorKey] = useState(0);
       const [importingTemplate, setImportingTemplate] = useState(false);
+      const [humanizing, setHumanizing] = useState(false);
+      const [suggestingKws, setSuggestingKws] = useState(false);
+      const [suggestedKws, setSuggestedKws] = useState([]);
       const [importTemplateUrl, setImportTemplateUrl] = useState('');
       // Section-aware content system
       const [parsingSections, setParsingSections] = useState(false);
@@ -21335,6 +21338,52 @@
           loadWpHistory();
         } catch (e) { alert('Rollback failed: ' + e.message); }
         setRollingBack(null);
+      };
+
+      // Humanize handler — same as new website pipeline
+      const handleHumanize = async () => {
+        if (!editContent || humanizing || !selectedItem) return;
+        setHumanizing(true);
+        try {
+          const result = await api(`/projects/${pid}/humanize-smart`, {
+            method: 'POST',
+            body: { content_html: editContent, page_id: selectedItem.page_id || selectedItem.id }
+          });
+          if (result.content_html) {
+            setEditContent(result.content_html);
+            let msg = 'Humanize complete!';
+            if (result.credits_used > 0) msg += ` GPTHuman credits: ${result.credits_used}.`;
+            if (result.gaps_found > 0) msg += ` Brief gaps: ${result.gaps_found}, repaired: ${result.gaps_repaired}.`;
+            msg += ' Run AI Detection to check the score.';
+            alert(msg);
+          }
+        } catch (e) { alert('Humanize error: ' + (e.message || e)); }
+        setHumanizing(false);
+      };
+
+      // Suggest target keywords handler
+      const handleSuggestKeywords = async () => {
+        if (!selectedItem || suggestingKws) return;
+        setSuggestingKws(true);
+        setSuggestedKws([]);
+        try {
+          const pageId = selectedItem.page_id || selectedItem.id;
+          const data = await api(`/projects/${pid}/site-pages/${pageId}/suggest-keywords`, {
+            method: 'POST',
+            body: { page_title: selectedItem.page_title || '', page_url: selectedItem.page_url || '', current_content: editContent || selectedItem.current_content || '' }
+          });
+          if (data.keywords && data.keywords.length > 0) {
+            setSuggestedKws(data.keywords);
+          } else {
+            alert('No keyword suggestions found');
+          }
+        } catch (e) { alert('Error: ' + (e.message || e)); }
+        setSuggestingKws(false);
+      };
+
+      const handlePickKeyword = (kw) => {
+        setEditMeta(prev => ({ ...prev, focus_keyword: kw }));
+        setSuggestedKws([]);
       };
 
       // Plagiarism check handler
@@ -22175,6 +22224,20 @@
                 title: 'Detect AI-generated content via Winston AI',
                 style: { padding: '8px 16px', background: aiDetecting ? 'var(--bg3)' : '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: aiDetecting ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
               }, React.createElement('i', { className: aiDetecting ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-robot', style: { marginRight: 6 } }), aiDetecting ? 'Detecting...' : 'AI Detection'),
+              // Humanize — rewrite content to sound more human
+              !isPublished && React.createElement('button', {
+                disabled: humanizing || !editContent,
+                onClick: handleHumanize,
+                title: 'Rewrite content to sound more human — uses GPTHuman API',
+                style: { padding: '8px 16px', background: humanizing ? 'var(--bg3)' : '#10b981', color: '#fff', border: 'none', borderRadius: 8, cursor: humanizing ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: humanizing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-feather', style: { marginRight: 6 } }), humanizing ? 'Humanizing...' : 'Humanize'),
+              // Suggest Target Keywords
+              !isPublished && React.createElement('button', {
+                disabled: suggestingKws,
+                onClick: handleSuggestKeywords,
+                title: 'AI suggests target keywords based on page content and competitors',
+                style: { padding: '8px 16px', background: suggestingKws ? 'var(--bg3)' : '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: suggestingKws ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+              }, React.createElement('i', { className: suggestingKws ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-key', style: { marginRight: 6 } }), suggestingKws ? 'Suggesting...' : 'Suggest Keywords'),
               // Reset — clear all draft data, sections, meta, AI notes back to clean state
               !isPublished && React.createElement('button', {
                 onClick: async () => {
@@ -22214,6 +22277,21 @@
               React.createElement('span', { style: { fontWeight: 600, color: 'var(--text)', minWidth: 120 } }, c.check),
               React.createElement('span', { style: { color: 'var(--text2)' } }, c.message)
             ))
+          ),
+
+          // Suggested Keywords (from AI)
+          suggestedKws.length > 0 && React.createElement('div', {
+            style: { margin: '12px 0', padding: 16, background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 8 }
+          },
+            React.createElement('div', { style: { fontWeight: 700, fontSize: 13, color: '#8b5cf6', marginBottom: 8 } },
+              React.createElement('i', { className: 'fas fa-key', style: { marginRight: 6 } }), 'Suggested Target Keywords — click to set as focus keyword'),
+            React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+              suggestedKws.map((kw, i) => React.createElement('button', {
+                key: i,
+                onClick: () => handlePickKeyword(typeof kw === 'string' ? kw : kw.keyword || kw),
+                style: { padding: '6px 12px', background: '#8b5cf620', color: '#8b5cf6', border: '1px solid #8b5cf640', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+              }, typeof kw === 'string' ? kw : kw.keyword || kw))
+            )
           ),
 
           // Plagiarism Check Results
