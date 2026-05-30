@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.2
+ * Version: 8.4.3
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.2');
+define('SEOROOM_VERSION', '8.4.3');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -848,40 +848,53 @@ function sropt_elementor_preview_create($request) {
     ]);
 }
 
-// Filter: when page loads with seoroom_preview token, swap _elementor_data
-add_filter('get_post_metadata', 'sropt_elementor_preview_filter', 1, 4);
-function sropt_elementor_preview_filter($value, $post_id, $meta_key, $single) {
-    if ($meta_key !== '_elementor_data') return $value;
-    if (empty($_GET['seoroom_preview'])) return $value;
+// Elementor Design-Safe Preview: swap _elementor_data in DB before render, restore after
+// This is the only reliable method that works with ALL widgets including third-party addons
+add_action('template_redirect', 'sropt_elementor_preview_swap', 1);
+function sropt_elementor_preview_swap() {
+    if (empty($_GET['seoroom_preview'])) return;
+    if (!is_singular()) return;
 
     $token = sanitize_text_field($_GET['seoroom_preview']);
     $preview = get_transient('seoroom_preview_' . $token);
+    if (!$preview || empty($preview['elementor_data'])) return;
 
-    if (!$preview || $preview['page_id'] != $post_id) return $value;
+    $page_id = $preview['page_id'];
+    if (get_the_ID() != $page_id && get_queried_object_id() != $page_id) return;
 
-    // Return the modified elementor data instead of the real one
-    if ($single) return $preview['elementor_data'];
-    return [$preview['elementor_data']];
-}
+    // Save original _elementor_data
+    global $wpdb;
+    $original = $wpdb->get_var($wpdb->prepare(
+        "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' LIMIT 1",
+        $page_id
+    ));
 
-// Hook into Elementor's rendering pipeline — this fires AFTER Elementor loads data but BEFORE rendering
-// This is the correct hook for third-party addon widgets (iaccordions, etc.) that cache data internally
-add_filter('elementor/frontend/builder_content_data', 'sropt_elementor_preview_content_data', 10, 2);
-function sropt_elementor_preview_content_data($data, $post_id) {
-    if (empty($_GET['seoroom_preview'])) return $data;
+    if (!$original) return;
 
-    $token = sanitize_text_field($_GET['seoroom_preview']);
-    $preview = get_transient('seoroom_preview_' . $token);
+    // Directly update to modified data (bypasses all caches)
+    $wpdb->update($wpdb->postmeta,
+        ['meta_value' => $preview['elementor_data']],
+        ['post_id' => $page_id, 'meta_key' => '_elementor_data']
+    );
 
-    if (!$preview || $preview['page_id'] != $post_id) return $data;
-
-    // Decode and return the modified elementor data
-    $modified = json_decode($preview['elementor_data'], true);
-    if (is_array($modified) && count($modified) > 0) {
-        return $modified;
+    // Clear Elementor's document cache so it re-reads from DB
+    if (class_exists('\Elementor\Plugin')) {
+        $doc = \Elementor\Plugin::$instance->documents->get($page_id, false);
+        if ($doc) {
+            // Clear the parsed elements cache
+            delete_post_meta($page_id, '_elementor_page_assets');
+            wp_cache_delete($page_id, 'post_meta');
+        }
     }
 
-    return $data;
+    // Restore original data AFTER the page is fully rendered
+    register_shutdown_function(function() use ($wpdb, $page_id, $original) {
+        $wpdb->update($wpdb->postmeta,
+            ['meta_value' => $original],
+            ['post_id' => $page_id, 'meta_key' => '_elementor_data']
+        );
+        wp_cache_delete($page_id, 'post_meta');
+    });
 }
 
 // Add preview bar to the page when in preview mode
