@@ -3010,7 +3010,7 @@ app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
 // GET /api/plugin/update-check — plugin checks for updates (no auth needed)
 app.get('/api/plugin/update-check', (req, res) => {
   res.json({
-    version: '8.4.4',
+    version: '8.4.5',
     download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
     requires: '5.8',
     tested: '6.7',
@@ -3029,7 +3029,7 @@ app.get('/api/plugin/download', async (req, res) => {
       return res.status(404).json({ error: 'Plugin zip not found. Upload seoroom-latest.zip to the server root.' });
     }
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.4.4.zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.4.5.zip');
     fs.createReadStream(zipPath).pipe(res);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -19282,7 +19282,7 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       const widgetSettings = templateWidget ? { ...templateWidget.settings, _element_id: undefined, editor: (heading ? `<h2>${heading}</h2>` : '') + content } : { editor: (heading ? `<h2>${heading}</h2>` : '') + content };
 
       // Detect FAQ sections — use Elementor accordion widget with +/- toggles
-      const isFaq = false; // TEMPORARILY DISABLED — testing delivery mechanism without FAQ modification
+      const isFaq = /faq/i.test(ns.type || '') || /faq/i.test(heading || '') || /\?<\//i.test(content);
       let widgetEl;
 
       if (isFaq) {

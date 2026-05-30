@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.4
+ * Version: 8.4.5
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.4');
+define('SEOROOM_VERSION', '8.4.5');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -876,24 +876,8 @@ function sropt_elementor_preview_swap() {
         ['post_id' => $page_id, 'meta_key' => '_elementor_data']
     );
 
-    // Flush ALL caches for this post — WordPress object cache, Elementor cache, everything
-    wp_cache_flush();
-    clean_post_cache($page_id);
-
-    // Clear Elementor's specific caches
-    if (class_exists('\Elementor\Plugin')) {
-        try {
-            \Elementor\Plugin::$instance->files_manager->clear_cache();
-        } catch (\Exception $e) {}
-        // Force Elementor to re-read the document
-        $documents = \Elementor\Plugin::$instance->documents;
-        if (method_exists($documents, 'get')) {
-            $doc = $documents->get($page_id);
-            if ($doc && method_exists($doc, 'delete_cache')) {
-                $doc->delete_cache();
-            }
-        }
-    }
+    // Clear only post meta cache — NOT Elementor's CSS files
+    wp_cache_delete($page_id, 'post_meta');
 
     // Restore original data AFTER page is fully rendered and sent to browser
     register_shutdown_function(function() use ($wpdb, $page_id, $original) {
@@ -901,11 +885,7 @@ function sropt_elementor_preview_swap() {
             ['meta_value' => $original],
             ['post_id' => $page_id, 'meta_key' => '_elementor_data']
         );
-        wp_cache_flush();
-        clean_post_cache($page_id);
-        if (class_exists('\Elementor\Plugin')) {
-            try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Exception $e) {}
-        }
+        wp_cache_delete($page_id, 'post_meta');
     });
 }
 
