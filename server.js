@@ -19282,19 +19282,41 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       let widgetEl;
 
       if (isFaq) {
-        // Parse Q&A pairs from content — look for <h3>Question?</h3><p>Answer</p> or <strong>Q</strong><p>A</p>
         const tabs = [];
-        const faqHtml = (heading ? `<h2>${heading}</h2>` : '') + content;
-        const qaPairs = faqHtml.match(/<(?:h[2-4]|strong)[^>]*>(.*?)<\/(?:h[2-4]|strong)>\s*([\s\S]*?)(?=<(?:h[2-4]|strong)|$)/gi) || [];
+        const faqHtml = content;
 
-        if (qaPairs.length > 0) {
-          for (const pair of qaPairs) {
+        // Strategy 1: Look for <h3>Question</h3><p>Answer</p> pattern
+        const h3Pairs = faqHtml.match(/<(?:h[2-4]|strong)[^>]*>(.*?)<\/(?:h[2-4]|strong)>\s*([\s\S]*?)(?=<(?:h[2-4]|strong)|$)/gi) || [];
+        if (h3Pairs.length > 0) {
+          for (const pair of h3Pairs) {
             const qMatch = pair.match(/<(?:h[2-4]|strong)[^>]*>(.*?)<\/(?:h[2-4]|strong)>/i);
             const aMatch = pair.replace(/<(?:h[2-4]|strong)[^>]*>.*?<\/(?:h[2-4]|strong)>/i, '').trim();
-            if (qMatch && qMatch[1] && !qMatch[1].toLowerCase().includes('faq')) {
+            if (qMatch && qMatch[1] && !qMatch[1].toLowerCase().includes('faq') && !qMatch[1].toLowerCase().includes('frequently')) {
               tabs.push({ _id: genId(), tab_title: qMatch[1].replace(/<[^>]+>/g, ''), tab_content: aMatch || '' });
             }
           }
+        }
+
+        // Strategy 2: Split paragraphs — if a paragraph contains a "?" in the first sentence, it's a question
+        if (tabs.length === 0) {
+          const paragraphs = faqHtml.split(/<\/p>\s*<p[^>]*>/i).map(p => p.replace(/<\/?p[^>]*>/gi, '').trim()).filter(p => p.length > 10);
+          let currentQ = null;
+          let currentA = '';
+          for (const para of paragraphs) {
+            const plainText = para.replace(/<[^>]+>/g, '').trim();
+            const firstSentence = plainText.split(/[.!]/).shift() || '';
+            if (firstSentence.includes('?') && !plainText.toLowerCase().includes('frequently asked')) {
+              // Save previous Q&A
+              if (currentQ) tabs.push({ _id: genId(), tab_title: currentQ, tab_content: `<p>${currentA}</p>` });
+              // Extract question (up to first ?)
+              const qEnd = plainText.indexOf('?');
+              currentQ = plainText.substring(0, qEnd + 1);
+              currentA = plainText.substring(qEnd + 1).trim();
+            } else if (currentQ) {
+              currentA += ' ' + plainText;
+            }
+          }
+          if (currentQ) tabs.push({ _id: genId(), tab_title: currentQ, tab_content: `<p>${currentA}</p>` });
         }
 
         if (tabs.length > 0) {
