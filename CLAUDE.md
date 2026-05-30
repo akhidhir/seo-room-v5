@@ -359,10 +359,13 @@ const PILLAR_CATEGORIES = {
 - **DataForSEO SERP returns 0 for some AU keywords** — even with correct location "Perth,Western Australia,Australia". SerpAPI fallback handles this but DataForSEO root cause unknown.
 
 ### Next Session Priorities
-1. **AI Replace popup** — port from New Website editor to existing site Copywriter. Select text → 4 AI alternatives inline. Backend `/suggest-replacements` already works, just need frontend text-selection handler in CopywriterPage editor.
-2. **Accept/reject topics & keywords flow** — competitor topics/keywords show but no accept/reject UI to feed into the Rewrite AI. Port the accept flow from NewWebsitePipelinePage.
-3. **SERP finding as brief for Brief Check** — use the `brief` field (pushed from SERP analysis) as the copywriting brief. Wire Brief Check button to validate content against it.
-4. **Full existing site copywriter flow**: SERP Analysis → Send to Copywriter (brief = finding) → Import Current Copy → Check Competitors → Accept topics → Rewrite → AI Replace → Check SEO → Plagiarism/AI Detection/Humanize → Preview (Design-Safe) → Publish
+1. **Elementor-native preview** — WP REST API autosaves don't save meta fields. Need custom PHP endpoint in seoroom plugin that receives modified `_elementor_data`, renders page with it (without saving), returns HTML. Plugin 8.4.0 already registers `_elementor_data` for REST. Server endpoint at `/elementor-preview` exists, just needs the WP-side renderer.
+2. **AI Replace popup** — port from New Website editor to existing site Copywriter. Select text → 4 AI alternatives inline. Backend `/suggest-replacements` already works, just need frontend text-selection handler in CopywriterPage editor.
+3. **Accept/reject topics & keywords flow** — competitor topics/keywords show but no accept/reject UI to feed into the Rewrite AI. Port the accept flow from NewWebsitePipelinePage.
+4. **SERP finding as brief for Brief Check** — use the `brief` field (pushed from SERP analysis) as the copywriting brief. Wire Brief Check button to validate content against it.
+5. **Full existing site copywriter flow**: SERP Analysis → Send to Copywriter (brief = finding) → Import Current Copy → Check Competitors → Accept topics → Rewrite → AI Replace → Check SEO → Plagiarism/AI Detection/Humanize → Preview (Design-Safe) → Publish
+6. **Plugin auto-update debugging** — version 8.4.0 not detected by WordPress update check despite correct server response. Check transient caching or version comparison.
+7. **WordPress admin data** — audit what WP REST API exposes (WP version, theme, plugin updates, site health, PHP version) and pull into our dashboard.
 
 ### Previous Session
 - **Humanize-only endpoint — pure rule-based**: Zero-cost rule-based humanizer (contractions, synonym swaps, sentence starters, AU English).
