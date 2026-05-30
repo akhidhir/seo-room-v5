@@ -19282,10 +19282,13 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       const widgetSettings = templateWidget ? { ...templateWidget.settings, _element_id: undefined, editor: (heading ? `<h2>${heading}</h2>` : '') + content } : { editor: (heading ? `<h2>${heading}</h2>` : '') + content };
 
       // Detect FAQ sections — use Elementor accordion widget with +/- toggles
+      // FAQ detection — but DON'T modify existing FAQ widgets (third-party widgets break)
+      // Instead, add new FAQ as a standard Elementor toggle widget in a separate section
       const isFaq = /faq/i.test(ns.type || '') || /faq/i.test(heading || '') || /\?<\//i.test(content);
+      const skipExistingFaq = true; // Never modify existing FAQ — add as new section instead
       let widgetEl;
 
-      if (isFaq) {
+      if (isFaq && !skipExistingFaq) {
         // First, try to find and clone the existing FAQ section from the page
         let existingFaqSection = null;
         const findFaqSection = (els) => {
