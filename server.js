@@ -19412,28 +19412,55 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
             const replaceIds = (el) => { el.id = genId(); if (el.elements) el.elements.forEach(replaceIds); };
             replaceIds(clonedSection);
             // Find the toggle/accordion widget inside and replace it
-            const replaceWidget = (els) => {
+            // Find ALL accordion widgets in the cloned section and replace with our tabs
+            const allFaqWidgets = [];
+            const collectFaqWidgets = (els, path) => {
               for (let i = 0; i < els.length; i++) {
                 if (els[i].widgetType && /accordion|toggle|faq/i.test(els[i].widgetType)) {
-                  els[i] = widgetEl;
-                  return true;
+                  allFaqWidgets.push({ arr: els, idx: i });
                 }
-                if (els[i].elements && replaceWidget(els[i].elements)) return true;
+                if (els[i].elements) collectFaqWidgets(els[i].elements, path + '.' + i);
               }
-              return false;
             };
-            if (replaceWidget(clonedSection.elements || [])) {
-              // Remove the original FAQ section and insert the cloned one in its place
+            collectFaqWidgets(clonedSection.elements || [], '');
+
+            if (allFaqWidgets.length > 0) {
+              // Split tabs evenly across the columns (e.g., 8 items → 4 left + 4 right)
+              const itemsPerWidget = Math.ceil(tabs.length / allFaqWidgets.length);
+              for (let w = 0; w < allFaqWidgets.length; w++) {
+                const startIdx = w * itemsPerWidget;
+                const widgetTabs = tabs.slice(startIdx, startIdx + itemsPerWidget);
+                // Clone the original widget and replace its tabs
+                const clonedWidget = JSON.parse(JSON.stringify(allFaqWidgets[w].arr[allFaqWidgets[w].idx]));
+                clonedWidget.id = genId();
+                const wSettings = clonedWidget.settings || {};
+                // Find and replace the tab array using the detected keys
+                let replaced = false;
+                for (const key of ['ot_accs', 'tabs', 'items', 'accordions', 'accordion', 'faq_items', 'acc_items', 'iaccordions', 'premium_accordion_items']) {
+                  if (Array.isArray(wSettings[key]) && wSettings[key].length > 0) {
+                    const tmpl = wSettings[key][0];
+                    const tKey = Object.keys(tmpl).find(k => /title|question|heading/i.test(k) && typeof tmpl[k] === 'string') || 'tab_title';
+                    const cKey = Object.keys(tmpl).find(k => /content|answer|body|desc/i.test(k) && typeof tmpl[k] === 'string') || 'tab_content';
+                    wSettings[key] = widgetTabs.map(t => ({ ...tmpl, _id: genId(), [tKey]: t.tab_title, [cKey]: t.tab_content }));
+                    replaced = true;
+                    break;
+                  }
+                }
+                if (!replaced) wSettings.tabs = widgetTabs;
+                allFaqWidgets[w].arr[allFaqWidgets[w].idx] = clonedWidget;
+              }
+              console.log(`[elementor-preview] Replaced ${allFaqWidgets.length} FAQ widgets, ${tabs.length} items split across columns`);
+
+              // Replace the original FAQ section
               const origIdx = elementorData.indexOf(existingFaqSection);
               if (origIdx >= 0) {
                 elementorData.splice(origIdx, 1, clonedSection);
-                console.log(`[elementor-preview] Replaced original FAQ section at index ${origIdx} with cloned version`);
+                console.log(`[elementor-preview] Replaced original FAQ section at index ${origIdx}`);
               } else {
                 const insertIdx = Math.max(0, elementorData.length - 2);
                 elementorData.splice(insertIdx, 0, clonedSection);
-                console.log(`[elementor-preview] Inserted cloned FAQ section (original not found to replace)`);
               }
-              continue; // Skip the normal section builder below
+              continue;
             }
           }
         }
