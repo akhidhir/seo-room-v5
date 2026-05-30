@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.6
+ * Version: 8.4.7
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.6');
+define('SEOROOM_VERSION', '8.4.7');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -859,13 +859,12 @@ function sropt_elementor_preview_intercept() {
     $page_id = intval($preview['page_id']);
     if (get_queried_object_id() != $page_id) return;
 
-    // Start output buffering — capture the entire page HTML
+    // Start output buffering — capture the entire rendered HTML, then modify it
     ob_start(function($html) use ($preview, $page_id) {
         if (empty($html) || strlen($html) < 500) return $html;
 
         $sections = $preview['sections'] ?? [];
 
-        // Process each new/modified section
         foreach ($sections as $section) {
             $is_new = !empty($section['is_new']);
             $heading = $section['draft_heading'] ?? $section['heading'] ?? '';
@@ -873,98 +872,150 @@ function sropt_elementor_preview_intercept() {
             $type = $section['type'] ?? '';
             $original_heading = $section['original_heading'] ?? $section['heading'] ?? '';
 
-            if ($is_new && $content) {
-                // NEW SECTION: find insertion point and add content
-                $is_faq = (stripos($type, 'faq') !== false || stripos($heading, 'faq') !== false);
+            if (!$is_new || !$content) continue;
 
-                if ($is_faq) {
-                    // Find existing FAQ/accordion section and clone its HTML structure
-                    // Look for accordion containers in the rendered HTML
-                    if (preg_match('/<section[^>]*class="[^"]*elementor-section[^"]*"[^>]*>(?:(?!<\/section>).)*(?:accordion|toggle|ot-accordions)(?:(?!<\/section>).)*<\/section>/is', $html, $faq_match, PREG_OFFSET_CAPTURE)) {
-                        $faq_html = $faq_match[0][0];
-                        $faq_pos = $faq_match[0][1];
+            $is_faq = (stripos($type, 'faq') !== false || stripos($heading, 'faq') !== false);
 
-                        // Parse Q&A from content
-                        $qas = [];
-                        $paragraphs = preg_split('/<\/p>\s*<p[^>]*>/i', strip_tags($content, '<p><strong><em><a><br>'));
-                        $current_q = null;
-                        $current_a = '';
-                        foreach ($paragraphs as $para) {
-                            $plain = trim(strip_tags($para));
-                            if (strlen($plain) < 10) continue;
-                            $first_sentence = explode('.', $plain)[0] ?? '';
-                            if (strpos($first_sentence, '?') !== false && stripos($plain, 'frequently') === false) {
-                                if ($current_q) $qas[] = ['q' => $current_q, 'a' => trim($current_a)];
-                                $qpos = strpos($plain, '?');
-                                $current_q = substr($plain, 0, $qpos + 1);
-                                $current_a = trim(substr($plain, $qpos + 1));
-                            } else if ($current_q) {
-                                $current_a .= ' ' . $plain;
-                            }
-                        }
+            // Parse Q&A pairs from content (for FAQ sections)
+            $qas = [];
+            if ($is_faq) {
+                $plain_content = strip_tags($content);
+                $parts = preg_split('/\n\n+/', $plain_content);
+                if (count($parts) < 2) $parts = preg_split('/(?<=\?)\s+(?=[A-Z])/', $plain_content);
+                $current_q = null;
+                $current_a = '';
+                foreach ($parts as $part) {
+                    $part = trim($part);
+                    if (strlen($part) < 10) continue;
+                    if (strpos($part, '?') !== false && stripos($part, 'frequently') === false && strlen($part) < 200) {
                         if ($current_q) $qas[] = ['q' => $current_q, 'a' => trim($current_a)];
+                        $qpos = strpos($part, '?');
+                        $current_q = substr($part, 0, $qpos + 1);
+                        $current_a = trim(substr($part, $qpos + 1));
+                    } else if ($current_q) {
+                        $current_a .= ' ' . $part;
+                    }
+                }
+                if ($current_q) $qas[] = ['q' => $current_q, 'a' => trim($current_a)];
+            }
 
-                        if (!empty($qas)) {
-                            // Find an individual accordion item in the existing FAQ to use as template
-                            if (preg_match('/<div[^>]*class="[^"]*(?:acc-item|elementor-tab-title|ot-acc-item|toggle-title)[^"]*"[^>]*>.*?<\/div>\s*<div[^>]*class="[^"]*(?:acc-content|elementor-tab-content|ot-acc-content|toggle-content)[^"]*"[^>]*>.*?<\/div>/is', $faq_html, $item_match)) {
-                                $template_item = $item_match[0];
-                                // Extract title and content patterns
-                                $new_items_html = '';
-                                foreach ($qas as $qa) {
-                                    $item = $template_item;
-                                    // Replace title text (keep HTML structure)
-                                    $item = preg_replace('/(<[^>]*(?:acc-title|tab-title|toggle-title)[^>]*>)(.*?)(<\/)/is', '$1' . esc_html($qa['q']) . '$3', $item);
-                                    // Replace content text
-                                    $item = preg_replace('/(<[^>]*(?:acc-content|tab-content|toggle-content)[^>]*>)(.*?)(<\/div>)/is', '$1<p>' . esc_html($qa['a']) . '</p>$3', $item);
-                                    $new_items_html .= $item;
-                                }
-                                // Insert new items after existing FAQ items (append)
-                                // Find the closing of the accordion container
-                                // For now, insert as a new section after the existing FAQ
+            if ($is_faq && !empty($qas)) {
+                // CLONE existing accordion HTML structure from the rendered page
+                // Find ALL accordion item wrappers — look for common patterns
+                $accordion_patterns = [
+                    // iElementor accordions (ot-acc)
+                    '/<div[^>]*class="[^"]*ot-acc-item[^"]*"[^>]*>(.*?)<\/div>\s*<\/div>/is',
+                    // Standard Elementor accordion
+                    '/<div[^>]*class="[^"]*elementor-accordion-item[^"]*"[^>]*>(.*?)<\/div>\s*<\/div>\s*<\/div>/is',
+                    // Standard Elementor toggle
+                    '/<div[^>]*class="[^"]*elementor-toggle-item[^"]*"[^>]*>(.*?)<\/div>\s*<\/div>\s*<\/div>/is',
+                ];
+
+                $found_item = false;
+                foreach ($accordion_patterns as $pattern) {
+                    if (preg_match($pattern, $html, $item_match)) {
+                        $template_item_html = $item_match[0];
+                        $found_item = true;
+
+                        // Build new items by cloning the template HTML
+                        $new_items = '';
+                        foreach ($qas as $idx => $qa) {
+                            $clone = $template_item_html;
+                            // Replace the title text — find the first link or heading-like element
+                            $clone = preg_replace_callback('/(<a[^>]*class="[^"]*(?:acc_title|title)[^"]*"[^>]*>)(.*?)(<\/a>)/is', function($m) use ($qa) {
+                                return $m[1] . esc_html($qa['q']) . $m[3];
+                            }, $clone, 1, $title_replaced);
+                            if (!$title_replaced) {
+                                // Try span/div title
+                                $clone = preg_replace_callback('/(<(?:span|div|h[3-6])[^>]*class="[^"]*(?:title|heading|question)[^"]*"[^>]*>)(.*?)(<\/(?:span|div|h[3-6])>)/is', function($m) use ($qa) {
+                                    return $m[1] . esc_html($qa['q']) . $m[3];
+                                }, $clone, 1, $title_replaced2);
                             }
+                            // Replace the content text
+                            $clone = preg_replace_callback('/(<div[^>]*class="[^"]*(?:acc_content|content|answer|body)[^"]*"[^>]*>)(.*?)(<\/div>)/is', function($m) use ($qa) {
+                                return $m[1] . '<p>' . esc_html($qa['a']) . '</p>' . $m[3];
+                            }, $clone, 1);
+                            // Change IDs to avoid duplicates
+                            $clone = preg_replace('/id="([^"]+)"/i', 'id="seoroom-faq-' . $idx . '-$1"', $clone);
+                            $new_items .= $clone;
                         }
+
+                        // Find the accordion container and insert new items
+                        // Look for the parent section that contains the accordion
+                        $faq_section_pattern = '/<section[^>]*class="[^"]*elementor-(?:top-)?section[^"]*"[^>]*>(?:(?!<\/section>).)*?' . preg_quote(substr($template_item_html, 0, 60), '/') . '(?:(?!<\/section>).)*<\/section>/is';
+                        if (preg_match($faq_section_pattern, $html, $section_match, PREG_OFFSET_CAPTURE)) {
+                            $section_end = $section_match[0][1] + strlen($section_match[0][0]);
+                            // Insert a cloned section AFTER the existing FAQ section
+                            $new_section = '<section class="elementor-section elementor-top-section seoroom-preview-section" style="position:relative;">';
+                            $new_section .= '<div style="position:absolute;top:8px;right:20px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;z-index:10;">NEW FAQ ITEMS</div>';
+                            // Copy the inner structure from the existing section
+                            $inner = $section_match[0][0];
+                            // Replace all accordion items with our new ones
+                            $inner = preg_replace($pattern, '', $inner); // Remove existing items
+                            // Find the accordion wrapper and inject new items
+                            $inner = preg_replace('/(<div[^>]*class="[^"]*(?:ot-accordions|elementor-accordion|elementor-toggle)[^"]*"[^>]*>)/is', '$1' . $new_items, $inner, 1);
+                            $new_section .= '</section>';
+                            // Actually, simpler: just duplicate the whole section and replace items
+                            $cloned_section = $section_match[0][0];
+                            // Remove existing accordion items and add new ones
+                            $item_count = 0;
+                            $cloned_section = preg_replace_callback($pattern, function($m) use ($qas, $template_item_html, &$item_count) {
+                                if ($item_count >= count($qas)) return '';
+                                $qa = $qas[$item_count];
+                                $clone = $template_item_html;
+                                $clone = preg_replace_callback('/(<a[^>]*>)(.*?)(<\/a>)/is', function($m2) use ($qa, $item_count) {
+                                    if (stripos($m2[0], 'title') !== false || stripos($m2[0], 'acc_title') !== false || $item_count === 0) {
+                                        return $m2[1] . esc_html($qa['q']) . $m2[3];
+                                    }
+                                    return $m2[0];
+                                }, $clone, 1);
+                                $clone = preg_replace_callback('/(<div[^>]*class="[^"]*(?:acc_content|content)[^"]*"[^>]*>)(.*?)(<\/div>)/is', function($m2) use ($qa) {
+                                    return $m2[1] . '<p>' . esc_html($qa['a']) . '</p>' . $m2[3];
+                                }, $clone, 1);
+                                $clone = preg_replace('/id="([^"]+)"/i', 'id="sr-' . $item_count . '-$1"', $clone);
+                                $item_count++;
+                                return $clone;
+                            }, $cloned_section);
+                            // Add green border to distinguish
+                            $cloned_section = preg_replace('/class="elementor-section/', 'style="border-top:4px solid #22c55e;position:relative;" class="elementor-section', $cloned_section, 1);
+                            // Insert badge
+                            $cloned_section = preg_replace('/(<section[^>]*>)/', '$1<div style="position:absolute;top:8px;right:20px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;z-index:10;">NEW FAQ</div>', $cloned_section, 1);
+                            // Insert after existing FAQ
+                            $html = substr($html, 0, $section_end) . $cloned_section . substr($html, $section_end);
+                        }
+                        break; // Found and processed
                     }
                 }
 
-                // Build new section HTML using the page's own styling
-                // Find the content container width from existing sections
-                $new_section_html = '<div class="seoroom-preview-section" style="position:relative;padding:50px 0;border-top:3px solid #22c55e;">';
-                $new_section_html .= '<div style="position:absolute;top:-14px;right:20px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;letter-spacing:0.5px;z-index:10;">NEW SECTION</div>';
-                // Use a container div that inherits from the page's CSS
-                $new_section_html .= '<div class="elementor-container" style="max-width:1140px;margin:0 auto;padding:0 20px;">';
-                if ($heading) $new_section_html .= '<h2>' . esc_html($heading) . '</h2>';
-                $new_section_html .= $content;
-                $new_section_html .= '</div></div>';
+                if ($found_item) continue; // Skip the generic section builder
+            }
 
-                // Insert before footer
-                $footer_pos = stripos($html, '<footer');
-                if (!$footer_pos) $footer_pos = stripos($html, 'elementor-location-footer');
-                if (!$footer_pos) $footer_pos = stripos($html, '</main>');
-                if ($footer_pos) {
-                    $html = substr($html, 0, $footer_pos) . $new_section_html . substr($html, $footer_pos);
-                } else {
-                    $html = str_replace('</body>', $new_section_html . '</body>', $html);
-                }
+            // Generic new section (text content) — insert with page container styling
+            $new_html = '<div class="seoroom-preview-section" style="position:relative;padding:50px 0;border-top:3px solid #22c55e;">';
+            $new_html .= '<div style="position:absolute;top:-14px;right:20px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;z-index:10;">NEW SECTION</div>';
+            $new_html .= '<div class="elementor-container" style="max-width:1140px;margin:0 auto;padding:0 20px;">';
+            if ($heading) $new_html .= '<h2>' . esc_html($heading) . '</h2>';
+            $new_html .= $content;
+            $new_html .= '</div></div>';
 
-            } else if (!$is_new && $content && $original_heading) {
-                // EXISTING SECTION: find by heading text and replace content
-                $escaped_heading = preg_quote(strip_tags($original_heading), '/');
-                // Find the heading in rendered HTML
-                $pattern = '/(<(?:h[1-6]|div|span)[^>]*>)\s*' . $escaped_heading . '\s*(<\/(?:h[1-6]|div|span)>)/i';
-                // For now, just replace text within text-editor widgets
-                // This is simpler and more reliable
+            $footer_pos = stripos($html, '<footer');
+            if (!$footer_pos) $footer_pos = stripos($html, '</main>');
+            if ($footer_pos) {
+                $html = substr($html, 0, $footer_pos) . $new_html . substr($html, $footer_pos);
+            } else {
+                $html = str_replace('</body>', $new_html . '</body>', $html);
             }
         }
 
-        // Add preview bar
+        // Preview bar
         $original_url = get_permalink($page_id);
-        $preview_bar = '<div style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">'
+        $bar = '<div style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">'
             . '<strong style="font-size:15px;">SEO Room Preview</strong>'
             . '<span style="background:rgba(255,255,255,0.2);padding:3px 10px;border-radius:5px;font-size:12px;">Design-Safe Mode</span>'
             . '<span style="opacity:0.9;">Content changes are temporary — not published</span>'
             . '<a href="' . esc_url($original_url) . '" style="margin-left:auto;color:#e0e7ff;text-decoration:underline;font-size:13px;">View original &rarr;</a>'
             . '</div>';
-        $html = str_replace('</body>', $preview_bar . '</body>', $html);
+        $html = str_replace('</body>', $bar . '</body>', $html);
 
         return $html;
     });
