@@ -19254,7 +19254,7 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
               for (const widget of col.elements) {
                 if (widget.widgetType === 'text-editor' && widget.settings?.editor) {
                   const textLen = (widget.settings.editor || '').replace(/<[^>]+>/g, '').length;
-                  if (textLen > 200) {
+                  if (textLen > 50) {
                     templateSection = el;
                     templateColumn = col;
                     templateWidget = widget;
@@ -19290,8 +19290,8 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
         let existingFaqSection = null;
         const findFaqSection = (els) => {
           for (const el of (els || [])) {
-            if (el.widgetType === 'toggle' || el.widgetType === 'accordion') {
-              // Found an existing toggle/accordion — find its parent section
+            // Match any accordion/toggle/FAQ widget — including addon plugins (iaccordions, premium-accordion, etc.)
+            if (el.widgetType && /accordion|toggle|faq/i.test(el.widgetType)) {
               return el;
             }
             if (el.widgetType === 'shortcode' && (el.settings?.shortcode || '').includes('faq')) return el;
@@ -19356,9 +19356,34 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
             // Clone the existing FAQ widget structure — exact same styling/type
             widgetEl = JSON.parse(JSON.stringify(existingFaqWidget));
             widgetEl.id = genId();
-            // Replace tabs with our new content
-            if (widgetEl.settings) widgetEl.settings.tabs = tabs;
-            console.log(`[elementor-preview] Cloned existing FAQ widget (${existingFaqWidget.widgetType}) with ${tabs.length} new items`);
+            // Find the tabs/items array in the widget settings — different plugins use different keys
+            const settings = widgetEl.settings || {};
+            const tabKeys = ['tabs', 'items', 'accordions', 'accordion', 'faq_items', 'acc_items', 'iaccordions'];
+            let tabKey = 'tabs';
+            for (const key of tabKeys) {
+              if (Array.isArray(settings[key]) && settings[key].length > 0) {
+                tabKey = key;
+                break;
+              }
+            }
+            // Map our tabs to match the existing format
+            if (settings[tabKey] && settings[tabKey].length > 0) {
+              const template = settings[tabKey][0]; // Copy structure from first existing item
+              const templateKeys = Object.keys(template);
+              // Find title and content keys
+              const titleKey = templateKeys.find(k => /title|question|heading/i.test(k) && typeof template[k] === 'string') || 'tab_title';
+              const contentKey = templateKeys.find(k => /content|answer|body|desc/i.test(k) && typeof template[k] === 'string') || 'tab_content';
+              settings[tabKey] = tabs.map(t => {
+                const item = { ...template, _id: genId() };
+                item[titleKey] = t.tab_title;
+                item[contentKey] = t.tab_content;
+                return item;
+              });
+              console.log(`[elementor-preview] Cloned ${existingFaqWidget.widgetType} widget: tabKey=${tabKey}, titleKey=${titleKey}, contentKey=${contentKey}, ${tabs.length} items`);
+            } else {
+              settings.tabs = tabs;
+              console.log(`[elementor-preview] Cloned ${existingFaqWidget.widgetType} widget with default tabs key, ${tabs.length} items`);
+            }
           } else {
             // Fallback: create standard toggle widget (more common on Elementor sites than accordion)
             widgetEl = {
@@ -19389,7 +19414,7 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
             // Find the toggle/accordion widget inside and replace it
             const replaceWidget = (els) => {
               for (let i = 0; i < els.length; i++) {
-                if (els[i].widgetType === 'toggle' || els[i].widgetType === 'accordion') {
+                if (els[i].widgetType && /accordion|toggle|faq/i.test(els[i].widgetType)) {
                   els[i] = widgetEl;
                   return true;
                 }
