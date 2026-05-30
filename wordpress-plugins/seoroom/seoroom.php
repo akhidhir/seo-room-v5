@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.3
+ * Version: 8.4.4
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.3');
+define('SEOROOM_VERSION', '8.4.4');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -848,21 +848,20 @@ function sropt_elementor_preview_create($request) {
     ]);
 }
 
-// Elementor Design-Safe Preview: swap _elementor_data in DB before render, restore after
-// This is the only reliable method that works with ALL widgets including third-party addons
-add_action('template_redirect', 'sropt_elementor_preview_swap', 1);
+// Elementor Design-Safe Preview: swap _elementor_data BEFORE anything reads it
+// Hook into 'wp' action (fires before template_redirect, before Elementor renders)
+add_action('wp', 'sropt_elementor_preview_swap', 1);
 function sropt_elementor_preview_swap() {
     if (empty($_GET['seoroom_preview'])) return;
-    if (!is_singular()) return;
 
     $token = sanitize_text_field($_GET['seoroom_preview']);
     $preview = get_transient('seoroom_preview_' . $token);
     if (!$preview || empty($preview['elementor_data'])) return;
 
-    $page_id = $preview['page_id'];
-    if (get_the_ID() != $page_id && get_queried_object_id() != $page_id) return;
+    $page_id = intval($preview['page_id']);
+    if (!$page_id) return;
 
-    // Save original _elementor_data
+    // Save original _elementor_data directly from DB
     global $wpdb;
     $original = $wpdb->get_var($wpdb->prepare(
         "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' LIMIT 1",
@@ -871,29 +870,42 @@ function sropt_elementor_preview_swap() {
 
     if (!$original) return;
 
-    // Directly update to modified data (bypasses all caches)
-    $wpdb->update($wpdb->postmeta,
+    // Write modified data directly to DB
+    $result = $wpdb->update($wpdb->postmeta,
         ['meta_value' => $preview['elementor_data']],
         ['post_id' => $page_id, 'meta_key' => '_elementor_data']
     );
 
-    // Clear Elementor's document cache so it re-reads from DB
+    // Flush ALL caches for this post — WordPress object cache, Elementor cache, everything
+    wp_cache_flush();
+    clean_post_cache($page_id);
+
+    // Clear Elementor's specific caches
     if (class_exists('\Elementor\Plugin')) {
-        $doc = \Elementor\Plugin::$instance->documents->get($page_id, false);
-        if ($doc) {
-            // Clear the parsed elements cache
-            delete_post_meta($page_id, '_elementor_page_assets');
-            wp_cache_delete($page_id, 'post_meta');
+        try {
+            \Elementor\Plugin::$instance->files_manager->clear_cache();
+        } catch (\Exception $e) {}
+        // Force Elementor to re-read the document
+        $documents = \Elementor\Plugin::$instance->documents;
+        if (method_exists($documents, 'get')) {
+            $doc = $documents->get($page_id);
+            if ($doc && method_exists($doc, 'delete_cache')) {
+                $doc->delete_cache();
+            }
         }
     }
 
-    // Restore original data AFTER the page is fully rendered
+    // Restore original data AFTER page is fully rendered and sent to browser
     register_shutdown_function(function() use ($wpdb, $page_id, $original) {
         $wpdb->update($wpdb->postmeta,
             ['meta_value' => $original],
             ['post_id' => $page_id, 'meta_key' => '_elementor_data']
         );
-        wp_cache_delete($page_id, 'post_meta');
+        wp_cache_flush();
+        clean_post_cache($page_id);
+        if (class_exists('\Elementor\Plugin')) {
+            try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Exception $e) {}
+        }
     });
 }
 
