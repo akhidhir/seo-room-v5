@@ -19303,10 +19303,15 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
         // Find the top-level section containing this FAQ widget
         if (existingFaqWidget) {
           for (const section of elementorData) {
-            const hasWidget = JSON.stringify(section).includes(existingFaqWidget.id);
-            if (hasWidget) { existingFaqSection = section; break; }
+            const sectionStr = JSON.stringify(section);
+            if (sectionStr.includes(existingFaqWidget.id)) { existingFaqSection = section; break; }
           }
           console.log(`[elementor-preview] Found existing FAQ widget type: ${existingFaqWidget.widgetType}, section: ${!!existingFaqSection}`);
+          if (existingFaqSection) {
+            // Log the full structure so we can understand the layout
+            const structLog = JSON.stringify(existingFaqSection, null, 0).substring(0, 2000);
+            console.log(`[elementor-preview] FAQ section structure: ${structLog}`);
+          }
         }
 
         const tabs = [];
