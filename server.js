@@ -19438,12 +19438,15 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
                     const tmpl = wSettings[key][0];
                     const tKey = Object.keys(tmpl).find(k => /title|question|heading/i.test(k) && typeof tmpl[k] === 'string') || 'tab_title';
                     const cKey = Object.keys(tmpl).find(k => /content|answer|body|desc/i.test(k) && typeof tmpl[k] === 'string') || 'tab_content';
-                    wSettings[key] = widgetTabs.map(t => ({ ...tmpl, [tKey]: t.tab_title, [cKey]: t.tab_content }));
+                    wSettings[key] = widgetTabs.map(t => ({ ...tmpl, _id: genId(), [tKey]: t.tab_title, [cKey]: t.tab_content }));
                     break;
                   }
                 }
               }
-              console.log(`[elementor-preview] Modified ${allFaqWidgets.length} FAQ widgets in-place, ${tabs.length} items split across columns`);
+              // Verify the modification
+              const verifyKey = Object.keys(allFaqWidgets[0].settings || {}).find(k => Array.isArray(allFaqWidgets[0].settings[k]));
+              const verifyItems = verifyKey ? allFaqWidgets[0].settings[verifyKey] : [];
+              console.log(`[elementor-preview] Modified ${allFaqWidgets.length} FAQ widgets in-place, ${tabs.length} items split. First widget now has ${verifyItems.length} items, first title: "${verifyItems[0]?.acc_title || verifyItems[0]?.tab_title || '?'}"`);
               // Section is already in elementorData — no need to splice, it's modified in-place
               continue;
             }
