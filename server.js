@@ -19358,7 +19358,7 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
             widgetEl.id = genId();
             // Find the tabs/items array in the widget settings — different plugins use different keys
             const settings = widgetEl.settings || {};
-            const tabKeys = ['tabs', 'items', 'accordions', 'accordion', 'faq_items', 'acc_items', 'iaccordions'];
+            const tabKeys = ['ot_accs', 'tabs', 'items', 'accordions', 'accordion', 'faq_items', 'acc_items', 'iaccordions', 'premium_accordion_items'];
             let tabKey = 'tabs';
             for (const key of tabKeys) {
               if (Array.isArray(settings[key]) && settings[key].length > 0) {
@@ -19423,10 +19423,16 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
               return false;
             };
             if (replaceWidget(clonedSection.elements || [])) {
-              // Use the full cloned section instead of building a new one
-              const insertIdx = Math.max(0, elementorData.length - 2);
-              elementorData.splice(insertIdx, 0, clonedSection);
-              console.log(`[elementor-preview] Inserted cloned FAQ section with full layout`);
+              // Remove the original FAQ section and insert the cloned one in its place
+              const origIdx = elementorData.indexOf(existingFaqSection);
+              if (origIdx >= 0) {
+                elementorData.splice(origIdx, 1, clonedSection);
+                console.log(`[elementor-preview] Replaced original FAQ section at index ${origIdx} with cloned version`);
+              } else {
+                const insertIdx = Math.max(0, elementorData.length - 2);
+                elementorData.splice(insertIdx, 0, clonedSection);
+                console.log(`[elementor-preview] Inserted cloned FAQ section (original not found to replace)`);
+              }
               continue; // Skip the normal section builder below
             }
           }
