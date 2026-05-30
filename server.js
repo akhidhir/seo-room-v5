@@ -3029,7 +3029,7 @@ app.get('/api/plugin/download', async (req, res) => {
       return res.status(404).json({ error: 'Plugin zip not found. Upload seoroom-latest.zip to the server root.' });
     }
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=seoroom.zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.4.0.zip');
     fs.createReadStream(zipPath).pipe(res);
   } catch (e) {
     res.status(500).json({ error: e.message });
