@@ -19230,36 +19230,72 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       return false;
     };
 
+    let updatedCount = 0;
     for (const section of updatedSections) {
-      updateTextInElements(elementorData, section);
+      const matched = updateTextInElements(elementorData, section);
+      if (matched) updatedCount++;
+      else console.log(`[elementor-preview] Could not match section: "${(section.heading || section.original_text || '').substring(0, 50)}"`);
     }
+    console.log(`[elementor-preview] Updated ${updatedCount}/${updatedSections.length} existing sections`);
 
-    // 5. Add new sections to _elementor_data
+    // 5. Find a template text section to copy styling from
+    let templateSection = null;
+    let templateColumn = null;
+    let templateWidget = null;
+    const findTextSection = (elements) => {
+      for (const el of elements) {
+        if (el.elType === 'section' && el.elements) {
+          for (const col of el.elements) {
+            if (col.elements) {
+              for (const widget of col.elements) {
+                if (widget.widgetType === 'text-editor' && widget.settings?.editor) {
+                  const textLen = (widget.settings.editor || '').replace(/<[^>]+>/g, '').length;
+                  if (textLen > 200) {
+                    templateSection = el;
+                    templateColumn = col;
+                    templateWidget = widget;
+                    return true;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return false;
+    };
+    findTextSection(elementorData);
+    console.log(`[elementor-preview] Template section found: ${!!templateSection}, settings keys: ${templateSection ? Object.keys(templateSection.settings || {}).join(',') : 'none'}`);
+
+    // 6. Add new sections to _elementor_data with copied styling
     for (const ns of newSections) {
       const heading = ns.draft_heading || ns.heading || '';
       const content = ns.draft_text || '';
+
+      // Copy section/column/widget settings from template for consistent styling
+      const sectionSettings = templateSection ? { ...templateSection.settings, _element_id: undefined } : { layout: 'boxed' };
+      const columnSettings = templateColumn ? { ...templateColumn.settings, _element_id: undefined, _column_size: 100, _inline_size: null } : { _column_size: 100 };
+      const widgetSettings = templateWidget ? { ...templateWidget.settings, _element_id: undefined, editor: (heading ? `<h2>${heading}</h2>` : '') + content } : { editor: (heading ? `<h2>${heading}</h2>` : '') + content };
+
       const newSection = {
         id: genId(),
         elType: 'section',
-        settings: { layout: 'boxed' },
+        settings: sectionSettings,
         elements: [{
           id: genId(),
           elType: 'column',
-          settings: { _column_size: 100, _inline_size: null },
+          settings: columnSettings,
           elements: [{
             id: genId(),
             elType: 'widget',
             widgetType: 'text-editor',
-            settings: {
-              editor: (heading ? `<h2>${heading}</h2>` : '') + content
-            },
+            settings: widgetSettings,
             elements: []
           }]
         }]
       };
 
-      // Find insert position — before footer sections or at the end
-      // Heuristic: last 1-2 sections are usually CTA/footer — insert before them
+      // Insert before last 2 sections (usually CTA/footer)
       const insertIdx = Math.max(0, elementorData.length - 2);
       elementorData.splice(insertIdx, 0, newSection);
     }
