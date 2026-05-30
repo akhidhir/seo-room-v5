@@ -19282,7 +19282,7 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       const widgetSettings = templateWidget ? { ...templateWidget.settings, _element_id: undefined, editor: (heading ? `<h2>${heading}</h2>` : '') + content } : { editor: (heading ? `<h2>${heading}</h2>` : '') + content };
 
       // Detect FAQ sections — use Elementor accordion widget with +/- toggles
-      const isFaq = /faq/i.test(ns.type || '') || /faq/i.test(heading || '') || /\?<\//i.test(content);
+      const isFaq = false; // TEMPORARILY DISABLED — testing delivery mechanism without FAQ modification
       let widgetEl;
 
       if (isFaq) {
