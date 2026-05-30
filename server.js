@@ -3010,7 +3010,7 @@ app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
 // GET /api/plugin/update-check — plugin checks for updates (no auth needed)
 app.get('/api/plugin/update-check', (req, res) => {
   res.json({
-    version: '8.4.0',
+    version: '8.4.1',
     download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
     requires: '5.8',
     tested: '6.7',
@@ -3029,7 +3029,7 @@ app.get('/api/plugin/download', async (req, res) => {
       return res.status(404).json({ error: 'Plugin zip not found. Upload seoroom-latest.zip to the server root.' });
     }
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.4.0.zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.4.1.zip');
     fs.createReadStream(zipPath).pipe(res);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -19264,40 +19264,36 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       elementorData.splice(insertIdx, 0, newSection);
     }
 
-    // 6. Save as autosave (revision) — does NOT publish
-    const autosaveResp = await fetch(`${wpBase}/wp-json/wp/v2/${wpType}/${pageId}/autosaves`, {
+    // 6. Send modified _elementor_data to plugin's preview endpoint
+    //    Plugin stores it in a transient and returns a preview URL with token
+    //    When the page loads with that token, plugin swaps _elementor_data via filter
+    const previewResp = await fetch(`${wpBase}/wp-json/seoroom-opt/v1/elementor-preview/${pageId}`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
-        meta: {
-          _elementor_data: JSON.stringify(elementorData)
-        },
-        // Keep existing title/content unchanged
-        title: pageData.title?.raw || pageData.title?.rendered || '',
-        content: pageData.content?.raw || pageData.content?.rendered || ''
+        elementor_data: JSON.stringify(elementorData)
       }),
       signal: AbortSignal.timeout(15000)
     });
 
-    if (!autosaveResp.ok) {
-      const errText = await autosaveResp.text();
-      console.error('[elementor-preview] Autosave failed:', autosaveResp.status, errText.substring(0, 300));
-      return res.status(400).json({ error: `Autosave failed: HTTP ${autosaveResp.status}` });
+    if (!previewResp.ok) {
+      const errText = await previewResp.text();
+      console.error('[elementor-preview] Plugin preview failed:', previewResp.status, errText.substring(0, 300));
+      // Fallback: try autosave approach
+      return res.status(400).json({ error: `Plugin preview endpoint failed: HTTP ${previewResp.status}. Make sure SEO Room plugin v8.4.0+ is installed.` });
     }
-    const autosave = await autosaveResp.json();
+    const previewData = await previewResp.json();
 
-    // 7. Build preview URL
-    const previewUrl = `${wpBase}/?p=${pageId}&preview=true&preview_nonce=${autosave.id || ''}`;
-    // Alternative: use the page's actual URL with preview params
-    const pageUrl = pageData.link || `${wpBase}/?p=${pageId}`;
-    const previewUrlClean = pageUrl + (pageUrl.includes('?') ? '&' : '?') + 'preview=true';
+    if (!previewData.ok || !previewData.preview_url) {
+      return res.status(400).json({ error: previewData.message || 'Plugin returned no preview URL' });
+    }
 
-    console.log(`[elementor-preview] Created autosave ${autosave.id} for page ${pageId}, ${newSections.length} new + ${updatedSections.length} updated sections`);
+    console.log(`[elementor-preview] Preview created: token=${previewData.token}, ${newSections.length} new + ${updatedSections.length} updated sections`);
 
     res.json({
       ok: true,
-      preview_url: previewUrlClean,
-      autosave_id: autosave.id,
+      preview_url: previewData.preview_url,
+      token: previewData.token,
       page_id: pageId,
       new_sections: newSections.length,
       updated_sections: updatedSections.length

@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.0
+ * Version: 8.4.1
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.0');
+define('SEOROOM_VERSION', '8.4.1');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -794,6 +794,94 @@ add_action('init', function() {
         }
     }
 }, 20);
+
+// ================================================================
+// ELEMENTOR DESIGN-SAFE PREVIEW
+// Accepts modified _elementor_data, stores in transient, serves via
+// filter on get_post_metadata so Elementor renders the modified version.
+// ================================================================
+
+// REST endpoint: receive modified elementor data and create preview token
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom-opt/v1', '/elementor-preview/(?P<page_id>\d+)', [
+        'methods' => 'POST',
+        'callback' => 'sropt_elementor_preview_create',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+        'args' => [
+            'page_id' => ['type' => 'integer', 'required' => true],
+            'elementor_data' => ['type' => 'string', 'required' => true],
+        ]
+    ]);
+});
+
+function sropt_elementor_preview_create($request) {
+    $page_id = $request->get_param('page_id');
+    $elementor_data = $request->get_param('elementor_data');
+
+    if (!$page_id || !$elementor_data) {
+        return new WP_Error('missing_data', 'page_id and elementor_data required', ['status' => 400]);
+    }
+
+    // Verify page exists
+    $page = get_post($page_id);
+    if (!$page) return new WP_Error('not_found', 'Page not found', ['status' => 404]);
+
+    // Generate unique preview token
+    $token = wp_generate_password(32, false);
+
+    // Store modified data in transient (expires in 10 minutes)
+    set_transient('seoroom_preview_' . $token, [
+        'page_id' => $page_id,
+        'elementor_data' => $elementor_data,
+        'created' => time(),
+    ], 600);
+
+    // Build preview URL
+    $page_url = get_permalink($page_id);
+    $preview_url = add_query_arg('seoroom_preview', $token, $page_url);
+
+    return rest_ensure_response([
+        'ok' => true,
+        'preview_url' => $preview_url,
+        'token' => $token,
+        'expires_in' => 600,
+    ]);
+}
+
+// Filter: when page loads with seoroom_preview token, swap _elementor_data
+add_filter('get_post_metadata', 'sropt_elementor_preview_filter', 1, 4);
+function sropt_elementor_preview_filter($value, $post_id, $meta_key, $single) {
+    if ($meta_key !== '_elementor_data') return $value;
+    if (empty($_GET['seoroom_preview'])) return $value;
+
+    $token = sanitize_text_field($_GET['seoroom_preview']);
+    $preview = get_transient('seoroom_preview_' . $token);
+
+    if (!$preview || $preview['page_id'] != $post_id) return $value;
+
+    // Return the modified elementor data instead of the real one
+    if ($single) return $preview['elementor_data'];
+    return [$preview['elementor_data']];
+}
+
+// Add preview bar to the page when in preview mode
+add_action('wp_footer', 'sropt_elementor_preview_bar');
+function sropt_elementor_preview_bar() {
+    if (empty($_GET['seoroom_preview'])) return;
+    $token = sanitize_text_field($_GET['seoroom_preview']);
+    $preview = get_transient('seoroom_preview_' . $token);
+    if (!$preview) return;
+
+    $original_url = get_permalink($preview['page_id']);
+    ?>
+    <div style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        <strong style="font-size:15px;">SEO Room Preview</strong>
+        <span style="background:rgba(255,255,255,0.2);padding:3px 10px;border-radius:5px;font-size:12px;">Design-Safe Mode</span>
+        <span style="opacity:0.9;">Content changes are temporary — not published</span>
+        <a href="<?php echo esc_url($original_url); ?>" style="margin-left:auto;color:#e0e7ff;text-decoration:underline;font-size:13px;">View original &rarr;</a>
+    </div>
+    <?php
+}
 
 // Output JSON-LD in <head>
 add_action('wp_head', 'sropt_output_schema', 5);
