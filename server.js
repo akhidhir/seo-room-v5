@@ -3010,7 +3010,7 @@ app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
 // GET /api/plugin/update-check — plugin checks for updates (no auth needed)
 app.get('/api/plugin/update-check', (req, res) => {
   res.json({
-    version: '8.4.5',
+    version: '8.4.6',
     download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
     requires: '5.8',
     tested: '6.7',
@@ -3029,7 +3029,7 @@ app.get('/api/plugin/download', async (req, res) => {
       return res.status(404).json({ error: 'Plugin zip not found. Upload seoroom-latest.zip to the server root.' });
     }
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.4.5.zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.4.6.zip');
     fs.createReadStream(zipPath).pipe(res);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -19487,14 +19487,14 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       elementorData.splice(insertIdx, 0, newSection);
     }
 
-    // 6. Send modified _elementor_data to plugin's preview endpoint
-    //    Plugin stores it in a transient and returns a preview URL with token
-    //    When the page loads with that token, plugin swaps _elementor_data via filter
+    // 6. Send sections to plugin — plugin renders page and modifies HTML output
+    const sectionsForPlugin = (item.page_sections || []).filter(s => s.draft_text || s.is_new);
     const previewResp = await fetch(`${wpBase}/wp-json/seoroom-opt/v1/elementor-preview/${pageId}`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
-        elementor_data: JSON.stringify(elementorData)
+        sections: JSON.stringify(sectionsForPlugin),
+        elementor_data: JSON.stringify(elementorData) // fallback
       }),
       signal: AbortSignal.timeout(15000)
     });

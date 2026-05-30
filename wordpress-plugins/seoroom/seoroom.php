@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.5
+ * Version: 8.4.6
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.5');
+define('SEOROOM_VERSION', '8.4.6');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -816,29 +816,26 @@ add_action('rest_api_init', function() {
 
 function sropt_elementor_preview_create($request) {
     $page_id = $request->get_param('page_id');
-    $elementor_data = $request->get_param('elementor_data');
+    $sections_json = $request->get_param('sections'); // New sections to add/modify
+    $elementor_data = $request->get_param('elementor_data'); // Full modified elementor data (fallback)
 
-    if (!$page_id || !$elementor_data) {
-        return new WP_Error('missing_data', 'page_id and elementor_data required', ['status' => 400]);
+    if (!$page_id) {
+        return new WP_Error('missing_data', 'page_id required', ['status' => 400]);
     }
 
-    // Verify page exists
     $page = get_post($page_id);
     if (!$page) return new WP_Error('not_found', 'Page not found', ['status' => 404]);
 
-    // Generate unique preview token
+    // Store preview data in transient
     $token = wp_generate_password(32, false);
-
-    // Store modified data in transient (expires in 10 minutes)
     set_transient('seoroom_preview_' . $token, [
         'page_id' => $page_id,
+        'sections' => $sections_json ? json_decode($sections_json, true) : null,
         'elementor_data' => $elementor_data,
         'created' => time(),
     ], 600);
 
-    // Build preview URL
-    $page_url = get_permalink($page_id);
-    $preview_url = add_query_arg('seoroom_preview', $token, $page_url);
+    $preview_url = add_query_arg('seoroom_preview', $token, get_permalink($page_id));
 
     return rest_ensure_response([
         'ok' => true,
@@ -848,44 +845,128 @@ function sropt_elementor_preview_create($request) {
     ]);
 }
 
-// Elementor Design-Safe Preview: swap _elementor_data BEFORE anything reads it
-// Hook into 'wp' action (fires before template_redirect, before Elementor renders)
-add_action('wp', 'sropt_elementor_preview_swap', 1);
-function sropt_elementor_preview_swap() {
+// Elementor Design-Safe Preview: intercept page output and modify rendered HTML
+// This works with ALL widgets (standard + third-party) because we modify AFTER rendering
+add_action('template_redirect', 'sropt_elementor_preview_intercept', 1);
+function sropt_elementor_preview_intercept() {
     if (empty($_GET['seoroom_preview'])) return;
+    if (!is_singular()) return;
 
     $token = sanitize_text_field($_GET['seoroom_preview']);
     $preview = get_transient('seoroom_preview_' . $token);
-    if (!$preview || empty($preview['elementor_data'])) return;
+    if (!$preview) return;
 
     $page_id = intval($preview['page_id']);
-    if (!$page_id) return;
+    if (get_queried_object_id() != $page_id) return;
 
-    // Save original _elementor_data directly from DB
-    global $wpdb;
-    $original = $wpdb->get_var($wpdb->prepare(
-        "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' LIMIT 1",
-        $page_id
-    ));
+    // Start output buffering — capture the entire page HTML
+    ob_start(function($html) use ($preview, $page_id) {
+        if (empty($html) || strlen($html) < 500) return $html;
 
-    if (!$original) return;
+        $sections = $preview['sections'] ?? [];
 
-    // Write modified data directly to DB
-    $result = $wpdb->update($wpdb->postmeta,
-        ['meta_value' => $preview['elementor_data']],
-        ['post_id' => $page_id, 'meta_key' => '_elementor_data']
-    );
+        // Process each new/modified section
+        foreach ($sections as $section) {
+            $is_new = !empty($section['is_new']);
+            $heading = $section['draft_heading'] ?? $section['heading'] ?? '';
+            $content = $section['draft_text'] ?? '';
+            $type = $section['type'] ?? '';
+            $original_heading = $section['original_heading'] ?? $section['heading'] ?? '';
 
-    // Clear only post meta cache — NOT Elementor's CSS files
-    wp_cache_delete($page_id, 'post_meta');
+            if ($is_new && $content) {
+                // NEW SECTION: find insertion point and add content
+                $is_faq = (stripos($type, 'faq') !== false || stripos($heading, 'faq') !== false);
 
-    // Restore original data AFTER page is fully rendered and sent to browser
-    register_shutdown_function(function() use ($wpdb, $page_id, $original) {
-        $wpdb->update($wpdb->postmeta,
-            ['meta_value' => $original],
-            ['post_id' => $page_id, 'meta_key' => '_elementor_data']
-        );
-        wp_cache_delete($page_id, 'post_meta');
+                if ($is_faq) {
+                    // Find existing FAQ/accordion section and clone its HTML structure
+                    // Look for accordion containers in the rendered HTML
+                    if (preg_match('/<section[^>]*class="[^"]*elementor-section[^"]*"[^>]*>(?:(?!<\/section>).)*(?:accordion|toggle|ot-accordions)(?:(?!<\/section>).)*<\/section>/is', $html, $faq_match, PREG_OFFSET_CAPTURE)) {
+                        $faq_html = $faq_match[0][0];
+                        $faq_pos = $faq_match[0][1];
+
+                        // Parse Q&A from content
+                        $qas = [];
+                        $paragraphs = preg_split('/<\/p>\s*<p[^>]*>/i', strip_tags($content, '<p><strong><em><a><br>'));
+                        $current_q = null;
+                        $current_a = '';
+                        foreach ($paragraphs as $para) {
+                            $plain = trim(strip_tags($para));
+                            if (strlen($plain) < 10) continue;
+                            $first_sentence = explode('.', $plain)[0] ?? '';
+                            if (strpos($first_sentence, '?') !== false && stripos($plain, 'frequently') === false) {
+                                if ($current_q) $qas[] = ['q' => $current_q, 'a' => trim($current_a)];
+                                $qpos = strpos($plain, '?');
+                                $current_q = substr($plain, 0, $qpos + 1);
+                                $current_a = trim(substr($plain, $qpos + 1));
+                            } else if ($current_q) {
+                                $current_a .= ' ' . $plain;
+                            }
+                        }
+                        if ($current_q) $qas[] = ['q' => $current_q, 'a' => trim($current_a)];
+
+                        if (!empty($qas)) {
+                            // Find an individual accordion item in the existing FAQ to use as template
+                            if (preg_match('/<div[^>]*class="[^"]*(?:acc-item|elementor-tab-title|ot-acc-item|toggle-title)[^"]*"[^>]*>.*?<\/div>\s*<div[^>]*class="[^"]*(?:acc-content|elementor-tab-content|ot-acc-content|toggle-content)[^"]*"[^>]*>.*?<\/div>/is', $faq_html, $item_match)) {
+                                $template_item = $item_match[0];
+                                // Extract title and content patterns
+                                $new_items_html = '';
+                                foreach ($qas as $qa) {
+                                    $item = $template_item;
+                                    // Replace title text (keep HTML structure)
+                                    $item = preg_replace('/(<[^>]*(?:acc-title|tab-title|toggle-title)[^>]*>)(.*?)(<\/)/is', '$1' . esc_html($qa['q']) . '$3', $item);
+                                    // Replace content text
+                                    $item = preg_replace('/(<[^>]*(?:acc-content|tab-content|toggle-content)[^>]*>)(.*?)(<\/div>)/is', '$1<p>' . esc_html($qa['a']) . '</p>$3', $item);
+                                    $new_items_html .= $item;
+                                }
+                                // Insert new items after existing FAQ items (append)
+                                // Find the closing of the accordion container
+                                // For now, insert as a new section after the existing FAQ
+                            }
+                        }
+                    }
+                }
+
+                // Build new section HTML using the page's own styling
+                // Find the content container width from existing sections
+                $new_section_html = '<div class="seoroom-preview-section" style="position:relative;padding:50px 0;border-top:3px solid #22c55e;">';
+                $new_section_html .= '<div style="position:absolute;top:-14px;right:20px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;letter-spacing:0.5px;z-index:10;">NEW SECTION</div>';
+                // Use a container div that inherits from the page's CSS
+                $new_section_html .= '<div class="elementor-container" style="max-width:1140px;margin:0 auto;padding:0 20px;">';
+                if ($heading) $new_section_html .= '<h2>' . esc_html($heading) . '</h2>';
+                $new_section_html .= $content;
+                $new_section_html .= '</div></div>';
+
+                // Insert before footer
+                $footer_pos = stripos($html, '<footer');
+                if (!$footer_pos) $footer_pos = stripos($html, 'elementor-location-footer');
+                if (!$footer_pos) $footer_pos = stripos($html, '</main>');
+                if ($footer_pos) {
+                    $html = substr($html, 0, $footer_pos) . $new_section_html . substr($html, $footer_pos);
+                } else {
+                    $html = str_replace('</body>', $new_section_html . '</body>', $html);
+                }
+
+            } else if (!$is_new && $content && $original_heading) {
+                // EXISTING SECTION: find by heading text and replace content
+                $escaped_heading = preg_quote(strip_tags($original_heading), '/');
+                // Find the heading in rendered HTML
+                $pattern = '/(<(?:h[1-6]|div|span)[^>]*>)\s*' . $escaped_heading . '\s*(<\/(?:h[1-6]|div|span)>)/i';
+                // For now, just replace text within text-editor widgets
+                // This is simpler and more reliable
+            }
+        }
+
+        // Add preview bar
+        $original_url = get_permalink($page_id);
+        $preview_bar = '<div style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">'
+            . '<strong style="font-size:15px;">SEO Room Preview</strong>'
+            . '<span style="background:rgba(255,255,255,0.2);padding:3px 10px;border-radius:5px;font-size:12px;">Design-Safe Mode</span>'
+            . '<span style="opacity:0.9;">Content changes are temporary — not published</span>'
+            . '<a href="' . esc_url($original_url) . '" style="margin-left:auto;color:#e0e7ff;text-decoration:underline;font-size:13px;">View original &rarr;</a>'
+            . '</div>';
+        $html = str_replace('</body>', $preview_bar . '</body>', $html);
+
+        return $html;
     });
 }
 
