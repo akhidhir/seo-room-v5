@@ -19143,15 +19143,56 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
     if (!pageResp.ok) return res.status(400).json({ error: `Failed to fetch page: HTTP ${pageResp.status}` });
     const pageData = await pageResp.json();
 
-    // 2. Parse _elementor_data
+    // 2. Parse _elementor_data — try multiple approaches
     let elementorData = null;
+
+    // Approach A: standard WP REST meta (works if meta is registered for REST)
     try {
       const raw = pageData.meta?._elementor_data || '';
-      elementorData = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    } catch { elementorData = null; }
-    if (!elementorData || !Array.isArray(elementorData)) {
-      return res.status(400).json({ error: 'Page does not use Elementor or _elementor_data is empty' });
+      if (raw) elementorData = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {}
+
+    // Approach B: Elementor's own REST API
+    if (!elementorData || !Array.isArray(elementorData) || elementorData.length === 0) {
+      try {
+        const elResp = await fetch(`${wpBase}/wp-json/elementor/v1/document/${pageId}`, {
+          headers: { ...authHeaders, 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (elResp.ok) {
+          const elData = await elResp.json();
+          if (elData.elements && Array.isArray(elData.elements)) {
+            elementorData = elData.elements;
+            console.log(`[elementor-preview] Got data from Elementor API: ${elementorData.length} sections`);
+          }
+        } else {
+          console.log(`[elementor-preview] Elementor API: HTTP ${elResp.status}`);
+        }
+      } catch (e) { console.log('[elementor-preview] Elementor API failed:', e.message); }
     }
+
+    // Approach C: raw postmeta endpoint (some WP setups expose this)
+    if (!elementorData || !Array.isArray(elementorData) || elementorData.length === 0) {
+      try {
+        const metaResp = await fetch(`${wpBase}/wp-json/wp/v2/${wpType}/${pageId}?_fields=meta&context=edit`, {
+          headers: { ...authHeaders, 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (metaResp.ok) {
+          const metaData = await metaResp.json();
+          const raw = metaData.meta?._elementor_data || metaData.meta?.['_elementor_data'] || '';
+          if (raw) {
+            elementorData = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            console.log(`[elementor-preview] Got data from meta endpoint: ${elementorData?.length} sections`);
+          }
+        }
+      } catch {}
+    }
+
+    if (!elementorData || !Array.isArray(elementorData) || elementorData.length === 0) {
+      return res.status(400).json({ error: 'Cannot read _elementor_data. The SEO Room Schema plugin may need to register this meta field for REST API access. Add this to the plugin: register_post_meta("page", "_elementor_data", ["show_in_rest" => true, "single" => true, "type" => "string"])' });
+    }
+    console.log(`[elementor-preview] Loaded ${elementorData.length} Elementor sections`);
 
     // 3. Build new Elementor sections from draft content
     const sections = item.page_sections || [];
