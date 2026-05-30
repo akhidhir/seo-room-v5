@@ -19438,7 +19438,9 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
                     const tmpl = wSettings[key][0];
                     const tKey = Object.keys(tmpl).find(k => /title|question|heading/i.test(k) && typeof tmpl[k] === 'string') || 'tab_title';
                     const cKey = Object.keys(tmpl).find(k => /content|answer|body|desc/i.test(k) && typeof tmpl[k] === 'string') || 'tab_content';
-                    wSettings[key] = widgetTabs.map(t => ({ ...tmpl, _id: genId(), [tKey]: t.tab_title, [cKey]: t.tab_content }));
+                    // APPEND new items to existing list (don't replace — keeps widget structure intact)
+                    const newItems = widgetTabs.map(t => ({ ...tmpl, _id: genId(), [tKey]: t.tab_title, [cKey]: t.tab_content }));
+                    wSettings[key] = [...wSettings[key], ...newItems];
                     break;
                   }
                 }
