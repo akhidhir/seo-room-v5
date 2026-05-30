@@ -19192,7 +19192,11 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
     if (!elementorData || !Array.isArray(elementorData) || elementorData.length === 0) {
       return res.status(400).json({ error: 'Cannot read _elementor_data. The SEO Room Schema plugin may need to register this meta field for REST API access. Add this to the plugin: register_post_meta("page", "_elementor_data", ["show_in_rest" => true, "single" => true, "type" => "string"])' });
     }
-    console.log(`[elementor-preview] Loaded ${elementorData.length} Elementor sections`);
+    // Log all widget types on the page to understand the structure
+    const allWidgetTypes = new Set();
+    const scanWidgets = (els) => { for (const el of (els || [])) { if (el.widgetType) allWidgetTypes.add(el.widgetType); if (el.elements) scanWidgets(el.elements); } };
+    scanWidgets(elementorData);
+    console.log(`[elementor-preview] Loaded ${elementorData.length} Elementor sections, widget types: ${[...allWidgetTypes].join(', ')}`);
 
     // 3. Build new Elementor sections from draft content
     const sections = item.page_sections || [];
@@ -19282,6 +19286,29 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       let widgetEl;
 
       if (isFaq) {
+        // First, try to find and clone the existing FAQ section from the page
+        let existingFaqSection = null;
+        const findFaqSection = (els) => {
+          for (const el of (els || [])) {
+            if (el.widgetType === 'toggle' || el.widgetType === 'accordion') {
+              // Found an existing toggle/accordion — find its parent section
+              return el;
+            }
+            if (el.widgetType === 'shortcode' && (el.settings?.shortcode || '').includes('faq')) return el;
+            if (el.elements) { const found = findFaqSection(el.elements); if (found) return found; }
+          }
+          return null;
+        };
+        const existingFaqWidget = findFaqSection(elementorData);
+        // Find the top-level section containing this FAQ widget
+        if (existingFaqWidget) {
+          for (const section of elementorData) {
+            const hasWidget = JSON.stringify(section).includes(existingFaqWidget.id);
+            if (hasWidget) { existingFaqSection = section; break; }
+          }
+          console.log(`[elementor-preview] Found existing FAQ widget type: ${existingFaqWidget.widgetType}, section: ${!!existingFaqSection}`);
+        }
+
         const tabs = [];
         const faqHtml = content;
 
@@ -19320,21 +19347,59 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
         }
 
         if (tabs.length > 0) {
-          widgetEl = {
-            id: genId(),
-            elType: 'widget',
-            widgetType: 'accordion',
-            settings: {
-              tabs,
-              icon: { value: 'fas fa-plus', library: 'fa-solid' },
-              icon_active: { value: 'fas fa-minus', library: 'fa-solid' },
-              title_html_tag: 'h3',
-              selected_icon: { value: 'fas fa-plus', library: 'fa-solid' },
-              selected_active_icon: { value: 'fas fa-minus', library: 'fa-solid' },
-            },
-            elements: []
-          };
-          console.log(`[elementor-preview] Created FAQ accordion with ${tabs.length} items`);
+          if (existingFaqWidget) {
+            // Clone the existing FAQ widget structure — exact same styling/type
+            widgetEl = JSON.parse(JSON.stringify(existingFaqWidget));
+            widgetEl.id = genId();
+            // Replace tabs with our new content
+            if (widgetEl.settings) widgetEl.settings.tabs = tabs;
+            console.log(`[elementor-preview] Cloned existing FAQ widget (${existingFaqWidget.widgetType}) with ${tabs.length} new items`);
+          } else {
+            // Fallback: create standard toggle widget (more common on Elementor sites than accordion)
+            widgetEl = {
+              id: genId(),
+              elType: 'widget',
+              widgetType: 'toggle',
+              settings: {
+                tabs,
+                border_color: '#22b8cf',
+                title_color: '#22b8cf',
+                icon: { value: 'fas fa-chevron-down', library: 'fa-solid' },
+                icon_active: { value: 'fas fa-chevron-up', library: 'fa-solid' },
+                selected_icon: { value: 'fas fa-chevron-down', library: 'fa-solid' },
+                selected_active_icon: { value: 'fas fa-chevron-up', library: 'fa-solid' },
+                title_html_tag: 'h3',
+              },
+              elements: []
+            };
+            console.log(`[elementor-preview] Created toggle widget with ${tabs.length} items (no existing FAQ to clone)`);
+          }
+
+          // If we found an existing FAQ section, clone its full structure (heading + layout)
+          if (existingFaqSection) {
+            const clonedSection = JSON.parse(JSON.stringify(existingFaqSection));
+            // Replace IDs throughout
+            const replaceIds = (el) => { el.id = genId(); if (el.elements) el.elements.forEach(replaceIds); };
+            replaceIds(clonedSection);
+            // Find the toggle/accordion widget inside and replace it
+            const replaceWidget = (els) => {
+              for (let i = 0; i < els.length; i++) {
+                if (els[i].widgetType === 'toggle' || els[i].widgetType === 'accordion') {
+                  els[i] = widgetEl;
+                  return true;
+                }
+                if (els[i].elements && replaceWidget(els[i].elements)) return true;
+              }
+              return false;
+            };
+            if (replaceWidget(clonedSection.elements || [])) {
+              // Use the full cloned section instead of building a new one
+              const insertIdx = Math.max(0, elementorData.length - 2);
+              elementorData.splice(insertIdx, 0, clonedSection);
+              console.log(`[elementor-preview] Inserted cloned FAQ section with full layout`);
+              continue; // Skip the normal section builder below
+            }
+          }
         }
       }
 
