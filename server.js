@@ -19277,6 +19277,56 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
       const columnSettings = templateColumn ? { ...templateColumn.settings, _element_id: undefined, _column_size: 100, _inline_size: null } : { _column_size: 100 };
       const widgetSettings = templateWidget ? { ...templateWidget.settings, _element_id: undefined, editor: (heading ? `<h2>${heading}</h2>` : '') + content } : { editor: (heading ? `<h2>${heading}</h2>` : '') + content };
 
+      // Detect FAQ sections — use Elementor accordion widget with +/- toggles
+      const isFaq = /faq/i.test(ns.type || '') || /faq/i.test(heading || '') || /\?<\//i.test(content);
+      let widgetEl;
+
+      if (isFaq) {
+        // Parse Q&A pairs from content — look for <h3>Question?</h3><p>Answer</p> or <strong>Q</strong><p>A</p>
+        const tabs = [];
+        const faqHtml = (heading ? `<h2>${heading}</h2>` : '') + content;
+        const qaPairs = faqHtml.match(/<(?:h[2-4]|strong)[^>]*>(.*?)<\/(?:h[2-4]|strong)>\s*([\s\S]*?)(?=<(?:h[2-4]|strong)|$)/gi) || [];
+
+        if (qaPairs.length > 0) {
+          for (const pair of qaPairs) {
+            const qMatch = pair.match(/<(?:h[2-4]|strong)[^>]*>(.*?)<\/(?:h[2-4]|strong)>/i);
+            const aMatch = pair.replace(/<(?:h[2-4]|strong)[^>]*>.*?<\/(?:h[2-4]|strong)>/i, '').trim();
+            if (qMatch && qMatch[1] && !qMatch[1].toLowerCase().includes('faq')) {
+              tabs.push({ _id: genId(), tab_title: qMatch[1].replace(/<[^>]+>/g, ''), tab_content: aMatch || '' });
+            }
+          }
+        }
+
+        if (tabs.length > 0) {
+          widgetEl = {
+            id: genId(),
+            elType: 'widget',
+            widgetType: 'accordion',
+            settings: {
+              tabs,
+              icon: { value: 'fas fa-plus', library: 'fa-solid' },
+              icon_active: { value: 'fas fa-minus', library: 'fa-solid' },
+              title_html_tag: 'h3',
+              selected_icon: { value: 'fas fa-plus', library: 'fa-solid' },
+              selected_active_icon: { value: 'fas fa-minus', library: 'fa-solid' },
+            },
+            elements: []
+          };
+          console.log(`[elementor-preview] Created FAQ accordion with ${tabs.length} items`);
+        }
+      }
+
+      // Default: text-editor widget
+      if (!widgetEl) {
+        widgetEl = {
+          id: genId(),
+          elType: 'widget',
+          widgetType: 'text-editor',
+          settings: widgetSettings,
+          elements: []
+        };
+      }
+
       const newSection = {
         id: genId(),
         elType: 'section',
@@ -19285,13 +19335,7 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
           id: genId(),
           elType: 'column',
           settings: columnSettings,
-          elements: [{
-            id: genId(),
-            elType: 'widget',
-            widgetType: 'text-editor',
-            settings: widgetSettings,
-            elements: []
-          }]
+          elements: [widgetEl]
         }]
       };
 
