@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.7.0
+ * Version: 8.7.1
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.7.0');
+define('SEOROOM_VERSION', '8.7.1');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -852,19 +852,32 @@ function sropt_elementor_preview_intercept() {
     if (empty($_GET['seoroom_preview'])) return;
     if (!is_singular()) return;
 
-    $token = sanitize_text_field($_GET['seoroom_preview']);
-    $preview = get_transient('seoroom_preview_' . $token);
-    if (!$preview) return;
+    $page_id = get_queried_object_id();
+    $sections = null;
+    $dashboard_url = '';
 
-    $page_id = intval($preview['page_id']);
-    if (get_queried_object_id() != $page_id) return;
+    // Method 1: POST data (browser sends sections directly — no server-to-WP needed)
+    if ($_GET['seoroom_preview'] === 'post' && !empty($_POST['seoroom_sections'])) {
+        $sections = json_decode(wp_unslash($_POST['seoroom_sections']), true);
+        $dashboard_url = sanitize_url($_POST['seoroom_dashboard'] ?? '');
+    }
+    // Method 2: Transient token (server created it via REST API)
+    else {
+        $token = sanitize_text_field($_GET['seoroom_preview']);
+        $preview = get_transient('seoroom_preview_' . $token);
+        if (!$preview) return;
+        if (intval($preview['page_id']) !== $page_id) return;
+        $sections = $preview['sections'] ?? [];
+        $dashboard_url = rtrim((sropt_get_options())['dashboard_url'] ?? '', '/');
+    }
+
+    if ($sections === null) return;
 
     // Start output buffering — inject section-preview.js for CLIENT-SIDE replacement
     // This gives us: perfect WordPress rendering + proven JS paragraph matching
-    ob_start(function($html) use ($preview, $page_id) {
+    ob_start(function($html) use ($sections, $dashboard_url, $page_id) {
         if (empty($html) || strlen($html) < 500) return $html;
 
-        $sections = $preview['sections'] ?? [];
         if (empty($sections)) {
             // No sections — just add preview bar
             $original_url = get_permalink($page_id);
@@ -881,11 +894,10 @@ function sropt_elementor_preview_intercept() {
         $sections_json = wp_json_encode($sections);
         $script = '<script id="seo-section-data" type="application/json">' . $sections_json . '</script>';
 
-        // Inline the section-preview script (same algorithm used by dashboard)
-        // Fetch from dashboard or use bundled version
-        $dashboard_url = rtrim((sropt_get_options())['dashboard_url'] ?? '', '/');
-        if ($dashboard_url) {
-            $script .= '<script src="' . esc_url($dashboard_url) . '/section-preview.js" defer></script>';
+        // Load section-preview.js from dashboard
+        $dash = $dashboard_url ?: rtrim((sropt_get_options())['dashboard_url'] ?? '', '/');
+        if ($dash) {
+            $script .= '<script src="' . esc_url($dash) . '/section-preview.js" defer></script>';
         }
 
         // Preview bar with match count

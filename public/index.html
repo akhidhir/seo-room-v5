@@ -21785,17 +21785,35 @@
       // Section-aware preview
       const handleSectionPreview = async () => {
         try { await handleSaveEdit(); } catch(e) { console.log('[preview] save failed, continuing:', e.message); }
-        // Use WordPress plugin preview (perfect rendering) + injected section-preview.js (client-side matching)
-        try {
-          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/elementor-preview', { method: 'POST' });
-          if (r && r.preview_url) {
-            window.open(r.preview_url, '_blank');
-            return;
-          }
-        } catch (e) { console.log('[preview] Plugin preview failed:', e.message); }
-        // Fallback to server-side HTML injection
-        const tkn = localStorage.getItem('token') || '';
-        window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/section-preview?token=' + encodeURIComponent(tkn), '_blank');
+        // Send section data directly to WordPress via POST form (bypasses server-to-WP blocking)
+        const pageUrl = selectedItem.page_url;
+        if (!pageUrl) { alert('No page URL set'); return; }
+        const sections = (selectedItem.page_sections || []).filter(s => s.draft_text || s.is_new);
+        if (sections.length === 0 && !editContent) { alert('No content to preview — write or import content first'); return; }
+        // If no sections but editContent exists, build sections from editContent
+        let previewSections = sections;
+        if (sections.length === 0 && editContent) {
+          previewSections = [{ heading: selectedItem.page_title, draft_text: editContent, original_text: selectedItem.current_content || '', type: 'text', is_new: false }];
+        }
+        // Open preview via POST form — plugin reads sections from POST data
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = pageUrl + (pageUrl.includes('?') ? '&' : '?') + 'seoroom_preview=post';
+        form.target = '_blank';
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'seoroom_sections';
+        input.value = JSON.stringify(previewSections);
+        form.appendChild(input);
+        // Add dashboard URL so plugin can load section-preview.js
+        const dashInput = document.createElement('input');
+        dashInput.type = 'hidden';
+        dashInput.name = 'seoroom_dashboard';
+        dashInput.value = window.location.origin;
+        form.appendChild(dashInput);
+        document.body.appendChild(form);
+        form.submit();
+        document.body.removeChild(form);
       };
 
       // ============ SUGGESTION SYSTEM HANDLERS ============
