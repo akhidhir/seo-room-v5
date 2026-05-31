@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.9
+ * Version: 8.5.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.9');
+define('SEOROOM_VERSION', '8.5.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1108,6 +1108,91 @@ function sropt_visual_editor_mode() {
                         }
                     });
                 });
+                // For FAQ sections — convert plain text Q&A into accordion
+                sections.forEach(function(section) {
+                    if (!section.draft_text) return;
+                    var isFaq = /faq/i.test(section.type || '') || /faq/i.test(section.heading || '') || /faq/i.test(section.draft_heading || '');
+                    if (!isFaq) return;
+                    // Find existing accordion on the page to copy its styles
+                    var existingAcc = document.querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
+                    if (!existingAcc) return;
+                    var accParent = existingAcc.closest('.elementor-section, section');
+                    if (!accParent) return;
+                    // Parse Q&A from draft text
+                    var plain = section.draft_text.replace(/<[^>]+>/g, '');
+                    var qas = [];
+                    var parts = plain.split(/(?=(?:How|What|Why|When|Where|Can|Do|Is|Should|Will|Are|Does|Has|Which|Who)\b)/);
+                    var currentQ = null, currentA = '';
+                    parts.forEach(function(part) {
+                        part = part.trim();
+                        if (!part) return;
+                        var qMark = part.indexOf('?');
+                        if (qMark > 5 && qMark < 150) {
+                            if (currentQ) qas.push({q: currentQ, a: currentA.trim()});
+                            currentQ = part.substring(0, qMark + 1);
+                            currentA = part.substring(qMark + 1).trim();
+                        } else if (currentQ) {
+                            currentA += ' ' + part;
+                        }
+                    });
+                    if (currentQ) qas.push({q: currentQ, a: currentA.trim()});
+                    if (qas.length === 0) return;
+                    // Find an existing accordion item to clone its HTML
+                    var existingItem = accParent.querySelector('[class*="acc-item"], .elementor-accordion-item, .elementor-toggle-item');
+                    if (existingItem) {
+                        // Clone the entire accordion section
+                        var clonedSection = accParent.cloneNode(true);
+                        // Find the accordion container inside
+                        var accContainer = clonedSection.querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
+                        if (accContainer) {
+                            // Get all items
+                            var items = accContainer.querySelectorAll('[class*="acc-item"], .elementor-accordion-item, .elementor-toggle-item');
+                            var templateItem = items[0];
+                            // Clear all items except template
+                            items.forEach(function(item, idx) { if (idx > 0) item.remove(); });
+                            // Clone template for each Q&A
+                            var half = Math.ceil(qas.length / 2);
+                            // Check if two-column layout
+                            var columns = clonedSection.querySelectorAll('.elementor-column');
+                            if (columns.length >= 2) {
+                                var leftAcc = columns[0].querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
+                                var rightAcc = columns[1].querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
+                                if (leftAcc && rightAcc) {
+                                    var leftTemplate = leftAcc.querySelector('[class*="acc-item"], .elementor-accordion-item');
+                                    var rightTemplate = rightAcc.querySelector('[class*="acc-item"], .elementor-accordion-item');
+                                    // Clear existing items
+                                    leftAcc.querySelectorAll('[class*="acc-item"], .elementor-accordion-item').forEach(function(el) { el.remove(); });
+                                    rightAcc.querySelectorAll('[class*="acc-item"], .elementor-accordion-item').forEach(function(el) { el.remove(); });
+                                    // Add Q&As split between columns
+                                    qas.forEach(function(qa, idx) {
+                                        var tmpl = idx < half ? leftTemplate : rightTemplate;
+                                        var target = idx < half ? leftAcc : rightAcc;
+                                        if (!tmpl) return;
+                                        var clone = tmpl.cloneNode(true);
+                                        // Replace title
+                                        var titleEl = clone.querySelector('[class*="acc_title"], .elementor-tab-title a, .elementor-toggle-title');
+                                        if (titleEl) titleEl.textContent = qa.q;
+                                        // Replace content
+                                        var contentEl = clone.querySelector('[class*="acc_content"], .elementor-tab-content, .elementor-toggle-content');
+                                        if (contentEl) contentEl.innerHTML = '<p>' + qa.a + '</p>';
+                                        target.appendChild(clone);
+                                    });
+                                    // Insert cloned section after original with green border
+                                    clonedSection.style.borderTop = '4px solid #22c55e';
+                                    clonedSection.style.position = 'relative';
+                                    var badge = document.createElement('div');
+                                    badge.style.cssText = 'position:absolute;top:8px;right:20px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;z-index:10;';
+                                    badge.textContent = 'NEW FAQ';
+                                    clonedSection.appendChild(badge);
+                                    accParent.parentNode.insertBefore(clonedSection, accParent.nextSibling);
+                                    applied++;
+                                    console.log('[SEO Room] FAQ accordion cloned with ' + qas.length + ' items');
+                                }
+                            }
+                        }
+                    }
+                });
+
                 // Notify parent
                 window.parent.postMessage({ type: 'seoroom-draft-applied', count: applied, total: sections.length }, '*');
                 var ind = document.querySelector('.seoroom-edit-indicator');
