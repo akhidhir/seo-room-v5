@@ -72,12 +72,18 @@
         var candidates = document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, span, div');
         var found = null;
 
+        // Helper: skip elements with display/heading font sizes (>20px) to avoid breaking hero/CTA areas
+        function isDisplayFont(el) {
+          try { var fs = parseFloat(window.getComputedStyle(el).fontSize); return fs > 20; } catch(e) { return false; }
+        }
+
         // Exact match on normalized text
         for(var i=0; i<candidates.length; i++){
           var el = candidates[i];
           if(replacedEls.has(el)) continue;
           if(el.closest(skipSelector)) continue;
           if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
+          if(isDisplayFont(el)) continue;
           var elNorm = norm(el.textContent);
           if(elNorm === orig.normText){ found = el; break; }
         }
@@ -91,6 +97,7 @@
               if(replacedEls.has(el)) continue;
               if(el.closest(skipSelector)) continue;
               if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
+              if(isDisplayFont(el)) continue;
               var elNorm = norm(el.textContent);
               if(elNorm.length >= 15 && elNorm.slice(0,50) === short){ found = el; break; }
             }
@@ -105,6 +112,7 @@
             if(replacedEls.has(el)) continue;
             if(el.closest(skipSelector)) continue;
             if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
+            if(isDisplayFont(el)) continue;
             var elNorm = norm(el.textContent);
             if(elNorm.length >= 20 && elNorm.indexOf(snippet) !== -1){ found = el; break; }
           }
@@ -166,11 +174,16 @@
       }
 
       if(sectionMatched > 0) matched++;
+      else if(section.draft_text && !section.is_new) {
+        // No paragraphs matched — promote to NEW section so it gets inserted on the page
+        section._unmatched = true;
+        console.log('[SEO Room] Section "'+section.type+'" ('+(section.heading||'no heading').slice(0,30)+'): UNMATCHED — will insert as new section');
+      }
       console.log('[SEO Room] Section "'+section.type+'" ('+(section.heading||'no heading').slice(0,30)+'): '+sectionMatched+'/'+origParas.length+' paragraphs matched');
     });
 
-    // Handle NEW sections
-    var newSections = sections.filter(function(s){ return s.is_new; });
+    // Handle NEW sections + unmatched sections (insert on page)
+    var newSections = sections.filter(function(s){ return s.is_new || s._unmatched; });
     if(newSections.length > 0){
       // Use Elementor's own class structure so the page's CSS styles everything automatically
       var isElementor = !!document.querySelector('.elementor');
