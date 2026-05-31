@@ -18373,6 +18373,162 @@ ${(section.draft_text || section.original_text || '').slice(0, 3000)}`;
   }
 });
 
+// Add a new section to the page
+app.post('/api/projects/:projectId/content-queue/:id/add-section', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { heading, type, position } = req.body; // type: 'text' or 'faq'
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const sections = item.page_sections || [];
+    const newSection = {
+      id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      heading: heading || (type === 'faq' ? 'Frequently Asked Questions' : 'New Section'),
+      type: type || 'text',
+      original_text: '',
+      draft_text: '',
+      word_count: 0,
+      draft_word_count: 0,
+      locked: false,
+      is_new: true
+    };
+
+    const idx = typeof position === 'number' ? Math.min(position, sections.length) : sections.length;
+    sections.splice(idx, 0, newSection);
+
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(sections), id]);
+    res.json({ section: newSection, page_sections: sections });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete a section
+app.post('/api/projects/:projectId/content-queue/:id/delete-section', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { section_id } = req.body;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    let sections = item.page_sections || [];
+    sections = sections.filter(s => s.id !== section_id);
+
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(sections), id]);
+    res.json({ page_sections: sections });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reorder sections
+app.post('/api/projects/:projectId/content-queue/:id/reorder-sections', async (req, res) => {
+  const { projectId, id } = req.params;
+  const { section_ids } = req.body;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+
+    const sections = item.page_sections || [];
+    const reordered = section_ids.map(sid => sections.find(s => s.id === sid)).filter(Boolean);
+    sections.forEach(s => { if (!section_ids.includes(s.id)) reordered.push(s); });
+
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(reordered), id]);
+    res.json({ page_sections: reordered });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Write content for a section from scratch (AI generates based on heading + context)
+app.post('/api/projects/:projectId/content-queue/:id/write-section', async (req, res) => {
+  req.setTimeout(60000);
+  res.setTimeout(60000);
+  const { projectId, id } = req.params;
+  const { section_id } = req.body;
+  try {
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+
+    const sections = item.page_sections || [];
+    const section = sections.find(s => s.id === section_id);
+    if (!section) return res.status(404).json({ error: 'Section not found' });
+
+    const focusKw = item.draft_focus_keyword || item.current_focus_keyword || '';
+    const targetKeywords = item.target_keywords || [];
+    const isFaq = section.type === 'faq';
+
+    // Build context from other sections
+    const otherSections = sections.filter(s => s.id !== section_id && (s.draft_text || s.original_text));
+    const pageContext = otherSections.map(s => `## ${s.heading}\n${(s.draft_text || s.original_text || '').replace(/<[^>]+>/g, '').slice(0, 200)}`).join('\n\n');
+
+    const systemPrompt = `You are an SEO copywriter for "${project.business_name || project.name}" (${project.domain || ''}) in ${project.location || 'Australia'}.
+${isFaq ? `Write FAQ content as a JSON array of Q&A pairs. Each question should be a genuine question a customer would ask.
+Return ONLY JSON: { "heading": "${section.heading}", "faq": [{"q": "question?", "a": "answer text"}], "word_count": N }
+Write 6-10 Q&A pairs. Answers should be 40-80 words each. Natural, conversational, Australian English.`
+: `Write a content section for the heading "${section.heading}".
+Return ONLY JSON: { "heading": "${section.heading}", "content_html": "<p>HTML content</p>", "word_count": N }
+Write 150-300 words. Use proper HTML (p, h3, ul/li, strong, em). Natural, conversational, Australian English.`}
+
+Include focus keyword "${focusKw}" naturally (1-2 times).
+${targetKeywords.length ? 'Also use these keywords where natural: ' + targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ') : ''}
+${HUMAN_WRITING_RULES}
+${buildCopywriterContext(project, item)}`;
+
+    const userPrompt = `Write content for this ${isFaq ? 'FAQ' : 'text'} section.
+
+Page title: "${item.page_title}"
+Page URL: ${item.page_url || 'N/A'}
+Section heading: "${section.heading}"
+Focus keyword: "${focusKw}"
+
+${pageContext ? 'Other sections on this page (for context, don\'t repeat their content):\n' + pageContext : ''}`;
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: userPrompt },
+        { role: 'assistant', content: '{' }
+      ]
+    });
+
+    let aiText = '{' + aiResp.content[0].text;
+    aiText = aiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+    let generated;
+    try {
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error('No JSON found');
+      generated = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      console.error('[write-section] Parse failed:', parseErr.message, aiText.slice(0, 500));
+      return res.status(500).json({ error: 'AI returned invalid response' });
+    }
+
+    if (isFaq && generated.faq && Array.isArray(generated.faq)) {
+      const faqHtml = generated.faq.map(qa =>
+        `<details><summary>${qa.q}</summary><p>${qa.a}</p></details>`
+      ).join('\n');
+      section.draft_text = faqHtml;
+      section.draft_word_count = generated.word_count || generated.faq.reduce((sum, qa) => sum + (qa.q + ' ' + qa.a).split(/\s+/).length, 0);
+    } else {
+      section.draft_text = generated.content_html || '';
+      section.draft_word_count = generated.word_count || section.draft_text.replace(/<[^>]+>/g, '').trim().split(/\s+/).length;
+    }
+    section.draft_heading = generated.heading || section.heading;
+
+    await pool.query('UPDATE content_queue SET page_sections=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(sections), id]);
+    console.log(`[write-section] Wrote ${isFaq ? 'FAQ' : 'text'} section "${section.heading}" for item ${id}: ${section.draft_word_count} words`);
+    res.json({ section, page_sections: sections });
+  } catch (e) {
+    console.error('[write-section] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Toggle section lock
 app.post('/api/projects/:projectId/content-queue/:id/toggle-section-lock', async (req, res) => {
   const { projectId, id } = req.params;

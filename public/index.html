@@ -21262,6 +21262,7 @@
       const [loadingSuggestions, setLoadingSuggestions] = useState(false);
       const [addingSection, setAddingSection] = useState(null); // section being added
       const [sectionView, setSectionView] = useState(false); // toggle section editor vs full editor
+      const [writingSection, setWritingSection] = useState(null); // section_id being written by AI
       const [visualEditor, setVisualEditor] = useState(false); // iframe-based visual editor
       const visualIframeRef = React.useRef(null);
 
@@ -22770,60 +22771,141 @@
               'Set a page URL first to analyse the live page structure'
             ),
 
-            // Sections list (when parsed) — hidden in highlighted view, shown only in section edit mode
-            false && sectionView && selectedItem.page_sections?.length > 0 && React.createElement('div', { style: { marginTop: 8 } },
-              selectedItem.page_sections.map((section, idx) => {
+            // Section Builder — each section is a card with Write button
+            sectionView && React.createElement('div', { style: { marginTop: 8 } },
+              (selectedItem.page_sections || []).map((section, idx) => {
                 const isExpanded = expandedSections && expandedSections[section.id];
+                const hasContent = !!(section.draft_text || section.original_text);
                 const hasChanges = !!(section.draft_text && section.original_text && section.draft_text !== section.original_text);
-                const displayHtml = hasChanges ? highlightDraftChanges(section.original_text, section.draft_text) : (section.draft_text || section.original_text || '');
-                return React.createElement('div', { key: section.id, style: { marginBottom: 10, borderRadius: 8, border: '1px solid ' + (section.is_new ? 'rgba(34,197,94,0.3)' : hasChanges ? 'rgba(245,158,11,0.4)' : section.draft_text ? 'rgba(99,102,241,0.2)' : 'var(--border)'), overflow: 'hidden' } },
-                  // Card header — clickable to toggle original
-                  React.createElement('div', { style: { display: 'flex', gap: 12, padding: '10px 12px', background: section.locked ? 'rgba(107,114,128,0.05)' : section.is_new ? 'rgba(34,197,94,0.08)' : hasChanges ? 'rgba(245,158,11,0.06)' : section.draft_text ? 'rgba(99,102,241,0.05)' : 'var(--bg)', alignItems: 'center' } },
-                    // Section number + type badge
-                    React.createElement('div', { style: { minWidth: 70, textAlign: 'center' } },
-                      React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#fff', background: section.locked ? '#6b7280' : section.is_new ? '#22c55e' : hasChanges ? '#f59e0b' : section.draft_text ? '#6366f1' : '#94a3b8', padding: '2px 6px', borderRadius: 4, marginBottom: 4 } }, section.type.toUpperCase()),
-                      React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)' } }, section.word_count + ' words')
-                    ),
-                    // Section heading
+                const isFaq = section.type === 'faq';
+                const isWriting = writingSection === section.id;
+                const contentHtml = section.draft_text || section.original_text || '';
+                const wordCount = contentHtml.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+
+                return React.createElement('div', { key: section.id, style: { marginBottom: 10, borderRadius: 8, border: '1px solid ' + (isFaq ? 'rgba(20,184,166,0.3)' : hasContent ? 'rgba(99,102,241,0.2)' : 'var(--border)'), overflow: 'hidden' } },
+                  // Card header
+                  React.createElement('div', { style: { display: 'flex', gap: 10, padding: '10px 12px', background: isFaq ? 'rgba(20,184,166,0.06)' : hasContent ? 'rgba(99,102,241,0.04)' : 'var(--bg)', alignItems: 'center' } },
+                    // Section number
+                    React.createElement('div', { style: { width: 24, height: 24, borderRadius: '50%', background: isFaq ? '#14b8a6' : hasContent ? '#6366f1' : '#4b5563', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', flexShrink: 0 } }, idx + 1),
+                    // Type badge
+                    React.createElement('div', { style: { fontSize: 9, fontWeight: 700, color: '#fff', background: isFaq ? '#14b8a6' : '#6366f1', padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5 } }, isFaq ? 'FAQ' : 'TEXT'),
+                    // Heading (editable)
                     React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-                      React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)' } },
-                        section.draft_heading || section.heading || '(No heading)',
-                        section.locked && React.createElement('span', { style: { marginLeft: 8, fontSize: 10, color: '#6b7280', fontWeight: 400 } }, '🔒 Locked'),
-                        section.is_new && React.createElement('span', { style: { marginLeft: 8, fontSize: 10, color: '#22c55e', fontWeight: 600 } }, '✨ NEW'),
-                        hasChanges && React.createElement('span', { style: { marginLeft: 8, fontSize: 9, fontWeight: 700, color: '#fff', background: '#f59e0b', padding: '1px 5px', borderRadius: 3, verticalAlign: 'middle' } }, 'UPDATED')
-                      )
+                      React.createElement('div', {
+                        contentEditable: true,
+                        suppressContentEditableWarning: true,
+                        onBlur: async (e) => {
+                          const newHeading = e.target.textContent.trim();
+                          if (newHeading && newHeading !== section.heading) {
+                            const secs = [...(selectedItem.page_sections || [])];
+                            const s = secs.find(s => s.id === section.id);
+                            if (s) { s.heading = newHeading; s.draft_heading = newHeading; }
+                            await api('/projects/' + pid + '/content-queue/' + selectedItem.id, { method: 'PATCH', body: { page_sections: secs } });
+                            setSelectedItem(prev => ({ ...prev, page_sections: secs }));
+                          }
+                        },
+                        style: { fontSize: 14, fontWeight: 600, color: 'var(--text)', outline: 'none', cursor: 'text' }
+                      }, section.draft_heading || section.heading || 'Click to set heading')
                     ),
-                    // Status + expand toggle for original
-                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                      section.draft_text ? React.createElement('i', { className: 'fas fa-check-circle', style: { color: '#22c55e', fontSize: 14 } })
-                        : section.locked ? React.createElement('i', { className: 'fas fa-lock', style: { color: '#6b7280', fontSize: 14 } })
-                        : React.createElement('i', { className: 'fas fa-minus-circle', style: { color: '#d1d5db', fontSize: 14 } }),
-                      hasChanges && React.createElement('button', { onClick: () => setExpandedSections(prev => ({ ...prev, [section.id]: !isExpanded })),
-                        style: { fontSize: 10, padding: '2px 8px', background: isExpanded ? '#ef4444' : 'transparent', color: isExpanded ? '#fff' : '#ef4444', border: '1px solid #ef4444', borderRadius: 4, cursor: 'pointer', fontWeight: 600 }
-                      }, isExpanded ? 'Hide Original' : 'Show Original')
-                    )
+                    // Word count
+                    hasContent && React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)' } }, wordCount + 'w'),
+                    // Write / Rewrite button
+                    React.createElement('button', {
+                      disabled: isWriting,
+                      onClick: async () => {
+                        setWritingSection(section.id);
+                        try {
+                          const endpoint = hasContent ? 'rewrite-section' : 'write-section';
+                          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/' + endpoint, {
+                            method: 'POST', body: { section_id: section.id }
+                          });
+                          if (r.page_sections) setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+                        } catch (e) { alert('Write failed: ' + e.message); }
+                        setWritingSection(null);
+                      },
+                      style: { fontSize: 11, padding: '4px 10px', background: hasContent ? 'transparent' : '#6366f1', color: hasContent ? '#6366f1' : '#fff', border: '1px solid #6366f1', borderRadius: 6, cursor: isWriting ? 'wait' : 'pointer', fontWeight: 600, opacity: isWriting ? 0.6 : 1, whiteSpace: 'nowrap' }
+                    }, React.createElement('i', { className: isWriting ? 'fas fa-spinner fa-spin' : hasContent ? 'fas fa-sync' : 'fas fa-pen', style: { marginRight: 4 } }), isWriting ? 'Writing...' : hasContent ? 'Rewrite' : 'Write'),
+                    // Expand/collapse
+                    hasContent && React.createElement('button', {
+                      onClick: () => setExpandedSections(prev => ({ ...prev, [section.id]: !isExpanded })),
+                      style: { fontSize: 11, padding: '4px 8px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }
+                    }, React.createElement('i', { className: isExpanded ? 'fas fa-chevron-up' : 'fas fa-chevron-down' })),
+                    // Delete button
+                    React.createElement('button', {
+                      onClick: async () => {
+                        if (!confirm('Delete this section?')) return;
+                        const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/delete-section', {
+                          method: 'POST', body: { section_id: section.id }
+                        });
+                        if (r.page_sections) setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+                      },
+                      style: { fontSize: 11, padding: '4px 6px', background: 'transparent', color: '#ef4444', border: 'none', cursor: 'pointer', opacity: 0.5 }
+                    }, React.createElement('i', { className: 'fas fa-trash' }))
                   ),
-                  // Draft content with orange highlights — ALWAYS visible
-                  !section.locked && section.draft_text && React.createElement('div', {
-                    style: { padding: '10px 14px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, borderTop: '1px solid var(--border)' },
-                    dangerouslySetInnerHTML: { __html: displayHtml }
+                  // Content preview (expanded)
+                  isExpanded && hasContent && React.createElement('div', {
+                    style: { padding: '12px 14px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, borderTop: '1px solid var(--border)', maxHeight: 400, overflow: 'auto' },
+                    dangerouslySetInnerHTML: { __html: contentHtml }
                   }),
-                  // Original content — only when expanded (toggled via "Show Original")
-                  isExpanded && hasChanges && React.createElement('div', { style: { padding: '10px 14px', borderTop: '1px dashed rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.04)' } },
-                    React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6, letterSpacing: 0.5 } }, 'Original Content'),
-                    React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', lineHeight: 1.6 }, dangerouslySetInnerHTML: { __html: section.original_text || '' } })
-                  ),
-                  // Changes summary
-                  section.changes_summary && React.createElement('div', { style: { padding: '6px 14px 10px', fontSize: 11, color: '#f59e0b', fontStyle: 'italic' } },
-                    React.createElement('i', { className: 'fas fa-info-circle', style: { marginRight: 4 } }), section.changes_summary
+                  // Empty state
+                  !hasContent && React.createElement('div', { style: { padding: '16px 14px', textAlign: 'center', color: 'var(--text3)', fontSize: 12, borderTop: '1px solid var(--border)' } },
+                    isFaq ? 'Click "Write" to generate FAQ questions & answers' : 'Click "Write" to generate content for this section'
                   )
                 );
-              })
+              }),
+
+              // Add Section buttons
+              React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' } },
+                React.createElement('button', {
+                  onClick: async () => {
+                    const heading = prompt('Section heading:');
+                    if (!heading) return;
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/add-section', {
+                      method: 'POST', body: { heading, type: 'text' }
+                    });
+                    if (r.page_sections) setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+                  },
+                  style: { fontSize: 12, padding: '8px 16px', background: 'transparent', color: '#6366f1', border: '1px dashed #6366f1', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }
+                }, React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 6 } }), 'Add Text Section'),
+                React.createElement('button', {
+                  onClick: async () => {
+                    const heading = prompt('FAQ section heading:', 'Frequently Asked Questions');
+                    if (!heading) return;
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/add-section', {
+                      method: 'POST', body: { heading, type: 'faq' }
+                    });
+                    if (r.page_sections) setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+                  },
+                  style: { fontSize: 12, padding: '8px 16px', background: 'transparent', color: '#14b8a6', border: '1px dashed #14b8a6', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }
+                }, React.createElement('i', { className: 'fas fa-question-circle', style: { marginRight: 6 } }), 'Add FAQ Section')
+              )
             ),
 
-            // When no sections parsed yet, show explanation
-            !selectedItem.page_sections?.length && selectedItem.page_url && React.createElement('div', { style: { marginTop: 8, color: 'var(--text3)', fontSize: 12, lineHeight: 1.6 } },
-              'Click "Analyse Page Structure" to let AI identify all sections on the live page. Then you can rewrite content section-by-section without changing the page design.'
+            // When no sections, show prompt
+            sectionView && !selectedItem.page_sections?.length && React.createElement('div', { style: { marginTop: 16, textAlign: 'center', padding: 24, border: '1px dashed var(--border)', borderRadius: 8 } },
+              React.createElement('div', { style: { fontSize: 14, color: 'var(--text3)', marginBottom: 12 } }, 'No sections yet. Add sections to build your page content.'),
+              React.createElement('div', { style: { display: 'flex', gap: 8, justifyContent: 'center' } },
+                React.createElement('button', {
+                  onClick: async () => {
+                    const heading = prompt('Section heading:');
+                    if (!heading) return;
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/add-section', {
+                      method: 'POST', body: { heading, type: 'text' }
+                    });
+                    if (r.page_sections) setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+                  },
+                  style: { fontSize: 13, padding: '10px 20px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }
+                }, React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 6 } }), 'Add Text Section'),
+                React.createElement('button', {
+                  onClick: async () => {
+                    const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/add-section', {
+                      method: 'POST', body: { heading: 'Frequently Asked Questions', type: 'faq' }
+                    });
+                    if (r.page_sections) setSelectedItem(prev => ({ ...prev, page_sections: r.page_sections }));
+                  },
+                  style: { fontSize: 13, padding: '10px 20px', background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }
+                }, React.createElement('i', { className: 'fas fa-question-circle', style: { marginRight: 6 } }), 'Add FAQ Section')
+              )
             )
           ),
 
