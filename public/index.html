@@ -21219,6 +21219,8 @@
       const [loadingSuggestions, setLoadingSuggestions] = useState(false);
       const [addingSection, setAddingSection] = useState(null); // section being added
       const [sectionView, setSectionView] = useState(false); // toggle section editor vs full editor
+      const [visualEditor, setVisualEditor] = useState(false); // iframe-based visual editor
+      const visualIframeRef = React.useRef(null);
       const [expandedSections, setExpandedSections] = useState({}); // track which section cards are expanded
       // Suggestion system (Google Docs style)
       const [suggestions, setSuggestions] = useState([]); // all suggestions for this item
@@ -22674,7 +22676,13 @@
                   className: 'btn btn-small',
                   onClick: () => setSectionView(!sectionView),
                   style: { fontSize: 12, padding: '4px 12px', background: sectionView ? 'rgba(5,150,105,0.1)' : 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }
-                }, React.createElement('i', { className: sectionView ? 'fas fa-th-list' : 'fas fa-align-left', style: { marginRight: 5 } }), sectionView ? 'Section View' : 'Full Editor')
+                }, React.createElement('i', { className: sectionView ? 'fas fa-th-list' : 'fas fa-align-left', style: { marginRight: 5 } }), sectionView ? 'Section View' : 'Full Editor'),
+                // Visual Editor button — loads page in iframe with editable text
+                selectedItem.page_url && React.createElement('button', {
+                  className: 'btn btn-small',
+                  onClick: () => { setVisualEditor(!visualEditor); setSectionView(false); },
+                  style: { fontSize: 12, padding: '4px 12px', background: visualEditor ? 'rgba(99,102,241,0.15)' : 'transparent', color: visualEditor ? '#6366f1' : 'var(--text2)', border: '1px solid ' + (visualEditor ? '#6366f1' : 'var(--border)'), borderRadius: 6, cursor: 'pointer', fontWeight: visualEditor ? 700 : 400 }
+                }, React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 5 } }), 'Visual Editor')
               )
             ),
 
@@ -22851,6 +22859,60 @@
                             setSelectedItem(item);
                             setEditContent(item.draft_content || '');
                             setEditorKey(k => k + 1);
+                          }
+                        }
+                      })
+                    )
+                  : visualEditor && selectedItem.page_url
+                  ? React.createElement('div', { style: { position: 'relative', width: '100%', minHeight: 600, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: '#fff' } },
+                      React.createElement('div', { style: { padding: '8px 12px', background: 'linear-gradient(135deg, #6366f1, #a855f7)', color: '#fff', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 } },
+                        React.createElement('i', { className: 'fas fa-eye' }),
+                        React.createElement('strong', null, 'Visual Editor'),
+                        React.createElement('span', { style: { opacity: 0.8 } }, '— Edit text directly on the live page design'),
+                        React.createElement('button', {
+                          onClick: () => {
+                            // Send draft content to iframe for overlay
+                            const iframe = visualIframeRef.current;
+                            if (iframe && iframe.contentWindow) {
+                              iframe.contentWindow.postMessage({ type: 'seoroom-update-content', content: editContent, sections: selectedItem.page_sections || [] }, '*');
+                            }
+                          },
+                          style: { marginLeft: 'auto', padding: '3px 10px', background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600 }
+                        }, React.createElement('i', { className: 'fas fa-sync', style: { marginRight: 4 } }), 'Apply Changes')
+                      ),
+                      React.createElement('iframe', {
+                        ref: visualIframeRef,
+                        src: selectedItem.page_url,
+                        style: { width: '100%', height: 700, border: 'none' },
+                        onLoad: () => {
+                          // Inject editing script into iframe
+                          try {
+                            const iframe = visualIframeRef.current;
+                            if (!iframe || !iframe.contentDocument) return;
+                            const doc = iframe.contentDocument;
+                            // Make text widgets editable
+                            const textEls = doc.querySelectorAll('.elementor-widget-text-editor .elementor-widget-container, .elementor-widget-heading .elementor-heading-title');
+                            textEls.forEach(el => {
+                              el.contentEditable = 'true';
+                              el.style.outline = 'none';
+                              el.style.cursor = 'text';
+                              el.addEventListener('focus', () => { el.style.boxShadow = '0 0 0 2px #6366f1'; });
+                              el.addEventListener('blur', () => {
+                                el.style.boxShadow = 'none';
+                                // Collect all edited content and sync back
+                                const allText = [];
+                                textEls.forEach(te => allText.push(te.innerHTML));
+                                window.parent.postMessage({ type: 'seoroom-content-edited', html: allText }, '*');
+                              });
+                            });
+                            // Add edit indicator
+                            const indicator = doc.createElement('div');
+                            indicator.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:99999;background:#6366f1;color:#fff;padding:6px 16px;border-radius:20px;font-size:12px;font-family:-apple-system,sans-serif;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+                            indicator.textContent = 'Click any text to edit — changes sync to Copywriter';
+                            doc.body.appendChild(indicator);
+                            setTimeout(() => { indicator.style.opacity = '0.5'; }, 3000);
+                          } catch(e) {
+                            console.log('[visual-editor] Cannot access iframe (cross-origin):', e.message);
                           }
                         }
                       })
