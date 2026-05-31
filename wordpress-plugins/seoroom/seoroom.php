@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.5.1
+ * Version: 8.5.2
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.5.1');
+define('SEOROOM_VERSION', '8.5.2');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1086,9 +1086,9 @@ function sropt_visual_editor_mode() {
                 var applied = 0;
                 sections.forEach(function(section) {
                     if (!section.draft_text) return;
-                    var heading = (section.draft_heading || section.heading || '').trim();
+                    // Use ORIGINAL heading to find elements on the page (page still has original text)
+                    var heading = (section.original_heading || section.heading || '').trim();
                     if (!heading) return;
-                    // Find the heading in the page
                     var headingNorm = heading.toLowerCase().replace(/[^a-z0-9]/g, '');
                     var allHeadings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, .elementor-heading-title');
                     allHeadings.forEach(function(hEl) {
@@ -1097,13 +1097,20 @@ function sropt_visual_editor_mode() {
                             // Found matching heading — replace the next text container
                             var container = hEl.closest('.elementor-widget-text-editor, .elementor-section, section');
                             if (container) {
+                                // Replace heading text with draft heading
+                                var draftHeading = (section.draft_heading || '').trim();
+                                if (draftHeading) hEl.textContent = draftHeading;
+                                // Replace body text with draft content
                                 var textWidget = container.querySelector('.elementor-widget-text-editor .elementor-widget-container') || container.querySelector('.entry-content');
                                 if (textWidget) {
                                     textWidget.innerHTML = section.draft_text;
                                     textWidget.style.boxShadow = '0 0 0 3px #22c55e';
-                                    setTimeout(function() { textWidget.style.boxShadow = ''; }, 2000);
+                                    setTimeout(function() { textWidget.style.boxShadow = ''; }, 3000);
                                     applied++;
                                 }
+                                // Highlight the heading too
+                                hEl.style.boxShadow = '0 0 0 3px #22c55e';
+                                setTimeout(function() { hEl.style.boxShadow = ''; }, 3000);
                             }
                         }
                     });
