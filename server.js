@@ -19203,14 +19203,10 @@ app.post('/api/projects/:projectId/content-queue/:id/elementor-preview', async (
     const newSections = sections.filter(s => s.is_new && s.draft_text);
     const updatedSections = sections.filter(s => !s.is_new && !s.locked && s.draft_text);
 
-    if (newSections.length === 0 && updatedSections.length === 0) {
-      // No sections to preview — use draft_content as full replacement
-      if (item.draft_content) {
-        // Find existing text widgets and replace their content
-        // For now, just add as a new section at the end
-      } else {
-        return res.status(400).json({ error: 'No draft content or sections to preview' });
-      }
+    // Visual Editor only needs a token for iframe embedding — proceed even without sections
+    // Apply Changes sends content via postMessage, not via Elementor data
+    if (newSections.length === 0 && updatedSections.length === 0 && !item.draft_content && !item.current_content) {
+      return res.status(400).json({ error: 'Import content first — no content available for preview' });
     }
 
     // Helper: generate random Elementor ID (8 hex chars)
