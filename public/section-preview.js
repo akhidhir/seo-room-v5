@@ -32,7 +32,7 @@
 
     console.log('[SEO Room] Starting DIRECT paragraph matching for '+sections.length+' sections');
 
-    var skipSelector = 'form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form,.elementor-form,.wpcf7,.wpforms-container,.gform_wrapper,.site-footer,.footer-widget,.elementor-location-footer,.elementor-widget-itestimonials,.elementor-widget-call-to-action,.elementor-widget-ibutton,.elementor-widget-image,.elementor-widget-iteams';
+    var skipSelector = 'form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form,.elementor-form,.wpcf7,.wpforms-container,.gform_wrapper,.site-footer,.footer-widget,.elementor-location-footer,.elementor-widget-itestimonials,.elementor-widget-call-to-action,.elementor-widget-ibutton,.elementor-widget-image,.elementor-widget-iteams,.elementor-widget-ipricingtable,.elementor-widget-price-table,.elementor-widget-iservice_box2,.elementor-widget-icon-box,.elementor-widget-image-carousel,.elementor-widget-shortcode';
     var replacedEls = new Set();
 
     sections.forEach(function(section){
