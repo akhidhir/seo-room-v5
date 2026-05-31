@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.5.2
+ * Version: 8.5.3
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.5.2');
+define('SEOROOM_VERSION', '8.5.3');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1201,6 +1201,57 @@ function sropt_visual_editor_mode() {
                         }
                     }
                 });
+
+                // If no sections matched, try fullContent — replace text widgets sequentially
+                if (applied === 0 && e.data.fullContent) {
+                    var parser = new DOMParser();
+                    var draftDoc = parser.parseFromString('<div>' + e.data.fullContent + '</div>', 'text/html');
+                    var draftH2s = draftDoc.querySelectorAll('h2');
+                    var pageWidgets = document.querySelectorAll('.elementor-widget-text-editor .elementor-widget-container');
+                    var pageHeadings = document.querySelectorAll('.elementor-widget-heading .elementor-heading-title, h2');
+                    // Try to match by position — first draft H2 matches first page text section, etc.
+                    var widgetIdx = 0;
+                    draftH2s.forEach(function(dh2) {
+                        var draftHeading = dh2.textContent.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                        // Find matching heading on the page
+                        pageHeadings.forEach(function(ph) {
+                            if (ph.closest('nav, footer, header')) return;
+                            var pageH = ph.textContent.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                            if (pageH.length < 5) return;
+                            // Fuzzy match — check if >50% of words overlap
+                            var dWords = draftHeading.split(/(?=[A-Z])|(?<=[a-z])(?=[0-9])/);
+                            var words1 = dh2.textContent.trim().toLowerCase().split(/\s+/).filter(function(w){return w.length>2;});
+                            var words2 = ph.textContent.trim().toLowerCase().split(/\s+/).filter(function(w){return w.length>2;});
+                            var overlap = words1.filter(function(w){return words2.some(function(w2){return w2.includes(w) || w.includes(w2);});}).length;
+                            if (overlap >= Math.min(words1.length, words2.length) * 0.3 || pageH.includes(draftHeading.substring(0,15)) || draftHeading.includes(pageH.substring(0,15))) {
+                                // Found a match — replace the heading
+                                ph.textContent = dh2.textContent.trim();
+                                ph.style.boxShadow = '0 0 0 3px #22c55e';
+                                setTimeout(function(){ph.style.boxShadow='';}, 3000);
+                                // Find the text widget near this heading and replace its content
+                                var container = ph.closest('.elementor-section, section');
+                                if (container) {
+                                    var tw = container.querySelector('.elementor-widget-text-editor .elementor-widget-container');
+                                    if (tw) {
+                                        // Get content between this H2 and the next H2 in draft
+                                        var content = '';
+                                        var el = dh2.nextElementSibling;
+                                        while (el && el.tagName !== 'H2') {
+                                            content += el.outerHTML || el.textContent;
+                                            el = el.nextElementSibling;
+                                        }
+                                        if (content) {
+                                            tw.innerHTML = content;
+                                            tw.style.boxShadow = '0 0 0 3px #22c55e';
+                                            setTimeout(function(){tw.style.boxShadow='';}, 3000);
+                                            applied++;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    });
+                }
 
                 // Notify parent
                 window.parent.postMessage({ type: 'seoroom-draft-applied', count: applied, total: sections.length }, '*');
