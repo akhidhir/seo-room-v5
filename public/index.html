@@ -18,6 +18,49 @@
       box-sizing: border-box;
     }
 
+    /* FAQ accordion styling for <details><summary> tags */
+    details {
+      background: var(--card, #1a1d27);
+      border: 1px solid var(--border, #2a2d3a);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    details summary {
+      padding: 12px 16px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text, #e4e4e7);
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    details summary::-webkit-details-marker { display: none; }
+    details summary::before {
+      content: '+';
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      background: rgba(20,184,166,0.15);
+      color: #14b8a6;
+      font-weight: 700;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    details[open] summary::before { content: '−'; }
+    details[open] summary { border-bottom: 1px solid var(--border, #2a2d3a); }
+    details p, details div {
+      padding: 12px 16px 12px 44px;
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--text2, #a1a1aa);
+    }
+
     :root {
       --bg: #0f1117;
       --card: #1a1d27;

@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
+const cheerio = require('cheerio');
 
 // Preload section-preview script for inlining (avoids external script loading issues)
 const SECTION_PREVIEW_JS = fs.readFileSync(path.join(__dirname, 'public', 'section-preview.js'), 'utf8');
@@ -14379,7 +14380,7 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
   let content = '';
   const wpBase = (project?.wordpress_url || '').replace(/\/$/, '');
 
-  // Resolve page_id if missing (needed for Yoast meta later, not for content)
+  // Resolve page_id if missing
   if (wpBase && !pageId) {
     const resolved = await resolveWpPageId(project, pageUrl, null);
     if (resolved.pageId) {
@@ -14388,88 +14389,132 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
     }
   }
 
-  // ── STRATEGY: URL is the source of truth ──
-  // 1. Always try live HTML fetch from the URL first (what the user actually chose)
-  // 2. Only fall back to WP REST API if live fetch fails or returns very little
-  // 3. page_id is mainly for Yoast meta retrieval, NOT for content fetching
-  let liveContent = '';
-  let wpContent = '';
+  // ── STRATEGY: Fetch live HTML → parse with cheerio → extract structured content ──
   console.log(`[fetchLivePageContent] Fetching live from URL: ${pageUrl}`);
-  // ── Step 1: Live HTML fetch from the URL (primary — this is what user chose) ──
+  let liveHtml = '';
   if (pageUrl) {
     try {
-      const liveRes = await fetch(pageUrl, { signal: AbortSignal.timeout(15000) });
-      if (liveRes.ok) {
-        const liveHtml = await liveRes.text();
-        // Helper to strip non-content elements
-        const stripChrome = (html) => html
-          .replace(/<script[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[\s\S]*?<\/style>/gi, '')
-          .replace(/<nav[\s\S]*?<\/nav>/gi, '')
-          .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
-          .replace(/<!--[\s\S]*?-->/g, '')
-          .replace(/<aside[\s\S]*?<\/aside>/gi, '')
-          .replace(/<div[^>]*class="[^"]*(?:sidebar|widget|menu|breadcrumb|se-pre-con)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
-          .replace(/<div[^>]*id="[^"]*(?:sidebar|widget)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
-        const wordCount = (html) => html.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
-        let extracted = '';
-        // Priority 1: <main> or <article> — most accurate semantic content
-        const mainMatch = liveHtml.match(/<main[^>]*>([\s\S]*)<\/main>/i);
-        if (mainMatch && wordCount(mainMatch[1]) >= 30) {
-          extracted = stripChrome(mainMatch[1]);
-          console.log('[fetchLivePageContent] Extracted from <main> tag:', wordCount(extracted), 'words');
-        }
-        if (!extracted || wordCount(extracted) < 30) {
-          const articleMatch = liveHtml.match(/<article[^>]*>([\s\S]*)<\/article>/i);
-          if (articleMatch && wordCount(articleMatch[1]) >= 30) {
-            extracted = stripChrome(articleMatch[1]);
-            console.log('[fetchLivePageContent] Extracted from <article> tag:', wordCount(extracted), 'words');
-          }
-        }
-        // Priority 2: Elementor content container (common in WP sites)
-        if (!extracted || wordCount(extracted) < 30) {
-          const elMatch = liveHtml.match(/<div[^>]*class="[^"]*elementor[^"]*"[^>]*data-elementor-type="wp-page"[^>]*>([\s\S]*?)(?=<footer|<div[^>]*class="[^"]*footer)/i);
-          if (elMatch && wordCount(elMatch[1]) >= 30) {
-            extracted = stripChrome(elMatch[1]);
-            console.log('[fetchLivePageContent] Extracted from Elementor container:', wordCount(extracted), 'words');
-          }
-        }
-        // Priority 3: header-to-footer (strip sidebars)
-        if (!extracted || wordCount(extracted) < 30) {
-          const headerEnd = liveHtml.search(/<\/header>/i);
-          const footerStart = liveHtml.search(/<footer[\s>]/i);
-          if (headerEnd !== -1 && footerStart !== -1 && footerStart > headerEnd) {
-            const between = liveHtml.slice(headerEnd + '</header>'.length, footerStart);
-            const cleaned = stripChrome(between);
-            if (wordCount(cleaned) >= 30) {
-              extracted = cleaned;
-              console.log('[fetchLivePageContent] Extracted header-to-footer:', wordCount(extracted), 'words');
-            }
-          }
-        }
-        // Priority 4: full body minus chrome
-        if (!extracted || wordCount(extracted) < 30) {
-          const bodyMatch = liveHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-          if (bodyMatch) {
-            extracted = stripChrome(bodyMatch[1])
-              .replace(/<footer[\s\S]*?<\/footer>/gi, '')
-              .replace(/<header[\s\S]*?<\/header>/gi, '');
-            console.log('[fetchLivePageContent] Extracted from body (last resort):', wordCount(extracted), 'words');
-          }
-        }
-        if (extracted) {
-          liveContent = extracted;
-          const liveWc = extracted.replace(/<[^>]+>/g, '').trim().split(/\s+/).length;
-          console.log(`[fetchLivePageContent] Live fetch: ${liveWc} words`);
-        } else {
-          console.log('[fetchLivePageContent] Live fetch: no content extracted');
-        }
-      }
+      const liveRes = await fetch(pageUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' } });
+      if (liveRes.ok) liveHtml = await liveRes.text();
     } catch (e) { console.log('[fetchLivePageContent] Live fetch failed:', e.message); }
   }
 
-  // ── Step 2: WP REST API — always try (gives clean content without sidebar) ──
-  if (wpBase && pageId) {
+  // ── Cheerio-based extraction (preserves HTML structure) ──
+  if (liveHtml && liveHtml.length > 500) {
+    try {
+      const $ = cheerio.load(liveHtml);
+      const parts = [];
+      const skipSel = 'footer, nav, header, .site-footer, .elementor-location-footer, .footer-widget, form, .sidebar, .widget-area, .se-pre-con, .breadcrumb';
+      const isElementor = $('[data-elementor-type]').length > 0;
+
+      if (isElementor) {
+        console.log('[fetchLivePageContent] Elementor page detected — using widget-level extraction');
+
+        // Walk through Elementor top-level sections in order
+        $('.elementor-top-section, .elementor-section[data-element_type="section"]').each(function() {
+          const section = $(this);
+          // Skip footer/nav/header sections
+          if (section.closest(skipSel).length > 0) return;
+          if (section.find('.elementor-location-footer').length > 0) return;
+
+          // Extract heading widgets
+          section.find('.elementor-widget-heading .elementor-heading-title').each(function() {
+            const tag = ($(this).prop('tagName') || 'h2').toLowerCase();
+            const text = $(this).text().trim();
+            if (text && text.length > 2) parts.push(`<${tag}>${text}</${tag}>`);
+          });
+
+          // Extract text editor widgets (main content)
+          section.find('.elementor-widget-text-editor .elementor-widget-container').each(function() {
+            const html = $(this).html().trim();
+            if (html && html.replace(/<[^>]+>/g, '').trim().length > 10) {
+              parts.push(html);
+            }
+          });
+
+          // Extract iaccordions FAQ widgets
+          section.find('.elementor-widget-iaccordions, .elementor-widget-accordion, .elementor-widget-toggle').each(function() {
+            const faqText = $(this).text().trim();
+            if (faqText.length < 50) return;
+
+            // Parse Q&A from text content (iaccordions renders via JS, but text is in the HTML)
+            const qaPairs = [];
+            // Split by question marks followed by newlines/whitespace
+            const rawParts = faqText.split(/(?<=\?)\s*\n\s*/);
+            let currentQ = null, currentA = '';
+            rawParts.forEach(part => {
+              part = part.trim();
+              if (!part) return;
+              const qIdx = part.indexOf('?');
+              if (qIdx > 5 && qIdx < 200) {
+                if (currentQ) qaPairs.push({ q: currentQ, a: currentA.trim() });
+                currentQ = part.substring(0, qIdx + 1).trim();
+                currentA = part.substring(qIdx + 1).trim();
+              } else if (currentQ) {
+                currentA += ' ' + part;
+              } else {
+                // First part might be an answer to a question in a previous chunk
+                currentA += ' ' + part;
+              }
+            });
+            if (currentQ) qaPairs.push({ q: currentQ, a: currentA.trim() });
+
+            // If that didn't work, try splitting by known question patterns
+            if (qaPairs.length < 2) {
+              qaPairs.length = 0;
+              const lines = faqText.split(/\n+/).map(l => l.trim()).filter(l => l.length > 5);
+              let q = null, a = '';
+              lines.forEach(line => {
+                if (line.endsWith('?') && line.length < 200) {
+                  if (q) qaPairs.push({ q, a: a.trim() });
+                  q = line;
+                  a = '';
+                } else if (q) {
+                  a += (a ? ' ' : '') + line;
+                }
+              });
+              if (q) qaPairs.push({ q, a: a.trim() });
+            }
+
+            if (qaPairs.length > 0) {
+              parts.push('<h2>Frequently Asked Questions</h2>');
+              qaPairs.forEach(qa => {
+                parts.push(`<details><summary>${qa.q}</summary><p>${qa.a}</p></details>`);
+              });
+              console.log(`[fetchLivePageContent] Extracted ${qaPairs.length} FAQ items as <details> accordions`);
+            }
+          });
+        });
+      }
+
+      // Non-Elementor fallback or if Elementor extraction got too little
+      if (parts.length === 0 || parts.join('').replace(/<[^>]+>/g, '').trim().split(/\s+/).length < 50) {
+        // Fall back to semantic extraction
+        const mainEl = $('main').first();
+        const articleEl = $('article').first();
+        const contentEl = mainEl.length ? mainEl : articleEl.length ? articleEl : $('body');
+        contentEl.find('script, style, nav, noscript, aside, footer, header').remove();
+        contentEl.find('.sidebar, .widget, .menu, .breadcrumb').remove();
+        const fallbackHtml = contentEl.html() || '';
+        if (fallbackHtml.replace(/<[^>]+>/g, '').trim().split(/\s+/).length > 30) {
+          parts.length = 0;
+          parts.push(fallbackHtml);
+          console.log('[fetchLivePageContent] Used semantic fallback extraction');
+        }
+      }
+
+      if (parts.length > 0) {
+        content = parts.join('\n');
+        const wc = content.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length;
+        console.log(`[fetchLivePageContent] Cheerio extracted: ${wc} words, ${parts.length} content blocks`);
+      }
+    } catch (e) {
+      console.log('[fetchLivePageContent] Cheerio extraction failed:', e.message);
+    }
+  }
+
+  // ── WP REST API fallback — only if cheerio extraction failed ──
+  if (!content && wpBase && pageId) {
     const authHeaders = getWpAuthHeaders(project);
     for (const type of ['pages', 'posts']) {
       try {
@@ -14478,32 +14523,13 @@ async function fetchLivePageContent(pageUrl, project, pageId) {
         });
         if (wpRes.ok) {
           const wpData = await wpRes.json();
-          const wpTitle = (wpData.title?.rendered || '').replace(/<[^>]+>/g, '');
-          wpContent = wpData.content?.rendered || '';
-          const wpWc = wpContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).length;
-          console.log(`[fetchLivePageContent] WP REST fallback: id=${pageId}, title="${wpTitle}", ${wpWc} words`);
+          content = wpData.content?.rendered || '';
+          const wpWc = content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length;
+          console.log(`[fetchLivePageContent] WP REST fallback: ${wpWc} words`);
           break;
         }
       } catch (e) { /* try next */ }
     }
-  }
-
-  // ── Pick result: compare both, prefer cleaner source ──
-  // WP REST returns clean page body (no sidebar/nav/widget content)
-  // Live HTML may include sidebar junk but captures ACF/page-builder content WP REST misses
-  const liveWc = liveContent ? liveContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length : 0;
-  const wpWc = wpContent ? wpContent.replace(/<[^>]+>/g, '').trim().split(/\s+/).filter(Boolean).length : 0;
-  if (wpWc >= 50 && liveWc <= wpWc * 1.5) {
-    // WP REST has substantial content and live isn't dramatically more — use WP (cleaner)
-    content = wpContent;
-    console.log(`[fetchLivePageContent] Final: ${wpWc} words (source: WP REST — cleaner, no sidebar). Live had ${liveWc} words.`);
-  } else if (liveWc > wpWc) {
-    // Live fetch has significantly more content — likely ACF/builder content WP REST missed
-    content = liveContent;
-    console.log(`[fetchLivePageContent] Final: ${liveWc} words (source: live URL — more content than WP REST ${wpWc})`);
-  } else {
-    content = liveContent || wpContent;
-    console.log(`[fetchLivePageContent] Final: ${content ? content.replace(/<[^>]+>/g, '').trim().split(/\s+/).length : 0} words (source: ${liveContent ? 'live URL' : wpContent ? 'WP REST' : 'none'})`);
   }
   return { content, resolvedPageId: pageId };
 }
