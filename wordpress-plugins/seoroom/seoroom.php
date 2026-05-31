@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.8
+ * Version: 8.4.9
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.8');
+define('SEOROOM_VERSION', '8.4.9');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1055,7 +1055,6 @@ function sropt_visual_editor_mode() {
         <div class="seoroom-edit-indicator">Click any text section to edit — changes sync to SEO Room Dashboard</div>
         <script>
         (function() {
-            // Make text widgets editable
             var selectors = [
                 '.elementor-widget-text-editor .elementor-widget-container',
                 '.elementor-widget-heading .elementor-heading-title',
@@ -1064,28 +1063,64 @@ function sropt_visual_editor_mode() {
             var editables = [];
             selectors.forEach(function(sel) {
                 document.querySelectorAll(sel).forEach(function(el) {
-                    // Skip nav, footer, forms
-                    if (el.closest('nav, footer, form, header, .site-footer, .elementor-location-footer')) return;
+                    if (el.closest('nav, footer, form, header, .site-footer, .elementor-location-footer, .seoroom-edit-indicator')) return;
                     el.contentEditable = 'true';
                     el.classList.add('seoroom-editable');
                     editables.push(el);
                     el.addEventListener('input', function() {
-                        // Sync changes back to parent (dashboard iframe)
-                        var allContent = editables.map(function(e) { return { html: e.innerHTML, text: e.textContent.trim().substring(0, 50) }; });
+                        var allContent = editables.map(function(e) { return { html: e.innerHTML, text: e.textContent.trim().substring(0, 80) }; });
                         window.parent.postMessage({ type: 'seoroom-content-edited', editables: allContent }, '*');
                     });
                 });
             });
-            // Also make accordion titles editable
-            document.querySelectorAll('.acc_title, .elementor-tab-title, .elementor-toggle-title').forEach(function(el) {
+            // Make accordion titles editable too
+            document.querySelectorAll('.acc_title, .elementor-tab-title, .elementor-toggle-title, [class*="acc_title"]').forEach(function(el) {
                 el.contentEditable = 'true';
                 el.classList.add('seoroom-editable');
             });
-            // Fade indicator after 3 seconds
+
+            // Listen for draft content from parent dashboard
+            window.addEventListener('message', function(e) {
+                if (!e.data || e.data.type !== 'seoroom-apply-draft') return;
+                var sections = e.data.sections || [];
+                var applied = 0;
+                sections.forEach(function(section) {
+                    if (!section.draft_text) return;
+                    var heading = (section.draft_heading || section.heading || '').trim();
+                    if (!heading) return;
+                    // Find the heading in the page
+                    var headingNorm = heading.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    var allHeadings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, .elementor-heading-title');
+                    allHeadings.forEach(function(hEl) {
+                        var hText = hEl.textContent.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                        if (hText === headingNorm || hText.includes(headingNorm) || headingNorm.includes(hText)) {
+                            // Found matching heading — replace the next text container
+                            var container = hEl.closest('.elementor-widget-text-editor, .elementor-section, section');
+                            if (container) {
+                                var textWidget = container.querySelector('.elementor-widget-text-editor .elementor-widget-container') || container.querySelector('.entry-content');
+                                if (textWidget) {
+                                    textWidget.innerHTML = section.draft_text;
+                                    textWidget.style.boxShadow = '0 0 0 3px #22c55e';
+                                    setTimeout(function() { textWidget.style.boxShadow = ''; }, 2000);
+                                    applied++;
+                                }
+                            }
+                        }
+                    });
+                });
+                // Notify parent
+                window.parent.postMessage({ type: 'seoroom-draft-applied', count: applied, total: sections.length }, '*');
+                var ind = document.querySelector('.seoroom-edit-indicator');
+                if (ind) ind.textContent = applied + ' section(s) updated — edit text directly to make changes';
+            });
+
+            // Tell parent we're ready
+            window.parent.postMessage({ type: 'seoroom-editor-ready', editables: editables.length }, '*');
+
             setTimeout(function() {
                 var ind = document.querySelector('.seoroom-edit-indicator');
                 if (ind) ind.style.opacity = '0.4';
-            }, 3000);
+            }, 4000);
             console.log('[SEO Room] Visual editor active: ' + editables.length + ' editable sections');
         })();
         </script>

@@ -21222,18 +21222,31 @@
       const [visualEditor, setVisualEditor] = useState(false); // iframe-based visual editor
       const visualIframeRef = React.useRef(null);
 
-      // Listen for content edits from visual editor iframe
+      // Listen for messages from visual editor iframe
       useEffect(() => {
         const handler = (e) => {
           if (e.data?.type === 'seoroom-content-edited' && e.data.editables) {
-            // Combine all edited sections into draft content
             const html = e.data.editables.map(ed => ed.html).join('\n');
             if (html && html.length > 10) setEditContent(html);
+          }
+          if (e.data?.type === 'seoroom-editor-ready' && visualEditor && selectedItem) {
+            // Iframe is ready — send draft content to apply
+            const iframe = visualIframeRef.current;
+            if (iframe && iframe.contentWindow) {
+              const sections = selectedItem.page_sections || [];
+              const drafts = sections.filter(s => s.draft_text);
+              if (drafts.length > 0) {
+                iframe.contentWindow.postMessage({ type: 'seoroom-apply-draft', sections: drafts }, '*');
+              }
+            }
+          }
+          if (e.data?.type === 'seoroom-draft-applied') {
+            console.log('[visual-editor] Applied ' + e.data.count + '/' + e.data.total + ' sections');
           }
         };
         window.addEventListener('message', handler);
         return () => window.removeEventListener('message', handler);
-      }, []);
+      }, [visualEditor, selectedItem]);
       const [expandedSections, setExpandedSections] = useState({}); // track which section cards are expanded
       // Suggestion system (Google Docs style)
       const [suggestions, setSuggestions] = useState([]); // all suggestions for this item
