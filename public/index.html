@@ -21785,25 +21785,7 @@
       // Section-aware preview
       const handleSectionPreview = async () => {
         try { await handleSaveEdit(); } catch(e) { console.log('[preview] save failed, continuing:', e.message); }
-        // Try Elementor-native preview first (100% design match)
-        if (project?.is_elementor_site) {
-          try {
-            setParsingSections(true);
-            const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/elementor-preview', { method: 'POST' });
-            setParsingSections(false);
-            console.log('[preview] Elementor response:', JSON.stringify(r).substring(0, 300));
-            if (r && r.preview_url) {
-              window.open(r.preview_url, '_blank');
-              return;
-            }
-            if (r && r.error) alert('Elementor preview: ' + r.error);
-          } catch (e) {
-            setParsingSections(false);
-            console.log('[preview] Elementor failed:', e.message);
-            alert('Elementor preview failed: ' + e.message);
-          }
-        }
-        // Fallback to HTML injection preview
+        // Always use section-preview (HTML injection) — works with all page builders
         const tkn = localStorage.getItem('token') || '';
         window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/section-preview?token=' + encodeURIComponent(tkn), '_blank');
       };
