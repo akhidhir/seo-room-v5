@@ -22698,11 +22698,17 @@
                       // Create a preview token so the plugin allows iframe + injects editor
                       try {
                         const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/elementor-preview', { method: 'POST' });
-                        if (r && r.token) window._lastPreviewToken = r.token;
-                      } catch(e) { console.log('[visual-editor] Token creation failed:', e.message); }
+                        if (r && r.token) {
+                          window._lastPreviewToken = r.token;
+                          setSectionView(false);
+                          setVisualEditor(true);
+                        } else {
+                          alert('Could not create visual editor session: ' + (r?.error || 'unknown'));
+                        }
+                      } catch(e) { alert('Visual editor error: ' + e.message); }
+                    } else {
+                      setVisualEditor(false);
                     }
-                    setVisualEditor(!visualEditor);
-                    setSectionView(false);
                   },
                   style: { fontSize: 12, padding: '4px 12px', background: visualEditor ? 'rgba(99,102,241,0.15)' : 'transparent', color: visualEditor ? '#6366f1' : 'var(--text2)', border: '1px solid ' + (visualEditor ? '#6366f1' : 'var(--border)'), borderRadius: 6, cursor: 'pointer', fontWeight: visualEditor ? 700 : 400 }
                 }, React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 5 } }), 'Visual Editor')
