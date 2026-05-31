@@ -21221,6 +21221,19 @@
       const [sectionView, setSectionView] = useState(false); // toggle section editor vs full editor
       const [visualEditor, setVisualEditor] = useState(false); // iframe-based visual editor
       const visualIframeRef = React.useRef(null);
+
+      // Listen for content edits from visual editor iframe
+      useEffect(() => {
+        const handler = (e) => {
+          if (e.data?.type === 'seoroom-content-edited' && e.data.editables) {
+            // Combine all edited sections into draft content
+            const html = e.data.editables.map(ed => ed.html).join('\n');
+            if (html && html.length > 10) setEditContent(html);
+          }
+        };
+        window.addEventListener('message', handler);
+        return () => window.removeEventListener('message', handler);
+      }, []);
       const [expandedSections, setExpandedSections] = useState({}); // track which section cards are expanded
       // Suggestion system (Google Docs style)
       const [suggestions, setSuggestions] = useState([]); // all suggestions for this item
@@ -22680,7 +22693,17 @@
                 // Visual Editor button — loads page in iframe with editable text
                 selectedItem.page_url && React.createElement('button', {
                   className: 'btn btn-small',
-                  onClick: () => { setVisualEditor(!visualEditor); setSectionView(false); },
+                  onClick: async () => {
+                    if (!visualEditor) {
+                      // Create a preview token so the plugin allows iframe + injects editor
+                      try {
+                        const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/elementor-preview', { method: 'POST' });
+                        if (r && r.token) window._lastPreviewToken = r.token;
+                      } catch(e) { console.log('[visual-editor] Token creation failed:', e.message); }
+                    }
+                    setVisualEditor(!visualEditor);
+                    setSectionView(false);
+                  },
                   style: { fontSize: 12, padding: '4px 12px', background: visualEditor ? 'rgba(99,102,241,0.15)' : 'transparent', color: visualEditor ? '#6366f1' : 'var(--text2)', border: '1px solid ' + (visualEditor ? '#6366f1' : 'var(--border)'), borderRadius: 6, cursor: 'pointer', fontWeight: visualEditor ? 700 : 400 }
                 }, React.createElement('i', { className: 'fas fa-eye', style: { marginRight: 5 } }), 'Visual Editor')
               )
@@ -22882,39 +22905,16 @@
                       ),
                       React.createElement('iframe', {
                         ref: visualIframeRef,
-                        src: selectedItem.page_url,
-                        style: { width: '100%', height: 700, border: 'none' },
-                        onLoad: () => {
-                          // Inject editing script into iframe
-                          try {
-                            const iframe = visualIframeRef.current;
-                            if (!iframe || !iframe.contentDocument) return;
-                            const doc = iframe.contentDocument;
-                            // Make text widgets editable
-                            const textEls = doc.querySelectorAll('.elementor-widget-text-editor .elementor-widget-container, .elementor-widget-heading .elementor-heading-title');
-                            textEls.forEach(el => {
-                              el.contentEditable = 'true';
-                              el.style.outline = 'none';
-                              el.style.cursor = 'text';
-                              el.addEventListener('focus', () => { el.style.boxShadow = '0 0 0 2px #6366f1'; });
-                              el.addEventListener('blur', () => {
-                                el.style.boxShadow = 'none';
-                                // Collect all edited content and sync back
-                                const allText = [];
-                                textEls.forEach(te => allText.push(te.innerHTML));
-                                window.parent.postMessage({ type: 'seoroom-content-edited', html: allText }, '*');
-                              });
-                            });
-                            // Add edit indicator
-                            const indicator = doc.createElement('div');
-                            indicator.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:99999;background:#6366f1;color:#fff;padding:6px 16px;border-radius:20px;font-size:12px;font-family:-apple-system,sans-serif;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
-                            indicator.textContent = 'Click any text to edit — changes sync to Copywriter';
-                            doc.body.appendChild(indicator);
-                            setTimeout(() => { indicator.style.opacity = '0.5'; }, 3000);
-                          } catch(e) {
-                            console.log('[visual-editor] Cannot access iframe (cross-origin):', e.message);
-                          }
-                        }
+                        src: (() => {
+                          // Create a preview token first, then load with ?seoroom_edit=TOKEN
+                          // For now, use the preview URL if available, otherwise use page URL with edit param
+                          const url = new URL(selectedItem.page_url, window.location.origin);
+                          // Use the last preview token if available
+                          const lastToken = window._lastPreviewToken || '';
+                          if (lastToken) url.searchParams.set('seoroom_edit', lastToken);
+                          return url.toString();
+                        })(),
+                        style: { width: '100%', height: 700, border: 'none' }
                       })
                     )
                   : React.createElement(QuillEditor, {

@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.4.7
+ * Version: 8.4.8
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.4.7');
+define('SEOROOM_VERSION', '8.4.8');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1019,6 +1019,78 @@ function sropt_elementor_preview_intercept() {
 
         return $html;
     });
+}
+
+// ================================================================
+// VISUAL EDITOR MODE — allows iframe embedding + makes text editable
+// Activated by ?seoroom_edit=TOKEN query parameter
+// ================================================================
+add_action('template_redirect', 'sropt_visual_editor_mode', 1);
+function sropt_visual_editor_mode() {
+    if (empty($_GET['seoroom_edit'])) return;
+    if (!is_singular()) return;
+
+    $token = sanitize_text_field($_GET['seoroom_edit']);
+    $preview = get_transient('seoroom_preview_' . $token);
+    if (!$preview) return;
+
+    // Remove X-Frame-Options to allow iframe embedding from our dashboard
+    header_remove('X-Frame-Options');
+    // Allow embedding from our dashboard URL
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'], '/');
+    if ($dashboard_url) {
+        header("Content-Security-Policy: frame-ancestors 'self' $dashboard_url");
+    }
+
+    // Inject editing script into the page footer
+    add_action('wp_footer', function() {
+        ?>
+        <style>
+            .seoroom-editable { cursor: text !important; transition: box-shadow 0.2s; }
+            .seoroom-editable:hover { box-shadow: 0 0 0 2px rgba(99,102,241,0.3) !important; }
+            .seoroom-editable:focus { box-shadow: 0 0 0 2px #6366f1 !important; outline: none !important; }
+            .seoroom-edit-indicator { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 99999; background: #6366f1; color: #fff; padding: 8px 20px; border-radius: 20px; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,0.3); transition: opacity 0.5s; }
+        </style>
+        <div class="seoroom-edit-indicator">Click any text section to edit — changes sync to SEO Room Dashboard</div>
+        <script>
+        (function() {
+            // Make text widgets editable
+            var selectors = [
+                '.elementor-widget-text-editor .elementor-widget-container',
+                '.elementor-widget-heading .elementor-heading-title',
+                'article .entry-content > *'
+            ];
+            var editables = [];
+            selectors.forEach(function(sel) {
+                document.querySelectorAll(sel).forEach(function(el) {
+                    // Skip nav, footer, forms
+                    if (el.closest('nav, footer, form, header, .site-footer, .elementor-location-footer')) return;
+                    el.contentEditable = 'true';
+                    el.classList.add('seoroom-editable');
+                    editables.push(el);
+                    el.addEventListener('input', function() {
+                        // Sync changes back to parent (dashboard iframe)
+                        var allContent = editables.map(function(e) { return { html: e.innerHTML, text: e.textContent.trim().substring(0, 50) }; });
+                        window.parent.postMessage({ type: 'seoroom-content-edited', editables: allContent }, '*');
+                    });
+                });
+            });
+            // Also make accordion titles editable
+            document.querySelectorAll('.acc_title, .elementor-tab-title, .elementor-toggle-title').forEach(function(el) {
+                el.contentEditable = 'true';
+                el.classList.add('seoroom-editable');
+            });
+            // Fade indicator after 3 seconds
+            setTimeout(function() {
+                var ind = document.querySelector('.seoroom-edit-indicator');
+                if (ind) ind.style.opacity = '0.4';
+            }, 3000);
+            console.log('[SEO Room] Visual editor active: ' + editables.length + ' editable sections');
+        })();
+        </script>
+        <?php
+    }, 999);
 }
 
 // Add preview bar to the page when in preview mode
