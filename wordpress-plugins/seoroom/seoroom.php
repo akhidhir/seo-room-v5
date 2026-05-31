@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.5.5
+ * Version: 8.6.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.5.5');
+define('SEOROOM_VERSION', '8.6.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1080,160 +1080,185 @@ function sropt_visual_editor_mode() {
             });
 
             // Listen for draft content from parent dashboard
+            // Uses PARAGRAPH-LEVEL MATCHING (same algorithm as section-preview.js)
+            // instead of unreliable heading matching
             window.addEventListener('message', function(e) {
                 if (!e.data || e.data.type !== 'seoroom-apply-draft') return;
                 var sections = e.data.sections || [];
                 var applied = 0;
-                sections.forEach(function(section) {
-                    if (!section.draft_text) return;
-                    // Use ORIGINAL heading to find elements on the page (page still has original text)
-                    var heading = (section.original_heading || section.heading || '').trim();
-                    if (!heading) return;
-                    var headingNorm = heading.toLowerCase().replace(/[^a-z0-9]/g, '');
-                    var allHeadings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, .elementor-heading-title');
-                    allHeadings.forEach(function(hEl) {
-                        var hText = hEl.textContent.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-                        if (hText === headingNorm || hText.includes(headingNorm) || headingNorm.includes(hText)) {
-                            // Found matching heading — replace the next text container
-                            var container = hEl.closest('.elementor-widget-text-editor, .elementor-section, section');
-                            if (container) {
-                                // Replace heading text with draft heading
-                                var draftHeading = (section.draft_heading || '').trim();
-                                if (draftHeading) hEl.textContent = draftHeading;
-                                // Replace body text with draft content
-                                var textWidget = container.querySelector('.elementor-widget-text-editor .elementor-widget-container') || container.querySelector('.entry-content');
-                                if (textWidget) {
-                                    textWidget.innerHTML = section.draft_text;
-                                    textWidget.style.boxShadow = '0 0 0 3px #22c55e';
-                                    setTimeout(function() { textWidget.style.boxShadow = ''; }, 3000);
-                                    applied++;
-                                }
-                                // Highlight the heading too
-                                hEl.style.boxShadow = '0 0 0 3px #22c55e';
-                                setTimeout(function() { hEl.style.boxShadow = ''; }, 3000);
-                            }
-                        }
-                    });
-                });
-                // For FAQ sections — convert plain text Q&A into accordion
-                sections.forEach(function(section) {
-                    if (!section.draft_text) return;
-                    var isFaq = /faq/i.test(section.type || '') || /faq/i.test(section.heading || '') || /faq/i.test(section.draft_heading || '');
-                    if (!isFaq) return;
-                    // Find existing accordion on the page to copy its styles
-                    var existingAcc = document.querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
-                    if (!existingAcc) return;
-                    var accParent = existingAcc.closest('.elementor-section, section');
-                    if (!accParent) return;
-                    // Parse Q&A from draft text
-                    var plain = section.draft_text.replace(/<[^>]+>/g, '');
-                    var qas = [];
-                    var parts = plain.split(/(?=(?:How|What|Why|When|Where|Can|Do|Is|Should|Will|Are|Does|Has|Which|Who)\b)/);
-                    var currentQ = null, currentA = '';
-                    parts.forEach(function(part) {
-                        part = part.trim();
-                        if (!part) return;
-                        var qMark = part.indexOf('?');
-                        if (qMark > 5 && qMark < 150) {
-                            if (currentQ) qas.push({q: currentQ, a: currentA.trim()});
-                            currentQ = part.substring(0, qMark + 1);
-                            currentA = part.substring(qMark + 1).trim();
-                        } else if (currentQ) {
-                            currentA += ' ' + part;
-                        }
-                    });
-                    if (currentQ) qas.push({q: currentQ, a: currentA.trim()});
-                    if (qas.length === 0) return;
-                    // Find an existing accordion item to clone its HTML
-                    var existingItem = accParent.querySelector('[class*="acc-item"], .elementor-accordion-item, .elementor-toggle-item');
-                    if (existingItem) {
-                        // Clone the entire accordion section
-                        var clonedSection = accParent.cloneNode(true);
-                        // Find the accordion container inside
-                        var accContainer = clonedSection.querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
-                        if (accContainer) {
-                            // Get all items
-                            var items = accContainer.querySelectorAll('[class*="acc-item"], .elementor-accordion-item, .elementor-toggle-item');
-                            var templateItem = items[0];
-                            // Clear all items except template
-                            items.forEach(function(item, idx) { if (idx > 0) item.remove(); });
-                            // Clone template for each Q&A
-                            var half = Math.ceil(qas.length / 2);
-                            // Check if two-column layout
-                            var columns = clonedSection.querySelectorAll('.elementor-column');
-                            if (columns.length >= 2) {
-                                var leftAcc = columns[0].querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
-                                var rightAcc = columns[1].querySelector('.ot-accordions, .elementor-accordion, .elementor-toggle');
-                                if (leftAcc && rightAcc) {
-                                    var leftTemplate = leftAcc.querySelector('[class*="acc-item"], .elementor-accordion-item');
-                                    var rightTemplate = rightAcc.querySelector('[class*="acc-item"], .elementor-accordion-item');
-                                    // Clear existing items
-                                    leftAcc.querySelectorAll('[class*="acc-item"], .elementor-accordion-item').forEach(function(el) { el.remove(); });
-                                    rightAcc.querySelectorAll('[class*="acc-item"], .elementor-accordion-item').forEach(function(el) { el.remove(); });
-                                    // Add Q&As split between columns
-                                    qas.forEach(function(qa, idx) {
-                                        var tmpl = idx < half ? leftTemplate : rightTemplate;
-                                        var target = idx < half ? leftAcc : rightAcc;
-                                        if (!tmpl) return;
-                                        var clone = tmpl.cloneNode(true);
-                                        // Replace title
-                                        var titleEl = clone.querySelector('[class*="acc_title"], .elementor-tab-title a, .elementor-toggle-title');
-                                        if (titleEl) titleEl.textContent = qa.q;
-                                        // Replace content
-                                        var contentEl = clone.querySelector('[class*="acc_content"], .elementor-tab-content, .elementor-toggle-content');
-                                        if (contentEl) contentEl.innerHTML = '<p>' + qa.a + '</p>';
-                                        target.appendChild(clone);
-                                    });
-                                    // Insert cloned section after original with green border
-                                    clonedSection.style.borderTop = '4px solid #22c55e';
-                                    clonedSection.style.position = 'relative';
-                                    var badge = document.createElement('div');
-                                    badge.style.cssText = 'position:absolute;top:8px;right:20px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;z-index:10;';
-                                    badge.textContent = 'NEW FAQ';
-                                    clonedSection.appendChild(badge);
-                                    accParent.parentNode.insertBefore(clonedSection, accParent.nextSibling);
-                                    // Hide the original FAQ section
-                                    accParent.style.display = 'none';
-                                    applied++;
-                                    console.log('[SEO Room] FAQ accordion cloned with ' + qas.length + ' items');
-                                }
-                            }
-                        }
-                    }
-                });
+                var totalReplacements = 0;
+                var skipSel = 'form,footer,nav,header,.seoroom-edit-indicator,.widget,.sidebar,.elementor-widget-form,.site-footer,.footer-widget,.elementor-location-footer';
+                var replacedEls = new Set();
 
-                // Simple approach: find ALL main content text widgets and replace them sequentially
-                if (applied < 2 && e.data.fullContent) {
-                    // Get all text widgets in the main content area (skip header/footer/nav)
-                    var allTextWidgets = [];
-                    document.querySelectorAll('.elementor-widget-text-editor .elementor-widget-container').forEach(function(tw) {
-                        if (tw.closest('nav, footer, header, .site-footer, .elementor-location-footer, .footer-widget, #footer, .widget-area, .sidebar, form')) return;
-                        if (tw.textContent.trim().length > 30) allTextWidgets.push(tw);
-                    });
-                    // Replace each text widget's content with the full draft — first widget gets everything
-                    if (allTextWidgets.length > 0) {
-                        // Split draft by H2 into chunks
-                        var chunks = e.data.fullContent.split(/<h2[^>]*>/i);
-                        var widgetIdx = 0;
-                        for (var ci = 0; ci < chunks.length && widgetIdx < allTextWidgets.length; ci++) {
-                            var chunk = chunks[ci].trim();
-                            if (!chunk || chunk.length < 20) continue;
-                            // Re-add the H2 tag (except for the first chunk which is before any H2)
-                            if (ci > 0) chunk = '<h2>' + chunk;
-                            allTextWidgets[widgetIdx].innerHTML = chunk;
-                            allTextWidgets[widgetIdx].style.boxShadow = '0 0 0 3px #22c55e';
-                            (function(el){ setTimeout(function(){ el.style.boxShadow = ''; }, 5000); })(allTextWidgets[widgetIdx]);
-                            widgetIdx++;
-                            applied++;
-                        }
-                        console.log('[SEO Room] Replaced ' + applied + ' text widgets with draft content');
+                // Normalize text for matching (strip HTML, entities, smart quotes, whitespace)
+                function norm(s) {
+                    var r = (s||'').replace(/<[^>]+>/g,'');
+                    r = r.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#039;/g,"'").replace(/&nbsp;/g,' ').replace(/&mdash;/g,'-').replace(/&ndash;/g,'-').replace(/&rsquo;/g,"'").replace(/&lsquo;/g,"'").replace(/&rdquo;/g,'"').replace(/&ldquo;/g,'"');
+                    var out = '';
+                    for(var i=0;i<r.length;i++){
+                        var c = r.charCodeAt(i);
+                        if(c===8216||c===8217||c===8218||c===8219) out += "'";
+                        else if(c===8220||c===8221||c===8222||c===8223) out += '"';
+                        else if(c===8211||c===8212) out += '-';
+                        else out += r[i];
                     }
+                    return out.replace(/\s+/g,' ').trim().toLowerCase();
                 }
 
+                // Highlight changed element
+                function hl(el) {
+                    el.style.setProperty('border-left','3px solid #22c55e','important');
+                    el.style.setProperty('padding-left','10px','important');
+                    el.style.setProperty('background','rgba(34,197,94,0.08)','important');
+                    el.setAttribute('data-seo-changed','1');
+                }
+
+                console.log('[SEO Room Apply] Starting paragraph matching for ' + sections.length + ' sections');
+
+                sections.forEach(function(section) {
+                    if (!section.draft_text || !section.original_text) return;
+
+                    // Parse original text into paragraphs
+                    var origParas = [];
+                    (section.original_text || '').split(/\n\n+/).forEach(function(para) {
+                        var t = para.trim();
+                        if (t.length >= 10) origParas.push({ text: t, normText: norm(t) });
+                    });
+                    if (origParas.length <= 1 && section.original_text && section.original_text.length > 50) {
+                        origParas = [];
+                        section.original_text.split(/\n/).forEach(function(para) {
+                            var t = para.trim();
+                            if (t.length >= 10) origParas.push({ text: t, normText: norm(t) });
+                        });
+                    }
+
+                    // Parse draft into paragraphs (HTML)
+                    var draftTemp = document.createElement('div');
+                    draftTemp.innerHTML = section.draft_text;
+                    var draftParas = [];
+                    draftTemp.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote').forEach(function(el) {
+                        draftParas.push({ html: el.innerHTML, tag: el.tagName.toLowerCase(), text: el.textContent.trim() });
+                    });
+                    // If no block elements found, treat the whole draft as one paragraph
+                    if (draftParas.length === 0 && section.draft_text.trim().length > 10) {
+                        draftParas.push({ html: section.draft_text, tag: 'p', text: draftTemp.textContent.trim() });
+                    }
+
+                    var sectionMatched = 0;
+                    var candidates = document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, span, div');
+
+                    // For each original paragraph, find matching DOM element and replace with draft
+                    origParas.forEach(function(orig, idx) {
+                        if (idx >= draftParas.length) return;
+                        var draft = draftParas[idx];
+                        var found = null;
+
+                        // Exact match
+                        for (var i = 0; i < candidates.length; i++) {
+                            var el = candidates[i];
+                            if (replacedEls.has(el)) continue;
+                            if (el.closest(skipSel)) continue;
+                            if (el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
+                            if (norm(el.textContent) === orig.normText) { found = el; break; }
+                        }
+
+                        // Fuzzy: first 50 chars match
+                        if (!found && orig.normText.length >= 15) {
+                            var short = orig.normText.slice(0, 50);
+                            for (var i = 0; i < candidates.length; i++) {
+                                var el = candidates[i];
+                                if (replacedEls.has(el)) continue;
+                                if (el.closest(skipSel)) continue;
+                                if (el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
+                                var elNorm = norm(el.textContent);
+                                if (elNorm.length >= 15 && elNorm.slice(0, 50) === short) { found = el; break; }
+                            }
+                        }
+
+                        // Fuzzy: contains match
+                        if (!found && orig.normText.length >= 30) {
+                            var snippet = orig.normText.slice(0, 60);
+                            for (var i = 0; i < candidates.length; i++) {
+                                var el = candidates[i];
+                                if (replacedEls.has(el)) continue;
+                                if (el.closest(skipSel)) continue;
+                                if (el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
+                                var elNorm = norm(el.textContent);
+                                if (elNorm.length >= 20 && elNorm.indexOf(snippet) !== -1) { found = el; break; }
+                            }
+                        }
+
+                        if (found) {
+                            var oldNorm = norm(found.textContent);
+                            found.innerHTML = draft.html;
+                            replacedEls.add(found);
+                            if (norm(found.textContent) !== oldNorm) {
+                                hl(found);
+                                totalReplacements++;
+                            }
+                            sectionMatched++;
+                        } else {
+                            console.log('[SEO Room Apply] No match for: "' + orig.normText.slice(0, 50) + '..."');
+                        }
+                    });
+
+                    // Extra draft paragraphs — append after last replaced element
+                    if (draftParas.length > origParas.length && sectionMatched > 0) {
+                        var lastReplaced = null;
+                        replacedEls.forEach(function(el) { lastReplaced = el; });
+                        if (lastReplaced) {
+                            for (var extra = origParas.length; extra < draftParas.length; extra++) {
+                                var dp = draftParas[extra];
+                                var newEl = document.createElement(dp.tag === 'li' ? 'p' : dp.tag);
+                                newEl.innerHTML = dp.html;
+                                hl(newEl);
+                                if (lastReplaced.className) {
+                                    var origClasses = lastReplaced.className.replace(/seoroom-editable/g, '').trim();
+                                    if (origClasses) newEl.className = origClasses;
+                                }
+                                if (lastReplaced.nextSibling) lastReplaced.parentNode.insertBefore(newEl, lastReplaced.nextSibling);
+                                else lastReplaced.parentNode.appendChild(newEl);
+                                lastReplaced = newEl;
+                                totalReplacements++;
+                            }
+                        }
+                    }
+
+                    // Replace heading if changed
+                    if (section.original_heading && section.draft_heading) {
+                        var headingNorm = norm(section.original_heading);
+                        var allH = document.querySelectorAll('h1,h2,h3,h4,h5,h6,.elementor-heading-title');
+                        for (var i = 0; i < allH.length; i++) {
+                            if (replacedEls.has(allH[i])) continue;
+                            if (allH[i].closest(skipSel)) continue;
+                            if (norm(allH[i].textContent) === headingNorm) {
+                                if (norm(section.draft_heading) !== headingNorm) {
+                                    allH[i].textContent = section.draft_heading;
+                                    hl(allH[i]);
+                                    totalReplacements++;
+                                }
+                                replacedEls.add(allH[i]);
+                                break;
+                            }
+                        }
+                    }
+
+                    if (sectionMatched > 0) applied++;
+                    console.log('[SEO Room Apply] Section "' + (section.heading || 'unknown').slice(0, 30) + '": ' + sectionMatched + '/' + origParas.length + ' paragraphs matched');
+                });
+
                 // Notify parent
-                window.parent.postMessage({ type: 'seoroom-draft-applied', count: applied, total: sections.length }, '*');
+                window.parent.postMessage({ type: 'seoroom-draft-applied', count: applied, total: sections.length, replacements: totalReplacements }, '*');
                 var ind = document.querySelector('.seoroom-edit-indicator');
-                if (ind) ind.textContent = applied + ' section(s) updated — edit text directly to make changes';
+                if (ind) {
+                    if (totalReplacements > 0) {
+                        ind.textContent = totalReplacements + ' text change(s) applied — review below';
+                        ind.style.background = '#22c55e';
+                    } else {
+                        ind.textContent = 'No changes detected — rewrite content first, then Apply Changes';
+                        ind.style.background = '#ef4444';
+                    }
+                }
             });
 
             // Tell parent we're ready
