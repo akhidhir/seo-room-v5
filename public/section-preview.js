@@ -32,7 +32,7 @@
 
     console.log('[SEO Room] Starting DIRECT paragraph matching for '+sections.length+' sections');
 
-    var skipSelector = 'form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form,.elementor-form,.wpcf7,.wpforms-container,.gform_wrapper,.site-footer,.footer-widget,.elementor-location-footer';
+    var skipSelector = 'form,footer,nav,header,.seo-preview-bar,.widget,.sidebar,.elementor-widget-form,.elementor-form,.wpcf7,.wpforms-container,.gform_wrapper,.site-footer,.footer-widget,.elementor-location-footer,.elementor-widget-itestimonials,.elementor-widget-call-to-action,.elementor-widget-ibutton,.elementor-widget-image,.elementor-widget-iteams';
     var replacedEls = new Set();
 
     sections.forEach(function(section){
@@ -180,6 +180,11 @@
       var insertBefore = null;
       // Insert before footer if it's inside our target
       if(footer && insertTarget.contains(footer)) insertBefore = footer;
+      // Fallback: insert before the last 2 Elementor sections (usually CTA + footer widgets)
+      if(!insertBefore && isElementor) {
+        var allTopSections = document.querySelectorAll('.elementor-top-section');
+        if(allTopSections.length >= 3) insertBefore = allTopSections[allTopSections.length - 2];
+      }
 
       newSections.forEach(function(ns){
         var heading = ns.draft_heading || ns.heading;
