@@ -22909,14 +22909,17 @@
                             // Send draft content to iframe for overlay
                             const iframe = visualIframeRef.current;
                             if (iframe && iframe.contentWindow) {
-                              // Send sections if available, otherwise parse draft_content into sections by H2
-                              let sectionsToSend = (selectedItem.page_sections || []).filter(s => s.draft_text);
-                              if (sectionsToSend.length === 0 && editContent) {
-                                // Parse draft_content into sections by H2 headings
+                              // ALWAYS build sections from editContent (the current editor = rewritten text)
+                              // and pair with original_text from page_sections for paragraph matching
+                              const origSections = selectedItem.page_sections || [];
+                              let sectionsToSend = [];
+
+                              if (editContent) {
+                                // Parse editContent (rewritten) into sections by H2
                                 const parser = new DOMParser();
                                 const doc = parser.parseFromString('<div>' + editContent + '</div>', 'text/html');
                                 const h2s = doc.querySelectorAll('h2');
-                                h2s.forEach(h2 => {
+                                h2s.forEach((h2, idx) => {
                                   const heading = h2.textContent.trim();
                                   let content = '';
                                   let el = h2.nextElementSibling;
@@ -22924,12 +22927,34 @@
                                     content += el.outerHTML;
                                     el = el.nextElementSibling;
                                   }
-                                  if (heading && content) {
-                                    sectionsToSend.push({ heading: heading, original_heading: heading, draft_heading: heading, draft_text: content, is_new: false });
-                                  }
+                                  if (!heading || !content) return;
+                                  // Find matching original section by heading similarity or index
+                                  const headNorm = heading.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                  let origSection = origSections.find(s => {
+                                    const oh = (s.original_heading || s.heading || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                                    return oh && (oh === headNorm || oh.includes(headNorm) || headNorm.includes(oh));
+                                  });
+                                  if (!origSection && idx < origSections.length) origSection = origSections[idx];
+                                  sectionsToSend.push({
+                                    heading: heading,
+                                    original_heading: origSection?.original_heading || origSection?.heading || heading,
+                                    draft_heading: heading,
+                                    draft_text: content,
+                                    original_text: origSection?.original_text || '',
+                                    is_new: !origSection
+                                  });
                                 });
                               }
-                              console.log('[visual-editor] Sending', sectionsToSend.length, 'sections to iframe');
+
+                              // Fallback: if no H2s parsed, use page_sections but with editContent as fullContent
+                              if (sectionsToSend.length === 0) {
+                                sectionsToSend = origSections.filter(s => s.draft_text).map(s => ({
+                                  ...s,
+                                  original_text: s.original_text || ''
+                                }));
+                              }
+
+                              console.log('[visual-editor] Sending', sectionsToSend.length, 'sections with original_text to iframe');
                               iframe.contentWindow.postMessage({ type: 'seoroom-apply-draft', sections: sectionsToSend, fullContent: editContent }, '*');
                             }
                           },
