@@ -21798,7 +21798,9 @@
         // Open preview via POST form — plugin reads sections from POST data
         const form = document.createElement('form');
         form.method = 'POST';
-        form.action = pageUrl + (pageUrl.includes('?') ? '&' : '?') + 'seoroom_preview=post';
+        // Ensure trailing slash to avoid WordPress 301 redirect (which drops POST data)
+        var previewUrl = pageUrl.replace(/\/?$/, '/');
+        form.action = previewUrl + (previewUrl.includes('?') ? '&' : '?') + 'seoroom_preview=post';
         form.target = '_blank';
         const input = document.createElement('input');
         input.type = 'hidden';
