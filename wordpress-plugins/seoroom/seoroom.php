@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.7.2
+ * Version: 8.7.3
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.7.2');
+define('SEOROOM_VERSION', '8.7.3');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -894,11 +894,13 @@ function sropt_elementor_preview_intercept() {
         $sections_json = wp_json_encode($sections);
         $script = '<script id="seo-section-data" type="application/json">' . $sections_json . '</script>';
 
-        // Load section-preview.js from dashboard
+        // Load section-preview.js from dashboard (with cache buster)
         $dash = $dashboard_url ?: rtrim((sropt_get_options())['dashboard_url'] ?? '', '/');
         if ($dash) {
-            $script .= '<script src="' . esc_url($dash) . '/section-preview.js" defer></script>';
+            $script .= '<script src="' . esc_url($dash) . '/section-preview.js?v=' . time() . '" defer></script>';
         }
+        // Debug: log what we injected
+        $script .= '<script>console.log("[SEO Room Preview] Sections: ' . count($sections) . ', Dashboard: ' . esc_js($dash) . '");</script>';
 
         // Preview bar with match count
         $original_url = get_permalink($page_id);
