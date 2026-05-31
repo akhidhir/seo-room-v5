@@ -21785,7 +21785,15 @@
       // Section-aware preview
       const handleSectionPreview = async () => {
         try { await handleSaveEdit(); } catch(e) { console.log('[preview] save failed, continuing:', e.message); }
-        // Always use section-preview (HTML injection) — works with all page builders
+        // Use WordPress plugin preview (perfect rendering) + injected section-preview.js (client-side matching)
+        try {
+          const r = await api('/projects/' + pid + '/content-queue/' + selectedItem.id + '/elementor-preview', { method: 'POST' });
+          if (r && r.preview_url) {
+            window.open(r.preview_url, '_blank');
+            return;
+          }
+        } catch (e) { console.log('[preview] Plugin preview failed:', e.message); }
+        // Fallback to server-side HTML injection
         const tkn = localStorage.getItem('token') || '';
         window.open('/api/projects/' + pid + '/content-queue/' + selectedItem.id + '/section-preview?token=' + encodeURIComponent(tkn), '_blank');
       };

@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.6.1
+ * Version: 8.7.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.6.1');
+define('SEOROOM_VERSION', '8.7.0');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -859,20 +859,55 @@ function sropt_elementor_preview_intercept() {
     $page_id = intval($preview['page_id']);
     if (get_queried_object_id() != $page_id) return;
 
-    // Start output buffering — capture the entire rendered HTML, then modify it
+    // Start output buffering — inject section-preview.js for CLIENT-SIDE replacement
+    // This gives us: perfect WordPress rendering + proven JS paragraph matching
     ob_start(function($html) use ($preview, $page_id) {
         if (empty($html) || strlen($html) < 500) return $html;
 
         $sections = $preview['sections'] ?? [];
+        if (empty($sections)) {
+            // No sections — just add preview bar
+            $original_url = get_permalink($page_id);
+            $bar = '<div class="seo-preview-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">'
+                . '<strong style="font-size:15px;">SEO Room Preview</strong>'
+                . '<span style="background:rgba(255,255,255,0.2);padding:3px 10px;border-radius:5px;font-size:12px;">Design-Safe Mode</span>'
+                . '<span style="opacity:0.9;">No content changes to preview</span>'
+                . '<a href="' . esc_url($original_url) . '" style="margin-left:auto;color:#e0e7ff;text-decoration:underline;font-size:13px;">View original &rarr;</a>'
+                . '</div>';
+            return str_replace('</body>', $bar . '</body>', $html);
+        }
 
-        foreach ($sections as $section) {
-            $is_new = !empty($section['is_new']);
-            $heading = $section['draft_heading'] ?? $section['heading'] ?? '';
-            $content = $section['draft_text'] ?? '';
-            $type = $section['type'] ?? '';
-            $original_heading = $section['original_heading'] ?? $section['heading'] ?? '';
+        // Inject section data as JSON + section-preview.js for client-side matching
+        $sections_json = wp_json_encode($sections);
+        $script = '<script id="seo-section-data" type="application/json">' . $sections_json . '</script>';
 
-            if (!$is_new || !$content) continue;
+        // Inline the section-preview script (same algorithm used by dashboard)
+        // Fetch from dashboard or use bundled version
+        $dashboard_url = rtrim((sropt_get_options())['dashboard_url'] ?? '', '/');
+        if ($dashboard_url) {
+            $script .= '<script src="' . esc_url($dashboard_url) . '/section-preview.js" defer></script>';
+        }
+
+        // Preview bar with match count
+        $original_url = get_permalink($page_id);
+        $bar = '<div class="seo-preview-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">'
+            . '<strong style="font-size:15px;">SEO Room Preview</strong>'
+            . '<span style="background:rgba(255,255,255,0.2);padding:3px 10px;border-radius:5px;font-size:12px;">Design-Safe Mode</span>'
+            . '<span id="seo-match-count" style="opacity:0.9;">Loading preview...</span>'
+            . '<a href="' . esc_url($original_url) . '" style="margin-left:auto;color:#e0e7ff;text-decoration:underline;font-size:13px;">View original &rarr;</a>'
+            . '</div>';
+
+        // Add details/summary CSS for FAQ accordions
+        $faq_css = '<style>details{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;overflow:hidden}details summary{padding:12px 16px;cursor:pointer;font-weight:600;font-size:15px;color:#1e293b;list-style:none;display:flex;align-items:center;gap:8px}details summary::-webkit-details-marker{display:none}details summary::before{content:"+";display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;background:rgba(99,102,241,0.1);color:#6366f1;font-weight:700;font-size:14px;flex-shrink:0}details[open] summary::before{content:"−"}details[open] summary{border-bottom:1px solid #e2e8f0}details p,details div{padding:12px 16px 12px 46px;font-size:14px;line-height:1.7;color:#475569}.seo-new-badge{position:absolute;top:8px;right:12px;font-size:10px;font-weight:700;color:#fff;background:#22c55e;padding:3px 10px;border-radius:4px;z-index:10}</style>';
+
+        $html = str_replace('</head>', $faq_css . '</head>', $html);
+        $html = str_replace('</body>', $script . $bar . '</body>', $html);
+
+        return $html;
+    });
+
+    // Skip the old PHP regex replacement — everything below is handled by section-preview.js
+    return;
 
             $is_faq = (stripos($type, 'faq') !== false || stripos($heading, 'faq') !== false);
 
