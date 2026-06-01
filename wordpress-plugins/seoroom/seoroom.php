@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.0
+ * Version: 8.9.2
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.0');
+define('SEOROOM_VERSION', '8.9.2');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -3951,7 +3951,6 @@ function sropt_get_remote_update($force = false) {
 
 // Apply our update info to the plugins-update transient (shared by both the SET and READ hooks)
 function sropt_apply_update($transient, $force = false) {
-    if (!is_object($transient)) return $transient;
     $data = sropt_get_remote_update($force);
     if (!$data || !isset($data->version)) return $transient;
 
@@ -3959,6 +3958,10 @@ function sropt_apply_update($transient, $force = false) {
     $dashboard_url = rtrim((sropt_get_options()['dashboard_url'] ?? ''), '/');
 
     if (version_compare(SEOROOM_VERSION, $data->version, '<')) {
+        // We HAVE an update — attach it even if WordPress's transient is empty/false
+        // (the previous bug: we bailed when $transient wasn't an object, so the update never showed
+        //  on sites where WP couldn't refresh the list from wp.org)
+        if (!is_object($transient)) $transient = new stdClass();
         if (!isset($transient->response) || !is_array($transient->response)) $transient->response = array();
         $transient->response[$plugin_file] = (object) array(
             'slug'        => $data->slug ?? 'seoroom',
@@ -3970,7 +3973,8 @@ function sropt_apply_update($transient, $force = false) {
             'tested'      => $data->tested ?? '6.7',
         );
         if (isset($transient->no_update[$plugin_file])) unset($transient->no_update[$plugin_file]);
-    } else {
+    } else if (is_object($transient)) {
+        // No update available — only annotate an existing real transient; don't fabricate one
         if (!isset($transient->no_update) || !is_array($transient->no_update)) $transient->no_update = array();
         $transient->no_update[$plugin_file] = (object) array(
             'slug'        => $data->slug ?? 'seoroom',
