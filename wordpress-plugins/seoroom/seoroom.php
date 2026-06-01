@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.8.7
+ * Version: 8.8.8
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.8.7');
+define('SEOROOM_VERSION', '8.8.8');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -878,6 +878,11 @@ function sropt_elementor_preview_intercept() {
 
     if ($sections === null) return;
 
+    // Preview pages must never be cached by Cloudflare / BerqWP / page cache — they're per-request
+    if (!defined('DONOTCACHEPAGE')) define('DONOTCACHEPAGE', true);
+    nocache_headers();
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
     // Determine mode before starting buffer
     $is_hash_mode = ($_GET['seoroom_preview'] === 'hash');
 
@@ -911,9 +916,18 @@ function sropt_elementor_preview_intercept() {
             $script .= '<script id="seo-section-data" type="application/json">' . wp_json_encode($sections) . '</script>';
         }
 
-        // Load section-preview.js from plugin directory (local — no CORS/CSP issues)
-        $script .= '<script src="' . esc_url(SEOROOM_URL . 'section-preview.js') . '?v=' . SEOROOM_VERSION . '" defer></script>';
-        $script .= '<script>console.log("[SEO Room Preview] Injected ' . count($sections) . ' sections, script: local plugin");</script>';
+        // Inline section-preview.js directly into the (uncached) preview HTML so CDN/page caches can never serve a stale copy
+        $preview_js = @file_get_contents(SEOROOM_PATH . 'section-preview.js');
+        if ($preview_js !== false && strlen($preview_js) > 100) {
+            // Guard against an accidental closing tag breaking the inline script
+            $preview_js = str_replace('</script>', '<\/script>', $preview_js);
+            $script .= '<script id="seoroom-section-preview-inline" data-v="' . esc_attr(SEOROOM_VERSION) . '">' . $preview_js . '</script>';
+            $script .= '<script>console.log("[SEO Room Preview] Injected ' . count($sections) . ' sections, script: inline v' . SEOROOM_VERSION . '");</script>';
+        } else {
+            // Fallback to external file if the source can\'t be read
+            $script .= '<script src="' . esc_url(SEOROOM_URL . 'section-preview.js') . '?v=' . SEOROOM_VERSION . '" defer></script>';
+            $script .= '<script>console.log("[SEO Room Preview] Injected ' . count($sections) . ' sections, script: external fallback");</script>';
+        }
 
         // Preview bar with match count
         $original_url = get_permalink($page_id);
