@@ -37320,10 +37320,28 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
         let wpUrl = project.wp_url || baseUrl;
         if (!/^https?:\/\//i.test(wpUrl)) wpUrl = 'https://' + wpUrl;
 
+        // 0. Load plugin-pushed pages (collected locally inside WordPress — bypasses crawl blocking and
+        //    carries the real rendered content, including Elementor). Used as the page list and as a
+        //    per-page fallback when a server-side crawl is blocked.
+        const pushedByUrl = new Map();
+        try {
+          const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
+          for (const pp of (cc.rows[0]?.config?.pages || [])) {
+            const u = (pp.url || '').replace(/\/$/, '');
+            if (u) pushedByUrl.set(u, pp);
+          }
+          if (pushedByUrl.size) console.log(`[internal-links] Loaded ${pushedByUrl.size} plugin-pushed pages`);
+        } catch (e) {}
+
         // 1. Discover pages
         const authHeaders = getWpAuthHeaders(project);
-        const pages = await discoverPages(baseUrl, wpUrl, authHeaders);
-        console.log(`[internal-links] Discovered ${pages.length} pages for project ${projectId}`);
+        let pages = await discoverPages(baseUrl, wpUrl, authHeaders);
+        // If discovery found nothing (site blocks crawling), fall back to the plugin-pushed page list
+        if (!pages.length && pushedByUrl.size) {
+          pages = [...pushedByUrl.values()].map(pp => ({ url: pp.url, title: pp.title }));
+          console.log(`[internal-links] Discovery empty — using ${pages.length} plugin-pushed pages`);
+        }
+        console.log(`[internal-links] ${pages.length} pages for project ${projectId}`);
         if (!pages.length) {
           await pool.query(`UPDATE internal_link_audit_cache SET status='completed', total_pages=0, total_links=0, orphan_pages='[]', stats='{}', suggestions_count=0, audited_at=NOW(), updated_at=NOW() WHERE project_id=$1`, [projectId]);
           return;
@@ -37339,7 +37357,7 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           const url = page.url;
           try {
             const resp = await fetch(url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
-            if (!resp.ok) continue;
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const html = await resp.text();
             const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
             const title = titleMatch ? titleMatch[1].trim() : page.title;
@@ -37393,7 +37411,26 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
 
             pageMap.set(url.replace(/\/$/, ''), { title, outbound, inbound: [], wordCount, textSnippet: textContent.substring(0, 1500), fullText: textContent });
           } catch (crawlErr) {
-            console.log(`[internal-links] Failed to crawl ${url}: ${crawlErr.message}`);
+            // Crawl blocked/failed — use the plugin-pushed content for this page if we have it
+            const urlNorm = url.replace(/\/$/, '');
+            const pp = pushedByUrl.get(urlNorm);
+            if (pp && (pp.text || (pp.links && pp.links.length))) {
+              const fullText = (pp.text || '').replace(/\s+/g, ' ').trim();
+              const outbound = [];
+              for (const l of (pp.links || [])) {
+                let href = (l.href || '').trim();
+                const anchor = (l.anchor || '').trim();
+                if (!anchor || anchor.length > 200) continue;
+                try { const rr = new URL(href, url); if (rr.hostname !== domain) continue; href = rr.href.replace(/\/$/, ''); } catch { continue; }
+                if (href === urlNorm) continue;
+                outbound.push({ target_url: href, anchor_text: anchor, context_snippet: '' });
+                linkGraph.push({ source_url: urlNorm, source_title: pp.title || page.title, target_url: href, anchor_text: anchor, context_snippet: '' });
+              }
+              pageMap.set(urlNorm, { title: pp.title || page.title, outbound, inbound: [], wordCount: pp.wordCount || fullText.split(/\s+/).length, textSnippet: fullText.substring(0, 1500), fullText });
+              console.log(`[internal-links] Used plugin-pushed content for ${url}`);
+            } else {
+              console.log(`[internal-links] Failed to crawl ${url}: ${crawlErr.message}`);
+            }
           }
         }
 
@@ -37515,77 +37552,33 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           console.log('[internal-links] Total AI suggestions before validation: ' + suggestions.length);
         }
 
-        // 7. Validate suggestions against ACTUAL WP REST API content (not crawled page text)
+        // 7. Validate suggestions against the RENDERED page text (what the plugin's render-time injector acts on).
+        //    This works on Elementor/page-builder sites too, because the rendered text contains the visible content —
+        //    unlike WordPress post_content, which is empty on builder pages.
         await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed', 'approved')`, [projectId]);
         let validCount = 0, skippedCount = 0;
 
-        // Fetch WP content for unique source URLs used in suggestions
-        const wpContentCache = new Map();
-        const wpUrlForValidation = project.wp_url || project.domain;
-        const wpAuthHeaders = getWpAuthHeaders ? getWpAuthHeaders(project) : {};
-        const uniqueSourceUrls = [...new Set(suggestions.map(s => s.source_url))];
-        
-        for (const srcUrl of uniqueSourceUrls) {
-          try {
-            // Extract slug from URL
-            let slug = srcUrl.replace(/\/$/, '');
-            try { slug = new URL(slug).pathname.replace(/^\/(.*?)\/?$/, '$1'); } catch(e) { slug = slug.replace(/^https?:\/\/[^/]+\/?/, ''); }
-            slug = slug.split('/').pop() || slug;
-            
-            const baseWpUrl = (wpUrlForValidation || '').replace(/\/$/, '');
-            // Try pages first, then posts
-            let wpContent = '';
-            for (const postType of ['pages', 'posts']) {
-              try {
-                const resp = await fetch(baseWpUrl + '/wp-json/wp/v2/' + postType + '?slug=' + encodeURIComponent(slug), {
-                  headers: { ...wpAuthHeaders, 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
-                  signal: AbortSignal.timeout(10000)
-                });
-                if (resp.ok) {
-                  const items = await resp.json();
-                  if (items.length > 0) {
-                    wpContent = (items[0].content?.rendered || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').toLowerCase();
-                    break;
-                  }
-                }
-              } catch(e) {}
-            }
-            if (wpContent) wpContentCache.set(srcUrl, wpContent);
-          } catch(e) {
-            console.log('[internal-links] WP fetch failed for ' + srcUrl + ': ' + (e.message || ''));
-          }
-        }
-        console.log('[internal-links] Fetched WP content for ' + wpContentCache.size + '/' + uniqueSourceUrls.length + ' source pages');
-
         for (const s of suggestions) {
           const anchor = (s.suggested_anchor || '').toLowerCase().trim();
-          if (!anchor) { skippedCount++; continue; }
-          
-          // Validate against WP REST API content (what we can actually edit)
-          const wpText = wpContentCache.get(s.source_url);
-          if (!wpText || !wpText.includes(anchor)) {
-            // Fallback: check crawled text too — might work with flex regex during apply
-            const sourceData = pageMap.get((s.source_url || '').replace(/\/$/, ''));
-            const crawledText = (sourceData?.fullText || '').toLowerCase();
-            if (!crawledText.includes(anchor)) {
-              console.log('[internal-links] Skipped: anchor "' + s.suggested_anchor + '" not in WP content or crawled text for ' + s.source_url);
-              skippedCount++;
-              continue;
-            }
-            // Anchor in crawled text but not WP content — likely in theme/sidebar, skip
-            console.log('[internal-links] Skipped: anchor "' + s.suggested_anchor + '" in rendered page but not in editable WP content for ' + s.source_url);
+          if (!anchor || anchor.length < 3) { skippedCount++; continue; }
+
+          // Anchor must exist verbatim in the source page's rendered text (so the injector can find + wrap it).
+          const sourceData = pageMap.get((s.source_url || '').replace(/\/$/, ''));
+          const renderedText = (sourceData?.fullText || '').toLowerCase();
+          if (!renderedText || !renderedText.includes(anchor)) {
+            console.log('[internal-links] Skipped: anchor "' + s.suggested_anchor + '" not found in rendered text of ' + s.source_url);
             skippedCount++;
             continue;
           }
-          
-          // Validate target URL exists in our crawled pages
+
+          // Target must be a real page on the site, and not a self-link.
           const targetNorm = (s.target_url || '').replace(/\/$/, '');
-          if (!pageMap.has(targetNorm)) {
-            console.log('[internal-links] Skipped: target ' + s.target_url + ' not in crawled pages');
+          if (!pageMap.has(targetNorm) || targetNorm === (s.source_url || '').replace(/\/$/, '')) {
+            console.log('[internal-links] Skipped: target ' + s.target_url + ' not a distinct crawled page');
             skippedCount++;
             continue;
           }
-          
+
           await pool.query(`
             INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
@@ -37677,6 +37670,36 @@ app.get('/api/projects/:projectId/internal-links/suggestions', async (req, res) 
       : await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 AND status=$2 ORDER BY priority DESC, created_at', [projectId, status]);
     res.json({ suggestions: q.rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Approved links pull — the WordPress plugin fetches this and injects links at render time.
+// No auth: contains no sensitive data (just internal anchor → target mappings) and the plugin needs open read.
+app.get('/api/projects/:projectId/internal-links/approved', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const q = await pool.query(
+      `SELECT source_url, target_url, target_title, suggested_anchor
+         FROM internal_link_suggestions
+        WHERE project_id=$1 AND status IN ('approved','applied')
+        ORDER BY priority DESC, created_at`,
+      [projectId]
+    );
+    // Group by source page so the plugin can match by current URL
+    const byPage = {};
+    for (const r of q.rows) {
+      const src = (r.source_url || '').replace(/\/$/, '');
+      if (!src) continue;
+      (byPage[src] = byPage[src] || []).push({
+        anchor: r.suggested_anchor,
+        target: r.target_url,
+        target_title: r.target_title || '',
+      });
+    }
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json({ project_id: projectId, count: q.rows.length, links_by_page: byPage });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Approve/dismiss suggestion
