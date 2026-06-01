@@ -37612,20 +37612,21 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           page_details: pageStats
         };
 
-        // 9. Save audit record
+        // 9. Save audit record — report the count that ACTUALLY saved (validCount), not the pre-validation number,
+        //    and record how many were dropped + why, so the UI can explain an empty list instead of lying.
         await pool.query(`
           INSERT INTO audits (project_id, pillar, status, audit_data, completed_at)
           VALUES ($1, 'internal_links', 'completed', $2, NOW())
-        `, [projectId, JSON.stringify({ stats, orphan_pages: orphanPages, suggestions_count: suggestions.length })]);
+        `, [projectId, JSON.stringify({ stats, orphan_pages: orphanPages, suggestions_count: validCount, suggestions_generated: suggestions.length, suggestions_skipped: skippedCount })]);
 
         // 10. Update cache
         await pool.query(`
           UPDATE internal_link_audit_cache
           SET status='completed', total_pages=$2, total_links=$3, orphan_pages=$4, stats=$5, suggestions_count=$6, audited_at=NOW(), updated_at=NOW()
           WHERE project_id=$1
-        `, [projectId, pageMap.size, linkGraph.length, JSON.stringify(orphanPages), JSON.stringify(stats), suggestions.length]);
+        `, [projectId, pageMap.size, linkGraph.length, JSON.stringify(orphanPages), JSON.stringify(stats), validCount]);
 
-        console.log(`[internal-links] Audit complete for project ${projectId}: ${pageMap.size} pages, ${linkGraph.length} links, ${orphanPages.length} orphans, ${suggestions.length} suggestions`);
+        console.log(`[internal-links] Audit complete for project ${projectId}: ${pageMap.size} pages, ${linkGraph.length} links, ${orphanPages.length} orphans, ${validCount} saved (${suggestions.length} generated, ${skippedCount} skipped)`);
 
       } catch (bgErr) {
         console.error(`[internal-links] Background audit error: ${bgErr.message}`);
