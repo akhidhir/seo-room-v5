@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.2
+ * Version: 8.9.4
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.2');
+define('SEOROOM_VERSION', '8.9.4');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -3993,22 +3993,32 @@ function sropt_check_for_update($transient) {
     return sropt_apply_update($transient, true);
 }
 
-// READ hook — fires on every read of the transient (Plugins/Updates page loads), bypassing WP's ~12h plugin-check throttle
+// READ hook — fires on every read of the transient (Plugins/Updates page loads)
 add_filter('site_transient_update_plugins', 'sropt_read_update');
 function sropt_read_update($transient) {
-    return sropt_apply_update($transient, false);
+    global $pagenow;
+    // On the screens that actually display updates, bypass our cache and fetch live —
+    // a persistent object cache can otherwise serve a stale "no update" result forever
+    $live = in_array($pagenow, array('plugins.php', 'update-core.php', 'update.php'), true);
+    return sropt_apply_update($transient, $live);
 }
 
-// Clear the cached version check so the next page load re-queries the dashboard immediately
-function sropt_clear_update_cache() {
+// Force a genuine, cache-bypassing re-check whenever the admin opens Plugins / Updates / SEO Room settings
+function sropt_force_update_refresh() {
     delete_transient('sropt_remote_update');
-    delete_site_transient('update_plugins');
+    sropt_get_remote_update(true);            // live fetch now (force), repopulates cache
+    delete_site_transient('update_plugins');  // make WP rebuild its list (fires our SET hook too)
 }
-// Bust the cache whenever the admin opens the SEO Room settings page, and on activation
+add_action('load-plugins.php', 'sropt_force_update_refresh');
+add_action('load-update-core.php', 'sropt_force_update_refresh');
+add_action('load-update.php', 'sropt_force_update_refresh');
 add_action('admin_init', function () {
-    if (isset($_GET['page']) && $_GET['page'] === 'seoroom') sropt_clear_update_cache();
+    if (isset($_GET['page']) && $_GET['page'] === 'seoroom') sropt_force_update_refresh();
 });
-register_activation_hook(__FILE__, 'sropt_clear_update_cache');
+register_activation_hook(__FILE__, 'sropt_force_update_refresh');
+
+// Back-compat alias
+function sropt_clear_update_cache() { sropt_force_update_refresh(); }
 
 // Plugin info popup (when user clicks "View details")
 add_filter('plugins_api', 'sropt_plugin_info', 20, 3);
