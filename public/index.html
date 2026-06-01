@@ -21825,21 +21825,8 @@
           previewSections = [{ heading: selectedItem.page_title, draft_text: editContent, original_text: selectedItem.current_content || '', type: 'text', is_new: false }];
         }
         if (previewSections.length === 0) { alert('No content to preview — write or import content first'); return; }
-        // Match preview FAQ accordions to the live site's accordion design (white pill + cyan #00C3FF circle arrow,
-        // Red Hat Text question #1A1B1E, answer #606060). Embedded as a <style> so it overrides the plugin's +/- on any version.
-        const faqIdx = previewSections.findIndex(s => /<details/i.test(s.draft_text || ''));
-        if (faqIdx >= 0) {
-          const faqCss = '<style id="seo-faq-site-match">'
-            + '.seo-new-block details,.seo-split-card details{background:#fff;border:none;border-radius:28px;margin-bottom:14px;box-shadow:0 6px 18px rgba(2,6,23,.06);overflow:hidden}'
-            + '.seo-new-block details summary,.seo-split-card details summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 12px 13px 25px;min-height:56px;box-sizing:border-box;color:#1a1b1e;font-family:\'Red Hat Text\',-apple-system,sans-serif;font-weight:500;font-size:16px;line-height:30px}'
-            + 'details summary::-webkit-details-marker{display:none}'
-            + '.seo-new-block details summary::before,.seo-split-card details summary::before{display:none !important}'
-            + '.seo-new-block details summary::after,.seo-split-card details summary::after{content:"\\2193";flex:0 0 auto;width:30px;height:30px;border-radius:50%;background:#00c3ff;color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;line-height:1}'
-            + '.seo-new-block details[open] summary::after,.seo-split-card details[open] summary::after{content:"\\2191"}'
-            + '.seo-new-block details>*:not(summary),.seo-split-card details>*:not(summary){padding:4px 25px 20px 25px;color:#606060;font-family:\'Red Hat Text\',-apple-system,sans-serif;font-size:15px;line-height:1.7}'
-            + '</style>';
-          previewSections = previewSections.map((s, i) => i === faqIdx ? { ...s, draft_text: faqCss + (s.draft_text || '') } : s);
-        }
+        // NOTE: FAQ/section styling is matched PER-SITE by the plugin's section-preview.js (reads each site's own
+        // colours, fonts and accordion design). No site-specific styling is hardcoded here.
         // Encode sections as base64 in URL hash — plugin reads it client-side
         const sectionsJson = JSON.stringify(previewSections);
         const encoded = btoa(unescape(encodeURIComponent(sectionsJson)));

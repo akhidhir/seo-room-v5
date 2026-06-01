@@ -22,30 +22,66 @@
     el.setAttribute('data-seo-hl','1');
   }
 
-  // Restyle preview FAQ accordions (<details>/<summary>) to match the site's real accordion:
-  // arrow toggle instead of +/-, and the question colour/font pulled from the live page.
-  function styleFaqToMatchSite(){
-    if(!document.querySelector('.seo-new-block details')) return; // only run if a preview FAQ exists
-    var sels = '.elementor-widget-iaccordions .acc_title, .elementor-widget-iaccordions [class*="title"], '
-             + '.elementor-accordion .elementor-tab-title, .elementor-toggle .elementor-toggle-title, '
-             + '[class*="accordion"] [class*="title"], [class*="faq"] [class*="title"]';
-    var donor=null, all=document.querySelectorAll(sels);
-    for(var i=0;i<all.length;i++){ if(!all[i].closest('.seo-new-block') && (all[i].textContent||'').trim().length>2){ donor=all[i]; break; } }
-    var qColor='', qFont='', qWeight='', qSize='';
-    if(donor){ try{ var cs=window.getComputedStyle(donor); qColor=cs.color; qFont=cs.fontFamily; qWeight=cs.fontWeight; qSize=cs.fontSize; }catch(e){} }
-    var arrow = qColor || '#14b8a6';
+  // ── Per-site branding helpers ───────────────────────────────────────────────
+  function parseRgb(s){ var m=(s||'').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?/); return m?[+m[1],+m[2],+m[3], m[4]===undefined?1:+m[4]]:null; }
+  function isVivid(rgb){ if(!rgb || rgb[3] < 0.4) return false; var r=rgb[0],g=rgb[1],b=rgb[2]; var mx=Math.max(r,g,b), mn=Math.min(r,g,b); if(mx<35) return false; if(mn>225) return false; if(mx-mn<28) return false; return true; }
+  // Detect the site's primary brand/accent colour (accordion icon → button → link)
+  function getSiteAccent(){
+    var cands=[];
+    function push(el, prop){ try{ cands.push(window.getComputedStyle(el)[prop]); }catch(e){} }
+    document.querySelectorAll('.acc-toggle .down,.acc-toggle .up,.elementor-accordion-icon,[class*="accordion"] [class*="icon"],[class*="faq"] [class*="icon"]').forEach(function(e){ push(e,'backgroundColor'); push(e,'color'); });
+    document.querySelectorAll('.elementor-button,.elementor-button-link,a.button,button,.btn,[class*="btn-"],[class*="cta"]').forEach(function(e){ if(!e.closest('.seo-preview-bar')) push(e,'backgroundColor'); });
+    document.querySelectorAll('a').forEach(function(e,i){ if(i<25 && !e.closest('.seo-preview-bar,nav,header,footer')) push(e,'color'); });
+    for(var i=0;i<cands.length;i++){ var rgb=parseRgb(cands[i]); if(isVivid(rgb)) return 'rgb('+rgb[0]+','+rgb[1]+','+rgb[2]+')'; }
+    return '#1f4fe0';
+  }
+  // Read the site's real accordion so the preview FAQ can mirror it exactly
+  function readSiteAccordion(){
+    var out={};
+    function info(el){ if(!el) return null; try{ var c=window.getComputedStyle(el); return {color:c.color,bg:c.backgroundColor,font:c.fontFamily,weight:c.fontWeight,size:c.fontSize,radius:c.borderRadius,pad:c.padding,w:c.width,h:c.height,shadow:c.boxShadow}; }catch(e){ return null; } }
+    var title = document.querySelector('.acc-toggle, .elementor-tab-title, .elementor-toggle-title, [class*="accordion"] [class*="title"], [class*="accordion"] [class*="header"]');
+    var icon  = document.querySelector('.acc-toggle .down,.acc-toggle .up, .elementor-accordion-icon, [class*="accordion"] [class*="icon"]');
+    var item  = title ? (title.closest('.acc-item,.elementor-accordion-item,.elementor-toggle-item') || title.parentElement) : null;
+    var content = document.querySelector('.acc-content, .elementor-tab-content, [class*="accordion"] [class*="content"]');
+    out.title=info(title); out.icon=info(icon); out.item=info(item); out.content=info(content);
+    return out;
+  }
+  // Restyle preview FAQ accordions (<details>/<summary>) to MIRROR this specific site's accordion design.
+  function styleFaqToMatchSite(accent){
+    if(!document.querySelector('.seo-new-block details')) return;
+    var a = readSiteAccordion();
+    var t=a.title||{}, ic=a.icon||{}, it=a.item||{}, ct=a.content||{};
+    var qColor = t.color || '#1a1b1e';
+    var qFont  = t.font  || '';
+    var qWeight= t.weight|| '500';
+    var qSize  = t.size  || '16px';
+    var pillBg = (it.bg && parseRgb(it.bg) && parseRgb(it.bg)[3]>0.1) ? it.bg : '#ffffff';
+    var pillRadius = (t.radius && t.radius!=='0px') ? t.radius : (it.radius && it.radius!=='0px' ? it.radius : '14px');
+    // Icon circle: prefer the site's accordion icon background, else the detected brand accent
+    var circleBg = (ic.bg && isVivid(parseRgb(ic.bg))) ? ic.bg : accent;
+    var circleColor = ic.color || '#ffffff';
+    var circle = (ic.radius==='50%' || (ic.w && ic.w===ic.h)) ; // looks like a circle on the site
+    var aColor = ct.color || '#5b6470';
+    var aFont  = ct.font  || qFont;
+    var aSize  = ct.size  || '15px';
+    var arrowMode = circle; // circle-with-arrow vs plain chevron
     var css = ''
-      + '.seo-new-block details{border:1px solid #e7ebf1;border-radius:10px;margin-bottom:12px;overflow:hidden;background:#fff}'
-      + '.seo-new-block details summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 20px;'
-          + (qColor?'color:'+qColor+';':'') + (qFont?'font-family:'+qFont+';':'') + 'font-weight:'+(qWeight||'600')+';' + (qSize?'font-size:'+qSize+';':'') + '}'
+      + '.seo-new-block details{background:'+pillBg+';border:none;border-radius:'+pillRadius+';margin-bottom:12px;overflow:hidden;box-shadow:0 5px 16px rgba(2,6,23,.06)}'
+      + '.seo-new-block details summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 14px 14px 22px;min-height:54px;box-sizing:border-box;'
+          + 'color:'+qColor+';' + (qFont?'font-family:'+qFont+';':'') + 'font-weight:'+qWeight+';font-size:'+qSize+';line-height:1.4}'
       + '.seo-new-block details summary::-webkit-details-marker{display:none}'
-      + '.seo-new-block details summary::before{display:none !important}'
-      + '.seo-new-block details summary::after{content:"";flex:0 0 auto;margin-left:auto;width:9px;height:9px;border-right:2px solid '+arrow+';border-bottom:2px solid '+arrow+';transform:rotate(45deg);transition:transform .2s ease}'
-      + '.seo-new-block details[open] summary::after{transform:rotate(-135deg)}'
-      + '.seo-new-block details > *:not(summary){padding:2px 20px 18px 20px}';
+      + '.seo-new-block details summary::before{display:none !important}';
+    if(arrowMode){
+      css += '.seo-new-block details summary::after{content:"\\2193";flex:0 0 auto;width:30px;height:30px;border-radius:50%;background:'+circleBg+';color:'+circleColor+';display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;line-height:1;transition:transform .2s}'
+           + '.seo-new-block details[open] summary::after{content:"\\2191"}';
+    } else {
+      css += '.seo-new-block details summary::after{content:"";flex:0 0 auto;width:10px;height:10px;border-right:2px solid '+circleBg+';border-bottom:2px solid '+circleBg+';transform:rotate(45deg);transition:transform .2s}'
+           + '.seo-new-block details[open] summary::after{transform:rotate(-135deg)}';
+    }
+    css += '.seo-new-block details>*:not(summary){padding:2px 22px 18px 22px;color:'+aColor+';' + (aFont?'font-family:'+aFont+';':'') + 'font-size:'+aSize+'}';
     var prev=document.getElementById('seo-faq-match'); if(prev) prev.remove();
     var st=document.createElement('style'); st.id='seo-faq-match'; st.textContent=css; document.head.appendChild(st);
-    console.log('[SEO Room] FAQ styled to match site (colour '+(qColor||'default')+', font '+(qFont||'default')+')');
+    console.log('[SEO Room] FAQ matched to site — question '+qColor+', circle '+circleBg+', font '+(qFont||'inherit'));
   }
 
   function run(){
@@ -55,6 +91,11 @@
     var matched = 0;
     var totalReplacements = 0;
     var total = sections.filter(function(s){return !s.is_new;}).length;
+
+    // Detect this site's brand accent colour and expose it to all preview CSS as --seo-accent
+    var siteAccent = '#1f4fe0';
+    try { siteAccent = getSiteAccent(); document.documentElement.style.setProperty('--seo-accent', siteAccent); } catch(e){}
+    console.log('[SEO Room] Site accent detected: ' + siteAccent);
 
     console.log('[SEO Room] Starting DIRECT paragraph matching for '+sections.length+' sections');
 
@@ -241,8 +282,8 @@
           + '.seo-split-left{padding-top:54px}'
           + '.seo-split-left .elementor-widget-heading{margin-bottom:0}'
           + '.seo-split-right{position:relative}'
-          // Blue gradient sits to the LEFT and below the card, with a soft drop shadow (matches the testimonial design)
-          + '.seo-split-right:before{content:"";position:absolute;inset:-16px 70px -26px -42px;background:linear-gradient(155deg,#1f4fe0 0%,#1f8bf5 55%,#22c7f5 100%);border-radius:22px;z-index:0;box-shadow:0 36px 70px rgba(13,45,120,.32)}'
+          // Brand-coloured block sits to the LEFT and below the card (colour comes from --seo-accent, detected per site)
+          + '.seo-split-right:before{content:"";position:absolute;inset:-16px 70px -26px -42px;background:var(--seo-accent,#1f4fe0);border-radius:22px;z-index:0;box-shadow:0 30px 60px rgba(2,6,23,.28)}'
           + '.seo-split-card{position:relative;z-index:1;background:#fff;border-radius:18px;box-shadow:0 30px 60px rgba(2,6,23,.16);padding:46px 50px}'
           + '.seo-split-card .elementor-widget-container,.seo-split-card p{margin-top:0}'
           + '@media(max-width:900px){.seo-split .seo-split-inner{grid-template-columns:1fr;gap:28px}.seo-split-left{padding-top:0}.seo-split-right:before{inset:-10px 60px -16px -14px}.seo-split-card{padding:32px 26px}}';
@@ -439,8 +480,8 @@
       });
     }
 
-    // Style preview FAQ accordions to match the site's real accordion (arrow toggle + question colour/font)
-    try { styleFaqToMatchSite(); } catch(e){ console.warn('[SEO Room] FAQ styling skipped:', e); }
+    // Style preview FAQ accordions to mirror this site's real accordion (icon circle colour, question/answer colour + font)
+    try { styleFaqToMatchSite(siteAccent); } catch(e){ console.warn('[SEO Room] FAQ styling skipped:', e); }
 
     // Update badge
     var countBadge = document.getElementById('seo-match-count');
