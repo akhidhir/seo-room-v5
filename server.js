@@ -10852,7 +10852,7 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
 
     const canonicalNAP = { name: businessName, phone: bizPhone, address: location };
 
-    console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain}) phone=${bizPhone} — HTTP only, no SerpAPI`);
+    console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain}) phone=${bizPhone} — HTTP + SerpAPI site: fallback`);
 
     // Helper: check if HTML contains the business (fuzzy match)
     const htmlContainsBiz = (html) => {
@@ -11032,6 +11032,36 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         }
       }));
       results.push(...batchResults);
+    }
+
+    // Reliability fallback: many directories block server-side fetches and return "not_checked".
+    // Confirm those with a Google "site:" search via SerpAPI (only fires for the unchecked ones, so cost is bounded).
+    if (SERPAPI_KEY) {
+      const dirUrlByName = Object.fromEntries(
+        AUSTRALIAN_DIRECTORIES.map(d => [d.name, (d.url || '').replace(/^https?:\/\//, '').replace(/\/$/, '')])
+      );
+      const unchecked = results.filter(r => r.status === 'not_checked');
+      console.log(`[citations] SerpAPI fallback for ${unchecked.length} unchecked directories`);
+      for (const r of unchecked) {
+        const site = dirUrlByName[r.name];
+        if (!site) continue;
+        try {
+          const sr = await serpApiSearch({ engine: 'google', q: `site:${site} "${businessName}"`, gl: 'au', hl: 'en', num: 5 });
+          const org = sr.organic_results || [];
+          const hit = org.find(o => (o.link || '').includes(site) && htmlContainsBiz((o.title || '') + ' ' + (o.snippet || '')));
+          if (hit) {
+            r.status = 'listed';
+            r.listing_url = hit.link;
+            r.notes = 'Confirmed via Google site: search';
+            r.found_name = (hit.title || '').split(/[|\-–—]/)[0].trim() || r.found_name;
+          } else {
+            r.status = 'not_listed';
+            r.notes = 'Not found via Google site: search';
+          }
+        } catch (e) {
+          console.log(`[citations] SerpAPI fallback failed for ${r.name}: ${e.message}`);
+        }
+      }
     }
 
     // Save all results to DB
