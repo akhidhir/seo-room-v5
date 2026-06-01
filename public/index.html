@@ -11501,6 +11501,7 @@
       const [applying, setApplying] = useState(false);
       const [tab, setTab] = useState('overview'); // overview, suggestions
       const [pageFilter, setPageFilter] = useState('all'); // all, orphan, few_links, ok
+      const [pageSort, setPageSort] = useState({ key: 'inbound_count', dir: 'asc' }); // sortable columns
       const [filter, setFilter] = useState('pending'); // pending, approved, applied, dismissed, all
       const [selectedIds, setSelectedIds] = useState(new Set());
       const [rateLimitMsg, setRateLimitMsg] = useState('');
@@ -11751,21 +11752,41 @@
               const q = pageSearch.trim().toLowerCase();
               filteredPages = filteredPages.filter(p => (p.title || '').toLowerCase().includes(q) || (p.url || '').toLowerCase().includes(q));
             }
+            const sortVal = (p) => {
+              switch (pageSort.key) {
+                case 'title': return (p.title || p.url || '').toLowerCase();
+                case 'outbound_count': return p.outbound_count || 0;
+                case 'inbound_count': return p.inbound_count || 0;
+                case 'authority': return getAuthority(p.url) || 0;
+                case 'word_count': return p.word_count || 0;
+                case 'status': return p.is_orphan ? 0 : (p.outbound_count < 3 ? 1 : 2);
+                default: return 0;
+              }
+            };
+            const sortedPages = [...filteredPages].sort((a, b) => {
+              const va = sortVal(a), vb = sortVal(b);
+              const cmp = (typeof va === 'string') ? va.localeCompare(vb) : (va - vb);
+              return pageSort.dir === 'asc' ? cmp : -cmp;
+            });
+            const sortTh = (label, key, align) => React.createElement('th', {
+              onClick: () => setPageSort(s => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' })),
+              style: { padding: '10px 16px', textAlign: align, color: pageSort.key === key ? 'var(--accent)' : '#999', fontSize: 11, textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }
+            }, label, pageSort.key === key ? (pageSort.dir === 'asc' ? ' ▲' : ' ▼') : '');
             return React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden', marginBottom: 24 } },
               React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
                 React.createElement('thead', null,
                   React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
-                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Page'),
-                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Outbound'),
-                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Inbound'),
-                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Authority'),
-                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Words'),
-                    React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Status')
+                    sortTh('Page', 'title', 'left'),
+                    sortTh('Outbound', 'outbound_count', 'center'),
+                    sortTh('Inbound', 'inbound_count', 'center'),
+                    sortTh('Authority', 'authority', 'center'),
+                    sortTh('Words', 'word_count', 'center'),
+                    sortTh('Status', 'status', 'center')
                   )
                 ),
                 React.createElement('tbody', null,
-                  filteredPages.length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 6, style: { padding: 30, textAlign: 'center', color: '#666' } }, 'No pages match this filter')) :
-                  filteredPages.sort((a, b) => a.inbound_count - b.inbound_count).map((p, i) => {
+                  sortedPages.length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 6, style: { padding: 30, textAlign: 'center', color: '#666' } }, 'No pages match this filter')) :
+                  sortedPages.map((p, i) => {
                     const auth = getAuthority(p.url);
                     return React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
                       React.createElement('td', { style: { padding: '10px 16px' } },
