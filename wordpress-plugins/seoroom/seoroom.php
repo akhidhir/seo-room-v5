@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.4
+ * Version: 8.9.7
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.4');
+define('SEOROOM_VERSION', '8.9.7');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -3986,15 +3986,15 @@ function sropt_apply_update($transient, $force = false) {
     return $transient;
 }
 
-// SET hook — fires on WP's own update check (force a fresh remote read here)
-add_filter('pre_set_site_transient_update_plugins', 'sropt_check_for_update');
+// SET hook — fires on WP's own update check (force a fresh remote read here). High priority so we win over ManageWP/other update managers.
+add_filter('pre_set_site_transient_update_plugins', 'sropt_check_for_update', 999999);
 function sropt_check_for_update($transient) {
     if (empty($transient->checked)) return $transient;
     return sropt_apply_update($transient, true);
 }
 
-// READ hook — fires on every read of the transient (Plugins/Updates page loads)
-add_filter('site_transient_update_plugins', 'sropt_read_update');
+// READ hook — fires on every read of the transient (Plugins/Updates page loads). High priority to run last.
+add_filter('site_transient_update_plugins', 'sropt_read_update', 999999);
 function sropt_read_update($transient) {
     global $pagenow;
     // On the screens that actually display updates, bypass our cache and fetch live —
@@ -4019,6 +4019,71 @@ register_activation_hook(__FILE__, 'sropt_force_update_refresh');
 
 // Back-compat alias
 function sropt_clear_update_cache() { sropt_force_update_refresh(); }
+
+// ================================================================
+// SELF-CONTAINED ONE-CLICK UPDATER
+// Shows an "Update now" button on the SEO Room settings page and installs the
+// latest build directly from the dashboard — independent of WordPress's plugin
+// update list (which ManageWP / object caches can suppress on this site).
+// ================================================================
+add_action('admin_notices', 'sropt_self_update_notice');
+function sropt_self_update_notice() {
+    if (($_GET['page'] ?? '') !== 'seoroom' || !current_user_can('update_plugins')) return;
+
+    if (isset($_GET['sropt_updated'])) {
+        $ok = $_GET['sropt_updated'] === '1';
+        echo '<div class="notice notice-' . ($ok ? 'success' : 'error') . ' is-dismissible"><p>'
+            . ($ok ? 'SEO Room updated successfully to v' . esc_html(SEOROOM_VERSION) . '.' : 'SEO Room update failed: ' . esc_html($_GET['sropt_msg'] ?? 'unknown error'))
+            . '</p></div>';
+    }
+
+    $data = sropt_get_remote_update(true);
+    if ($data && isset($data->version) && version_compare(SEOROOM_VERSION, $data->version, '<')) {
+        $url = wp_nonce_url(admin_url('admin-post.php?action=sropt_self_update'), 'sropt_self_update');
+        echo '<div class="notice notice-warning"><p style="font-size:14px;">'
+            . '&#128640; <strong>SEO Room ' . esc_html($data->version) . '</strong> is available '
+            . '(you have ' . esc_html(SEOROOM_VERSION) . '). '
+            . '<a href="' . esc_url($url) . '" class="button button-primary" style="margin-left:8px;">Update now</a>'
+            . '</p></div>';
+    }
+}
+
+add_action('admin_post_sropt_self_update', 'sropt_handle_self_update');
+function sropt_handle_self_update() {
+    if (!current_user_can('update_plugins')) wp_die('You are not allowed to update plugins.');
+    check_admin_referer('sropt_self_update');
+
+    $redirect = admin_url('options-general.php?page=seoroom');
+    $data = sropt_get_remote_update(true);
+    if (!$data || empty($data->download_url)) {
+        wp_safe_redirect(add_query_arg(array('sropt_updated' => '0', 'sropt_msg' => rawurlencode('no download URL')), $redirect));
+        exit;
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/misc.php';
+    require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+
+    $plugin_file = plugin_basename(__FILE__);
+    $was_active  = is_plugin_active($plugin_file);
+
+    $skin     = new WP_Ajax_Upgrader_Skin();
+    $upgrader = new Plugin_Upgrader($skin);
+    $result   = $upgrader->install($data->download_url, array('overwrite_package' => true));
+
+    $ok  = ($result === true) || (!is_wp_error($result) && !$skin->get_errors()->has_errors());
+    $msg = '';
+    if (is_wp_error($result)) $msg = $result->get_error_message();
+    elseif ($skin->get_errors()->has_errors()) $msg = $skin->get_error_messages();
+
+    // Make sure the plugin is still active after the overwrite
+    if ($was_active && !is_plugin_active($plugin_file)) activate_plugin($plugin_file);
+
+    sropt_force_update_refresh();
+    wp_safe_redirect(add_query_arg(array('sropt_updated' => $ok ? '1' : '0', 'sropt_msg' => rawurlencode($msg)), $redirect));
+    exit;
+}
 
 // Plugin info popup (when user clicks "View details")
 add_filter('plugins_api', 'sropt_plugin_info', 20, 3);

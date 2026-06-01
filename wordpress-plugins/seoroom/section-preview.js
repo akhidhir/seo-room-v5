@@ -22,6 +22,32 @@
     el.setAttribute('data-seo-hl','1');
   }
 
+  // Restyle preview FAQ accordions (<details>/<summary>) to match the site's real accordion:
+  // arrow toggle instead of +/-, and the question colour/font pulled from the live page.
+  function styleFaqToMatchSite(){
+    if(!document.querySelector('.seo-new-block details')) return; // only run if a preview FAQ exists
+    var sels = '.elementor-widget-iaccordions .acc_title, .elementor-widget-iaccordions [class*="title"], '
+             + '.elementor-accordion .elementor-tab-title, .elementor-toggle .elementor-toggle-title, '
+             + '[class*="accordion"] [class*="title"], [class*="faq"] [class*="title"]';
+    var donor=null, all=document.querySelectorAll(sels);
+    for(var i=0;i<all.length;i++){ if(!all[i].closest('.seo-new-block') && (all[i].textContent||'').trim().length>2){ donor=all[i]; break; } }
+    var qColor='', qFont='', qWeight='', qSize='';
+    if(donor){ try{ var cs=window.getComputedStyle(donor); qColor=cs.color; qFont=cs.fontFamily; qWeight=cs.fontWeight; qSize=cs.fontSize; }catch(e){} }
+    var arrow = qColor || '#14b8a6';
+    var css = ''
+      + '.seo-new-block details{border:1px solid #e7ebf1;border-radius:10px;margin-bottom:12px;overflow:hidden;background:#fff}'
+      + '.seo-new-block details summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 20px;'
+          + (qColor?'color:'+qColor+';':'') + (qFont?'font-family:'+qFont+';':'') + 'font-weight:'+(qWeight||'600')+';' + (qSize?'font-size:'+qSize+';':'') + '}'
+      + '.seo-new-block details summary::-webkit-details-marker{display:none}'
+      + '.seo-new-block details summary::before{display:none !important}'
+      + '.seo-new-block details summary::after{content:"";flex:0 0 auto;margin-left:auto;width:9px;height:9px;border-right:2px solid '+arrow+';border-bottom:2px solid '+arrow+';transform:rotate(45deg);transition:transform .2s ease}'
+      + '.seo-new-block details[open] summary::after{transform:rotate(-135deg)}'
+      + '.seo-new-block details > *:not(summary){padding:2px 20px 18px 20px}';
+    var prev=document.getElementById('seo-faq-match'); if(prev) prev.remove();
+    var st=document.createElement('style'); st.id='seo-faq-match'; st.textContent=css; document.head.appendChild(st);
+    console.log('[SEO Room] FAQ styled to match site (colour '+(qColor||'default')+', font '+(qFont||'default')+')');
+  }
+
   function run(){
     var dataEl = document.getElementById('seo-section-data');
     if(!dataEl){ console.log('[SEO Room] No section data found'); return; }
@@ -412,6 +438,9 @@
         matched++;
       });
     }
+
+    // Style preview FAQ accordions to match the site's real accordion (arrow toggle + question colour/font)
+    try { styleFaqToMatchSite(); } catch(e){ console.warn('[SEO Room] FAQ styling skipped:', e); }
 
     // Update badge
     var countBadge = document.getElementById('seo-match-count');
