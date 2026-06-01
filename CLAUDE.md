@@ -374,7 +374,7 @@ const PILLAR_CATEGORIES = {
 - WordPress technical fixes via REST API
 - SEO Room Schema plugin (replaces seoroom-helper)
 
-## Google Local Business Ranking — Official Documentation (Last checked: May 2026, check every 3 months)
+## Google Local Business Ranking — Official Documentation (Last checked: June 2026, check every 3 months)
 
 Sources: https://support.google.com/business/answer/7091 | https://support.google.com/business/answer/3038177 | https://support.google.com/business/answer/2853879
 
