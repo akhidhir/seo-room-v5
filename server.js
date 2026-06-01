@@ -3021,8 +3021,18 @@ function getSeoroomPluginVersion() {
   }
 }
 
+// In-memory log of recent update-check hits (for diagnosing auto-update)
+const _updateCheckLog = [];
 // GET /api/plugin/update-check — plugin checks for updates (no auth needed)
 app.get('/api/plugin/update-check', (req, res) => {
+  try {
+    _updateCheckLog.unshift({
+      t: new Date().toISOString(),
+      ua: (req.get('user-agent') || '').slice(0, 120),
+      ip: (req.get('x-forwarded-for') || req.ip || '').toString().slice(0, 60),
+    });
+    if (_updateCheckLog.length > 40) _updateCheckLog.pop();
+  } catch (e) {}
   res.json({
     version: getSeoroomPluginVersion(),
     download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
@@ -3031,6 +3041,11 @@ app.get('/api/plugin/update-check', (req, res) => {
     slug: 'seoroom',
     changelog: 'Design-safe section preview (two-column split, cloned fonts), auto-updates'
   });
+});
+
+// GET /api/plugin/_debug_log — shows who has hit update-check recently (diagnostic only)
+app.get('/api/plugin/_debug_log', (req, res) => {
+  res.json({ serving_version: getSeoroomPluginVersion(), hits: _updateCheckLog });
 });
 
 // GET /api/plugin/download — build & serve the plugin zip on the fly from the committed source
