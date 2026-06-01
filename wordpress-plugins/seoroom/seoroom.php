@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.9
+ * Version: 8.9.10
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.9');
+define('SEOROOM_VERSION', '8.9.10');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -3369,8 +3369,17 @@ function sropt_page_audit() {
         if (!$meta_title) $meta_title = get_post_meta($post->ID, '_yoast_wpseo_title', true) ?: $post->post_title;
         if (!$meta_desc)  $meta_desc  = get_post_meta($post->ID, '_yoast_wpseo_metadesc', true) ?: '';
 
-        // Render content to get accurate word count (includes shortcodes, blocks, etc.)
-        $content = apply_filters('the_content', $post->post_content);
+        // Render content (Elementor-aware) to get the REAL visible text + links — page-builder pages
+        // keep nothing useful in post_content, so use Elementor's renderer when the page is built with it.
+        $content = '';
+        if (class_exists('\\Elementor\\Plugin') && isset(\\Elementor\\Plugin::$instance->db)
+            && method_exists(\\Elementor\\Plugin::$instance->db, 'is_built_with_elementor')
+            && \\Elementor\\Plugin::$instance->db->is_built_with_elementor($post->ID)) {
+            $content = \\Elementor\\Plugin::$instance->frontend->get_builder_content_for_display($post->ID);
+        }
+        if (empty($content)) {
+            $content = apply_filters('the_content', $post->post_content);
+        }
         $text = wp_strip_all_tags($content);
         $word_count = str_word_count($text);
 
@@ -3437,14 +3446,20 @@ function sropt_page_audit() {
         // Robots meta
         $robots_meta = $is_noindex ? 'noindex' : '';
 
-        // Internal/external links
+        // Internal/external links — also collect the internal link list (href + anchor) for the internal-link audit
         $internal_links = 0;
         $external_links = 0;
-        if (preg_match_all('/href=["\']([^"\'#]+)["\']/i', $content, $link_matches)) {
-            foreach ($link_matches[1] as $href) {
+        $internal_link_list = array();
+        if (preg_match_all('/<a\s[^>]*href=["\']([^"\'#]+)["\'][^>]*>(.*?)<\/a>/is', $content, $a_matches, PREG_SET_ORDER)) {
+            foreach ($a_matches as $am) {
+                $href = $am[1];
+                $anchor = trim(wp_strip_all_tags($am[2]));
                 if (strpos($href, 'mailto:') === 0 || strpos($href, 'tel:') === 0) continue;
                 if (strpos($href, $domain) !== false || strpos($href, '/') === 0) {
                     $internal_links++;
+                    if ($anchor !== '' && strlen($anchor) <= 200 && count($internal_link_list) < 100) {
+                        $internal_link_list[] = array('href' => $href, 'anchor' => $anchor);
+                    }
                 } elseif (strpos($href, 'http') === 0) {
                     $external_links++;
                 }
@@ -3482,6 +3497,8 @@ function sropt_page_audit() {
             'imagesMissingAlt' => $missing_alt_srcs,
             'internalLinks'    => $internal_links,
             'externalLinks'    => $external_links,
+            'text'             => function_exists('mb_substr') ? mb_substr($text, 0, 12000) : substr($text, 0, 12000),
+            'links'            => $internal_link_list,
             'schemas'          => $schemas,
             'schemaSources'    => $schema_sources,
             'canonical'        => $canonical,
@@ -4019,6 +4036,93 @@ register_activation_hook(__FILE__, 'sropt_force_update_refresh');
 
 // Back-compat alias
 function sropt_clear_update_cache() { sropt_force_update_refresh(); }
+
+// ================================================================
+// INTERNAL LINK INJECTOR
+// Pulls approved internal links from the dashboard (outbound — never IP-blocked) and injects them at
+// RENDER TIME via the_content. Wraps the first matching anchor phrase on each page in a real <a> link.
+// Works on Elementor / Gutenberg / classic because it acts on the final rendered HTML, not post_content.
+// Fully reversible: nothing in the database is changed — deactivate the plugin or clear the links and it's gone.
+// ================================================================
+function sropt_get_internal_links($force = false) {
+    if (!$force) {
+        $cached = get_transient('sropt_internal_links');
+        if ($cached !== false) return is_array($cached) ? $cached : array();
+    }
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'] ?? '', '/');
+    $project_id = $options['project_id'] ?? '';
+    if (empty($dashboard_url) || empty($project_id)) { set_transient('sropt_internal_links', array(), HOUR_IN_SECONDS); return array(); }
+
+    $resp = wp_remote_get($dashboard_url . '/api/projects/' . intval($project_id) . '/internal-links/approved', array(
+        'timeout' => 12,
+        'headers' => array('Accept' => 'application/json'),
+    ));
+    if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) !== 200) {
+        set_transient('sropt_internal_links', array(), 15 * MINUTE_IN_SECONDS);
+        return array();
+    }
+    $data = json_decode(wp_remote_retrieve_body($resp), true);
+    $links = (is_array($data) && isset($data['links_by_page']) && is_array($data['links_by_page'])) ? $data['links_by_page'] : array();
+    set_transient('sropt_internal_links', $links, HOUR_IN_SECONDS);
+    return $links;
+}
+
+add_filter('the_content', 'sropt_inject_internal_links', 50);
+function sropt_inject_internal_links($content) {
+    if (is_admin() || !is_singular() || in_the_loop() === false || empty($content)) return $content;
+    $links_by_page = sropt_get_internal_links();
+    if (empty($links_by_page)) return $content;
+
+    $perma = rtrim((string) get_permalink(), '/');
+    $links = isset($links_by_page[$perma]) ? $links_by_page[$perma] : null;
+    if (empty($links)) {
+        // try without scheme/host variations
+        $alt = rtrim(home_url(parse_url($perma, PHP_URL_PATH) ?: ''), '/');
+        if (isset($links_by_page[$alt])) $links = $links_by_page[$alt];
+    }
+    if (empty($links)) return $content;
+
+    foreach ($links as $link) {
+        $anchor = isset($link['anchor']) ? trim($link['anchor']) : '';
+        $target = isset($link['target']) ? trim($link['target']) : '';
+        if ($anchor === '' || $target === '') continue;
+        $content = sropt_link_first_occurrence($content, $anchor, $target);
+    }
+    return $content;
+}
+
+// Wrap the first occurrence of $anchor that is NOT already inside an <a> tag.
+function sropt_link_first_occurrence($html, $anchor, $target) {
+    $parts = preg_split('/(<[^>]+>)/', $html, -1, PREG_SPLIT_DELIM_CAPTURE);
+    if (!is_array($parts)) return $html;
+    $in_anchor = false;
+    $done = false;
+    $quoted = preg_quote($anchor, '/');
+    foreach ($parts as $i => $part) {
+        if ($done) break;
+        if ($part !== '' && $part[0] === '<') {
+            if (preg_match('/^<a[\s>]/i', $part)) $in_anchor = true;
+            elseif (preg_match('/^<\/a>/i', $part)) $in_anchor = false;
+            continue;
+        }
+        if ($in_anchor || $part === '') continue;
+        if (preg_match('/' . $quoted . '/i', $part, $m, PREG_OFFSET_CAPTURE)) {
+            $pos = $m[0][1];
+            $matched = $m[0][0];
+            $parts[$i] = substr($part, 0, $pos)
+                . '<a href="' . esc_url($target) . '" class="seoroom-internal-link">' . esc_html($matched) . '</a>'
+                . substr($part, $pos + strlen($matched));
+            $done = true;
+        }
+    }
+    return $done ? implode('', $parts) : $html;
+}
+
+// Refresh the cached links when the admin opens SEO Room settings (so approvals show fast)
+add_action('admin_init', function () {
+    if (isset($_GET['page']) && $_GET['page'] === 'seoroom') delete_transient('sropt_internal_links');
+});
 
 // ================================================================
 // SELF-CONTAINED ONE-CLICK UPDATER
