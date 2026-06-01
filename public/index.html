@@ -21549,6 +21549,8 @@
       const handleSaveEdit = async () => {
         if (!selectedItem || !pid) return;
         setSavingMeta(true);
+        // Editing a queued item automatically moves it into Drafts
+        const nextStage = selectedItem.stage === 'queue' ? 'drafts' : selectedItem.stage;
         try {
           const updated = await api('/projects/' + pid + '/content-queue/' + selectedItem.id, {
             method: 'PUT',
@@ -21559,11 +21561,11 @@
               draft_focus_keyword: editMeta.focus_keyword,
               target_keywords: targetKeywords,
               comments: comments,
-              stage: selectedItem.stage
+              stage: nextStage
             }
           });
           if (updated && !updated.error) {
-            setSelectedItem(prev => ({ ...prev, ...updated, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword }));
+            setSelectedItem(prev => ({ ...prev, ...updated, stage: nextStage, draft_content: editContent, draft_meta_title: editMeta.meta_title, draft_meta_desc: editMeta.meta_desc, draft_focus_keyword: editMeta.focus_keyword }));
           }
           await loadItems();
           setSavingMeta('done');
@@ -22185,6 +22187,17 @@
                 },
                 style: { padding: '8px 16px', background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
               }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 4 } }), 'Move to CW New'),
+              // Queue stage: move straight into Drafts (also happens automatically on save)
+              selectedItem.stage === 'queue' && React.createElement('button', {
+                onClick: async () => {
+                  try {
+                    await api('/projects/' + pid + '/content-queue/' + selectedItem.id, { method: 'PUT', body: { stage: 'drafts', draft_content: editContent } });
+                    setSelectedItem(prev => ({ ...prev, stage: 'drafts', draft_content: editContent }));
+                    loadItems();
+                  } catch (e) { alert('Failed: ' + e.message); }
+                },
+                style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }
+              }, React.createElement('i', { className: 'fas fa-arrow-right', style: { marginRight: 6 } }), 'Move to Drafts'),
               // Draft stage: Check SEO + Send for Approval
               selectedItem.stage === 'drafts' && !isPublished && selectedItem.source === 'serp_analysis' && React.createElement('button', {
                 disabled: validating,
