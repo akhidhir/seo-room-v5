@@ -4152,16 +4152,16 @@ function sropt_self_update_notice() {
     }
 }
 
-add_action('admin_post_sropt_self_update', 'sropt_handle_self_update');
-function sropt_handle_self_update() {
-    if (!current_user_can('update_plugins')) wp_die('You are not allowed to update plugins.');
-    check_admin_referer('sropt_self_update');
-
-    $redirect = admin_url('options-general.php?page=seoroom');
+// Shared installer — used by both the manual button and the daily auto-update cron.
+// Uses Plugin_Upgrader directly (works regardless of ManageWP / object cache hijacking WP's update list).
+function sropt_perform_self_update() {
     $data = sropt_get_remote_update(true);
-    if (!$data || empty($data->download_url)) {
-        wp_safe_redirect(add_query_arg(array('sropt_updated' => '0', 'sropt_msg' => rawurlencode('no download URL')), $redirect));
-        exit;
+    if (!$data || empty($data->version) || empty($data->download_url)) {
+        return array('ok' => false, 'msg' => 'No update info available', 'version' => null, 'updated' => false);
+    }
+    // Already up to date?
+    if (!version_compare(SEOROOM_VERSION, $data->version, '<')) {
+        return array('ok' => true, 'msg' => 'Already up to date', 'version' => SEOROOM_VERSION, 'updated' => false);
     }
 
     require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -4179,15 +4179,48 @@ function sropt_handle_self_update() {
     $ok  = ($result === true) || (!is_wp_error($result) && !$skin->get_errors()->has_errors());
     $msg = '';
     if (is_wp_error($result)) $msg = $result->get_error_message();
-    elseif ($skin->get_errors()->has_errors()) $msg = $skin->get_error_messages();
+    elseif ($skin->get_errors()->has_errors()) $msg = implode('; ', (array) $skin->get_error_messages());
 
-    // Make sure the plugin is still active after the overwrite
     if ($was_active && !is_plugin_active($plugin_file)) activate_plugin($plugin_file);
-
     sropt_force_update_refresh();
-    wp_safe_redirect(add_query_arg(array('sropt_updated' => $ok ? '1' : '0', 'sropt_msg' => rawurlencode($msg)), $redirect));
+    update_option('sropt_last_auto_update', array('time' => current_time('mysql'), 'ok' => $ok, 'to' => $data->version, 'msg' => $msg));
+
+    return array('ok' => $ok, 'msg' => $msg, 'version' => $data->version, 'updated' => $ok);
+}
+
+// Manual "Update now" button
+add_action('admin_post_sropt_self_update', 'sropt_handle_self_update');
+function sropt_handle_self_update() {
+    if (!current_user_can('update_plugins')) wp_die('You are not allowed to update plugins.');
+    check_admin_referer('sropt_self_update');
+    $r = sropt_perform_self_update();
+    wp_safe_redirect(add_query_arg(array('sropt_updated' => $r['ok'] ? '1' : '0', 'sropt_msg' => rawurlencode($r['msg'])), admin_url('options-general.php?page=seoroom')));
     exit;
 }
+
+// ── AUTO-UPDATE: install new versions automatically on a daily schedule ──
+add_action('sropt_auto_update_event', 'sropt_cron_auto_update');
+function sropt_cron_auto_update() {
+    // Respect an opt-out switch if present
+    $opts = sropt_get_options();
+    if (isset($opts['auto_update']) && $opts['auto_update'] === false) return;
+    sropt_perform_self_update();
+}
+// Ensure the daily event is scheduled
+add_action('init', function () {
+    if (!wp_next_scheduled('sropt_auto_update_event')) {
+        wp_schedule_event(time() + 300, 'daily', 'sropt_auto_update_event');
+    }
+});
+register_activation_hook(__FILE__, function () {
+    if (!wp_next_scheduled('sropt_auto_update_event')) {
+        wp_schedule_event(time() + 300, 'daily', 'sropt_auto_update_event');
+    }
+});
+register_deactivation_hook(__FILE__, function () {
+    $ts = wp_next_scheduled('sropt_auto_update_event');
+    if ($ts) wp_unschedule_event($ts, 'sropt_auto_update_event');
+});
 
 // Plugin info popup (when user clicks "View details")
 add_filter('plugins_api', 'sropt_plugin_info', 20, 3);
