@@ -11786,7 +11786,7 @@
               onClick: () => setPageSort(s => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' })),
               style: { padding: '10px 16px', textAlign: align, color: pageSort.key === key ? 'var(--accent)' : '#999', fontSize: 11, textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 5, background: '#15152a' }
             }, label, pageSort.key === key ? (pageSort.dir === 'asc' ? ' ▲' : ' ▼') : '');
-            return React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'visible', marginBottom: 24 } },
+            return React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflowY: 'auto', overflowX: 'hidden', maxHeight: 'calc(100vh - 340px)', marginBottom: 24 } },
               React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
                 React.createElement('thead', null,
                   React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
