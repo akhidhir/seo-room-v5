@@ -3372,10 +3372,10 @@ function sropt_page_audit() {
         // Render content (Elementor-aware) to get the REAL visible text + links — page-builder pages
         // keep nothing useful in post_content, so use Elementor's renderer when the page is built with it.
         $content = '';
-        if (class_exists('\\Elementor\\Plugin') && isset(\\Elementor\\Plugin::$instance->db)
-            && method_exists(\\Elementor\\Plugin::$instance->db, 'is_built_with_elementor')
-            && \\Elementor\\Plugin::$instance->db->is_built_with_elementor($post->ID)) {
-            $content = \\Elementor\\Plugin::$instance->frontend->get_builder_content_for_display($post->ID);
+        if (class_exists('\Elementor\Plugin') && isset(\Elementor\Plugin::$instance->db)
+            && method_exists(\Elementor\Plugin::$instance->db, 'is_built_with_elementor')
+            && \Elementor\Plugin::$instance->db->is_built_with_elementor($post->ID)) {
+            $content = \Elementor\Plugin::$instance->frontend->get_builder_content_for_display($post->ID);
         }
         if (empty($content)) {
             $content = apply_filters('the_content', $post->post_content);

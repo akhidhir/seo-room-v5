@@ -1270,6 +1270,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
   if (req.path.match(/^\/api\/plugin\//)) return next();
+  // Allow internal-links approved pull (WP plugin pulls without JWT; no sensitive data)
+  if (req.path.match(/^\/api\/projects\/\d+\/internal-links\/approved$/)) return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
