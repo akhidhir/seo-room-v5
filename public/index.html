@@ -21782,18 +21782,49 @@
         setAddingSection(null);
       };
 
+      // Distribute the full-editor rewrite HTML back into each section's draft_text by heading.
+      // Non-destructive: only fills draft_text for sections that don't already have one and whose heading is found.
+      // This keeps Section View "Write" drafts and full-editor Rewrites in sync for preview.
+      const syncEditContentToSections = (sections, html) => {
+        if (!sections || !sections.length || !html || html.length < 30) return sections || [];
+        const norm = (s) => (s || '').replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        let doc;
+        try { doc = new DOMParser().parseFromString('<div id="seo-sync-root">' + html + '</div>', 'text/html'); } catch (e) { return sections; }
+        const root = doc.getElementById('seo-sync-root');
+        if (!root) return sections;
+        const nodes = Array.from(root.childNodes);
+        const headings = [];
+        nodes.forEach((n, i) => { if (n.nodeType === 1 && /^H[1-6]$/.test(n.tagName)) headings.push({ idx: i, text: norm(n.textContent) }); });
+        if (!headings.length) return sections;
+        const blocks = headings.map((h, hi) => {
+          const end = hi + 1 < headings.length ? headings[hi + 1].idx : nodes.length;
+          let buf = '';
+          for (let j = h.idx + 1; j < end; j++) { const node = nodes[j]; buf += node.nodeType === 1 ? node.outerHTML : (node.textContent || ''); }
+          return { headingText: h.text, html: buf.trim() };
+        });
+        return sections.map(s => {
+          if (s.is_new || s.locked || s.draft_text) return s;
+          const target = norm(s.draft_heading || s.heading);
+          if (!target) return s;
+          const match = blocks.find(b => b.headingText === target) ||
+                        blocks.find(b => b.headingText && (b.headingText.indexOf(target) !== -1 || target.indexOf(b.headingText) !== -1));
+          return (match && match.html) ? Object.assign({}, s, { draft_text: match.html }) : s;
+        });
+      };
+
       // Section-aware preview
       const handleSectionPreview = async () => {
         try { await handleSaveEdit(); } catch(e) { console.log('[preview] save failed, continuing:', e.message); }
         // Send section data via URL hash (no POST, no server-to-WP call needed)
         const pageUrl = selectedItem.page_url;
         if (!pageUrl) { alert('No page URL set'); return; }
-        const sections = (selectedItem.page_sections || []).filter(s => s.draft_text || s.is_new);
-        if (sections.length === 0 && !editContent) { alert('No content to preview — write or import content first'); return; }
-        let previewSections = sections;
-        if (sections.length === 0 && editContent) {
+        // Sync full-editor rewrite (editContent) into per-section draft_text where missing, then keep drafted/new sections.
+        const enriched = syncEditContentToSections(selectedItem.page_sections || [], editContent);
+        let previewSections = enriched.filter(s => s.draft_text || s.is_new);
+        if (previewSections.length === 0 && editContent) {
           previewSections = [{ heading: selectedItem.page_title, draft_text: editContent, original_text: selectedItem.current_content || '', type: 'text', is_new: false }];
         }
+        if (previewSections.length === 0) { alert('No content to preview — write or import content first'); return; }
         // Encode sections as base64 in URL hash — plugin reads it client-side
         const sectionsJson = JSON.stringify(previewSections);
         const encoded = btoa(unescape(encodeURIComponent(sectionsJson)));
