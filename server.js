@@ -3008,32 +3008,54 @@ app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
 
 // ─── Plugin Auto-Update + License System ────────────────────────────
 
+// Read the live plugin version straight from the source header — no manual bumping needed
+function getSeoroomPluginVersion() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const php = fs.readFileSync(path.join(__dirname, 'wordpress-plugins/seoroom/seoroom.php'), 'utf8');
+    const m = php.match(/^\s*\*\s*Version:\s*([0-9][0-9.]*)/m);
+    return m ? m[1] : '0';
+  } catch (e) {
+    return '0';
+  }
+}
+
 // GET /api/plugin/update-check — plugin checks for updates (no auth needed)
 app.get('/api/plugin/update-check', (req, res) => {
   res.json({
-    version: '8.8.2',
+    version: getSeoroomPluginVersion(),
     download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
     requires: '5.8',
     tested: '6.7',
     slug: 'seoroom',
-    changelog: '410 Gone support, auto-updates, license system'
+    changelog: 'Design-safe section preview (two-column split, cloned fonts), auto-updates'
   });
 });
 
-// GET /api/plugin/download — serve the latest plugin zip
+// GET /api/plugin/download — build & serve the plugin zip on the fly from the committed source
 app.get('/api/plugin/download', async (req, res) => {
   try {
     const fs = require('fs');
     const path = require('path');
-    const zipPath = path.join(__dirname, 'seoroom-latest.zip');
-    if (!fs.existsSync(zipPath)) {
-      return res.status(404).json({ error: 'Plugin zip not found. Upload seoroom-latest.zip to the server root.' });
+    const pluginDir = path.join(__dirname, 'wordpress-plugins/seoroom');
+    if (!fs.existsSync(pluginDir)) {
+      return res.status(404).json({ error: 'Plugin source not found at wordpress-plugins/seoroom' });
     }
+    const version = getSeoroomPluginVersion();
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.8.2.zip');
-    fs.createReadStream(zipPath).pipe(res);
+    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v' + version + '.zip');
+
+    const archiver = require('archiver');
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => { console.error('[plugin/download] archive error:', err.message); try { res.status(500).end(); } catch (e) {} });
+    archive.pipe(res);
+    // Extracts as seoroom/… so WP installs it as the seoroom plugin folder
+    archive.directory(pluginDir, 'seoroom', (entry) => (entry.name.includes('.DS_Store') ? false : entry));
+    archive.finalize();
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('[plugin/download] error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
 
