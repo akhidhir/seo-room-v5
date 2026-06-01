@@ -37749,163 +37749,37 @@ app.post('/api/projects/:projectId/internal-links/suggestions/bulk', async (req,
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Apply approved suggestions — insert links into WordPress pages
+// Apply suggestions — the new model: mark them 'applied' so the SEO Room plugin injects the links at
+// render time (works on Elementor/any builder, no WordPress post_content write, no anchor-not-found failures).
 app.post('/api/projects/:projectId/internal-links/apply', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const { suggestion_ids } = req.body;
   try {
-    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
-    if (!proj.rows.length) return res.status(404).json({ error: 'Project not found' });
-    const project = proj.rows[0];
-    let wpUrl = project.wp_url || project.domain;
-    if (!/^https?:\/\//i.test(wpUrl)) wpUrl = 'https://' + wpUrl;
-    const authHeaders = getWpAuthHeaders(project);
-    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
-
-    let domain = project.domain || '';
-    if (!/^https?:\/\//i.test(domain)) domain = 'https://' + domain;
-    domain = domain.replace(/\/$/, '');
-
-    let suggestions;
-    if (suggestion_ids?.length) {
-      suggestions = await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 AND id = ANY($2) AND status=$3', [projectId, suggestion_ids, 'approved']);
+    let q;
+    if (suggestion_ids && suggestion_ids.length) {
+      q = await pool.query(
+        `UPDATE internal_link_suggestions SET status='applied', applied_at=NOW()
+           WHERE project_id=$1 AND id = ANY($2) AND status IN ('approved','pending')
+           RETURNING id`,
+        [projectId, suggestion_ids]
+      );
     } else {
-      suggestions = await pool.query('SELECT * FROM internal_link_suggestions WHERE project_id=$1 AND status=$2', [projectId, 'approved']);
+      q = await pool.query(
+        `UPDATE internal_link_suggestions SET status='applied', applied_at=NOW()
+           WHERE project_id=$1 AND status IN ('approved','pending')
+           RETURNING id`,
+        [projectId]
+      );
     }
-
-    if (!suggestions.rows.length) return res.json({ ok: true, applied: 0, message: 'No approved suggestions to apply' });
-
-    const bySource = {};
-    for (const s of suggestions.rows) {
-      if (!bySource[s.source_url]) bySource[s.source_url] = [];
-      bySource[s.source_url].push(s);
-    }
-
-    let applied = 0;
-    let failed = 0;
-    const results = [];
-
-    for (const [sourceUrl, pageSuggestions] of Object.entries(bySource)) {
-      try {
-        // Extract slug — strip domain (with or without protocol)
-        let slug = sourceUrl.replace(/^https?:\/\//, '').replace(project.domain?.replace(/^https?:\/\//, '').replace(/\/$/, ''), '').replace(/^\/|\/$/g, '') || '';
-        if (!slug) { results.push({ url: sourceUrl, status: 'skipped', reason: 'Homepage — manual edit recommended' }); continue; }
-        const lastSlug = slug.split('/').pop();
-        console.log('[internal-links] Applying to slug:', lastSlug, 'from URL:', sourceUrl);
-
-        // Try pages, posts, then auto-detect custom post types
-        let wpPage = null;
-        let wpType = 'pages';
-        const typesToTry = ['pages', 'posts'];
-
-        // Detect custom post type from URL path (e.g., /testimonial/testimonial-6)
-        const pathParts = slug.split('/');
-        if (pathParts.length >= 2) {
-          const possibleCpt = pathParts[0];
-          if (!['category', 'tag', 'author', 'page'].includes(possibleCpt)) {
-            typesToTry.push(possibleCpt);  // e.g., 'testimonial'
-          }
-        }
-
-        for (const type of typesToTry) {
-          try {
-            const searchResp = await fetch(`${wpUrl.replace(/\/$/, '')}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(lastSlug)}&_fields=id,content,title,slug`, {
-              headers: authHeaders
-            });
-            if (searchResp.ok) {
-              const found = await searchResp.json();
-              if (found.length) { wpPage = found[0]; wpType = type; break; }
-            }
-          } catch {}
-        }
-
-        if (!wpPage) {
-          const reason = 'WP page not found (tried: ' + typesToTry.join(', ') + ')';
-          console.log('[internal-links]', reason, 'for slug:', lastSlug);
-          results.push({ url: sourceUrl, status: 'skipped', reason });
-          failed += pageSuggestions.length;
-          continue;
-        }
-
-        let content = wpPage.content?.rendered || wpPage.content?.raw || '';
-        // Strip HTML for anchor matching, keep original for position mapping
-        const plainContent = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-        let contentModified = false;
-
-        for (const s of pageSuggestions) {
-          const anchor = s.suggested_anchor;
-          const targetUrl = s.target_url;
-
-          if (content.includes('href="' + targetUrl + '"') || content.includes('href="' + targetUrl + '/"')) {
-            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'skipped', reason: 'Link already exists' });
-            await pool.query("UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1", [s.id]);
-            applied++;
-            continue;
-          }
-
-          // Try 3 strategies to find and insert the anchor
-          let inserted = false;
-
-          // Strategy 1: exact match in HTML content (works for classic editor)
-          const anchorEsc = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const exactRegex = new RegExp('(?<!<a[^>]*>)(' + anchorEsc + ')(?![^<]*<\/a>)', 'i');
-          const exactMatch = content.match(exactRegex);
-          if (exactMatch) {
-            await pool.query("INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'internal_link', 'content', $5, $6)",
-              [projectId, wpPage.id, sourceUrl, wpPage.title?.rendered || '', content.substring(0, 500), 'Added link: "' + anchor + '" → ' + targetUrl]);
-            content = content.replace(exactRegex, '<a href="' + targetUrl + '">' + exactMatch[1] + '</a>');
-            inserted = true;
-          }
-
-          // Strategy 2: match in plain text (Elementor — text split across tags)
-          if (!inserted) {
-            const plainRegex = new RegExp(anchorEsc, 'i');
-            const plainMatch = plainContent.match(plainRegex);
-            if (plainMatch) {
-              // Found in plain text but not in HTML — text is split by tags
-              // Build a regex that allows HTML tags between words
-              const words = anchor.split(/\s+/).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-              const flexRegex = new RegExp('(' + words.join('(?:\\s|<[^>]*>)*\\s*') + ')', 'i');
-              const flexMatch = content.match(flexRegex);
-              if (flexMatch) {
-                await pool.query("INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'internal_link', 'content', $5, $6)",
-                  [projectId, wpPage.id, sourceUrl, wpPage.title?.rendered || '', content.substring(0, 500), 'Added link: "' + anchor + '" → ' + targetUrl]);
-                content = content.replace(flexRegex, '<a href="' + targetUrl + '">' + anchor + '</a>');
-                inserted = true;
-              }
-            }
-          }
-
-          if (inserted) {
-            contentModified = true;
-            await pool.query("UPDATE internal_link_suggestions SET status='applied', applied_at=NOW() WHERE id=$1", [s.id]);
-            applied++;
-            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'applied', anchor, target: targetUrl });
-          } else {
-            console.log('[internal-links] Anchor not found:', anchor, 'in', sourceUrl.split('/').pop());
-            results.push({ url: sourceUrl, suggestion_id: s.id, status: 'failed', reason: 'Anchor text "' + anchor + '" not found in page content' });
-            failed++;
-          }
-        }
-
-        if (contentModified) {
-          const updateResp = await fetch(wpUrl.replace(/\/$/, '') + '/wp-json/wp/v2/' + wpType + '/' + wpPage.id, {
-            method: 'POST',
-            headers: { ...authHeaders, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content })
-          });
-          if (!updateResp.ok) {
-            console.error('[internal-links] Failed to update WP page ' + wpPage.id + ': ' + updateResp.status);
-          }
-        }
-      } catch (pageErr) {
-        console.error('[internal-links] Error applying to ' + sourceUrl + ': ' + pageErr.message);
-        failed += pageSuggestions.length;
-        results.push({ url: sourceUrl, status: 'error', reason: pageErr.message });
-      }
-    }
-
-    res.json({ ok: true, applied, failed, results });
+    res.json({
+      ok: true,
+      applied: q.rowCount,
+      failed: 0,
+      injected_by_plugin: true,
+      message: q.rowCount
+        ? `${q.rowCount} link(s) applied. The SEO Room plugin injects them on the live pages — they appear within ~1 hour, or instantly after you open SEO Room → Settings on the site.`
+        : 'No suggestions to apply.'
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
