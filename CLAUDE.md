@@ -312,82 +312,67 @@ const PILLAR_CATEGORIES = {
 
 ## Recent Changes (This Session)
 
-### SERP Analysis — Rule-Based Engine (replaces AI-generated analysis)
-- **17 deterministic checks** replace AI hallucination: page existence, title, meta, H1, word count, URL slug, schema, internal links, images, H2 topics, domain authority vs competitors, GSC CTR, keyword density, page-level backlinks, PageSpeed, indexing status, cannibalization
-- **Smart page matching**: checks `onpage_audit_cache` first (with `wpType` page vs post preference), then slug variants (strips location words), then homepage fallback. Blog posts get -5 penalty, WP pages get +3 bonus.
-- **WP REST API override**: crawl data overridden with `onpage_audit_cache` data for Elementor/JS-rendered pages (word count, title, meta, H1)
-- **Competitor authority comparison**: DataForSEO backlinks summary for each competitor domain + page-level backlinks. Compares referring domains and domain rank.
-- **AI only for verdict**: Haiku writes one sentence summary constrained to stated facts. Cost ~$0.001 per analysis.
-- **Accuracy: ~90%+** — every check is a real data comparison, no hallucination possible. Remaining risk: competitor crawl quality for JS-rendered sites.
+### Section Builder (Copywriter)
+- **Backend endpoints**: `POST add-section`, `POST delete-section`, `POST reorder-sections`, `POST write-section` — per-section AI content generation
+- **`write-section`**: AI generates content for a single section heading. FAQ type returns `<details><summary>` accordion HTML. Uses page context (other sections) to avoid repetition.
+- **Frontend Section View**: numbered cards with Write/Rewrite/Delete buttons, inline heading editing, expand/collapse content preview, Add Text Section + Add FAQ Section buttons
+- **`writingSection` state**: tracks which section is being AI-written, shows spinner
 
-### Fix Buttons — SERP Analysis → Tools
-- **Every finding has a fix button** (26/26 gaps covered): purple navigate buttons (left, primary) + "Do Later" (right, secondary)
-- **Content fixes** (word count, keyword density, images) → **Send to Copywriter** — creates content_queue item with brief pre-filled from SERP finding
-- **Meta fixes** (title, meta desc, focus keyword) → **On-Page Audit** with search pre-filled to show exact page
-- **Technical fixes** (schema, speed, indexing) → **Website Audit**
-- **Authority fixes** (backlinks) → **Citations & Directories**
-- **Cannibalization** → individual card per competing page with specific fix (redirect thin pages, change focus keyword, differentiate title)
-- **Deep-link**: navigate buttons set `window._serpFixSearch` → On-Page Audit auto-filters to the target page
+### Import Current Copy — Cheerio Extraction
+- **`cheerio` npm dependency added** — proper HTML DOM parsing for live page content
+- **Elementor widget-level extraction**: walks `.elementor-top-section` elements, extracts `.elementor-widget-heading`, `.elementor-widget-text-editor`, `.elementor-widget-iaccordions` (FAQ)
+- **FAQ parsed as `<details><summary>`**: iaccordions text parsed into Q&A pairs, stored as native HTML5 accordion
+- **Always prefers live HTML over WP REST API** — WP REST gives unstructured Elementor fallback text
+- **FAQ accordion CSS** added to dashboard (teal +/− toggles, dark mode styled)
 
-### SEO Validation Gate (Copywriter)
-- **`POST /content-queue/:id/validate-seo`** — checks draft content against SERP brief before publishing
-- Checks: word count vs target, keyword density (3+ mentions), keyword in H1, keyword in H2s, meta title, meta description
-- Returns pass/fail per check + overall score + `ready_to_publish` boolean
-- **"Check SEO" button** in Copywriter (drafts stage, source='serp_analysis') — shows green/red checklist before approving
+### Design-Safe Preview — Plugin 8.8.2
+- **Hash-based approach** (v8.8.0+): sections base64-encoded in URL hash. No POST form, no server-to-WP call. Plugin decodes hash client-side.
+- **`section-preview.js` bundled in plugin** (v8.8.2): no cross-origin script loading. File at `wordpress-plugins/seoroom/section-preview.js`.
+- **Output buffer injects**: hash loader script + local section-preview.js + preview bar + FAQ CSS
+- **Three preview methods**: hash (URL fragment), POST (form data), transient (server-created token)
+- **Plugin versions 8.5.5→8.8.2**: multiple iterations fixing activation crashes, output buffer logic, preview rendering
 
-### Copywriter Tools (ported from New Website builder)
-- **Humanize button** — GPTHuman API, rewrites content to sound natural, checks brief compliance
-- **Suggest Keywords button** — AI suggests 5-8 target keywords via `/content-queue/:id/suggest-keywords` endpoint
-- Suggested keywords add to TARGET KEYWORDS list (not replace focus keyword)
-- **Check Competitors** — fixed location mapping (AU_CITY_STATE), SerpAPI fallback when DataForSEO returns 0 results
-- **ContentScorePanel** wired with all props: `pageUrl`, `itemType`, `onSuggestKeywords`, `suggestingKeywords`, `suggestedKws`, `onPickKeyword`
+### section-preview.js Improvements
+- **Unmatched sections → NEW SECTIONS**: if paragraph matching fails, section is inserted on the page as a new Elementor-structured block
+- **Skip display fonts**: elements with computed font-size >20px skipped during matching (prevents hero/CTA text from being replaced with body content)
+- **Extended skip list**: testimonials, CTAs, pricing tables, service boxes, icon boxes, image carousels, shortcodes
+- **New section placement**: inserts before 2nd-to-last Elementor top-section (before CTA), not appended at top
+- **FAQ `<details>` CSS**: light theme styling for accordion toggles on live page
 
-### Bug Fixes
-- **Circular JSON error** (`runAudit` MouseEvent as `force` param) — guard added to all 6 `runAudit` functions
-- **`is_local_business` check** — action plan skips GBP/maps actions for non-local businesses
-- **`wpType` stored in onpage_audit_cache** — `pg.type` ('page' or 'post') saved for page vs blog differentiation
-- **Navigate buttons wired** — `SERPRankingsPage` + `NewWebsitePipelinePage` receive `setPage` prop
-- **All fix_action page IDs verified** — `onpage-audit`, `website-audit`, `citations`, `internal-linking`, `indexing`, `ow-queue` all have matching router cases
-- **Re-analyze button** — one-click re-run (was two-step: delete + analyze separately)
-- **Competitor location fix** — "Perth" → "Perth, Western Australia, Australia" via AU_CITY_STATE mapping + SerpAPI fallback
+### Visual Editor (DROPPED)
+- **Attempted iframe-based approach** with contenteditable text and Apply Changes postMessage — fundamentally unreliable with Elementor's complex DOM
+- **Issues encountered**: paragraph matching hitting testimonials/CTAs/footer, FAQ accordion cloning breaking, heading matching too loose, content going to wrong widgets
+- **Decision**: dropped in favor of Design-Safe Preview (section-preview.js) which renders the actual WordPress page
+
+### Cloudflare/403 Blocking
+- **seoroom.com.au blocks Railway server IP** — all server-to-WP requests return 403 (REST API, sitemaps, page fetches)
+- **Fix**: hash-based preview bypasses server-to-WP communication entirely. User's browser (not blocked) opens the preview URL.
+- **Ongoing**: `Import Current Copy` server-side fetch also gets 403. Works when not blocked. Consider whitelisting Railway IP.
 
 ### UNFIXED — Carry to next session
-- **Sidebar scroll not independent** — still scrolls with page
-- **Editor text not full width** — hidden max-width constraints
+- **Preview not showing new sections** — Plugin 8.8.2 has hash mode + local section-preview.js but sections still don't appear. `$is_hash_mode` was undefined in output buffer callback (fixed in code but plugin needs rebuild/reinstall). Verify: check browser console for `[SEO Room]` logs on preview page.
+- **Font sizes wrong in preview** — section-preview.js `isDisplayFont()` check added but not fully tested. Elements >20px font-size should be skipped.
+- **Only sections with `draft_text` sent to preview** — full editor Rewrite puts content in `editContent`/`draft_content`, NOT in `page_sections[].draft_text`. Section View Rewrite button correctly updates `page_sections[].draft_text`. Users must use Section View for preview to work.
+- **Sidebar scroll not independent**
 - **Backlinks data consistency** — summary totals vs list counts mismatch
-- **Section "Add" fails** — "Suggest from Competitors" shows sections but clicking Add fails with AI generation error. Pre-existing issue with section content generation endpoint.
-- **DataForSEO SERP returns 0 for some AU keywords** — even with correct location "Perth,Western Australia,Australia". SerpAPI fallback handles this but DataForSEO root cause unknown.
+- **DataForSEO SERP returns 0 for some AU keywords**
 
 ### Next Session Priorities
-1. **Elementor-native preview** — WP REST API autosaves don't save meta fields. Need custom PHP endpoint in seoroom plugin that receives modified `_elementor_data`, renders page with it (without saving), returns HTML. Plugin 8.4.0 already registers `_elementor_data` for REST. Server endpoint at `/elementor-preview` exists, just needs the WP-side renderer.
-2. **AI Replace popup** — port from New Website editor to existing site Copywriter. Select text → 4 AI alternatives inline. Backend `/suggest-replacements` already works, just need frontend text-selection handler in CopywriterPage editor.
-3. **Accept/reject topics & keywords flow** — competitor topics/keywords show but no accept/reject UI to feed into the Rewrite AI. Port the accept flow from NewWebsitePipelinePage.
-4. **SERP finding as brief for Brief Check** — use the `brief` field (pushed from SERP analysis) as the copywriting brief. Wire Brief Check button to validate content against it.
-5. **Full existing site copywriter flow**: SERP Analysis → Send to Copywriter (brief = finding) → Import Current Copy → Check Competitors → Accept topics → Rewrite → AI Replace → Check SEO → Plagiarism/AI Detection/Humanize → Preview (Design-Safe) → Publish
-6. **Plugin auto-update debugging** — version 8.4.0 not detected by WordPress update check despite correct server response. Check transient caching or version comparison.
-7. **WordPress admin data** — audit what WP REST API exposes (WP version, theme, plugin updates, site health, PHP version) and pull into our dashboard.
+1. **Fix Design-Safe Preview** — verify plugin 8.8.2 hash mode works end-to-end. Check browser console for errors. The `$is_hash_mode` variable is now passed via `use()` in the output buffer closure. Rebuild plugin zip, install, test with Section View content.
+2. **Sync Rewrite → page_sections** — when user clicks top-level Rewrite button, parse the result by H2 and update `page_sections[].draft_text` so preview shows all sections.
+3. **AI Replace popup** — port from New Website editor to Copywriter
+4. **Accept/reject topics & keywords flow** — port from NewWebsitePipelinePage
+5. **Full copywriter flow**: Section View → Write per section → FAQ accordion → Preview (Design-Safe) → Publish
 
-### Previous Session
-- **Humanize-only endpoint — pure rule-based**: Zero-cost rule-based humanizer (contractions, synonym swaps, sentence starters, AU English).
-- **Australian English dictionary**: `AU_SPELLING` with 50+ US→AU replacements.
-- **Page Reset — dedicated endpoint**: Explicit clear of all draft fields.
-- **Delete Brief button**: Clears brief on website_builds.
-- **Save/Reset fix in Build mode**: Guard fix for build_id projects.
-- **Editor UI changes**: Background, padding, sidebar width adjustments.
-
-### Two Sessions Ago
-- **Players Handshake redesign (IN PROGRESS)** — Professional dark-mode SaaS mockup.
-- **Handshake AI parsing fix** — max_tokens 8000→12000, JSON extraction.
-- **PageSpeed ECONNRESET fix** — Retries with exponential backoff.
-- **Local Intel Reviews & Posts fix** — Bundled seed file, DB cache with 30-day TTL.
-
-### Three Sessions Ago
-- **Action Plan Calendar** — Month/Week/Day views, auto-distribute endpoint.
-- **Rule-based Technical Audit Engine** — No AI cost, 15+ checks.
-- **Fix buttons on Website Audit** — Green "Fix" / "Review" buttons.
-- **Technical fix endpoint** — 7 fix types via WP REST API.
-- **SEO Room Schema plugin** — Replaces seoroom-helper.
-- **Rankings-first architecture** — Audits diagnostic only, rankings drive Action Plan.
+### Previous Sessions (Summarized)
+- SERP Analysis rule-based engine (17 checks, 90%+ accuracy)
+- Fix buttons wiring (26/26 gaps covered)
+- SEO validation gate, Humanize, Suggest Keywords, Check Competitors
+- Players Handshake redesign
+- Action Plan Calendar (Month/Week/Day views)
+- Rule-based Technical Audit Engine
+- WordPress technical fixes via REST API
+- SEO Room Schema plugin (replaces seoroom-helper)
 
 ## Google Local Business Ranking — Official Documentation (Last checked: May 2026, check every 3 months)
 

@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.8.1
+ * Version: 8.8.2
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.8.1');
+define('SEOROOM_VERSION', '8.8.2');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -878,34 +878,21 @@ function sropt_elementor_preview_intercept() {
 
     if ($sections === null) return;
 
+    // Determine mode before starting buffer
+    $is_hash_mode = ($_GET['seoroom_preview'] === 'hash');
+
     // Start output buffering — inject section-preview.js for CLIENT-SIDE replacement
-    // This gives us: perfect WordPress rendering + proven JS paragraph matching
-    ob_start(function($html) use ($sections, $dashboard_url, $page_id) {
+    ob_start(function($html) use ($sections, $page_id, $is_hash_mode) {
         if (empty($html) || strlen($html) < 500) return $html;
 
-        if (empty($sections) || (count($sections) === 1 && $sections[0] === '__hash_mode__')) {
-            // Hash mode: skip "no sections" check — sections come from URL hash client-side
-            if ($is_hash_mode) goto inject_scripts;
-            // No sections — just add preview bar
-            $original_url = get_permalink($page_id);
-            $bar = '<div class="seo-preview-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">'
-                . '<strong style="font-size:15px;">SEO Room Preview</strong>'
-                . '<span style="background:rgba(255,255,255,0.2);padding:3px 10px;border-radius:5px;font-size:12px;">Design-Safe Mode</span>'
-                . '<span style="opacity:0.9;">No content changes to preview</span>'
-                . '<a href="' . esc_url($original_url) . '" style="margin-left:auto;color:#e0e7ff;text-decoration:underline;font-size:13px;">View original &rarr;</a>'
-                . '</div>';
-            return str_replace('</body>', $bar . '</body>', $html);
-        }
+        $script = '';
 
-        inject_scripts:
-        // Inject section data — either from server (POST/transient) or from URL hash (client-side)
-        $is_hash_mode = (isset($_GET['seoroom_preview']) && $_GET['seoroom_preview'] === 'hash');
+        // Hash mode: sections come from URL hash (decoded client-side)
         if ($is_hash_mode) {
-            // Hash mode: script reads sections from URL hash at runtime
-            $script = '<script id="seo-hash-loader">
+            $script .= '<script id="seo-hash-loader">
 (function(){
   var h = window.location.hash;
-  if (!h || h.indexOf("seodata=") === -1) { console.log("[SEO Room] No hash data"); return; }
+  if (!h || h.indexOf("seodata=") === -1) { console.log("[SEO Room] No hash data found"); return; }
   var encoded = h.split("seodata=")[1];
   try {
     var json = decodeURIComponent(escape(atob(encoded)));
@@ -915,21 +902,18 @@ function sropt_elementor_preview_intercept() {
     el.textContent = json;
     document.body.appendChild(el);
     console.log("[SEO Room] Loaded " + JSON.parse(json).length + " sections from URL hash");
-  } catch(e) { console.error("[SEO Room] Hash decode failed:", e); }
+  } catch(e) { console.error("[SEO Room] Hash decode error:", e); }
 })();
 </script>';
-        } else {
-            $sections_json = wp_json_encode($sections);
-            $script = '<script id="seo-section-data" type="application/json">' . $sections_json . '</script>';
+        }
+        // Server mode: sections already available as JSON
+        else if (!empty($sections) && $sections[0] !== '__hash_mode__') {
+            $script .= '<script id="seo-section-data" type="application/json">' . wp_json_encode($sections) . '</script>';
         }
 
-        // Load section-preview.js from dashboard (with cache buster)
-        $dash = $dashboard_url ?: rtrim((sropt_get_options())['dashboard_url'] ?? '', '/');
-        if ($dash) {
-            $script .= '<script src="' . esc_url($dash) . '/section-preview.js?v=' . time() . '" defer></script>';
-        }
-        // Debug: log what we injected
-        $script .= '<script>console.log("[SEO Room Preview] Sections: ' . count($sections) . ', Dashboard: ' . esc_js($dash) . '");</script>';
+        // Load section-preview.js from plugin directory (local — no CORS/CSP issues)
+        $script .= '<script src="' . esc_url(SEOROOM_URL . 'section-preview.js') . '?v=' . SEOROOM_VERSION . '" defer></script>';
+        $script .= '<script>console.log("[SEO Room Preview] Injected ' . count($sections) . ' sections, script: local plugin");</script>';
 
         // Preview bar with match count
         $original_url = get_permalink($page_id);
