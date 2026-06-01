@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.8.0
+ * Version: 8.8.1
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.8.0');
+define('SEOROOM_VERSION', '8.8.1');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -858,7 +858,7 @@ function sropt_elementor_preview_intercept() {
 
     // Method 1: Hash-based (sections encoded in URL hash — read client-side by injected script)
     if ($_GET['seoroom_preview'] === 'hash') {
-        $sections = []; // Will be populated client-side from URL hash
+        $sections = ['__hash_mode__']; // Non-empty marker so output buffer runs
         $dashboard_url = sanitize_url($_GET['dash'] ?? '');
     }
     // Method 2: POST data (browser sends sections directly)
@@ -883,7 +883,9 @@ function sropt_elementor_preview_intercept() {
     ob_start(function($html) use ($sections, $dashboard_url, $page_id) {
         if (empty($html) || strlen($html) < 500) return $html;
 
-        if (empty($sections)) {
+        if (empty($sections) || (count($sections) === 1 && $sections[0] === '__hash_mode__')) {
+            // Hash mode: skip "no sections" check — sections come from URL hash client-side
+            if ($is_hash_mode) goto inject_scripts;
             // No sections — just add preview bar
             $original_url = get_permalink($page_id);
             $bar = '<div class="seo-preview-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:999999;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:14px 24px;font-size:14px;display:flex;align-items:center;gap:16px;box-shadow:0 -4px 20px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">'
@@ -895,6 +897,7 @@ function sropt_elementor_preview_intercept() {
             return str_replace('</body>', $bar . '</body>', $html);
         }
 
+        inject_scripts:
         // Inject section data — either from server (POST/transient) or from URL hash (client-side)
         $is_hash_mode = (isset($_GET['seoroom_preview']) && $_GET['seoroom_preview'] === 'hash');
         if ($is_hash_mode) {

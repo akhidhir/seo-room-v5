@@ -3011,7 +3011,7 @@ app.post('/api/projects/:id/plugin/broken-links/clear', async (req, res) => {
 // GET /api/plugin/update-check — plugin checks for updates (no auth needed)
 app.get('/api/plugin/update-check', (req, res) => {
   res.json({
-    version: '8.8.0',
+    version: '8.8.1',
     download_url: 'https://seo-room-v5-production.up.railway.app/api/plugin/download',
     requires: '5.8',
     tested: '6.7',
@@ -3030,7 +3030,7 @@ app.get('/api/plugin/download', async (req, res) => {
       return res.status(404).json({ error: 'Plugin zip not found. Upload seoroom-latest.zip to the server root.' });
     }
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.8.0.zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=seoroom-v8.8.1.zip');
     fs.createReadStream(zipPath).pipe(res);
   } catch (e) {
     res.status(500).json({ error: e.message });
