@@ -21785,37 +21785,21 @@
       // Section-aware preview
       const handleSectionPreview = async () => {
         try { await handleSaveEdit(); } catch(e) { console.log('[preview] save failed, continuing:', e.message); }
-        // Send section data directly to WordPress via POST form (bypasses server-to-WP blocking)
+        // Send section data via URL hash (no POST, no server-to-WP call needed)
         const pageUrl = selectedItem.page_url;
         if (!pageUrl) { alert('No page URL set'); return; }
         const sections = (selectedItem.page_sections || []).filter(s => s.draft_text || s.is_new);
         if (sections.length === 0 && !editContent) { alert('No content to preview — write or import content first'); return; }
-        // If no sections but editContent exists, build sections from editContent
         let previewSections = sections;
         if (sections.length === 0 && editContent) {
           previewSections = [{ heading: selectedItem.page_title, draft_text: editContent, original_text: selectedItem.current_content || '', type: 'text', is_new: false }];
         }
-        // Open preview via POST form — plugin reads sections from POST data
-        const form = document.createElement('form');
-        form.method = 'POST';
-        // Ensure trailing slash to avoid WordPress 301 redirect (which drops POST data)
-        var previewUrl = pageUrl.replace(/\/?$/, '/');
-        form.action = previewUrl + (previewUrl.includes('?') ? '&' : '?') + 'seoroom_preview=post';
-        form.target = '_blank';
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'seoroom_sections';
-        input.value = JSON.stringify(previewSections);
-        form.appendChild(input);
-        // Add dashboard URL so plugin can load section-preview.js
-        const dashInput = document.createElement('input');
-        dashInput.type = 'hidden';
-        dashInput.name = 'seoroom_dashboard';
-        dashInput.value = window.location.origin;
-        form.appendChild(dashInput);
-        document.body.appendChild(form);
-        form.submit();
-        document.body.removeChild(form);
+        // Encode sections as base64 in URL hash — plugin reads it client-side
+        const sectionsJson = JSON.stringify(previewSections);
+        const encoded = btoa(unescape(encodeURIComponent(sectionsJson)));
+        const dashUrl = encodeURIComponent(window.location.origin);
+        const url = pageUrl.replace(/\/?$/, '/') + '?seoroom_preview=hash&dash=' + dashUrl + '#seodata=' + encoded;
+        window.open(url, '_blank');
       };
 
       // ============ SUGGESTION SYSTEM HANDLERS ============
