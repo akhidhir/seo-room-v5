@@ -11034,15 +11034,18 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
       results.push(...batchResults);
     }
 
-    // Reliability fallback: many directories block server-side fetches and return "not_checked".
-    // Confirm those with a Google "site:" search via SerpAPI (only fires for the unchecked ones, so cost is bounded).
+    // ACCURACY: Google is the source of truth. The raw HTTP fetch gives false positives (directory
+    // search pages echo the business name even with no real listing). So we verify EVERY directory with a
+    // Google "site:" search — an indexed page on that directory for this business is reliable proof of a listing.
+    // The HTTP pass above is kept only to extract NAP details (name/phone/address) when a listing is confirmed.
     if (SERPAPI_KEY) {
       const dirUrlByName = Object.fromEntries(
         AUSTRALIAN_DIRECTORIES.map(d => [d.name, (d.url || '').replace(/^https?:\/\//, '').replace(/\/$/, '')])
       );
-      const unchecked = results.filter(r => r.status === 'not_checked');
-      console.log(`[citations] SerpAPI fallback for ${unchecked.length} unchecked directories`);
-      for (const r of unchecked) {
+      console.log(`[citations] Google-verifying ${results.length} directories via SerpAPI site: search`);
+      for (const r of results) {
+        // GBP connection comes straight from Project Settings — already authoritative, don't override it.
+        if (r.name === 'Google Business Profile' && r.status === 'listed') continue;
         const site = dirUrlByName[r.name];
         if (!site) continue;
         try {
@@ -11052,14 +11055,16 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           if (hit) {
             r.status = 'listed';
             r.listing_url = hit.link;
-            r.notes = 'Confirmed via Google site: search';
-            r.found_name = (hit.title || '').split(/[|\-–—]/)[0].trim() || r.found_name;
+            r.notes = 'Verified in Google index';
+            if (!r.found_name) r.found_name = (hit.title || '').split(/[|\-–—]/)[0].trim();
           } else {
             r.status = 'not_listed';
-            r.notes = 'Not found via Google site: search';
+            r.notes = 'Not in Google index for this directory';
+            r.listing_url = null;
           }
         } catch (e) {
-          console.log(`[citations] SerpAPI fallback failed for ${r.name}: ${e.message}`);
+          console.log(`[citations] Google verify failed for ${r.name}: ${e.message}`);
+          // Leave the HTTP-derived status as-is if SerpAPI errors
         }
       }
     }
