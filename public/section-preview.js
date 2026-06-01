@@ -24,16 +24,19 @@
 
   // ── Per-site branding helpers ───────────────────────────────────────────────
   function parseRgb(s){ var m=(s||'').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?/); return m?[+m[1],+m[2],+m[3], m[4]===undefined?1:+m[4]]:null; }
-  function isVivid(rgb){ if(!rgb || rgb[3] < 0.4) return false; var r=rgb[0],g=rgb[1],b=rgb[2]; var mx=Math.max(r,g,b), mn=Math.min(r,g,b); if(mx<35) return false; if(mn>225) return false; if(mx-mn<28) return false; return true; }
+  function isVivid(rgb){ if(!rgb || rgb[3] < 0.4) return false; var r=rgb[0],g=rgb[1],b=rgb[2]; var mx=Math.max(r,g,b), mn=Math.min(r,g,b); if(mx<70) return false; /*near-black/text*/ if(mn>225) return false; /*near-white*/ if(mx-mn<28) return false; /*grey*/ return true; }
   // Detect the site's primary brand/accent colour (accordion icon → button → link)
   function getSiteAccent(){
-    var cands=[];
-    function push(el, prop){ try{ cands.push(window.getComputedStyle(el)[prop]); }catch(e){} }
-    document.querySelectorAll('.acc-toggle .down,.acc-toggle .up,.elementor-accordion-icon,[class*="accordion"] [class*="icon"],[class*="faq"] [class*="icon"]').forEach(function(e){ push(e,'backgroundColor'); push(e,'color'); });
-    document.querySelectorAll('.elementor-button,.elementor-button-link,a.button,button,.btn,[class*="btn-"],[class*="cta"]').forEach(function(e){ if(!e.closest('.seo-preview-bar')) push(e,'backgroundColor'); });
-    document.querySelectorAll('a').forEach(function(e,i){ if(i<25 && !e.closest('.seo-preview-bar,nav,header,footer')) push(e,'color'); });
-    for(var i=0;i<cands.length;i++){ var rgb=parseRgb(cands[i]); if(isVivid(rgb)) return 'rgb('+rgb[0]+','+rgb[1]+','+rgb[2]+')'; }
-    return '#1f4fe0';
+    // Tally vivid colours by frequency + weight; the dominant brand colour wins (a single gold CTA can't hijack it).
+    var counts={};
+    function add(c, w){ var rgb=parseRgb(c); if(!isVivid(rgb)) return; var key='rgb('+rgb[0]+','+rgb[1]+','+rgb[2]+')'; counts[key]=(counts[key]||0)+(w||1); }
+    function scan(sel, prop, max, w){ var els=document.querySelectorAll(sel), n=0; for(var i=0;i<els.length;i++){ var e=els[i]; if(e.closest('.seo-preview-bar,.seo-new-block,footer,.elementor-location-footer')) continue; try{ add(window.getComputedStyle(e)[prop], w); }catch(x){} if(++n>=max) break; } }
+    scan('.acc-toggle .down,.acc-toggle .up,.elementor-accordion-icon,[class*="accordion"] [class*="icon"]','backgroundColor',6,4); // FAQ icon = strongest signal
+    scan('h1,h2,h3','color',16,3);   // headings carry brand colour
+    scan('a','color',50,1);          // links
+    scan('.elementor-button,a.button,button,.btn,[class*="cta"]','backgroundColor',14,1); // CTAs (often a contrasting secondary colour) weighted low
+    var best=null, bestN=0; for(var k in counts){ if(counts[k]>bestN){ bestN=counts[k]; best=k; } }
+    return best || '#1f4fe0';
   }
   // Read the site's real accordion so the preview FAQ can mirror it exactly
   function readSiteAccordion(){
