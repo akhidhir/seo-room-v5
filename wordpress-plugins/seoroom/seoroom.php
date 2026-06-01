@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.8.8
+ * Version: 8.8.9
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.8.8');
+define('SEOROOM_VERSION', '8.8.9');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -3925,27 +3925,41 @@ function sropt_check_url_status($url) {
 // AUTO-UPDATE — Check Railway server for new versions
 // ================================================================
 
-add_filter('pre_set_site_transient_update_plugins', 'sropt_check_for_update');
-function sropt_check_for_update($transient) {
-    if (empty($transient->checked)) return $transient;
-
+// Fetch the latest version info from the dashboard, cached for 1 hour to avoid an HTTP call on every admin page load
+function sropt_get_remote_update($force = false) {
+    if (!$force) {
+        $cached = get_transient('sropt_remote_update');
+        if ($cached !== false) return $cached ?: null;
+    }
     $options = sropt_get_options();
-    $dashboard_url = rtrim($options['dashboard_url'], '/');
-    if (empty($dashboard_url)) return $transient;
+    $dashboard_url = rtrim($options['dashboard_url'] ?? '', '/');
+    if (empty($dashboard_url)) return null;
 
     $response = wp_remote_get($dashboard_url . '/api/plugin/update-check', array(
-        'timeout' => 10,
+        'timeout' => 12,
         'headers' => array('Accept' => 'application/json'),
     ));
-
-    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) return $transient;
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) return null;
 
     $data = json_decode(wp_remote_retrieve_body($response));
+    if (!$data || !isset($data->version)) return null;
+
+    // Cache for an hour (store empty string on miss so we don't hammer the endpoint)
+    set_transient('sropt_remote_update', $data, HOUR_IN_SECONDS);
+    return $data;
+}
+
+// Apply our update info to the plugins-update transient (shared by both the SET and READ hooks)
+function sropt_apply_update($transient, $force = false) {
+    if (!is_object($transient)) return $transient;
+    $data = sropt_get_remote_update($force);
     if (!$data || !isset($data->version)) return $transient;
 
-    $plugin_file = plugin_basename(__FILE__);
+    $plugin_file   = plugin_basename(__FILE__);
+    $dashboard_url = rtrim((sropt_get_options()['dashboard_url'] ?? ''), '/');
 
     if (version_compare(SEOROOM_VERSION, $data->version, '<')) {
+        if (!isset($transient->response) || !is_array($transient->response)) $transient->response = array();
         $transient->response[$plugin_file] = (object) array(
             'slug'        => $data->slug ?? 'seoroom',
             'plugin'      => $plugin_file,
@@ -3955,8 +3969,9 @@ function sropt_check_for_update($transient) {
             'requires'    => $data->requires ?? '5.8',
             'tested'      => $data->tested ?? '6.7',
         );
+        if (isset($transient->no_update[$plugin_file])) unset($transient->no_update[$plugin_file]);
     } else {
-        // No update — still register so WP doesn't show "update available" from wp.org
+        if (!isset($transient->no_update) || !is_array($transient->no_update)) $transient->no_update = array();
         $transient->no_update[$plugin_file] = (object) array(
             'slug'        => $data->slug ?? 'seoroom',
             'plugin'      => $plugin_file,
@@ -3964,9 +3979,32 @@ function sropt_check_for_update($transient) {
             'url'         => $dashboard_url,
         );
     }
-
     return $transient;
 }
+
+// SET hook — fires on WP's own update check (force a fresh remote read here)
+add_filter('pre_set_site_transient_update_plugins', 'sropt_check_for_update');
+function sropt_check_for_update($transient) {
+    if (empty($transient->checked)) return $transient;
+    return sropt_apply_update($transient, true);
+}
+
+// READ hook — fires on every read of the transient (Plugins/Updates page loads), bypassing WP's ~12h plugin-check throttle
+add_filter('site_transient_update_plugins', 'sropt_read_update');
+function sropt_read_update($transient) {
+    return sropt_apply_update($transient, false);
+}
+
+// Clear the cached version check so the next page load re-queries the dashboard immediately
+function sropt_clear_update_cache() {
+    delete_transient('sropt_remote_update');
+    delete_site_transient('update_plugins');
+}
+// Bust the cache whenever the admin opens the SEO Room settings page, and on activation
+add_action('admin_init', function () {
+    if (isset($_GET['page']) && $_GET['page'] === 'seoroom') sropt_clear_update_cache();
+});
+register_activation_hook(__FILE__, 'sropt_clear_update_cache');
 
 // Plugin info popup (when user clicks "View details")
 add_filter('plugins_api', 'sropt_plugin_info', 20, 3);
