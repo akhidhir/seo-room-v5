@@ -11770,7 +11770,7 @@
                     return React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
                       React.createElement('td', { style: { padding: '10px 16px' } },
                         React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
-                        React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, p.url)
+                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', marginTop: 2, wordBreak: 'break-all' } }, p.url)
                       ),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
@@ -11885,11 +11885,11 @@
                     ),
                     React.createElement('td', { style: { padding: '10px 16px' } },
                       React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, s.source_title || s.source_url.split('/').pop()),
-                      React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, s.source_url)
+                      React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', marginTop: 2, wordBreak: 'break-all' } }, s.source_url)
                     ),
                     React.createElement('td', { style: { padding: '10px 16px' } },
                       React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, s.target_title || s.target_url.split('/').pop()),
-                      React.createElement('div', { style: { fontSize: 10, color: '#555', marginTop: 2 } }, s.target_url)
+                      React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', marginTop: 2, wordBreak: 'break-all' } }, s.target_url)
                     ),
                     React.createElement('td', { style: { padding: '10px 16px', color: 'var(--accent)', fontWeight: 500 } }, s.suggested_anchor),
                     React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
