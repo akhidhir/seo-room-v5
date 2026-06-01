@@ -11648,6 +11648,20 @@
             isRunning && React.createElement('span', { style: { color: '#f59e0b', fontSize: 13 } },
               React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Auditing...'
             ),
+            audit?.audited_at && (stats.orphan_count || (stats.page_details || []).filter(p => p.is_orphan).length) > 0 && React.createElement('button', {
+              className: 'btn',
+              disabled: isRunning,
+              onClick: async () => {
+                if (!confirm('Create contextual internal links to rescue all orphan pages?\n\nThey are saved as pending suggestions — you review and approve before anything goes live.')) return;
+                try {
+                  const r = await api('/projects/' + project.id + '/internal-links/rescue-orphans', { method: 'POST' });
+                  if (r.error) { alert(r.error); return; }
+                  alert(r.message || ((r.created || 0) + ' orphan-rescue links created'));
+                  setTab('suggestions'); setFilter('pending'); loadData();
+                } catch (e) { alert('Error: ' + e.message); }
+              },
+              style: { fontSize: 13, padding: '8px 20px', background: '#ef4444', color: '#fff', border: 'none', marginRight: 8 }
+            }, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6 } }), 'Rescue Orphans'),
             React.createElement('button', {
               className: 'btn',
               disabled: isRunning,
@@ -11770,9 +11784,9 @@
             });
             const sortTh = (label, key, align) => React.createElement('th', {
               onClick: () => setPageSort(s => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' })),
-              style: { padding: '10px 16px', textAlign: align, color: pageSort.key === key ? 'var(--accent)' : '#999', fontSize: 11, textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }
+              style: { padding: '10px 16px', textAlign: align, color: pageSort.key === key ? 'var(--accent)' : '#999', fontSize: 11, textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 5, background: '#15152a' }
             }, label, pageSort.key === key ? (pageSort.dir === 'asc' ? ' ▲' : ' ▼') : '');
-            return React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden', marginBottom: 24 } },
+            return React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'visible', marginBottom: 24 } },
               React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
                 React.createElement('thead', null,
                   React.createElement('tr', { style: { borderBottom: '1px solid #333' } },

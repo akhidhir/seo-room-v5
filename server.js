@@ -37704,6 +37704,62 @@ app.get('/api/projects/:projectId/internal-links/approved', async (req, res) => 
   }
 });
 
+// Orphan rescue — give EVERY orphan page at least one contextual inbound link.
+// Heuristic (no AI cost): for each orphan, find a page whose rendered text already contains a phrase
+// matching the orphan's topic, and create a suggestion linking that phrase to the orphan. Anchor is
+// guaranteed to exist on the source page (so the render-time injector can place it). Scales to hundreds.
+app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const cache = await pool.query(`SELECT orphan_pages FROM internal_link_audit_cache WHERE project_id=$1`, [projectId]);
+    const orphanList = (cache.rows[0]?.orphan_pages) || [];
+    if (!orphanList.length) return res.json({ ok: true, created: 0, message: 'No orphan pages — run the audit first.' });
+
+    const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
+    const sources = ((cc.rows[0]?.config?.pages) || [])
+      .filter(p => p.text && p.text.length > 50)
+      .map(p => ({ url: (p.url || '').replace(/\/$/, ''), title: p.title || '', text: (p.text || '').toLowerCase() }));
+    if (!sources.length) return res.json({ ok: true, created: 0, message: 'No page content available — run Push Data Now on the site, then re-run the audit.' });
+
+    const norm = s => (s || '').replace(/\/$/, '');
+    // Clear previous orphan-rescue suggestions that are still pending (so re-runs don't duplicate)
+    await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status='pending' AND reason LIKE 'Orphan rescue%'`, [projectId]);
+
+    let created = 0;
+    const usedPerSource = {};
+    for (const orphan of orphanList) {
+      const ourl = norm(orphan.url);
+      const cleanTitle = (orphan.title || '').replace(/\s*[\|\-–—].*$/, '').trim();
+      const words = cleanTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const candidates = [];
+      if (cleanTitle.length >= 6) candidates.push(cleanTitle.toLowerCase());
+      for (let n = 4; n >= 2; n--) for (let i = 0; i + n <= words.length; i++) {
+        const ph = words.slice(i, i + n).join(' ');
+        if (ph.length >= 6) candidates.push(ph);
+      }
+      const uniq = [...new Set(candidates)].sort((a, b) => b.length - a.length);
+
+      let best = null;
+      for (const cand of uniq) {
+        for (const src of sources) {
+          if (src.url === ourl) continue;
+          if ((usedPerSource[src.url] || 0) >= 5) continue;
+          if (src.text.includes(cand)) { best = { src, anchor: cand }; break; }
+        }
+        if (best) break;
+      }
+      if (!best) continue;
+      await pool.query(`
+        INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+      `, [projectId, best.src.url, best.src.title, orphan.url, orphan.title || '', best.anchor, '', 'Orphan rescue — gives this page an inbound internal link', 'high']);
+      usedPerSource[best.src.url] = (usedPerSource[best.src.url] || 0) + 1;
+      created++;
+    }
+    res.json({ ok: true, created, orphans: orphanList.length, message: `${created} orphan-rescue links created (of ${orphanList.length} orphans). Review and approve them in Suggestions.` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Approve/dismiss suggestion
 app.put('/api/projects/:projectId/internal-links/suggestions/:id', async (req, res) => {
   const { id } = req.params;
