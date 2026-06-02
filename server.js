@@ -38686,7 +38686,20 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
     for (const [kw, allPages] of byKw) {
       const kwl = kw.toLowerCase();
       const kwWords = kwl.split(/\s+/).filter(w => w.length > 2);
-      const cand = allPages.filter(p => p.impressions >= 3);
+      // Merge URL duplicates first — GSC reports the same page under with/without trailing slash (and
+      // www/non-www), which would otherwise look like a page competing with itself.
+      const mergedByUrl = new Map();
+      for (const p of allPages) {
+        const key = normU(p.page);
+        if (!key) continue;
+        const m = mergedByUrl.get(key) || { page: p.page, clicks: 0, impressions: 0, _posw: 0, _top: 0 };
+        m.clicks += p.clicks; m.impressions += p.impressions; m._posw += (p.position || 0) * (p.impressions || 1);
+        if ((p.impressions || 0) >= m._top) { m._top = p.impressions || 0; m.page = p.page; } // keep highest-traffic URL variant
+        mergedByUrl.set(key, m);
+      }
+      const cand = [...mergedByUrl.values()]
+        .map(m => ({ page: m.page, clicks: m.clicks, impressions: m.impressions, position: m.impressions ? m._posw / m.impressions : 0, ctr: m.impressions ? m.clicks / m.impressions : 0 }))
+        .filter(p => p.impressions >= 3);
       if (cand.length < 2) continue;
       const topImpr = Math.max(...cand.map(p => p.impressions));
 
