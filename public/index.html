@@ -30760,6 +30760,7 @@
       const [prospects, setProspects] = useState([]);
       const [gapData, setGapData] = useState(null);
       const [gapLoading, setGapLoading] = useState(false);
+      const [discoveredComps, setDiscoveredComps] = useState(null);
       const [showAddProspect, setShowAddProspect] = useState(false);
       const [newProspect, setNewProspect] = useState({ domain: '', url: '', contact_email: '', contact_name: '', notes: '' });
       const [history, setHistory] = useState([]);
@@ -30789,6 +30790,8 @@
           setHistory(histRes.scans || []);
         } catch (e) { console.error(e); }
         setLoading(false);
+        // Load auto-discovered competitors (non-blocking) so the Gap tab can preview them
+        api(`/projects/${pid}/backlinks/competitors`).then(r => setDiscoveredComps(r.competitors || [])).catch(() => setDiscoveredComps([]));
       };
 
       useEffect(() => { loadData(); }, [pid]);
@@ -31039,6 +31042,28 @@
                   </button>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>Uses competitor domains from settings — or auto-finds them from your Maps grid scans & Players Handshake</span>
                 </div>
+
+                {discoveredComps && discoveredComps.length > 0 && (
+                  <div style={{ ...cardStyle, marginBottom: 16, padding: 14 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                      <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6, color: accent }}></i>Competitors found in your data
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {discoveredComps.slice(0, 8).map((c, i) => (
+                        <span key={i} title={`${c.sources.join(' + ')} · strength ${c.score}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 6, fontSize: 12, background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                          <span style={{ fontWeight: 600 }}>{c.domain}</span>
+                          {i < 5 && <span style={{ fontSize: 9, fontWeight: 700, color: accent }}>TOP {i + 1}</span>}
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>The top 5 will be compared when you run gap analysis (unless competitors are set in project settings).</div>
+                  </div>
+                )}
+                {discoveredComps && discoveredComps.length === 0 && !gapData && (
+                  <div style={{ ...cardStyle, marginBottom: 16, padding: 14, fontSize: 12, color: 'var(--text3)' }}>
+                    <i className="fas fa-circle-info" style={{ marginRight: 6 }}></i>No competitors found in your data yet — run a Maps grid scan or Players Handshake first, or add competitor domains in project settings.
+                  </div>
+                )}
                 {gapData ? (
                   <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
                     <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
