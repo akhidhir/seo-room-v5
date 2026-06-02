@@ -7332,8 +7332,23 @@ async function discoverCompetitorDomains(projectId, project, resolve = true) {
     const hs = await pool.query(`SELECT data FROM audits WHERE project_id=$1 AND pillar='handshake' ORDER BY created_at DESC LIMIT 1`, [projectId]);
     for (const c of (hs.rows[0]?.data?.competitors || [])) ingest(c.name, c.website || c.gbp?.website, (c.appearances || 0) + (c.dominance || 0), 'handshake');
   } catch (e) {}
+  // 3. Organic SERP competitors (from saved SERP analyses) — the domains actually ranking for our keywords.
+  //    Weighted by ranking position (higher rank = stronger) and how often they appear across keywords.
+  try {
+    const sa = await pool.query(`SELECT competitors FROM serp_analysis WHERE project_id=$1`, [projectId]);
+    for (const row of sa.rows) {
+      let comps = row.competitors;
+      if (typeof comps === 'string') { try { comps = JSON.parse(comps); } catch { comps = []; } }
+      for (const c of (comps || [])) {
+        let host = '';
+        try { host = c.url ? new URL(c.url).hostname : ''; } catch { host = c.url || ''; }
+        const pos = Number(c.position) || 10;
+        ingest(c.title || null, host, Math.max(1, 6 - pos), 'serp'); // pos1→5, pos2→4, … floor 1
+      }
+    }
+  } catch (e) {}
 
-  // 3. Resolve the strongest name-only competitors to domains via SerpAPI (with a persistent cache).
+  // 4. Resolve the strongest name-only competitors to domains via SerpAPI (with a persistent cache).
   if (resolve && nameAgg.size && SERPAPI_KEY) {
     let cache = {};
     try { cache = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='competitor_domains'`, [projectId])).rows[0]?.config?.map || {}; } catch (e) {}
