@@ -7199,6 +7199,29 @@ async function dataForSeoNewLostBacklinks(domain, type, limit = 200) {
   };
 }
 
+// Classify a prospect domain into a link-building "play" from its name/TLD. Drives outreach strategy.
+function classifyLinkType(domain) {
+  const d = (domain || '').toLowerCase();
+  if (/(^|\.)(facebook|twitter|x|instagram|linkedin|pinterest|youtube|tiktok|reddit)\./.test(d)) return 'social';
+  if (/(wikipedia|wikidata)\./.test(d)) return 'wiki';
+  if (/(\.gov(\.|$)|\.edu(\.|$))/.test(d)) return 'authority';
+  if (/(news|herald|times|post|tribune|gazette|abc|theage|smh|9news|7news|abc\.net)/.test(d)) return 'news';
+  if (/(forum|community|board|discuss|stackexchange|quora)/.test(d)) return 'forum';
+  if (/(directory|yellowpages|yelp|truelocal|hotfrog|startlocal|localsearch|womo|aussieweb|cylex|brownbook|find|listing|business\.|directories)/.test(d)) return 'directory';
+  if (/(blog|wordpress|medium|substack|tumblr|blogspot)/.test(d)) return 'blog';
+  return 'resource';
+}
+
+// Composite opportunity score (0-100): authority (domain rank) weighted with how many competitors already
+// earned the link (more competitors = more proven-relevant and attainable for this niche).
+function scoreOpportunity(rank, competitorsCount) {
+  const r = Math.max(0, Math.min(1000, Number(rank) || 0));
+  const c = Math.max(1, Number(competitorsCount) || 1);
+  const authority = (r / 1000) * 70;          // up to 70 pts from domain rank
+  const consensus = Math.min(c / 3, 1) * 30;  // up to 30 pts when 3+ competitors have it
+  return Math.round(authority + consensus);
+}
+
 async function dataForSeoBacklinkGap(targetDomain, competitorDomains) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
   // Use referring_domains_intersection to find where competitors have links but target doesn't
@@ -38095,6 +38118,11 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
 
     const gapResult = await dataForSeoBacklinkGap(domain, cleanCompetitors);
 
+    // Enrich each opportunity with a composite score and a link-type classification, then sort best-first.
+    gapResult.opportunities = (gapResult.opportunities || [])
+      .map(o => ({ ...o, link_type: classifyLinkType(o.domain), score: scoreOpportunity(o.rank, o.competitors_count) }))
+      .sort((a, b) => b.score - a.score);
+
     // Save to DB
     for (const comp of cleanCompetitors) {
       const compOpps = gapResult.opportunities.filter(o => {
@@ -38205,6 +38233,104 @@ app.post('/api/projects/:projectId/backlinks/prospects/from-gap', async (req, re
       } catch (e) { /* skip duplicates */ }
     }
     res.json({ ok: true, added });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Auto-verify which prospects have actually placed a link to the client — FREE: cross-references prospects
+// against the client's own latest backlink scan (the referring-domain list we already have). Any prospect
+// whose domain appears as a referring domain is flipped to 'placed' with the discovered link URL + date.
+app.post('/api/projects/:projectId/backlinks/prospects/verify', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const scan = (await pool.query(
+      `SELECT backlinks FROM backlink_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 1`,
+      [projectId]
+    )).rows[0];
+    if (!scan) return res.status(400).json({ error: 'Run a backlink scan first so there is link data to verify against.' });
+
+    let backlinks = scan.backlinks || [];
+    if (typeof backlinks === 'string') { try { backlinks = JSON.parse(backlinks); } catch { backlinks = []; } }
+
+    // Map referring domain -> the first source URL we saw from it.
+    const refMap = new Map();
+    for (const b of backlinks) {
+      let host = (b.domain_from || '').toLowerCase();
+      if (!host && b.url_from) { try { host = new URL(b.url_from).hostname.toLowerCase(); } catch {} }
+      host = host.replace(/^www\./, '');
+      if (host && !refMap.has(host)) refMap.set(host, b.url_from || '');
+    }
+
+    const prospects = (await pool.query(
+      `SELECT id, domain, status FROM backlink_prospects WHERE project_id=$1 AND status NOT IN ('placed','rejected')`,
+      [projectId]
+    )).rows;
+
+    let placed = 0;
+    const newlyPlaced = [];
+    for (const p of prospects) {
+      const host = (p.domain || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+      if (host && refMap.has(host)) {
+        const linkUrl = refMap.get(host);
+        await pool.query(
+          `UPDATE backlink_prospects SET status='placed', link_url=$3, link_placed_at=NOW(), updated_at=NOW() WHERE id=$1 AND project_id=$2`,
+          [p.id, projectId, linkUrl]
+        );
+        placed++;
+        newlyPlaced.push({ id: p.id, domain: p.domain, link_url: linkUrl });
+      }
+    }
+    res.json({ ok: true, checked: prospects.length, placed, newly_placed: newlyPlaced });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generate a tailored outreach email for a prospect (Haiku), based on the prospect's domain, its link
+// type (directory/blog/news/resource…) and the client's business — so the user can send real outreach.
+app.post('/api/projects/:projectId/backlinks/prospects/:id/outreach', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  try {
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const prospect = (await pool.query('SELECT * FROM backlink_prospects WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!project || !prospect) return res.status(404).json({ error: 'Not found' });
+
+    const linkType = classifyLinkType(prospect.domain);
+    const bizName = project.business_name || project.name || project.domain;
+    const bizDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const industry = project.industry || 'local business';
+    const location = project.location || '';
+
+    const playByType = {
+      directory: 'request a business listing/citation (provide NAP: name, address, phone)',
+      blog: 'offer a genuinely useful guest article or expert quote relevant to their readers',
+      news: 'offer a local-interest story angle, data point, or expert comment a journalist could use',
+      resource: 'ask to be added to their resource/links page as a relevant local provider',
+      forum: 'contribute a genuinely helpful answer where a link is natural and allowed',
+      authority: 'propose a relevant, non-promotional resource suitable for an institutional page',
+      social: 'engage and request a profile/mention where appropriate',
+      wiki: 'suggest a citation only where it genuinely supports existing content',
+    };
+
+    const prompt = `Write a short, warm, non-spammy backlink outreach email.
+
+From: ${bizName} (${bizDomain}), a ${industry}${location ? ' in ' + location : ''}.
+To: the owner/editor of ${prospect.domain} (link type: ${linkType}).
+Goal/play: ${playByType[linkType] || playByType.resource}.
+${prospect.contact_name ? 'Contact name: ' + prospect.contact_name + '.' : 'No contact name known — use a friendly generic greeting.'}
+
+Rules: under 130 words, specific to their site, lead with value (not a demand), one clear ask, friendly Australian tone, no buzzwords, no fake flattery. Return STRICT JSON only: {"subject": "...", "body": "..."} with \\n for line breaks in body.`;
+
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 600,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    let txt = (msg.content?.[0]?.text || '').trim();
+    const jstart = txt.indexOf('{'), jend = txt.lastIndexOf('}');
+    if (jstart >= 0 && jend > jstart) txt = txt.slice(jstart, jend + 1);
+    let out;
+    try { out = JSON.parse(txt); } catch { out = { subject: `Quick question about ${prospect.domain}`, body: txt }; }
+    res.json({ ok: true, link_type: linkType, subject: out.subject || '', body: out.body || '' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

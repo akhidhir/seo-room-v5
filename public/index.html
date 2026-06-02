@@ -30831,6 +30831,32 @@
         loadData();
       };
 
+      const [verifying, setVerifying] = useState(false);
+      const verifyLinks = async () => {
+        setVerifying(true);
+        try {
+          const r = await api(`/projects/${pid}/backlinks/prospects/verify`, { method: 'POST' });
+          alert(r.placed > 0
+            ? `${r.placed} link${r.placed > 1 ? 's' : ''} confirmed live and marked as Placed (of ${r.checked} checked).`
+            : `No new live links found yet (checked ${r.checked}). Run a fresh backlink scan first if you just earned one.`);
+          loadData();
+        } catch (e) { alert('Verify error: ' + e.message); }
+        setVerifying(false);
+      };
+
+      const [outreach, setOutreach] = useState(null); // { prospect, loading, subject, body }
+      const genOutreach = async (p) => {
+        setOutreach({ prospect: p, loading: true, subject: '', body: '' });
+        try {
+          const r = await api(`/projects/${pid}/backlinks/prospects/${p.id}/outreach`, { method: 'POST' });
+          setOutreach({ prospect: p, loading: false, subject: r.subject || '', body: r.body || '', link_type: r.link_type });
+        } catch (e) {
+          setOutreach({ prospect: p, loading: false, subject: '', body: '', error: e.message });
+        }
+      };
+
+      const linkTypeColors = { directory: '#14b8a6', blog: '#8b5cf6', news: '#f59e0b', resource: '#3b82f6', forum: '#ec4899', authority: '#22c55e', social: '#06b6d4', wiki: '#64748b' };
+
       if (!pid) return <div style={{ padding: 40, color: 'var(--text3)' }}>Select a project first</div>;
 
       const s = scan?.summary ? (typeof scan.summary === 'string' ? JSON.parse(scan.summary) : scan.summary) : {};
@@ -31024,7 +31050,9 @@
                     <div style={{ maxHeight: 500, overflowY: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr>
+                          <th style={thStyle}>Score</th>
                           <th style={thStyle}>Domain</th>
+                          <th style={thStyle}>Type</th>
                           <th style={thStyle}>Domain Rank</th>
                           <th style={thStyle}>Competitors Linked</th>
                           <th style={thStyle}>Action</th>
@@ -31032,13 +31060,15 @@
                         <tbody>
                           {(gapData.opportunities || []).map((o, i) => (
                             <tr key={i}>
+                              <td style={tdStyle}><span style={{ fontWeight: 800, fontSize: 15, color: o.score >= 60 ? '#22c55e' : o.score >= 35 ? '#f59e0b' : 'var(--text3)' }}>{o.score ?? '-'}</span></td>
                               <td style={{ ...tdStyle, fontWeight: 600 }}>{o.domain}</td>
+                              <td style={tdStyle}>{o.link_type && <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: (linkTypeColors[o.link_type] || '#666') + '22', color: linkTypeColors[o.link_type] || '#666' }}>{o.link_type}</span>}</td>
                               <td style={tdStyle}><span style={{ fontWeight: 700, color: o.rank > 50 ? '#22c55e' : o.rank > 20 ? '#f59e0b' : 'var(--text3)' }}>{o.rank}</span></td>
                               <td style={tdStyle}>{o.competitors_count}</td>
                               <td style={tdStyle}>
-                                <button onClick={() => {
-                                  setNewProspect({ domain: o.domain, url: '', contact_email: '', contact_name: '', notes: 'From gap analysis' });
-                                  setShowAddProspect(true);
+                                <button onClick={async () => {
+                                  await api(`/projects/${pid}/backlinks/prospects`, { method: 'POST', body: { domain: o.domain, domain_rank: o.rank || 0, source: 'gap_analysis', notes: `Gap: ${o.link_type || 'resource'} · score ${o.score ?? '-'} · ${o.competitors_count} competitors` } });
+                                  loadData();
                                   setTab('outreach');
                                 }} style={{ ...btnOutline, padding: '4px 10px', fontSize: 11 }}>
                                   <i className="fas fa-plus" style={{ marginRight: 4 }}></i>Add to Outreach
@@ -31060,11 +31090,16 @@
 
               {/* OUTREACH TAB */}
               {tab === 'outreach' && <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, alignItems: 'center' }}>
                   <div style={{ fontSize: 13, color: 'var(--text3)' }}>{prospects.length} prospects</div>
-                  <button onClick={() => setShowAddProspect(!showAddProspect)} style={btnStyle}>
-                    <i className="fas fa-plus" style={{ marginRight: 6 }}></i>Add Prospect
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={verifyLinks} disabled={verifying} style={{ ...btnOutline, opacity: verifying ? 0.6 : 1 }} title="Cross-check prospects against your latest backlink scan and auto-mark any that are now linking to you">
+                      {verifying ? <><span className="spinner" style={{ marginRight: 6 }}></span>Verifying...</> : <><i className="fas fa-circle-check" style={{ marginRight: 6 }}></i>Verify Placed Links</>}
+                    </button>
+                    <button onClick={() => setShowAddProspect(!showAddProspect)} style={btnStyle}>
+                      <i className="fas fa-plus" style={{ marginRight: 6 }}></i>Add Prospect
+                    </button>
+                  </div>
                 </div>
 
                 {showAddProspect && (
@@ -31133,6 +31168,10 @@
                             <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{p.source || 'manual'}</td>
                             <td style={{ ...tdStyle, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.notes || '-'}</td>
                             <td style={tdStyle}>
+                              <button onClick={() => genOutreach(p)} title="Generate outreach email" style={{ background: 'none', border: 'none', color: accent, cursor: 'pointer', fontSize: 13, marginRight: 10 }}>
+                                <i className="fas fa-envelope"></i>
+                              </button>
+                              {p.link_url && <a href={p.link_url} target="_blank" rel="noopener" title="View live link" style={{ color: '#22c55e', fontSize: 13, marginRight: 10 }}><i className="fas fa-link"></i></a>}
                               <button onClick={() => deleteProspect(p.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>
                                 <i className="fas fa-trash-alt"></i>
                               </button>
@@ -31186,6 +31225,38 @@
                 </div>
               </>}
             </>
+          )}
+
+          {/* OUTREACH EMAIL MODAL */}
+          {outreach && (
+            <div onClick={() => setOutreach(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+              <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', padding: 24, width: 'min(640px, 92vw)', maxHeight: '88vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800 }}><i className="fas fa-envelope" style={{ marginRight: 8, color: accent }}></i>Outreach email</div>
+                  <button onClick={() => setOutreach(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}><i className="fas fa-times"></i></button>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>
+                  To {outreach.prospect?.domain}{outreach.link_type && <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: (linkTypeColors[outreach.link_type] || '#666') + '22', color: linkTypeColors[outreach.link_type] || '#666' }}>{outreach.link_type}</span>}
+                </div>
+                {outreach.loading ? (
+                  <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Drafting a tailored email...</div>
+                ) : outreach.error ? (
+                  <div style={{ color: '#ef4444', padding: 12 }}>{outreach.error}</div>
+                ) : (
+                  <>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Subject</label>
+                    <input value={outreach.subject} onChange={e => setOutreach({ ...outreach, subject: e.target.value })} style={{ ...inputStyle, marginTop: 4, marginBottom: 14 }} />
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Body</label>
+                    <textarea value={outreach.body} onChange={e => setOutreach({ ...outreach, body: e.target.value })} rows={11} style={{ ...inputStyle, marginTop: 4, fontFamily: 'inherit', lineHeight: 1.5, resize: 'vertical' }} />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                      <button onClick={() => { navigator.clipboard.writeText(`Subject: ${outreach.subject}\n\n${outreach.body}`); }} style={btnStyle}><i className="fas fa-copy" style={{ marginRight: 6 }}></i>Copy</button>
+                      {outreach.prospect?.contact_email && <a href={`mailto:${outreach.prospect.contact_email}?subject=${encodeURIComponent(outreach.subject)}&body=${encodeURIComponent(outreach.body)}`} style={{ ...btnOutline, textDecoration: 'none' }}><i className="fas fa-paper-plane" style={{ marginRight: 6 }}></i>Open in email</a>}
+                      <button onClick={() => genOutreach(outreach.prospect)} style={btnOutline}><i className="fas fa-rotate" style={{ marginRight: 6 }}></i>Regenerate</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           )}
         </>
       );
