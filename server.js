@@ -38301,10 +38301,11 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
       .map(c => (c || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, ''))
       .filter(c => /\./.test(c)).slice(0, 5);
 
-    // If none usable, auto-discover competitor domains from grid scans + handshake data we already have.
+    // If none usable, auto-discover — preferring organic SERP competitors (who we compete with in search,
+    // and whose backlinks are the most relevant to win) over Maps local-pack competitors.
     let autoDiscovered = false;
     if (!cleanCompetitors.length) {
-      const found = await discoverCompetitorDomains(projectId, proj);
+      const found = await discoverCompetitorDomains(projectId, proj, true, true);
       cleanCompetitors = found.slice(0, 5).map(c => c.domain);
       autoDiscovered = cleanCompetitors.length > 0;
     }
