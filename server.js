@@ -38743,10 +38743,11 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       if (cand.length < 2) continue;
       const topImpr = Math.max(...cand.map(p => p.impressions));
 
-      // Phrase-accurate matching: a field counts only if the EXACT keyword phrase appears (so "Local SEO
-      // Expert Perth" does NOT count as targeting "seo perth"). This separates real duplication from a
-      // healthy topic cluster where pages target their own specific keywords and merely overlap.
-      const phraseHas = (text) => (text || '').toLowerCase().includes(kwl);
+      // Whole-word phrase matching: the keyword must appear as its own word(s), not buried inside another
+      // word. So "iMac Repairs" does NOT count as "mac repair", and "Local SEO Expert Perth" does NOT count
+      // as "seo perth". A leading word boundary is required; a trailing one is not (so plurals still match).
+      const kwRe = new RegExp('\\b' + kwl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const phraseHas = (text) => kwRe.test(text || '');
       const enriched = cand.map(p => {
         const op = onpage.get(normU(p.page)); const pp = pushed.get(normU(p.page));
         const meta_title = op?.metaTitle || op?.title || pp?.title || '';
