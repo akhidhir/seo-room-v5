@@ -11897,19 +11897,19 @@
             `No ${filter === 'all' ? '' : filter + ' '}suggestions found.`
           ),
 
-          suggestions.length > 0 && React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflow: 'hidden' } },
+          suggestions.length > 0 && React.createElement('div', { style: { background: '#1a1a2e', borderRadius: 8, overflowY: 'auto', overflowX: 'hidden', maxHeight: 'calc(100vh - 260px)' } },
             React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
               React.createElement('thead', null,
                 React.createElement('tr', { style: { borderBottom: '1px solid #333' } },
-                  filter === 'pending' && React.createElement('th', { style: { padding: '10px 12px', width: 30 } },
+                  filter === 'pending' && React.createElement('th', { style: { padding: '10px 12px', width: 30, position: 'sticky', top: 0, background: '#15152a', zIndex: 5 } },
                     React.createElement('input', { type: 'checkbox', checked: selectedIds.size === suggestions.length && suggestions.length > 0, onChange: selectAll })
                   ),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'From'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'To'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Anchor Text'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Priority'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Status'),
-                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'right', color: '#999', fontSize: 11, textTransform: 'uppercase' } }, 'Actions')
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase', position: 'sticky', top: 0, background: '#15152a', zIndex: 5 } }, 'From'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase', position: 'sticky', top: 0, background: '#15152a', zIndex: 5 } }, 'To'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'left', color: '#999', fontSize: 11, textTransform: 'uppercase', position: 'sticky', top: 0, background: '#15152a', zIndex: 5 } }, 'Anchor Text'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase', position: 'sticky', top: 0, background: '#15152a', zIndex: 5 } }, 'Priority'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'center', color: '#999', fontSize: 11, textTransform: 'uppercase', position: 'sticky', top: 0, background: '#15152a', zIndex: 5 } }, 'Status'),
+                  React.createElement('th', { style: { padding: '10px 16px', textAlign: 'right', color: '#999', fontSize: 11, textTransform: 'uppercase', position: 'sticky', top: 0, background: '#15152a', zIndex: 5 } }, 'Actions')
                 )
               ),
               React.createElement('tbody', null,
