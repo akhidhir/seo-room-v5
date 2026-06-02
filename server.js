@@ -7319,26 +7319,27 @@ async function discoverCompetitorDomains(projectId, project, resolve = true) {
     .map(c => ({ domain: c.domain, name: c.name, score: Math.round(c.score), sources: [...c.sources] }));
 }
 
-async function dataForSeoBacklinkGap(targetDomain, competitorDomains) {
+async function dataForSeoBacklinkGap(targetDomain, competitorDomains, opts = {}) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
   // Domain intersection: referring domains that link to the competitor TARGETS but NOT to our exclude_target.
-  // Correct DataForSEO format: targets is a numbered object, exclude_targets is an array. intersection_mode
-  // 'all' returns domains linking to ANY target (summary.intersections_count says how many) — true link gap.
+  // Correct DataForSEO format: targets is a numbered object, exclude_targets is an array.
   const targets = {};
   competitorDomains.forEach((d, i) => { targets[String(i + 1)] = d; });
+
+  const payload = {
+    targets,
+    intersection_mode: opts.intersection_mode || 'all',
+    backlinks_status_type: 'live',
+    include_subdomains: true,
+    limit: 200,
+    order_by: ['1.rank,desc']
+  };
+  if (opts.exclude !== false) payload.exclude_targets = [targetDomain];
 
   const resp = await fetch('https://api.dataforseo.com/v3/backlinks/domain_intersection/live', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
-    body: JSON.stringify([{
-      targets,
-      exclude_targets: [targetDomain],
-      intersection_mode: 'all',
-      backlinks_status_type: 'live',
-      include_subdomains: true,
-      limit: 200,
-      order_by: ['1.rank,desc']
-    }])
+    body: JSON.stringify([payload])
   });
   const data = await resp.json();
   const task = data.tasks?.[0];
@@ -7361,7 +7362,12 @@ async function dataForSeoBacklinkGap(targetDomain, competitorDomains) {
     };
   }).filter(o => o.domain);
 
-  return { opportunities, total: result?.total_count || 0, cost: data.cost };
+  return {
+    opportunities,
+    total: result?.total_count || 0,
+    cost: data.cost,
+    debug: { status_message: task?.status_message, status_code: task?.status_code, items_count: result?.items_count, sent_targets: targets, mode: payload.intersection_mode, excluded: opts.exclude !== false }
+  };
 }
 
 // ==================== 11a-ii. UULE v2 Encoder (GPS → Google location param) ====================
@@ -38238,7 +38244,11 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
     }
     console.log(`[backlinks] Gap analysis: ${domain} vs ${cleanCompetitors.join(', ')}${autoDiscovered ? ' (auto-discovered)' : ''}`);
 
-    const gapResult = await dataForSeoBacklinkGap(domain, cleanCompetitors);
+    const gapResult = await dataForSeoBacklinkGap(domain, cleanCompetitors, {
+      intersection_mode: req.body.intersection_mode,
+      exclude: req.body.exclude,
+    });
+    console.log(`[backlinks] Gap debug:`, JSON.stringify(gapResult.debug));
 
     // Enrich each opportunity with a composite score and a link-type classification, then sort best-first.
     gapResult.opportunities = (gapResult.opportunities || [])
@@ -38273,7 +38283,8 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
       auto_discovered: autoDiscovered,
       opportunities: gapResult.opportunities,
       total: gapResult.total,
-      cost: gapResult.cost
+      cost: gapResult.cost,
+      debug: gapResult.debug
     });
   } catch (e) {
     console.error('[backlinks] Gap error:', e.message);
