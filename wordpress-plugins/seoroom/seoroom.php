@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.14
+ * Version: 8.9.15
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.14');
+define('SEOROOM_VERSION', '8.9.15');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -4135,6 +4135,9 @@ function sropt_flush_caches($urls = null) {
 add_action('template_redirect', 'sropt_il_buffer_start', 1);
 function sropt_il_buffer_start() {
     if (is_admin() || !is_singular()) return;
+    // Never run during a copywriter Design-Safe Preview — its own output buffer handles the page, and link
+    // injection would collide with section-preview.js's content matching.
+    if (!empty($_GET['seoroom_preview']) || !empty($_GET['elementor-preview']) || (function_exists('is_preview') && is_preview())) return;
 
     $links_by_page = sropt_get_internal_links();
     if (empty($links_by_page)) return;
