@@ -7328,7 +7328,9 @@ async function dataForSeoBacklinkGap(targetDomain, competitorDomains, opts = {})
 
   const payload = {
     targets,
-    intersection_mode: opts.intersection_mode || 'all',
+    // 'partial' = referring domains linking to ANY of the targets (true link gap). 'all' would require a
+    // domain to link to EVERY competitor — almost never matches, which is why it returned 0.
+    intersection_mode: opts.intersection_mode || 'partial',
     backlinks_status_type: 'live',
     include_subdomains: true,
     limit: 200,
