@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.10
+ * Version: 8.9.11
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.10');
+define('SEOROOM_VERSION', '8.9.11');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -4121,7 +4121,59 @@ function sropt_link_first_occurrence($html, $anchor, $target) {
 
 // Refresh the cached links when the admin opens SEO Room settings (so approvals show fast)
 add_action('admin_init', function () {
-    if (isset($_GET['page']) && $_GET['page'] === 'seoroom') delete_transient('sropt_internal_links');
+    if (isset($_GET['page']) && $_GET['page'] === 'seoroom') {
+        delete_transient('sropt_internal_links');
+        // Confirm live status shortly after, once the fresh links are loaded
+        if (!wp_next_scheduled('sropt_confirm_links_event')) wp_schedule_single_event(time() + 30, 'sropt_confirm_links_event');
+    }
+});
+
+// Confirm to the dashboard which approved links are ACTUALLY on the live pages.
+// Fetches each page through the full WordPress+builder pipeline and looks for our injected <a> — so the
+// dashboard can show "Live" only when the link is genuinely placed (and "Can't place" when it isn't).
+add_action('sropt_confirm_links_event', 'sropt_confirm_internal_links');
+function sropt_confirm_internal_links() {
+    $options = sropt_get_options();
+    $dashboard_url = rtrim($options['dashboard_url'] ?? '', '/');
+    $project_id = $options['project_id'] ?? '';
+    if (empty($dashboard_url) || empty($project_id)) return;
+
+    $links_by_page = sropt_get_internal_links(true);
+    if (empty($links_by_page)) return;
+
+    $confirmations = array();
+    foreach ($links_by_page as $page_url => $links) {
+        $resp = wp_remote_get($page_url, array('timeout' => 15, 'headers' => array('User-Agent' => 'SEORoomBot/1.0')));
+        $html = is_wp_error($resp) ? '' : wp_remote_retrieve_body($resp);
+        // Collect hrefs of OUR injected links on this page
+        $injected = array();
+        if ($html) {
+            if (preg_match_all('/<a\s[^>]*class="[^"]*seoroom-internal-link[^"]*"[^>]*href="([^"]+)"/i', $html, $m1)) $injected = array_merge($injected, $m1[1]);
+            if (preg_match_all('/<a\s[^>]*href="([^"]+)"[^>]*class="[^"]*seoroom-internal-link[^"]*"/i', $html, $m2)) $injected = array_merge($injected, $m2[1]);
+        }
+        foreach ($links as $link) {
+            $target = $link['target'] ?? '';
+            $tpath = parse_url($target, PHP_URL_PATH);
+            $live = false;
+            foreach ($injected as $h) {
+                if (($target && strpos($h, $target) !== false) || ($tpath && strpos($h, $tpath) !== false)) { $live = true; break; }
+            }
+            $confirmations[] = array('source_url' => $page_url, 'target_url' => $target, 'live' => $live);
+        }
+    }
+    if (empty($confirmations)) return;
+    wp_remote_post($dashboard_url . '/api/projects/' . intval($project_id) . '/internal-links/confirm', array(
+        'timeout' => 25,
+        'headers' => array('Content-Type' => 'application/json'),
+        'body'    => wp_json_encode(array('confirmations' => $confirmations)),
+    ));
+}
+add_action('init', function () {
+    if (!wp_next_scheduled('sropt_confirm_links_event')) wp_schedule_event(time() + 600, 'hourly', 'sropt_confirm_links_event');
+});
+register_deactivation_hook(__FILE__, function () {
+    $ts = wp_next_scheduled('sropt_confirm_links_event');
+    if ($ts) wp_unschedule_event($ts, 'sropt_confirm_links_event');
 });
 
 // ================================================================
