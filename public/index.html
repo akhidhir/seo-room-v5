@@ -31043,25 +31043,30 @@
                                 ))}
                               </div>
                             )}
-                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '8px 0' }}>Pages competing for "{c.keyword}"</div>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                              <thead><tr>{['Page', 'Pos', 'Impr', 'Clicks', 'CTR'].map(h => <th key={h} style={{ textAlign: 'left', padding: '4px 8px', fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>{h}</th>)}</tr></thead>
-                              <tbody>
-                                {c.pages.map((p, pi) => (
-                                  <tr key={pi}>
-                                    <td style={{ padding: '4px 8px' }}>
-                                      <a href={p.url} target="_blank" rel="noopener" style={{ color: 'var(--text1)', textDecoration: 'none', borderBottom: '1px dotted var(--text3)' }}>{path(p.url)}</a>
-                                      {p.is_primary && <span style={{ marginLeft: 8, padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: '#22c55e22', color: '#22c55e' }}>PRIMARY</span>}
-                                      {(p.why || []).map((w, wi) => <span key={wi} title={w === 'title' ? 'Keyword is in this page’s title' : w === 'slug' ? 'Keyword is in this page’s URL' : w === 'homepage' ? 'This is your homepage' : w} style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: (w === 'title' ? '#ef4444' : w === 'homepage' ? '#f59e0b' : '#8b5cf6') + '22', color: w === 'title' ? '#ef4444' : w === 'homepage' ? '#f59e0b' : '#8b5cf6' }}>{w}</span>)}
-                                    </td>
-                                    <td style={{ padding: '4px 8px', fontWeight: 700, color: p.position <= 10 ? '#22c55e' : p.position <= 20 ? '#f59e0b' : 'var(--text3)' }}>#{p.position}</td>
-                                    <td style={{ padding: '4px 8px' }}>{p.impressions.toLocaleString()}</td>
-                                    <td style={{ padding: '4px 8px' }}>{p.clicks.toLocaleString()}</td>
-                                    <td style={{ padding: '4px 8px' }}>{p.ctr}%</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '8px 0' }}>What each page has (red = contains "{c.keyword}" — change it on the non-primary pages)</div>
+                            {(() => {
+                              const fieldRow = (label, val, hit) => (
+                                <div style={{ display: 'flex', gap: 8, fontSize: 12, padding: '2px 0' }}>
+                                  <span style={{ minWidth: 80, color: 'var(--text3)', fontWeight: 600 }}>{label}</span>
+                                  <span style={{ flex: 1, color: val ? (hit ? '#ef4444' : 'var(--text1)') : 'var(--text3)', fontWeight: hit ? 700 : 400 }}>{val || <i style={{ opacity: 0.6 }}>(empty)</i>}{hit && <i className="fas fa-circle-exclamation" style={{ marginLeft: 6, color: '#ef4444' }} title="Contains the competing keyword"></i>}</span>
+                                </div>
+                              );
+                              return c.pages.map((p, pi) => (
+                                <div key={pi} style={{ background: 'var(--card)', border: '1px solid ' + (p.is_primary ? '#22c55e55' : 'var(--border)'), borderRadius: 8, padding: 12, marginBottom: 8 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                                    <a href={p.url} target="_blank" rel="noopener" style={{ color: 'var(--text1)', textDecoration: 'none', fontWeight: 600, borderBottom: '1px dotted var(--text3)' }}>{path(p.url)}</a>
+                                    {p.is_primary
+                                      ? <span style={{ padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: '#22c55e22', color: '#22c55e' }}>PRIMARY — KEEP</span>
+                                      : <span style={{ padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: '#ef444422', color: '#ef4444' }}>FIX THIS</span>}
+                                    <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>pos <b style={{ color: p.position <= 10 ? '#22c55e' : p.position <= 20 ? '#f59e0b' : 'var(--text2)' }}>#{p.position}</b> · {p.impressions.toLocaleString()} impr · {p.clicks} clicks</span>
+                                  </div>
+                                  {fieldRow('Title', p.meta_title, p.kw_in_title)}
+                                  {fieldRow('H1', p.h1, p.kw_in_h1)}
+                                  {fieldRow('Focus KW', p.focus_keyword, p.kw_in_focus)}
+                                  {p.kw_in_slug && <div style={{ fontSize: 11, color: '#8b5cf6', marginTop: 2 }}><i className="fas fa-link" style={{ marginRight: 4 }}></i>URL also contains the keyword</div>}
+                                </div>
+                              ));
+                            })()}
                             <div style={{ fontSize: 13, padding: '8px 12px', background: accent + '18', borderRadius: 8, marginTop: 10 }}>
                               <b style={{ color: accent }}><i className="fas fa-lightbulb" style={{ marginRight: 5 }}></i>How to fix:</b> Keep <b>{path(c.primary_page)}</b> as the single page targeting "{c.keyword}" (it has the best clicks/position). For the other page{c.page_count > 2 ? 's' : ''}: either merge the content into the primary and 301-redirect, or re-target {c.page_count > 2 ? 'them' : 'it'} to a different keyword and remove "{c.keyword}" from {c.page_count > 2 ? 'their' : 'its'} title/H1/meta. Then add an internal link from the other page{c.page_count > 2 ? 's' : ''} to the primary.
                             </div>
