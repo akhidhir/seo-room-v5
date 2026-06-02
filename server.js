@@ -7231,11 +7231,30 @@ function directoryInfo(domain) {
   };
 }
 
-// Detect low-quality auto-submit / SEO link-farm directories (PBN spam) so they aren't mislabelled as real
-// citation directories. Known legit directories are matched separately and never flagged here.
+// Detect low-quality / spam backlink sources so they don't pollute the gap as "opportunities".
+// Covers: link-farm directories, SEO-stat/website-value tools (auto-generate a page linking to ANY domain),
+// generic SEO link spam, and free-hosting throwaway subdomains. Known legit directories are never flagged.
+const JUNK_BACKLINK_RE = new RegExp([
+  // SEO stat / website-value / "report" tools that link to every domain they scan
+  'siteprice', 'statshow', 'siteworth', 'websiteoutlook', 'hypestat', 'webstatsdomain', 'rank2traffic',
+  'siteindices', 'sitevaluefox', 'worthofweb', 'kingranks', 'wtoregister', 'urlrate', 'clearwebstats',
+  'easycounter', 'cubestat', 'websiteinformer', 'informer', 'statvoo', 'hupso', 'seoceros', 'seobility',
+  'expireddomains', 'siteprice', 'similarsites', 'sitechecker', 'webrate', 'sur\\.ly', 'sitelike',
+  // generic SEO / link spam
+  'ahrefs-links', 'backlink', 'guestpost', 'articlesubmission', 'postonseo', 'seosandwitch', 'submiturl',
+  'addurl', 'linkbuild', 'smallseotools', 'seotool', 'indexkings', 'prepostseo', 'bilalarticles',
+  'seosandwich', 'articlebiz', 'bloggings', 'newses', 'kingranks',
+].join('|'), 'i');
+const FREE_HOST_RE = /\.(pages\.dev|netlify\.app|vercel\.app|web\.app|github\.io|wordpress\.com|blogspot\.|weebly\.com|wixsite\.com|webnode\.|surge\.sh|onrender\.com|herokuapp\.com|glitch\.me|repl\.co|000webhost|rf\.gd|epizy|infinityfreeapp)/i;
+
 function isSpamLinkDir(domain) {
   if (directoryInfo(domain)) return false;
   return /(directory|listing|backlink|seolink|linkbuild|submit(url|site|link)|addurl|webdir|linkdir|rankdir)/i.test(domain || '');
+}
+// Broader junk check used to flag worthless gap rows as spam.
+function isJunkBacklinkDomain(domain) {
+  const d = domain || '';
+  return isSpamLinkDir(d) || JUNK_BACKLINK_RE.test(d) || FREE_HOST_RE.test(d);
 }
 
 // Composite opportunity score (0-100): authority (domain rank) weighted with how many competitors already
@@ -38282,22 +38301,23 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
     gapResult.opportunities = (gapResult.opportunities || [])
       .map(o => {
         const dir = directoryInfo(o.domain);
-        const spam = !dir && isSpamLinkDir(o.domain);
+        const junk = !dir && isJunkBacklinkDomain(o.domain);
         let score = scoreOpportunity(o.rank, o.competitors_count);
-        if (spam) score = Math.round(score * 0.2); // de-prioritise spam link farms
+        if (junk) score = Math.round(score * 0.1); // bury SEO-tool/spam junk
         let type;
         if (dir) type = 'directory';            // verified directory (has pricing/difficulty)
-        else if (spam) type = 'spam';
+        else if (junk) type = 'spam';
         else { type = classifyLinkType(o.domain); if (type === 'directory') type = 'resource'; } // only verified dirs get 'directory'
         return {
           ...o,
           link_type: type,
+          is_spam: type === 'spam',
           score,
           directory: dir, // {name, free, price, difficulty, url} or null
         };
       })
-      // Most competitors linked first (strongest signal), then score.
-      .sort((a, b) => (b.competitors_count - a.competitors_count) || (b.score - a.score));
+      // Real opportunities first (junk buried), then most competitors, then score.
+      .sort((a, b) => (a.is_spam - b.is_spam) || (b.competitors_count - a.competitors_count) || (b.score - a.score));
 
     // Persist the full enriched result so it survives navigation/reload (single cache row).
     const gapPayload = {

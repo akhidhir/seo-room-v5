@@ -31220,6 +31220,9 @@
                           {(gapData.opportunities || [])
                             .filter(o => gapTypeFilter === 'all' || (o.link_type || 'resource') === gapTypeFilter)
                             .slice().sort((a, b) => {
+                              // Always keep spam/junk at the bottom, whatever the sort column.
+                              const aSpam = a.link_type === 'spam', bSpam = b.link_type === 'spam';
+                              if (aSpam !== bSpam) return aSpam ? 1 : -1;
                               const k = gapSort.key, dir = gapSort.dir === 'desc' ? -1 : 1;
                               let av = a[k], bv = b[k];
                               if (k === 'domain' || k === 'link_type') { av = (av || '').toString(); bv = (bv || '').toString(); return av < bv ? dir : av > bv ? -dir : 0; }
