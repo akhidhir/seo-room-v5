@@ -7275,7 +7275,7 @@ async function discoverCompetitorDomains(projectId, project, resolve = true) {
 
   // 1. Maps grid scans
   try {
-    const gs = await pool.query(`SELECT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL ORDER BY scanned_at DESC LIMIT 8`, [projectId]);
+    const gs = await pool.query(`SELECT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL AND competitors::text NOT IN ('[]','{}','null','""') ORDER BY scanned_at DESC LIMIT 40`, [projectId]);
     for (const row of gs.rows) {
       const c = row.competitors || {};
       const top = Array.isArray(c) ? c : (c.top || []);
