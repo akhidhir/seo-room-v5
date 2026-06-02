@@ -37789,18 +37789,20 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
         // 7. Validate suggestions against the RENDERED page text (what the plugin's render-time injector acts on).
         //    This works on Elementor/page-builder sites too, because the rendered text contains the visible content —
         //    unlike WordPress post_content, which is empty on builder pages.
-        await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed', 'approved')`, [projectId]);
+        await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending', 'dismissed', 'approved', 'failed')`, [projectId]);
         let validCount = 0, skippedCount = 0;
 
         for (const s of suggestions) {
           const anchor = (s.suggested_anchor || '').toLowerCase().trim();
           if (!anchor || anchor.length < 3) { skippedCount++; continue; }
 
-          // Anchor must exist verbatim in the source page's rendered text (so the injector can find + wrap it).
+          // Anchor must be PLACEABLE: present in the page's visible text AND have an unlinked occurrence the
+          // injector can wrap (not already a link). This is what the render-time injector requires.
           const sourceData = pageMap.get((s.source_url || '').replace(/\/$/, ''));
-          const renderedText = (sourceData?.fullText || '').toLowerCase();
-          if (!renderedText || !renderedText.includes(anchor)) {
-            console.log('[internal-links] Skipped: anchor "' + s.suggested_anchor + '" not found in rendered text of ' + s.source_url);
+          const renderedText = (sourceData?.fullText || '');
+          const existingAnchors = (sourceData?.outbound || []).map(o => o.anchor_text);
+          if (!anchorIsPlaceable(renderedText, anchor, existingAnchors)) {
+            console.log('[internal-links] Skipped (not placeable): "' + s.suggested_anchor + '" on ' + s.source_url);
             skippedCount++;
             continue;
           }
@@ -38025,6 +38027,17 @@ app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, r
 });
 
 // Find an anchor for a link: a phrase from the target page's title that already exists in the source page's text.
+// An anchor is "placeable" by the render-time injector only if it appears in the page's visible text AND
+// has at least one occurrence that ISN'T already a link (so we never double-link or invent text).
+function anchorIsPlaceable(text, anchor, existingAnchors) {
+  const a = (anchor || '').toLowerCase().trim();
+  const t = (text || '').toLowerCase();
+  if (!a || a.length < 3 || !t.includes(a)) return false;
+  let tc = 0, i = 0; while ((i = t.indexOf(a, i)) !== -1) { tc++; i += a.length; }
+  const lc = (existingAnchors || []).filter(la => (la || '').toLowerCase().includes(a)).length;
+  return tc > lc;
+}
+
 function sropt_findClusterAnchor(targetTitle, sourceTextLower) {
   const cleanTitle = (targetTitle || '').replace(/\s*[\|\-–—].*$/, '').trim();
   const words = cleanTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2);
@@ -38052,7 +38065,7 @@ app.post('/api/projects/:projectId/internal-links/build-clusters', async (req, r
 
     const norm = s => (s || '').replace(/\/$/, '');
     const byUrl = {};
-    for (const p of allPages) byUrl[norm(p.url)] = { url: norm(p.url), title: p.title, text: (p.text || '').toLowerCase() };
+    for (const p of allPages) byUrl[norm(p.url)] = { url: norm(p.url), title: p.title, text: (p.text || '').toLowerCase(), linkAnchors: (p.links || []).map(l => (l.anchor || '').toLowerCase()) };
 
     // 1. AI clustering (one call) — titles + urls only
     const dir = allPages.slice(0, 220).map(p => ({ url: norm(p.url), title: p.title }));
@@ -38072,7 +38085,7 @@ app.post('/api/projects/:projectId/internal-links/build-clusters', async (req, r
     } catch (e) { return res.status(500).json({ error: 'Could not parse AI clustering response' }); }
 
     // 2. Generate bidirectional links per cluster, anchor-grounded
-    await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status='pending' AND reason LIKE 'Topic cluster%'`, [projectId]);
+    await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('pending','failed') AND reason LIKE 'Topic cluster%'`, [projectId]);
     let created = 0, clustersUsed = 0;
     for (const cl of clusters) {
       const pillar = byUrl[norm(cl.pillar)];
@@ -38081,9 +38094,9 @@ app.post('/api/projects/:projectId/internal-links/build-clusters', async (req, r
       clustersUsed++;
       let pillarOut = 0;
       for (const spoke of spokes) {
-        // spoke -> pillar (anchor about the pillar topic, found in the spoke's text)
+        // spoke -> pillar (anchor about the pillar topic, found UNLINKED in the spoke's text)
         const upAnchor = sropt_findClusterAnchor(pillar.title, spoke.text);
-        if (upAnchor) {
+        if (upAnchor && anchorIsPlaceable(spoke.text, upAnchor, spoke.linkAnchors)) {
           await pool.query(`INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status) VALUES ($1,$2,$3,$4,$5,$6,'','Topic cluster — spoke links up to pillar','high','pending')`,
             [projectId, spoke.url, spoke.title, pillar.url, pillar.title, upAnchor]);
           created++;
@@ -38091,7 +38104,7 @@ app.post('/api/projects/:projectId/internal-links/build-clusters', async (req, r
         // pillar -> spoke (cap to keep the pillar clean)
         if (pillarOut < 10) {
           const downAnchor = sropt_findClusterAnchor(spoke.title, pillar.text);
-          if (downAnchor) {
+          if (downAnchor && anchorIsPlaceable(pillar.text, downAnchor, pillar.linkAnchors)) {
             await pool.query(`INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status) VALUES ($1,$2,$3,$4,$5,$6,'','Topic cluster — pillar links down to spoke','medium','pending')`,
               [projectId, pillar.url, pillar.title, spoke.url, spoke.title, downAnchor]);
             created++; pillarOut++;
