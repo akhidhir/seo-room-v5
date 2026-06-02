@@ -24130,6 +24130,27 @@
       const [importingMaps, setImportingMaps] = useState(false);
       const [serpProvider, setSerpProvider] = useState('serpapi');
       const [serpView, setSerpView] = useState('rankings');
+      // Keyword Gap state
+      const [serpGap, setSerpGap] = useState(null);
+      const [serpGapLoading, setSerpGapLoading] = useState(false);
+      const [serpGapComps, setSerpGapComps] = useState(null);
+      const [serpGapSort, setSerpGapSort] = useState({ key: 'competitors_count', dir: 'desc' });
+      const [serpGapAdded, setSerpGapAdded] = useState({});
+      useEffect(() => {
+        if (!project?.id) return;
+        api(`/projects/${project.id}/serp-gap`).then(r => { if (r && (r.opportunities || []).length) setSerpGap(r); }).catch(() => {});
+        api(`/projects/${project.id}/backlinks/competitors`).then(r => setSerpGapComps(r.competitors || [])).catch(() => setSerpGapComps([]));
+      }, [project?.id]);
+      const runSerpGap = async () => {
+        setSerpGapLoading(true);
+        try { const r = await api(`/projects/${project.id}/serp-gap`, { method: 'POST' }); if (r.error) alert('Keyword gap error: ' + r.error); else setSerpGap(r); }
+        catch (e) { alert('Keyword gap error: ' + e.message); }
+        setSerpGapLoading(false);
+      };
+      const trackGapKeyword = async (kw) => {
+        try { await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: [kw.trim()], location: null } }); setSerpGapAdded(p => ({ ...p, [kw]: true })); }
+        catch (e) { alert('Add error: ' + e.message); }
+      };
       const [actionFilter, setActionFilter] = useState('all');
       const [actionSubFilter, setActionSubFilter] = useState(null);
       const [expandedActionKw, setExpandedActionKw] = useState(null); // only one keyword expanded at a time
@@ -24615,6 +24636,7 @@
               <div style={{ display: 'flex', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden' }}>
                 {[
                   { key: 'rankings', label: 'Rankings', icon: 'fa-chart-simple' },
+                  { key: 'gap', label: 'Keyword Gap', icon: 'fa-not-equal' },
                   { key: 'actions', label: 'Action Plan', icon: 'fa-list-check', count: serpActions.filter(function(a) { return getActionStatus(a.key) !== 'done'; }).length }
                 ].map(function(tab) {
                   var active = serpView === tab.key;
@@ -24848,6 +24870,93 @@
               )}
             </div>
           )}
+
+          {/* ===== KEYWORD GAP VIEW ===== */}
+          {serpView === 'gap' && (() => {
+            const accent = '#14b8a6';
+            const th = { textAlign: 'left', padding: '10px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' };
+            const td = { padding: '10px 14px', fontSize: 13, borderBottom: '1px solid var(--border)' };
+            const card = { background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' };
+            const opps = (serpGap?.opportunities) || [];
+            const sorted = opps.slice().sort((a, b) => {
+              const k = serpGapSort.key, dir = serpGapSort.dir === 'desc' ? -1 : 1;
+              let av = a[k], bv = b[k];
+              if (k === 'keyword') { av = (av || '').toString(); bv = (bv || '').toString(); return av < bv ? dir : av > bv ? -dir : 0; }
+              return ((av || 0) - (bv || 0)) * dir;
+            });
+            const sortHead = (key, label) => (
+              <th style={th} onClick={() => setSerpGapSort(s => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}>
+                {label}{serpGapSort.key === key && <i className={`fas fa-caret-${serpGapSort.dir === 'desc' ? 'down' : 'up'}`} style={{ marginLeft: 5, color: accent }}></i>}
+              </th>
+            );
+            return (
+              <div>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+                  <button className="btn" onClick={runSerpGap} disabled={serpGapLoading} style={{ background: accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, opacity: serpGapLoading ? 0.6 : 1 }}>
+                    {serpGapLoading ? <><span className="spinner" style={{ marginRight: 6 }}></span>Analyzing...</> : <><i className="fas fa-not-equal" style={{ marginRight: 6 }}></i>Run Keyword Gap</>}
+                  </button>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>Keywords your competitors rank for (top 20) that you don't rank for at all</span>
+                </div>
+
+                {serpGapComps && serpGapComps.length > 0 && !serpGap && (
+                  <div style={{ ...card, padding: 14, marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6, color: accent }}></i>Competitors found in your data</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {serpGapComps.slice(0, 8).map((c, i) => <span key={i} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, background: 'var(--bg)', border: '1px solid var(--border)' }}>{c.domain}{i < 5 && <span style={{ fontSize: 9, fontWeight: 700, color: accent, marginLeft: 6 }}>TOP {i + 1}</span>}</span>)}
+                    </div>
+                  </div>
+                )}
+
+                {serpGap ? (
+                  <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
+                    <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{serpGap.total} keywords competitors rank for that you don't</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                        Competitors: {(serpGap.competitors || []).join(', ')}
+                        {serpGap.auto_discovered && <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: accent + '22', color: accent }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }}></i>Auto-found</span>}
+                      </div>
+                    </div>
+                    <div style={{ maxHeight: 'calc(100vh - 360px)', overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead><tr>
+                          {sortHead('score', 'Score')}
+                          {sortHead('keyword', 'Keyword')}
+                          {sortHead('volume', 'Volume')}
+                          {sortHead('competitors_count', 'Competitors')}
+                          {sortHead('best_position', 'Best Pos')}
+                          <th style={{ ...th, cursor: 'default' }}>Action</th>
+                        </tr></thead>
+                        <tbody>
+                          {sorted.map((o, i) => (
+                            <tr key={i}>
+                              <td style={td}><span style={{ fontWeight: 800, fontSize: 15, color: o.score >= 60 ? '#22c55e' : o.score >= 35 ? '#f59e0b' : 'var(--text3)' }}>{o.score}</span></td>
+                              <td style={{ ...td, fontWeight: 600 }}>{o.keyword}</td>
+                              <td style={td}>{o.volume ? o.volume.toLocaleString() : '-'}</td>
+                              <td style={td}>
+                                <span title={(o.competitors || []).map(c => `${c.domain} #${c.position}`).join('\n')} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 26, padding: '2px 8px', borderRadius: 12, fontSize: 13, fontWeight: 800, background: (o.competitors_count >= 4 ? '#22c55e' : o.competitors_count >= 2 ? accent : '#64748b') + '22', color: o.competitors_count >= 4 ? '#22c55e' : o.competitors_count >= 2 ? accent : '#94a3b8' }}>{o.competitors_count}</span>
+                              </td>
+                              <td style={td}><span style={{ fontWeight: 700, color: o.best_position <= 3 ? '#22c55e' : o.best_position <= 10 ? '#f59e0b' : 'var(--text3)' }}>#{o.best_position}</span></td>
+                              <td style={td}>
+                                {serpGapAdded[o.keyword]
+                                  ? <span style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check" style={{ marginRight: 4 }}></i>Tracking</span>
+                                  : <button className="btn" onClick={() => trackGapKeyword(o.keyword)} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text1)', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}><i className="fas fa-plus" style={{ marginRight: 4 }}></i>Track</button>}
+                              </td>
+                            </tr>
+                          ))}
+                          {sorted.length === 0 && <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No gap keywords found.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
+                    <i className="fas fa-not-equal" style={{ fontSize: 32, opacity: 0.3, marginBottom: 12, display: 'block' }}></i>
+                    Run keyword gap to find keywords your competitors rank for but you don't
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ===== RANKINGS VIEW ===== */}
           {serpView === 'rankings' && <React.Fragment>

@@ -38354,6 +38354,94 @@ app.get('/api/projects/:projectId/backlinks/gap', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==================== SERP KEYWORD GAP ====================
+// Keywords your competitors rank for (organic, top ~20) that you don't rank for at all.
+// Auto-discovers competitors (same as backlink gap), pulls ranked keywords for each via DataForSEO Labs.
+
+function scoreKeywordGap(volume, competitorsCount, bestPosition) {
+  const v = Math.min(50, Math.round(Math.log10((Number(volume) || 0) + 1) * 14)); // up to 50 from volume
+  const c = Math.min((Number(competitorsCount) || 1) / 3, 1) * 30;                  // up to 30 from consensus
+  const p = bestPosition <= 3 ? 20 : bestPosition <= 10 ? 12 : 6;                   // up to 20 from winnability
+  return Math.round(v + c + p);
+}
+
+app.post('/api/projects/:projectId/serp-gap', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const proj = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!proj) return res.status(404).json({ error: 'Project not found' });
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
+
+    const domain = (proj.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+    if (!domain) return res.status(400).json({ error: 'Project domain not set' });
+
+    // Competitors: settings domains, else auto-discover from grid scans + handshake.
+    const provided = req.body.competitors || proj.competitors || [];
+    let competitors = provided.map(c => (c || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '')).filter(c => /\./.test(c)).slice(0, 5);
+    let autoDiscovered = false;
+    if (!competitors.length) {
+      competitors = (await discoverCompetitorDomains(projectId, proj)).slice(0, 5).map(c => c.domain);
+      autoDiscovered = competitors.length > 0;
+    }
+    if (!competitors.length) return res.status(400).json({ error: 'No competitor domains found. Run a Maps grid scan / Players Handshake, or add competitors in project settings.' });
+
+    const locationCode = 2036; // Australia
+    let cost = 0;
+
+    // 1. Our ranked keywords — anything we already rank for (so we can exclude it from the gap).
+    const ours = await dataForSeoRankedKeywords({ domain, locationCode, limit: 1000, offset: 0 });
+    cost += ours.cost || 0;
+    const ourKeywords = new Set((ours.keywords || []).map(k => (k.keyword || '').trim().toLowerCase()).filter(Boolean));
+
+    // 2. Each competitor's ranked keywords (top ~20 only — real opportunities).
+    const gap = new Map(); // keyword -> { keyword, volume, cpc, competitors: [{domain, position}], best_position }
+    for (const comp of competitors) {
+      let ck;
+      try { ck = await dataForSeoRankedKeywords({ domain: comp, locationCode, limit: 700, offset: 0 }); }
+      catch (e) { console.log(`[serp-gap] ${comp} failed: ${e.message}`); continue; }
+      cost += ck.cost || 0;
+      for (const k of (ck.keywords || [])) {
+        const kw = (k.keyword || '').trim();
+        const kwl = kw.toLowerCase();
+        const pos = k.position || 99;
+        if (!kw || pos > 20) continue;          // only their page 1-2 rankings
+        if (ourKeywords.has(kwl)) continue;      // we already rank for it → not a gap
+        const cur = gap.get(kwl) || { keyword: kw, volume: k.volume || 0, cpc: k.cpc || 0, competitors: [], best_position: pos };
+        cur.competitors.push({ domain: comp, position: pos });
+        if (pos < cur.best_position) cur.best_position = pos;
+        if ((k.volume || 0) > cur.volume) cur.volume = k.volume || 0;
+        gap.set(kwl, cur);
+      }
+    }
+
+    let opportunities = [...gap.values()].map(o => ({
+      ...o,
+      competitors_count: o.competitors.length,
+      score: scoreKeywordGap(o.volume, o.competitors.length, o.best_position),
+    })).sort((a, b) => (b.competitors_count - a.competitors_count) || (b.volume - a.volume) || (b.score - a.score));
+
+    const payload = { domain, competitors, auto_discovered: autoDiscovered, total: opportunities.length, opportunities, scanned_at: new Date().toISOString() };
+    try {
+      await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'serp_gap_cache',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify(payload)]);
+    } catch (e) {}
+    try { await pool.query('INSERT INTO api_costs (project_id, feature, provider, api_calls, cost, details) VALUES ($1,$2,$3,$4,$5,$6)', [projectId, 'serp_gap', 'dataforseo', competitors.length + 1, cost, JSON.stringify({ domain, competitors })]); } catch (e) {}
+
+    res.json({ ...payload, cost });
+  } catch (e) {
+    console.error('[serp-gap] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/projects/:projectId/serp-gap', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const row = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='serp_gap_cache'`, [projectId])).rows[0];
+    if (row?.config && row.config.opportunities) return res.json(row.config);
+    res.json({ opportunities: [], total: 0, competitors: [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Outreach / Prospects CRUD ──
 
 app.get('/api/projects/:projectId/backlinks/prospects', async (req, res) => {
