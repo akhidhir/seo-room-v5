@@ -7262,8 +7262,10 @@ function isJunkBacklinkDomain(domain) {
 function scoreOpportunity(rank, competitorsCount) {
   const r = Math.max(0, Math.min(1000, Number(rank) || 0));
   const c = Math.max(1, Number(competitorsCount) || 1);
-  const authority = (r / 1000) * 70;          // up to 70 pts from domain rank
-  const consensus = Math.min(c / 3, 1) * 30;  // up to 30 pts when 3+ competitors have it
+  // Authority is tiered and dominant — a rank-0 domain (the signature of link-farm junk) earns nothing here,
+  // so it can never outrank a domain with real authority no matter how many competitors link to it.
+  const authority = r >= 300 ? 70 : r >= 150 ? 58 : r >= 80 ? 45 : r >= 30 ? 32 : r > 0 ? 18 : 0;
+  const consensus = Math.min(c / 3, 1) * 25;  // up to 25 pts when 3+ competitors have it
   return Math.round(authority + consensus);
 }
 
@@ -7292,7 +7294,7 @@ async function resolveCompetitorWebsite(name, locationHint, ownDomain) {
 // Auto-discover competitor DOMAINS from data we already collected — Maps grid scans (competitors[].website
 // or name) and the Players Handshake. When a competitor only has a name, resolve it to a domain via SerpAPI
 // (cached in project_integrations kind='competitor_domains' so we never pay to resolve the same name twice).
-async function discoverCompetitorDomains(projectId, project, resolve = true) {
+async function discoverCompetitorDomains(projectId, project, resolve = true, preferSerp = false) {
   const ownDomain = cleanHost(project?.domain || project?.website || '');
   const locationHint = project?.location || (Array.isArray(project?.service_areas) ? project.service_areas[0] : '') || '';
   const domainAgg = new Map(); // host -> {domain,name,score,sources}
@@ -7374,9 +7376,14 @@ async function discoverCompetitorDomains(projectId, project, resolve = true) {
     }
   }
 
-  return [...domainAgg.values()]
-    .sort((a, b) => b.score - a.score)
-    .map(c => ({ domain: c.domain, name: c.name, score: Math.round(c.score), sources: [...c.sources] }));
+  let list = [...domainAgg.values()];
+  if (preferSerp) {
+    // For organic/SERP use, rank competitors that actually rank in search (source 'serp') first.
+    list.sort((a, b) => (b.sources.has('serp') - a.sources.has('serp')) || (b.score - a.score));
+  } else {
+    list.sort((a, b) => b.score - a.score);
+  }
+  return list.map(c => ({ domain: c.domain, name: c.name, score: Math.round(c.score), sources: [...c.sources] }));
 }
 
 async function dataForSeoBacklinkGap(targetDomain, competitorDomains, opts = {}) {
@@ -38331,8 +38338,8 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
           directory: dir, // {name, free, price, difficulty, url} or null
         };
       })
-      // Real opportunities first (junk buried), then most competitors, then score.
-      .sort((a, b) => (a.is_spam - b.is_spam) || (b.competitors_count - a.competitors_count) || (b.score - a.score));
+      // Real opportunities first (junk buried), then best score (authority-led), then most competitors.
+      .sort((a, b) => (a.is_spam - b.is_spam) || (b.score - a.score) || (b.competitors_count - a.competitors_count));
 
     // Persist the full enriched result so it survives navigation/reload (single cache row).
     const gapPayload = {
@@ -38374,7 +38381,7 @@ app.get('/api/projects/:projectId/backlinks/competitors', async (req, res) => {
   try {
     const proj = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     if (!proj) return res.status(404).json({ error: 'Project not found' });
-    const discovered = await discoverCompetitorDomains(projectId, proj);
+    const discovered = await discoverCompetitorDomains(projectId, proj, true, req.query.prefer === 'serp');
     res.json({ competitors: discovered });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -38415,10 +38422,10 @@ app.post('/api/projects/:projectId/serp-gap', async (req, res) => {
     let competitors = provided.map(c => (c || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '')).filter(c => /\./.test(c)).slice(0, 5);
     let autoDiscovered = false;
     if (!competitors.length) {
-      competitors = (await discoverCompetitorDomains(projectId, proj)).slice(0, 5).map(c => c.domain);
+      competitors = (await discoverCompetitorDomains(projectId, proj, true, true)).slice(0, 5).map(c => c.domain); // preferSerp: organic competitors first
       autoDiscovered = competitors.length > 0;
     }
-    if (!competitors.length) return res.status(400).json({ error: 'No competitor domains found. Run a Maps grid scan / Players Handshake, or add competitors in project settings.' });
+    if (!competitors.length) return res.status(400).json({ error: 'No competitor domains found. Run a SERP analysis, Maps grid scan, or add competitors in project settings.' });
 
     const locationCode = 2036; // Australia
     let cost = 0;

@@ -24139,7 +24139,7 @@
       useEffect(() => {
         if (!project?.id) return;
         api(`/projects/${project.id}/serp-gap`).then(r => { if (r && (r.opportunities || []).length) setSerpGap(r); }).catch(() => {});
-        api(`/projects/${project.id}/backlinks/competitors`).then(r => setSerpGapComps(r.competitors || [])).catch(() => setSerpGapComps([]));
+        api(`/projects/${project.id}/backlinks/competitors?prefer=serp`).then(r => setSerpGapComps(r.competitors || [])).catch(() => setSerpGapComps([]));
       }, [project?.id]);
       const runSerpGap = async () => {
         setSerpGapLoading(true);
@@ -30871,7 +30871,7 @@
       const [gapLoading, setGapLoading] = useState(false);
       const [discoveredComps, setDiscoveredComps] = useState(null);
       const [gapTypeFilter, setGapTypeFilter] = useState('all');
-      const [gapSort, setGapSort] = useState({ key: 'competitors_count', dir: 'desc' });
+      const [gapSort, setGapSort] = useState({ key: 'score', dir: 'desc' });
       const [showAddProspect, setShowAddProspect] = useState(false);
       const [newProspect, setNewProspect] = useState({ domain: '', url: '', contact_email: '', contact_name: '', notes: '' });
       const [history, setHistory] = useState([]);
