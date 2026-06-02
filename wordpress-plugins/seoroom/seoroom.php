@@ -4081,7 +4081,53 @@ function sropt_get_internal_links($force = false) {
     $data = json_decode(wp_remote_retrieve_body($resp), true);
     $links = (is_array($data) && isset($data['links_by_page']) && is_array($data['links_by_page'])) ? $data['links_by_page'] : array();
     set_transient('sropt_internal_links', $links, HOUR_IN_SECONDS);
+
+    // Auto-flush page caches when the approved-link set actually changes, so injected links
+    // go live without anyone manually clearing BerqWP. Signature compare avoids redundant purges.
+    $sig = md5(wp_json_encode($links));
+    $prev_sig = get_option('sropt_links_sig', '');
+    if ($sig !== $prev_sig) {
+        update_option('sropt_links_sig', $sig);
+        if ($prev_sig !== '') { // skip the very first population
+            $prev_pages = get_option('sropt_links_pages', array());
+            $now_pages = array_keys($links);
+            $affected = array_values(array_unique(array_merge(is_array($prev_pages) ? $prev_pages : array(), $now_pages)));
+            sropt_flush_caches($affected);
+        }
+        update_option('sropt_links_pages', array_keys($links));
+    }
     return $links;
+}
+
+// Purge page caches automatically so newly injected/removed links go live with no manual flush.
+// Targets specific URLs when given (via clean_post_cache, which BerqWP and most caches bind to),
+// and fires the site-wide purge of every major cache layer it can find.
+function sropt_flush_caches($urls = null) {
+    if (is_array($urls) && !empty($urls)) {
+        foreach ($urls as $u) {
+            $pid = url_to_postid($u);
+            if ($pid) {
+                clean_post_cache($pid);                 // fires `clean_post_cache` — BerqWP & most caches recache the page
+                do_action('clean_post_cache', $pid, get_post($pid));
+            }
+        }
+    }
+    // BerqWP — call any public clear function it exposes, then fire its action hooks.
+    foreach (array('berqwp_clear_cache', 'bwp_clear_cache', 'berqwp_clear_all_cache', 'bwp_purge_all', 'berqwp_purge_everything') as $fn) {
+        if (function_exists($fn)) { @call_user_func($fn); }
+    }
+    do_action('berqwp_clear_cache');
+    do_action('berqwp/clear_cache');
+    // Other common cache plugins (guarded so we only call what's installed).
+    if (function_exists('rocket_clean_domain'))  rocket_clean_domain();        // WP Rocket
+    if (function_exists('w3tc_flush_all'))        w3tc_flush_all();            // W3 Total Cache
+    if (function_exists('wp_cache_clear_cache'))  wp_cache_clear_cache();      // WP Super Cache
+    if (function_exists('wpfc_clear_all_cache'))  wpfc_clear_all_cache();      // WP Fastest Cache
+    if (class_exists('autoptimizeCache') && method_exists('autoptimizeCache', 'clearall')) autoptimizeCache::clearall();
+    // LiteSpeed + Cloudflare (BerqWP integrates these) + generic object cache.
+    do_action('litespeed_purge_all');
+    do_action('cloudflare_purge_everything');
+    if (function_exists('wp_cache_flush')) wp_cache_flush();
 }
 
 // Inject internal links by output-buffering the WHOLE rendered page. This catches Elementor / any page
@@ -4267,6 +4313,8 @@ function sropt_perform_self_update() {
 
     if ($was_active && !is_plugin_active($plugin_file)) activate_plugin($plugin_file);
     sropt_force_update_refresh();
+    // New plugin code can change how pages render — purge caches so the update is visible immediately.
+    if ($ok && function_exists('sropt_flush_caches')) sropt_flush_caches();
     update_option('sropt_last_auto_update', array('time' => current_time('mysql'), 'ok' => $ok, 'to' => $data->version, 'msg' => $msg));
 
     return array('ok' => $ok, 'msg' => $msg, 'version' => $data->version, 'updated' => $ok);
