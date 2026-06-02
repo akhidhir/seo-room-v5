@@ -38703,72 +38703,84 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       if (cand.length < 2) continue;
       const topImpr = Math.max(...cand.map(p => p.impressions));
 
-      // Enrich every candidate, then keep only GENUINE competitors: a page counts only if it actually
-      // targets the keyword (title/H1/focus/slug) OR pulls substantial impressions — not a 13-impression fluke.
+      // Phrase-accurate matching: a field counts only if the EXACT keyword phrase appears (so "Local SEO
+      // Expert Perth" does NOT count as targeting "seo perth"). This separates real duplication from a
+      // healthy topic cluster where pages target their own specific keywords and merely overlap.
+      const phraseHas = (text) => (text || '').toLowerCase().includes(kwl);
       const enriched = cand.map(p => {
         const op = onpage.get(normU(p.page)); const pp = pushed.get(normU(p.page));
         const meta_title = op?.metaTitle || op?.title || pp?.title || '';
         const h1 = op?.h1 || ''; const meta_desc = op?.metaDesc || ''; const focus_keyword = op?.focusKeyword || '';
         const slug = slugOf(p.page);
-        const kw_in_title = has(meta_title, kwl, kwWords);
-        const kw_in_h1 = has(h1, kwl, kwWords);
-        const kw_in_focus = has(focus_keyword, kwl, kwWords);
-        const kw_in_slug = kwWords.length > 0 && kwWords.filter(w => slug.includes(w)).length >= Math.ceil(kwWords.length * 0.6) && slug !== '/' && slug !== '';
         const isHome = slug === '' || slug === '/';
-        const targets = kw_in_title || kw_in_h1 || kw_in_focus || kw_in_slug;
+        const slugText = slug.replace(/[-_\/]+/g, ' ').trim();
+        const kw_in_title = phraseHas(meta_title);
+        const kw_in_h1 = phraseHas(h1);
+        const kw_in_focus = phraseHas(focus_keyword);
+        const kw_in_slug = !isHome && phraseHas(slugText);
+        const targets_exact = kw_in_title || kw_in_focus || kw_in_slug; // actively optimised for THIS exact keyword
+        const own_focus = !!focus_keyword && !kw_in_focus;             // built around a different keyword
         const substantial = p.impressions >= Math.max(20, topImpr * 0.15);
         return {
           url: p.page, clicks: p.clicks, impressions: p.impressions, position: Math.round(p.position * 10) / 10, ctr: Math.round((p.ctr || 0) * 1000) / 10,
           meta_title, h1, meta_desc, focus_keyword, kw_in_title, kw_in_h1, kw_in_focus, kw_in_slug, isHome,
-          genuine: targets || substantial,
+          targets_exact, own_focus, genuine: targets_exact || substantial,
         };
       });
       const pages = enriched.filter(p => p.genuine);
-      if (pages.length < 2) continue; // not real cannibalization once flukes are removed
+      if (pages.length < 2) continue;
+
+      const exactCount = pages.filter(p => p.targets_exact).length;
+      const mode = exactCount >= 2 ? 'duplicate' : 'cluster'; // duplicate = real cannibalization; cluster = head term
 
       const totalImpr = pages.reduce((s, p) => s + p.impressions, 0);
       const totalClicks = pages.reduce((s, p) => s + p.clicks, 0);
       const bestPos = Math.min(...pages.map(p => p.position));
-      // Primary = the page that should OWN this keyword: most on-page targeting, then clicks, then traffic.
-      const targScore = (p) => (p.kw_in_focus ? 100 : 0) + (p.kw_in_title ? 50 : 0) + (p.kw_in_slug ? 30 : 0) + (p.kw_in_h1 ? 20 : 0) - (p.isHome ? 60 : 0);
-      const primary = [...pages].sort((a, b) => (targScore(b) - targScore(a)) || (b.clicks - a.clicks) || (b.impressions - a.impressions) || (a.position - b.position))[0];
+      // Pick the page that should own the keyword. Duplicate: the exact-target with best traffic.
+      // Cluster: the page Google already ranks most (impressions), preferring a real page over the homepage.
+      let primary;
+      if (mode === 'duplicate') primary = [...pages].filter(p => p.targets_exact).sort((a, b) => (b.clicks - a.clicks) || (b.impressions - a.impressions) || (a.position - b.position))[0] || pages[0];
+      else primary = [...pages].sort((a, b) => (a.isHome - b.isHome) || (b.impressions - a.impressions) || (a.position - b.position))[0];
       const primaryPath = (() => { try { return new URL(primary.url).pathname; } catch { return primary.url; } })();
 
-      const titlePages = [], focusPages = [], slugPages = [], homepage = [];
       for (const p of pages) {
         p.is_primary = p.url === primary.url;
         p.why = [];
-        if (p.isHome) { homepage.push(p.url); p.why.push('homepage'); }
-        if (p.kw_in_title) { titlePages.push(p.url); p.why.push('title'); }
+        if (p.isHome) p.why.push('homepage');
+        if (p.kw_in_title) p.why.push('title');
         if (p.kw_in_h1) p.why.push('h1');
-        if (p.kw_in_focus) { focusPages.push(p.url); p.why.push('focus kw'); }
-        if (p.kw_in_slug) { slugPages.push(p.url); p.why.push('slug'); }
-        // Per-page fix instruction
+        if (p.kw_in_focus) p.why.push('focus kw');
+        if (p.kw_in_slug) p.why.push('slug');
         if (p.is_primary) {
-          p.fix = `Keep this as the one page for "${kw}". Make sure "${kw}" stays in its title, H1 and focus keyword, and strengthen the content.`;
+          p.fix = mode === 'duplicate'
+            ? `Keep this as the one page for "${kw}". Make sure "${kw}" stays in its title, H1 and focus keyword, and strengthen the content.`
+            : `Make this your main (pillar) page for "${kw}" — Google already ranks it most for the term. Add "${kw}" to its title/H1/focus keyword and link the related pages below to it.`;
           p.fix_type = 'keep';
-        } else {
+        } else if (p.targets_exact) {
           const redFields = [];
           if (p.kw_in_title) redFields.push('title');
           if (p.kw_in_h1) redFields.push('H1');
           if (p.kw_in_focus) redFields.push('focus keyword');
           if (p.kw_in_slug) redFields.push('URL');
-          if (p.isHome) {
-            p.fix = `Your homepage naturally surfaces for this term — don't actively target "${kw}" here. Keep it brand/overview-focused, and link to ${primaryPath} as the page for "${kw}".`;
-          } else if (redFields.length) {
-            p.fix = `Remove "${kw}" from this page's ${redFields.join(', ')}, and re-focus it on its own topic${p.focus_keyword ? ` ("${p.focus_keyword}")` : ''}. Then add an internal link from here to ${primaryPath}.`;
-          } else {
-            p.fix = `This page ranks for "${kw}" only through topical overlap. Sharpen its focus on its own subject and add an internal link to ${primaryPath} for "${kw}".`;
-          }
+          p.fix = `This page is also optimised for "${kw}" (in its ${redFields.join(', ')}), clashing with the primary. Remove "${kw}" from its ${redFields.join(', ')} and re-focus it on ${p.own_focus ? `"${p.focus_keyword}"` : 'its own specific topic'}. Then link to ${primaryPath}.`;
           p.fix_type = 'fix';
+        } else if (p.isHome) {
+          p.fix = `Your homepage naturally ranks for broad terms — leave it brand/overview-focused. Just make sure it links to ${primaryPath} for "${kw}". No keyword changes needed here.`;
+          p.fix_type = 'ok';
+        } else {
+          p.fix = `This page targets ${p.focus_keyword ? `"${p.focus_keyword}"` : 'its own topic'}, not "${kw}" — that's fine, it only ranks for "${kw}" by overlap. Add an internal link to ${primaryPath} for "${kw}". Don't remove anything.`;
+          p.fix_type = 'ok';
         }
       }
+
       const reasons = [];
-      if (focusPages.length >= 2) reasons.push({ type: 'focus kw', label: `${focusPages.length} pages use "${kw}" as their focus keyword`, fix: 'Only the primary page should target this keyword — change the others’ focus keyword.' });
-      if (titlePages.length >= 2) reasons.push({ type: 'title', label: `Same keyword "${kw}" is in the title tag of ${titlePages.length} pages`, fix: 'Keep it in the primary page’s title; rewrite the others’ titles around a different term.' });
-      if (homepage.length) reasons.push({ type: 'homepage', label: `Your homepage is competing for "${kw}"`, fix: 'Let the dedicated page own this keyword; point the homepage at your brand/overview.' });
-      if (slugPages.length >= 2) reasons.push({ type: 'slug', label: `${slugPages.length} pages have "${kw}" terms in their URL`, fix: 'Consolidate to one page; redirect or re-slug the duplicates.' });
-      if (!reasons.length) reasons.push({ type: 'intent', label: `${pages.length} pages each pull real impressions for "${kw}" with overlapping intent`, fix: 'Differentiate each page’s focus, or merge them into one.' });
+      if (mode === 'duplicate') {
+        reasons.push({ type: 'duplicate', label: `${exactCount} of your pages are optimised for the exact term "${kw}" (in their title, focus keyword or URL), so they cannibalise each other.`, fix: `Keep ${primaryPath} targeting it and re-focus the others.` });
+      } else {
+        const focuses = [...new Set(pages.filter(p => p.own_focus && !p.is_primary).map(p => p.focus_keyword))].slice(0, 4);
+        reasons.push({ type: 'cluster', label: `No single page is built for "${kw}". Several related pages${focuses.length ? ` (targeting ${focuses.map(f => `"${f}"`).join(', ')})` : ''} all rank for it, so Google splits your visibility across them.`, fix: `Make ${primaryPath} the pillar for "${kw}" and internally link the related pages to it — keep their own focus keywords.` });
+      }
+      if (pages.some(p => p.isHome && !p.is_primary)) reasons.push({ type: 'homepage', label: `Your homepage also surfaces for "${kw}".`, fix: 'Leave it brand-focused; let the pillar page own the keyword.' });
 
       let severity = 'low';
       if (totalImpr >= 500 && bestPos <= 20) severity = 'high';
