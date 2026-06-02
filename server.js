@@ -7272,7 +7272,7 @@ function scoreOpportunity(rank, competitorsCount) {
 // Auto-discover competitor DOMAINS from data we already collected — Maps grid scans (competitors[].website)
 // and the Players Handshake analysis — so backlink gap (and anything else) doesn't depend on someone
 // manually typing competitors. Aggregates by domain, ranks by how dominant/frequent each competitor is.
-const COMP_SKIP_HOST = /(facebook|instagram|google\.|google$|goo\.gl|gstatic|yelp|tripadvisor|yellowpages|truelocal|hotfrog|localsearch|youtube|linkedin|twitter|wikipedia|\.gov|oneflare|hipages|airtasker|productreview|womo|startlocal|cylex|aussieweb|brownbook|pinterest|tiktok|maps\.|bing\.|apple\.)/;
+const COMP_SKIP_HOST = /(facebook|instagram|google\.|google$|goo\.gl|gstatic|yelp|tripadvisor|yellowpages|truelocal|hotfrog|localsearch|youtube|linkedin|twitter|wikipedia|\.gov|oneflare|hipages|airtasker|productreview|womo|startlocal|cylex|aussieweb|brownbook|pinterest|tiktok|maps\.|bing\.|apple\.|reddit|quora|medium\.com|github|gumtree|seek\.com|indeed|glassdoor|trustpilot|clutch\.co|designrush|expertise\.com|threebestrated|wordstream)/;
 function cleanHost(url) {
   return (url || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
 }
