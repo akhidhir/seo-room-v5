@@ -7231,6 +7231,13 @@ function directoryInfo(domain) {
   };
 }
 
+// Detect low-quality auto-submit / SEO link-farm directories (PBN spam) so they aren't mislabelled as real
+// citation directories. Known legit directories are matched separately and never flagged here.
+function isSpamLinkDir(domain) {
+  if (directoryInfo(domain)) return false;
+  return /(directory|listing|backlink|seolink|linkbuild|submit(url|site|link)|addurl|webdir|linkdir|rankdir)/i.test(domain || '');
+}
+
 // Composite opportunity score (0-100): authority (domain rank) weighted with how many competitors already
 // earned the link (more competitors = more proven-relevant and attainable for this niche).
 function scoreOpportunity(rank, competitorsCount) {
@@ -38275,10 +38282,13 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
     gapResult.opportunities = (gapResult.opportunities || [])
       .map(o => {
         const dir = directoryInfo(o.domain);
+        const spam = !dir && isSpamLinkDir(o.domain);
+        let score = scoreOpportunity(o.rank, o.competitors_count);
+        if (spam) score = Math.round(score * 0.2); // de-prioritise spam link farms
         return {
           ...o,
-          link_type: dir ? 'directory' : classifyLinkType(o.domain),
-          score: scoreOpportunity(o.rank, o.competitors_count),
+          link_type: dir ? 'directory' : (spam ? 'spam' : classifyLinkType(o.domain)),
+          score,
           directory: dir, // {name, free, price, difficulty, url} or null
         };
       })
