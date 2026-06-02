@@ -38802,11 +38802,20 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       const reasons = [];
       if (mode === 'duplicate') {
         reasons.push({ type: 'duplicate', label: `${exactCount} of your pages are optimised for the exact term "${kw}" (in their title, focus keyword or URL), so they cannibalise each other.`, fix: `Keep ${primaryPath} targeting it and re-focus the others.` });
+      } else if (exactCount === 1) {
+        reasons.push({ type: 'dilution', label: `You already have a dedicated page for "${kw}" (${primaryPath}), but other pages also rank for it, splitting your signals.`, fix: `Strengthen ${primaryPath} and add internal links to it using the anchor "${kw}". Leave the other pages' own keywords alone.` });
       } else {
         const focuses = [...new Set(pages.filter(p => p.own_focus && !p.is_primary).map(p => p.focus_keyword))].slice(0, 4);
         reasons.push({ type: 'cluster', label: `No single page is built for "${kw}". Several related pages${focuses.length ? ` (targeting ${focuses.map(f => `"${f}"`).join(', ')})` : ''} all rank for it, so Google splits your visibility across them.`, fix: `Make ${primaryPath} the pillar for "${kw}" and internally link the related pages to it — keep their own focus keywords.` });
       }
-      if (pages.some(p => p.isHome && !p.is_primary)) reasons.push({ type: 'homepage', label: `Your homepage also surfaces for "${kw}".`, fix: 'Leave it brand-focused; let the pillar page own the keyword.' });
+      // The real cannibalization signal: a different page outranks your main page for this keyword.
+      const bestRanked = [...pages].sort((a, b) => a.position - b.position)[0];
+      if (bestRanked && !bestRanked.is_primary && (bestRanked.position + 3) < primary.position) {
+        const brPath = (() => { try { return new URL(bestRanked.url).pathname; } catch { return bestRanked.url; } })();
+        reasons.push({ type: 'outranked', label: `Google ranks ${bestRanked.isHome ? 'your homepage' : brPath} (#${bestRanked.position}) ABOVE your main page ${primaryPath} (#${primary.position}) for "${kw}" — that's the cannibalization.`, fix: `Build up ${primaryPath} (content + internal links with the "${kw}" anchor) so Google switches to ranking it instead.` });
+      } else if (pages.some(p => p.isHome && !p.is_primary)) {
+        reasons.push({ type: 'homepage', label: `Your homepage also surfaces for "${kw}".`, fix: 'Leave it brand-focused; let the main page own the keyword.' });
+      }
 
       let severity = 'low';
       if (totalImpr >= 500 && bestPos <= 20) severity = 'high';
