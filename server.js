@@ -37760,6 +37760,85 @@ app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, r
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Find an anchor for a link: a phrase from the target page's title that already exists in the source page's text.
+function sropt_findClusterAnchor(targetTitle, sourceTextLower) {
+  const cleanTitle = (targetTitle || '').replace(/\s*[\|\-–—].*$/, '').trim();
+  const words = cleanTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  const candidates = [];
+  if (cleanTitle.length >= 6) candidates.push(cleanTitle.toLowerCase());
+  for (let n = 4; n >= 2; n--) for (let i = 0; i + n <= words.length; i++) {
+    const ph = words.slice(i, i + n).join(' ');
+    if (ph.length >= 6) candidates.push(ph);
+  }
+  const uniq = [...new Set(candidates)].sort((a, b) => b.length - a.length);
+  for (const c of uniq) if (sourceTextLower.includes(c)) return c;
+  return null;
+}
+
+// Build topic clusters — AI groups pages into clusters (pillar service page + supporting spokes), then
+// generate bidirectional pillar<->spoke internal links. Anchors are grounded in real page text, so the
+// plugin's render-time injector can place them. This builds the hub-and-spoke structure that moves rankings.
+app.post('/api/projects/:projectId/internal-links/build-clusters', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  try {
+    const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
+    const allPages = ((cc.rows[0]?.config?.pages) || []).filter(p => p.url && p.title);
+    if (allPages.length < 4) return res.json({ ok: true, created: 0, message: 'Not enough page content — run Push Data Now on the site, then re-run the audit.' });
+
+    const norm = s => (s || '').replace(/\/$/, '');
+    const byUrl = {};
+    for (const p of allPages) byUrl[norm(p.url)] = { url: norm(p.url), title: p.title, text: (p.text || '').toLowerCase() };
+
+    // 1. AI clustering (one call) — titles + urls only
+    const dir = allPages.slice(0, 220).map(p => ({ url: norm(p.url), title: p.title }));
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 6000,
+      messages: [{ role: 'user', content:
+        'Group these website pages into SEO topic clusters. For each cluster pick ONE pillar (the main service/category page) and list its spoke pages (supporting articles, variants, sub-services that belong to that topic). Only group genuinely related pages; leave unrelated pages out. Use the EXACT urls given.\n\n' +
+        'PAGES:\n' + JSON.stringify(dir) + '\n\n' +
+        'Return ONLY JSON: {"clusters":[{"pillar":"https://...","spokes":["https://...","https://..."]}]}'
+      }]
+    });
+    let clusters = [];
+    try {
+      const m = (aiResp.content[0]?.text || '').match(/\{[\s\S]*\}/);
+      clusters = m ? (JSON.parse(m[0]).clusters || []) : [];
+    } catch (e) { return res.status(500).json({ error: 'Could not parse AI clustering response' }); }
+
+    // 2. Generate bidirectional links per cluster, anchor-grounded
+    await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status='pending' AND reason LIKE 'Topic cluster%'`, [projectId]);
+    let created = 0, clustersUsed = 0;
+    for (const cl of clusters) {
+      const pillar = byUrl[norm(cl.pillar)];
+      const spokes = (cl.spokes || []).map(s => byUrl[norm(s)]).filter(Boolean).filter(s => s.url !== pillar?.url);
+      if (!pillar || spokes.length === 0) continue;
+      clustersUsed++;
+      let pillarOut = 0;
+      for (const spoke of spokes) {
+        // spoke -> pillar (anchor about the pillar topic, found in the spoke's text)
+        const upAnchor = sropt_findClusterAnchor(pillar.title, spoke.text);
+        if (upAnchor) {
+          await pool.query(`INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status) VALUES ($1,$2,$3,$4,$5,$6,'','Topic cluster — spoke links up to pillar','high','pending')`,
+            [projectId, spoke.url, spoke.title, pillar.url, pillar.title, upAnchor]);
+          created++;
+        }
+        // pillar -> spoke (cap to keep the pillar clean)
+        if (pillarOut < 10) {
+          const downAnchor = sropt_findClusterAnchor(spoke.title, pillar.text);
+          if (downAnchor) {
+            await pool.query(`INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status) VALUES ($1,$2,$3,$4,$5,$6,'','Topic cluster — pillar links down to spoke','medium','pending')`,
+              [projectId, pillar.url, pillar.title, spoke.url, spoke.title, downAnchor]);
+            created++; pillarOut++;
+          }
+        }
+      }
+    }
+    res.json({ ok: true, created, clusters: clustersUsed, message: `${created} cluster links created across ${clustersUsed} topic clusters. Review and approve them in Suggestions.` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Approve/dismiss suggestion
 app.put('/api/projects/:projectId/internal-links/suggestions/:id', async (req, res) => {
   const { id } = req.params;

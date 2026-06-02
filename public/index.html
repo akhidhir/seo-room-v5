@@ -11648,6 +11648,20 @@
             isRunning && React.createElement('span', { style: { color: '#f59e0b', fontSize: 13 } },
               React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Auditing...'
             ),
+            audit?.audited_at && React.createElement('button', {
+              className: 'btn',
+              disabled: isRunning,
+              onClick: async () => {
+                if (!confirm('Build topic clusters?\n\nAI groups your pages into service clusters and creates pillar↔spoke internal links. Saved as pending suggestions for you to review and approve.')) return;
+                try {
+                  const r = await api('/projects/' + project.id + '/internal-links/build-clusters', { method: 'POST' });
+                  if (r.error) { alert(r.error); return; }
+                  alert(r.message || ((r.created || 0) + ' cluster links created'));
+                  setTab('suggestions'); setFilter('pending'); loadData();
+                } catch (e) { alert('Error: ' + e.message); }
+              },
+              style: { fontSize: 13, padding: '8px 20px', background: '#8b5cf6', color: '#fff', border: 'none', marginRight: 8 }
+            }, React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 6 } }), 'Build Clusters'),
             audit?.audited_at && (stats.orphan_count || (stats.page_details || []).filter(p => p.is_orphan).length) > 0 && React.createElement('button', {
               className: 'btn',
               disabled: isRunning,
