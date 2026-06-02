@@ -30947,10 +30947,13 @@
         setScanning(false);
       };
 
-      const runGap = async () => {
+      const [gapCompFilter, setGapCompFilter] = useState(null); // single competitor being viewed, or null = all
+      const runGap = async (oneCompetitor) => {
         setGapLoading(true);
+        setGapCompFilter(oneCompetitor || null);
         try {
-          const r = await api(`/projects/${pid}/backlinks/gap`, { method: 'POST' });
+          const body = oneCompetitor ? { competitors: [oneCompetitor] } : {};
+          const r = await api(`/projects/${pid}/backlinks/gap`, { method: 'POST', body });
           setGapData(r);
         } catch (e) { alert('Gap analysis error: ' + e.message); }
         setGapLoading(false);
@@ -31187,17 +31190,25 @@
                 {discoveredComps && discoveredComps.length > 0 && (
                   <div style={{ ...cardStyle, marginBottom: 16, padding: 14 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-                      <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6, color: accent }}></i>Competitors found in your data
+                      <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6, color: accent }}></i>Competitors found in your data — click one to see only its gap
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {discoveredComps.slice(0, 8).map((c, i) => (
-                        <span key={i} title={`${c.sources.join(' + ')} · strength ${c.score}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 6, fontSize: 12, background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                      {discoveredComps.slice(0, 8).map((c, i) => {
+                        const active = gapCompFilter === c.domain;
+                        return (
+                        <button key={i} onClick={() => runGap(c.domain)} disabled={gapLoading} title={`${c.sources.join(' + ')} · strength ${c.score} — click to run gap for just ${c.domain}`}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 6, fontSize: 12, cursor: 'pointer', background: active ? accent + '22' : 'var(--bg)', border: '1px solid ' + (active ? accent : 'var(--border)'), color: active ? accent : 'var(--text1)' }}>
                           <span style={{ fontWeight: 600 }}>{c.domain}</span>
                           {i < 5 && <span style={{ fontSize: 9, fontWeight: 700, color: accent }}>TOP {i + 1}</span>}
-                        </span>
-                      ))}
+                        </button>
+                        );
+                      })}
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>The top 5 will be compared when you run gap analysis (unless competitors are set in project settings).</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10 }}>
+                      {gapCompFilter
+                        ? <>Showing gap for <b style={{ color: accent }}>{gapCompFilter}</b> only. <button onClick={() => runGap()} style={{ background: 'none', border: 'none', color: accent, cursor: 'pointer', textDecoration: 'underline', fontSize: 11, padding: 0 }}>Show all competitors</button></>
+                        : <>Click <b>Run Gap Analysis</b> to compare the top 5 together, or click a competitor above to see just its gap.</>}
+                    </div>
                   </div>
                 )}
                 {discoveredComps && discoveredComps.length === 0 && !gapData && (
