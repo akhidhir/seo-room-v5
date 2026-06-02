@@ -7321,34 +7321,47 @@ async function discoverCompetitorDomains(projectId, project, resolve = true) {
 
 async function dataForSeoBacklinkGap(targetDomain, competitorDomains) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
-  // Use referring_domains_intersection to find where competitors have links but target doesn't
+  // Domain intersection: referring domains that link to the competitor TARGETS but NOT to our exclude_target.
+  // Correct DataForSEO format: targets is a numbered object, exclude_targets is an array. intersection_mode
+  // 'all' returns domains linking to ANY target (summary.intersections_count says how many) — true link gap.
+  const targets = {};
+  competitorDomains.forEach((d, i) => { targets[String(i + 1)] = d; });
+
   const resp = await fetch('https://api.dataforseo.com/v3/backlinks/domain_intersection/live', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
     body: JSON.stringify([{
-      targets: Object.fromEntries([
-        [targetDomain, { exclude: true }],
-        ...competitorDomains.map((d, i) => [d, { intersect: true }])
-      ]),
+      targets,
+      exclude_targets: [targetDomain],
+      intersection_mode: 'all',
+      backlinks_status_type: 'live',
+      include_subdomains: true,
       limit: 200,
       order_by: ['1.rank,desc']
     }])
   });
   const data = await resp.json();
-  const items = data.tasks?.[0]?.result?.[0]?.items || [];
-  return {
-    opportunities: items.map(i => {
-      const targets = i.targets || {};
-      return {
-        domain: Object.keys(targets)[0] || '',
-        rank: i.rank || 0,
-        competitors_count: Object.keys(targets).length,
-        targets
-      };
-    }),
-    total: data.tasks?.[0]?.result?.[0]?.total_count || 0,
-    cost: data.cost
-  };
+  const task = data.tasks?.[0];
+  if (task && task.status_code >= 40000) {
+    throw new Error(`DataForSEO: ${task.status_message || 'error ' + task.status_code}`);
+  }
+  const result = task?.result?.[0];
+  const items = result?.items || [];
+
+  const opportunities = items.map(it => {
+    const di = it.domain_intersection || {};
+    const entries = Object.values(di);
+    const refDomain = (entries[0]?.target || '')
+      .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+    const rank = entries.reduce((m, e) => Math.max(m, e.rank || 0), 0);
+    return {
+      domain: refDomain,
+      rank,
+      competitors_count: it.summary?.intersections_count || entries.length,
+    };
+  }).filter(o => o.domain);
+
+  return { opportunities, total: result?.total_count || 0, cost: data.cost };
 }
 
 // ==================== 11a-ii. UULE v2 Encoder (GPS → Google location param) ====================
