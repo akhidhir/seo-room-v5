@@ -38865,18 +38865,17 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       if (pages.some(p => p.noindex)) reasons.push({ type: 'noindex', label: `${pages.filter(p => p.noindex).length} of these pages is set to noindex.`, fix: 'Make sure the page you want to rank is indexable; noindex the genuine duplicates instead.' });
       if (pagesWithInbound.length >= 2) reasons.push({ type: 'internal links', label: `Internal links point to ${pagesWithInbound.length} of these competing pages (${pagesWithInbound.map(x => x.path + ' ×' + x.count).join(', ')}), splitting link signals.`, fix: `Concentrate internal links — especially "${kw}" anchors — on ${primaryPath}.` });
 
-      // A REAL, fixable SEO problem — not just two URLs co-appearing. If none of these is true (e.g. you
-      // already rank page 1, or it's a healthy cluster), it's not worth flagging as an issue.
+      // A REAL, structural cannibalization problem — something that genuinely splits/misdirects Google and
+      // hurts SEO if left unfixed. Co-ranking of different pages (homepage or a hub page also showing for a
+      // suburb term) is NOT this — Google handles that, and your dedicated page is usually already winning.
       const primaryMisconfigured = pages.some(p => p.is_primary && (p.canonical_elsewhere || p.noindex));
       const nearDuplicate = simPairs.some(s => s.score >= 50);
-      const notOnPage1 = bestPos > 10;
-      const is_real_issue = (mode === 'duplicate') || nearDuplicate || primaryMisconfigured || notOnPage1;
+      const is_real_issue = (mode === 'duplicate') || nearDuplicate || primaryMisconfigured;
 
-      let severity = 'low';
-      if (!is_real_issue) severity = 'minor';
-      else if ((mode === 'duplicate' || nearDuplicate || primaryMisconfigured) && totalImpr >= 100) severity = 'high';
-      else if (totalImpr >= 500 || primaryMisconfigured || nearDuplicate) severity = 'high';
-      else if (totalImpr >= 100) severity = 'medium';
+      let severity = 'minor';
+      if (is_real_issue) {
+        severity = (totalImpr >= 500 || primaryMisconfigured || nearDuplicate) ? 'high' : (totalImpr >= 100 ? 'medium' : 'low');
+      }
 
       competing.push({
         keyword: kw, page_count: pages.length, total_impressions: totalImpr, total_clicks: totalClicks,
