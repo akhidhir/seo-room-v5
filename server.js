@@ -38729,7 +38729,10 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       const totalImpr = pages.reduce((s, p) => s + p.impressions, 0);
       const totalClicks = pages.reduce((s, p) => s + p.clicks, 0);
       const bestPos = Math.min(...pages.map(p => p.position));
-      const primary = [...pages].sort((a, b) => (b.clicks - a.clicks) || (a.position - b.position))[0];
+      // Primary = the page that should OWN this keyword: most on-page targeting, then clicks, then traffic.
+      const targScore = (p) => (p.kw_in_focus ? 100 : 0) + (p.kw_in_title ? 50 : 0) + (p.kw_in_slug ? 30 : 0) + (p.kw_in_h1 ? 20 : 0) - (p.isHome ? 60 : 0);
+      const primary = [...pages].sort((a, b) => (targScore(b) - targScore(a)) || (b.clicks - a.clicks) || (b.impressions - a.impressions) || (a.position - b.position))[0];
+      const primaryPath = (() => { try { return new URL(primary.url).pathname; } catch { return primary.url; } })();
 
       const titlePages = [], focusPages = [], slugPages = [], homepage = [];
       for (const p of pages) {
@@ -38740,6 +38743,25 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
         if (p.kw_in_h1) p.why.push('h1');
         if (p.kw_in_focus) { focusPages.push(p.url); p.why.push('focus kw'); }
         if (p.kw_in_slug) { slugPages.push(p.url); p.why.push('slug'); }
+        // Per-page fix instruction
+        if (p.is_primary) {
+          p.fix = `Keep this as the one page for "${kw}". Make sure "${kw}" stays in its title, H1 and focus keyword, and strengthen the content.`;
+          p.fix_type = 'keep';
+        } else {
+          const redFields = [];
+          if (p.kw_in_title) redFields.push('title');
+          if (p.kw_in_h1) redFields.push('H1');
+          if (p.kw_in_focus) redFields.push('focus keyword');
+          if (p.kw_in_slug) redFields.push('URL');
+          if (p.isHome) {
+            p.fix = `Your homepage naturally surfaces for this term — don't actively target "${kw}" here. Keep it brand/overview-focused, and link to ${primaryPath} as the page for "${kw}".`;
+          } else if (redFields.length) {
+            p.fix = `Remove "${kw}" from this page's ${redFields.join(', ')}, and re-focus it on its own topic${p.focus_keyword ? ` ("${p.focus_keyword}")` : ''}. Then add an internal link from here to ${primaryPath}.`;
+          } else {
+            p.fix = `This page ranks for "${kw}" only through topical overlap. Sharpen its focus on its own subject and add an internal link to ${primaryPath} for "${kw}".`;
+          }
+          p.fix_type = 'fix';
+        }
       }
       const reasons = [];
       if (focusPages.length >= 2) reasons.push({ type: 'focus kw', label: `${focusPages.length} pages use "${kw}" as their focus keyword`, fix: 'Only the primary page should target this keyword — change the others’ focus keyword.' });
@@ -38755,7 +38777,7 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       competing.push({
         keyword: kw, page_count: pages.length, total_impressions: totalImpr, total_clicks: totalClicks,
         best_position: Math.round(bestPos * 10) / 10, severity, primary_page: primary.url, reasons,
-        pages: pages.map(p => ({ url: p.url, clicks: p.clicks, impressions: p.impressions, position: p.position, ctr: p.ctr, is_primary: p.is_primary, why: p.why, meta_title: p.meta_title, h1: p.h1, meta_desc: p.meta_desc, focus_keyword: p.focus_keyword, kw_in_title: p.kw_in_title, kw_in_h1: p.kw_in_h1, kw_in_focus: p.kw_in_focus, kw_in_slug: p.kw_in_slug })),
+        pages: pages.map(p => ({ url: p.url, clicks: p.clicks, impressions: p.impressions, position: p.position, ctr: p.ctr, is_primary: p.is_primary, why: p.why, fix: p.fix, fix_type: p.fix_type, meta_title: p.meta_title, h1: p.h1, meta_desc: p.meta_desc, focus_keyword: p.focus_keyword, kw_in_title: p.kw_in_title, kw_in_h1: p.kw_in_h1, kw_in_focus: p.kw_in_focus, kw_in_slug: p.kw_in_slug })),
       });
     }
 

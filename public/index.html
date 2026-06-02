@@ -31064,12 +31064,14 @@
                                   {fieldRow('H1', p.h1, p.kw_in_h1)}
                                   {fieldRow('Focus KW', p.focus_keyword, p.kw_in_focus)}
                                   {p.kw_in_slug && <div style={{ fontSize: 11, color: '#8b5cf6', marginTop: 2 }}><i className="fas fa-link" style={{ marginRight: 4 }}></i>URL also contains the keyword</div>}
+                                  {p.fix && (
+                                    <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, padding: '7px 10px', borderRadius: 6, background: (p.fix_type === 'keep' ? '#22c55e' : accent) + '18' }}>
+                                      <b style={{ color: p.fix_type === 'keep' ? '#22c55e' : accent }}>{p.fix_type === 'keep' ? <><i className="fas fa-check" style={{ marginRight: 5 }}></i>Do this:</> : <><i className="fas fa-wrench" style={{ marginRight: 5 }}></i>Fix:</>}</b> {p.fix}
+                                    </div>
+                                  )}
                                 </div>
                               ));
                             })()}
-                            <div style={{ fontSize: 13, padding: '8px 12px', background: accent + '18', borderRadius: 8, marginTop: 10 }}>
-                              <b style={{ color: accent }}><i className="fas fa-lightbulb" style={{ marginRight: 5 }}></i>How to fix:</b> Keep <b>{path(c.primary_page)}</b> as the single page targeting "{c.keyword}" (it has the best clicks/position). For the other page{c.page_count > 2 ? 's' : ''}: either merge the content into the primary and 301-redirect, or re-target {c.page_count > 2 ? 'them' : 'it'} to a different keyword and remove "{c.keyword}" from {c.page_count > 2 ? 'their' : 'its'} title/H1/meta. Then add an internal link from the other page{c.page_count > 2 ? 's' : ''} to the primary.
-                            </div>
                           </td></tr>
                         )}
                         </React.Fragment>
