@@ -38865,13 +38865,22 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       if (pages.some(p => p.noindex)) reasons.push({ type: 'noindex', label: `${pages.filter(p => p.noindex).length} of these pages is set to noindex.`, fix: 'Make sure the page you want to rank is indexable; noindex the genuine duplicates instead.' });
       if (pagesWithInbound.length >= 2) reasons.push({ type: 'internal links', label: `Internal links point to ${pagesWithInbound.length} of these competing pages (${pagesWithInbound.map(x => x.path + ' ×' + x.count).join(', ')}), splitting link signals.`, fix: `Concentrate internal links — especially "${kw}" anchors — on ${primaryPath}.` });
 
+      // A REAL, fixable SEO problem — not just two URLs co-appearing. If none of these is true (e.g. you
+      // already rank page 1, or it's a healthy cluster), it's not worth flagging as an issue.
+      const primaryMisconfigured = pages.some(p => p.is_primary && (p.canonical_elsewhere || p.noindex));
+      const nearDuplicate = simPairs.some(s => s.score >= 50);
+      const notOnPage1 = bestPos > 10;
+      const is_real_issue = (mode === 'duplicate') || nearDuplicate || primaryMisconfigured || notOnPage1;
+
       let severity = 'low';
-      if (totalImpr >= 500 && bestPos <= 20) severity = 'high';
+      if (!is_real_issue) severity = 'minor';
+      else if ((mode === 'duplicate' || nearDuplicate || primaryMisconfigured) && totalImpr >= 100) severity = 'high';
+      else if (totalImpr >= 500 || primaryMisconfigured || nearDuplicate) severity = 'high';
       else if (totalImpr >= 100) severity = 'medium';
 
       competing.push({
         keyword: kw, page_count: pages.length, total_impressions: totalImpr, total_clicks: totalClicks,
-        best_position: Math.round(bestPos * 10) / 10, severity, primary_page: primary.url, reasons, coverage,
+        best_position: Math.round(bestPos * 10) / 10, severity, is_real_issue, primary_page: primary.url, reasons, coverage,
         pages: pages.map(p => ({ url: p.url, clicks: p.clicks, impressions: p.impressions, position: p.position, ctr: p.ctr, is_primary: p.is_primary, why: p.why, fix: p.fix, fix_type: p.fix_type, meta_title: p.meta_title, h1: p.h1, meta_desc: p.meta_desc, focus_keyword: p.focus_keyword, canonical: p.canonical, noindex: p.noindex, canonical_elsewhere: p.canonical_elsewhere, kw_in_title: p.kw_in_title, kw_in_h1: p.kw_in_h1, kw_in_focus: p.kw_in_focus, kw_in_slug: p.kw_in_slug })),
       });
     }
@@ -38880,9 +38889,10 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
     competing.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (b.total_impressions - a.total_impressions));
     const summary = {
       total: competing.length,
+      real_issues: competing.filter(c => c.is_real_issue).length,
       high: competing.filter(c => c.severity === 'high').length,
       medium: competing.filter(c => c.severity === 'medium').length,
-      impressions_at_stake: competing.reduce((s, c) => s + c.total_impressions, 0),
+      impressions_at_stake: competing.filter(c => c.is_real_issue).reduce((s, c) => s + c.total_impressions, 0),
     };
     const payload = { competing, summary, site: matchedSite, range: { startDate, endDate }, scanned_at: new Date().toISOString() };
     await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'competing_pages_cache',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify(payload)]).catch(() => {});

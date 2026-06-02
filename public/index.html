@@ -30951,7 +30951,7 @@
       const [loading, setLoading] = useState(true);
       const [scanning, setScanning] = useState(false);
       const [expanded, setExpanded] = useState(null);
-      const [sev, setSev] = useState('all');
+      const [sev, setSev] = useState('real');
       const [cpPlan, setCpPlan] = useState({}); // keyword -> {loading, data, error}
       const getPlan = async (c) => {
         setCpPlan(p => ({ ...p, [c.keyword]: { loading: true } }));
@@ -30979,7 +30979,7 @@
       const path = (u) => { try { return new URL(u).pathname || u; } catch { return u; } };
       const sevColor = (s) => s === 'high' ? '#ef4444' : s === 'medium' ? '#f59e0b' : '#64748b';
       const s = data?.summary || {};
-      const rows = (data?.competing || []).filter(c => sev === 'all' || c.severity === sev);
+      const rows = (data?.competing || []).filter(c => sev === 'real' ? c.is_real_issue : sev === 'all' ? true : c.severity === sev);
       const card = { background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' };
       const th = { textAlign: 'left', padding: '10px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: 'var(--card)' };
       const td = { padding: '10px 14px', fontSize: 13, borderBottom: '1px solid var(--border)', verticalAlign: 'top' };
@@ -31005,15 +31005,15 @@
           ) : (
             <>
               <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-                {stat('Competing keywords', s.total || 0, accent)}
-                {stat('High severity', s.high || 0, '#ef4444')}
+                {stat('Real SEO issues', s.real_issues || 0, '#ef4444')}
+                {stat('High severity', s.high || 0, '#f59e0b')}
                 {stat('Impressions at stake', (s.impressions_at_stake || 0).toLocaleString())}
               </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                {[['all', 'All'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']].map(([k, l]) => (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+                {[['real', 'Real issues only'], ['all', 'Show all'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']].map(([k, l]) => (
                   <button key={k} onClick={() => setSev(k)} style={{ padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1px solid ' + (sev === k ? accent : 'var(--border)'), background: sev === k ? accent + '22' : 'transparent', color: sev === k ? accent : 'var(--text3)' }}>{l}</button>
                 ))}
-                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>Last scan: {data.scanned_at ? new Date(data.scanned_at).toLocaleString() : '-'}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>{sev === 'real' ? `${s.real_issues || 0} real of ${s.total || 0} found · ` : ''}Last scan: {data.scanned_at ? new Date(data.scanned_at).toLocaleString() : '-'}</span>
               </div>
               <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
                 <div style={{ maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
