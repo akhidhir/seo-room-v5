@@ -38816,6 +38816,64 @@ app.get('/api/projects/:projectId/competing-pages', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Beginner-friendly, step-by-step fix plan for one competing-pages keyword: exact replacement titles/H1/
+// focus keywords and the precise internal links to add. Cached per keyword.
+app.post('/api/projects/:projectId/competing-pages/plan', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { keyword } = req.body || {};
+  try {
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+    if (!keyword) return res.status(400).json({ error: 'keyword required' });
+    const cacheRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='competing_pages_plan'`, [projectId])).rows[0];
+    const cache = cacheRow?.config?.map || {};
+    if (cache[keyword.toLowerCase()] && !req.body.force) return res.json({ ...cache[keyword.toLowerCase()], cached: true });
+
+    const cp = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='competing_pages_cache'`, [projectId])).rows[0]?.config;
+    const item = (cp?.competing || []).find(c => c.keyword.toLowerCase() === keyword.toLowerCase());
+    if (!item) return res.status(404).json({ error: 'Keyword not found — re-scan first.' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const industry = project?.industry || 'local business';
+    const location = project?.location || '';
+    const pathOf = (u) => { try { return new URL(u).pathname; } catch { return u; } };
+
+    const pagesText = item.pages.map(p => `- ${pathOf(p.url)} [${p.is_primary ? 'PRIMARY/PILLAR' : p.fix_type === 'fix' ? 'needs fixing' : 'just link to pillar'}] — Title: "${p.meta_title || '(none)'}" | H1: "${p.h1 || '(none)'}" | Focus keyword: "${p.focus_keyword || '(none)'}" | ${p.impressions} impressions, position #${p.position}`).join('\n');
+
+    const prompt = `You are an SEO coach writing for a COMPLETE BEGINNER (they use WordPress + the Yoast SEO plugin). Give a precise, do-this-then-that plan to fix keyword cannibalization for the keyword "${keyword}" on ${project?.domain || 'the site'} (a ${industry}${location ? ' in ' + location : ''}).
+
+Situation: ${item.reasons.map(r => r.label).join(' ')}
+The pillar page (the one that should own "${keyword}") is ${pathOf(item.primary_page)}.
+
+The competing pages:
+${pagesText}
+
+Write exact, copy-pasteable changes. For any new title keep it under 60 characters and for any H1 keep it natural. Only tell them to CHANGE a field if it currently contains the exact phrase "${keyword}" and the page is NOT the pillar — otherwise leave that field alone. Always include the internal links to add. Return STRICT JSON only:
+{
+  "summary": "2 plain-English sentences explaining what we're doing and why, no jargon",
+  "steps": [
+    {
+      "page": "/path/",
+      "role": "pillar" | "edit" | "link-only",
+      "new_title": "exact new title tag, or null if no change",
+      "new_h1": "exact new H1, or null if no change",
+      "new_focus_keyword": "exact focus keyword to set, or null if no change",
+      "internal_link": { "anchor": "exact anchor text to use", "to": "/pillar-path/" } or null,
+      "do": ["numbered, beginner-friendly actions for THIS page, each a full sentence telling them exactly what to click/type"]
+    }
+  ],
+  "where": "1-2 sentences: in WordPress, Pages > open the page > scroll to the Yoast SEO box to edit the SEO title and focus keyphrase; edit the H1 in the page content; add links by selecting text and clicking the link button."
+}`;
+
+    const msg = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 2000, messages: [{ role: 'user', content: prompt }] });
+    let txt = (msg.content?.[0]?.text || '').trim();
+    const s = txt.indexOf('{'), e = txt.lastIndexOf('}'); if (s >= 0 && e > s) txt = txt.slice(s, e + 1);
+    let plan; try { plan = JSON.parse(txt); } catch { plan = { raw: txt }; }
+    const result = { ok: true, keyword, plan };
+    cache[keyword.toLowerCase()] = result;
+    try { await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'competing_pages_plan',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify({ map: cache })]); } catch (e) {}
+    res.json(result);
+  } catch (e) { console.error('[competing-pages-plan]', e.message); res.status(500).json({ error: e.message }); }
+});
+
 // AI analyser for one AI-Overview keyword: builds a concrete plan to EARN a citation — including the exact
 // answer snippet to publish, grounded in what Google's AI currently says and the pages it cites.
 app.post('/api/projects/:projectId/aio/analyze', async (req, res) => {

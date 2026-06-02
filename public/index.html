@@ -30952,6 +30952,15 @@
       const [scanning, setScanning] = useState(false);
       const [expanded, setExpanded] = useState(null);
       const [sev, setSev] = useState('all');
+      const [cpPlan, setCpPlan] = useState({}); // keyword -> {loading, data, error}
+      const getPlan = async (c) => {
+        setCpPlan(p => ({ ...p, [c.keyword]: { loading: true } }));
+        try {
+          const r = await api(`/projects/${pid}/competing-pages/plan`, { method: 'POST', body: { keyword: c.keyword } });
+          if (r.error) setCpPlan(p => ({ ...p, [c.keyword]: { error: r.error } }));
+          else setCpPlan(p => ({ ...p, [c.keyword]: { data: r } }));
+        } catch (e) { setCpPlan(p => ({ ...p, [c.keyword]: { error: e.message } })); }
+      };
 
       useEffect(() => {
         if (!pid) return;
@@ -31074,6 +31083,41 @@
                                 </div>
                                 );
                               });
+                            })()}
+                            {/* Step-by-step plan */}
+                            {(() => {
+                              const pl = cpPlan[c.keyword];
+                              if (!pl) return (
+                                <button className="btn" onClick={() => getPlan(c)} style={{ marginTop: 6, background: accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13 }}>
+                                  <i className="fas fa-list-ol" style={{ marginRight: 6 }}></i>Give me the full step-by-step plan
+                                </button>
+                              );
+                              if (pl.loading) return <div style={{ marginTop: 10, fontSize: 13, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Writing your step-by-step plan...</div>;
+                              if (pl.error) return <div style={{ marginTop: 10, color: '#ef4444', fontSize: 13 }}>Error: {pl.error} <button onClick={() => getPlan(c)} style={{ background: 'none', border: 'none', color: accent, cursor: 'pointer', textDecoration: 'underline' }}>Retry</button></div>;
+                              const plan = pl.data?.plan || {};
+                              if (plan.raw) return <div style={{ marginTop: 10, whiteSpace: 'pre-wrap', fontSize: 13, background: 'var(--card)', padding: 14, borderRadius: 10, border: '1px solid var(--border)' }}>{plan.raw}</div>;
+                              const copyBtn = (val) => <button onClick={() => navigator.clipboard.writeText(val)} style={{ marginLeft: 8, background: 'none', border: '1px solid var(--border)', color: 'var(--text3)', borderRadius: 5, padding: '1px 7px', fontSize: 10, cursor: 'pointer' }}><i className="fas fa-copy"></i> Copy</button>;
+                              const roleColor = (r) => r === 'pillar' ? '#22c55e' : r === 'edit' ? '#ef4444' : '#3b82f6';
+                              return (
+                                <div style={{ marginTop: 12, background: 'var(--card)', border: '1px solid ' + accent + '55', borderRadius: 10, padding: 16 }}>
+                                  <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8 }}><i className="fas fa-list-ol" style={{ marginRight: 7, color: accent }}></i>Step-by-step plan for "{c.keyword}"</div>
+                                  {plan.summary && <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14, lineHeight: 1.5 }}>{plan.summary}</div>}
+                                  {(plan.steps || []).map((st, si) => (
+                                    <div key={si} style={{ borderLeft: '3px solid ' + roleColor(st.role), paddingLeft: 12, marginBottom: 16 }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                                        <span style={{ fontWeight: 700, fontSize: 13 }}>{si + 1}. {st.page}</span>
+                                        <span style={{ padding: '1px 7px', borderRadius: 4, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', background: roleColor(st.role) + '22', color: roleColor(st.role) }}>{st.role}</span>
+                                      </div>
+                                      {st.new_title && <div style={{ fontSize: 12.5, marginBottom: 4 }}><span style={{ color: 'var(--text3)' }}>New title: </span><b>{st.new_title}</b>{copyBtn(st.new_title)}</div>}
+                                      {st.new_h1 && <div style={{ fontSize: 12.5, marginBottom: 4 }}><span style={{ color: 'var(--text3)' }}>New H1: </span><b>{st.new_h1}</b>{copyBtn(st.new_h1)}</div>}
+                                      {st.new_focus_keyword && <div style={{ fontSize: 12.5, marginBottom: 4 }}><span style={{ color: 'var(--text3)' }}>Set focus keyword to: </span><b>{st.new_focus_keyword}</b>{copyBtn(st.new_focus_keyword)}</div>}
+                                      {st.internal_link && <div style={{ fontSize: 12.5, marginBottom: 4, color: '#3b82f6' }}><i className="fas fa-link" style={{ marginRight: 5 }}></i>Add a link: select the text "<b>{st.internal_link.anchor}</b>" and link it to <b>{st.internal_link.to}</b></div>}
+                                      {(st.do || []).length > 0 && <ol style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>{st.do.map((d, di) => <li key={di}>{d}</li>)}</ol>}
+                                    </div>
+                                  ))}
+                                  {plan.where && <div style={{ fontSize: 12.5, color: 'var(--text2)', background: 'var(--bg)', padding: '8px 12px', borderRadius: 8, lineHeight: 1.5 }}><i className="fas fa-circle-info" style={{ marginRight: 6, color: accent }}></i>{plan.where}</div>}
+                                </div>
+                              );
                             })()}
                           </td></tr>
                         )}
