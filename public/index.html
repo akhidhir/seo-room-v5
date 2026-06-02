@@ -31037,7 +31037,7 @@
                   <button onClick={runGap} disabled={gapLoading} style={{ ...btnStyle, opacity: gapLoading ? 0.6 : 1 }}>
                     {gapLoading ? <><span className="spinner" style={{ marginRight: 6 }}></span>Analyzing...</> : <><i className="fas fa-not-equal" style={{ marginRight: 6 }}></i>Run Gap Analysis</>}
                   </button>
-                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>Compares your backlinks with competitors from project settings</span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>Uses competitor domains from settings — or auto-finds them from your Maps grid scans & Players Handshake</span>
                 </div>
                 {gapData ? (
                   <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
@@ -31045,7 +31045,10 @@
                       <div style={{ fontSize: 14, fontWeight: 700 }}>
                         {gapData.total} domains link to competitors but not to you
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>Competitors: {(gapData.competitors || []).join(', ')}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                        Competitors: {(gapData.competitors || []).join(', ')}
+                        {gapData.auto_discovered && <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: accent + '22', color: accent }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }}></i>Auto-found</span>}
+                      </div>
                     </div>
                     <div style={{ maxHeight: 500, overflowY: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse' }}>

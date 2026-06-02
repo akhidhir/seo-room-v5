@@ -7222,6 +7222,54 @@ function scoreOpportunity(rank, competitorsCount) {
   return Math.round(authority + consensus);
 }
 
+// Auto-discover competitor DOMAINS from data we already collected — Maps grid scans (competitors[].website)
+// and the Players Handshake analysis — so backlink gap (and anything else) doesn't depend on someone
+// manually typing competitors. Aggregates by domain, ranks by how dominant/frequent each competitor is.
+async function discoverCompetitorDomains(projectId, project) {
+  const ownDomain = (project?.domain || project?.website || '')
+    .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+  const SKIP = /(facebook|instagram|google\.|google$|goo\.gl|yelp|tripadvisor|yellowpages|truelocal|hotfrog|localsearch|youtube|linkedin|twitter|wikipedia|\.gov|oneflare|hipages|airtasker|productreview|womo|startlocal|cylex|aussieweb|brownbook|pinterest|tiktok)/;
+  const agg = new Map();
+  const addComp = (name, website, weight, source) => {
+    let host = (website || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+    if (!host || !host.includes('.')) return;
+    if (host === ownDomain || SKIP.test(host)) return;
+    const cur = agg.get(host) || { domain: host, name: name || host, score: 0, sources: new Set() };
+    cur.score += (weight || 0) + 1;
+    cur.sources.add(source);
+    if (name && (cur.name === host || !cur.name)) cur.name = name;
+    agg.set(host, cur);
+  };
+
+  // 1. Maps grid scans — competitors.top carries website, dominance and appearances
+  try {
+    const gs = await pool.query(
+      `SELECT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL ORDER BY scanned_at DESC LIMIT 8`,
+      [projectId]
+    );
+    for (const row of gs.rows) {
+      const c = row.competitors || {};
+      const top = Array.isArray(c) ? c : (c.top || []);
+      for (const x of top) addComp(x.name, x.website, (x.dominance || 0) + (x.appearances || 0), 'grid');
+    }
+  } catch (e) {}
+
+  // 2. Players Handshake — data.competitors[] with gbp.website
+  try {
+    const hs = await pool.query(
+      `SELECT data FROM audits WHERE project_id=$1 AND pillar='handshake' ORDER BY created_at DESC LIMIT 1`,
+      [projectId]
+    );
+    for (const c of (hs.rows[0]?.data?.competitors || [])) {
+      addComp(c.name, c.website || c.gbp?.website, (c.appearances || 0) + (c.dominance || 0), 'handshake');
+    }
+  } catch (e) {}
+
+  return [...agg.values()]
+    .sort((a, b) => b.score - a.score)
+    .map(c => ({ domain: c.domain, name: c.name, score: Math.round(c.score), sources: [...c.sources] }));
+}
+
 async function dataForSeoBacklinkGap(targetDomain, competitorDomains) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
   // Use referring_domains_intersection to find where competitors have links but target doesn't
@@ -38110,11 +38158,23 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
     if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
 
     const domain = (proj.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-    const competitors = req.body.competitors || proj.competitors || [];
-    if (!competitors.length) return res.status(400).json({ error: 'No competitors specified. Add competitors in project settings.' });
+    // Use provided/settings competitors, but only entries that look like domains (gap needs domains, not names).
+    const provided = req.body.competitors || proj.competitors || [];
+    let cleanCompetitors = provided
+      .map(c => (c || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, ''))
+      .filter(c => /\./.test(c)).slice(0, 5);
 
-    const cleanCompetitors = competitors.map(c => c.replace(/^https?:\/\//, '').replace(/\/+$/, '')).filter(Boolean).slice(0, 5);
-    console.log(`[backlinks] Gap analysis: ${domain} vs ${cleanCompetitors.join(', ')}`);
+    // If none usable, auto-discover competitor domains from grid scans + handshake data we already have.
+    let autoDiscovered = false;
+    if (!cleanCompetitors.length) {
+      const found = await discoverCompetitorDomains(projectId, proj);
+      cleanCompetitors = found.slice(0, 5).map(c => c.domain);
+      autoDiscovered = cleanCompetitors.length > 0;
+    }
+    if (!cleanCompetitors.length) {
+      return res.status(400).json({ error: 'No competitor domains found. Run a Maps grid scan (or Players Handshake), or add competitor domains in project settings.' });
+    }
+    console.log(`[backlinks] Gap analysis: ${domain} vs ${cleanCompetitors.join(', ')}${autoDiscovered ? ' (auto-discovered)' : ''}`);
 
     const gapResult = await dataForSeoBacklinkGap(domain, cleanCompetitors);
 
@@ -38148,6 +38208,7 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
     res.json({
       domain,
       competitors: cleanCompetitors,
+      auto_discovered: autoDiscovered,
       opportunities: gapResult.opportunities,
       total: gapResult.total,
       cost: gapResult.cost
@@ -38156,6 +38217,17 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
     console.error('[backlinks] Gap error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Auto-discovered competitor domains (from grid scans + handshake) — lets the UI show who it'll compare against.
+app.get('/api/projects/:projectId/backlinks/competitors', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const proj = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!proj) return res.status(404).json({ error: 'Project not found' });
+    const discovered = await discoverCompetitorDomains(projectId, proj);
+    res.json({ competitors: discovered });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Get saved gap data
