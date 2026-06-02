@@ -31041,7 +31041,12 @@
                         </tr>
                         {open && (
                           <tr><td colSpan={6} style={{ padding: '4px 16px 14px 38px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
-                            {(c.reasons || []).length > 0 && (
+                            {!c.is_real_issue && (
+                              <div style={{ margin: '10px 0', padding: '8px 12px', background: '#3b82f618', borderRadius: 8, fontSize: 13, lineHeight: 1.55 }}>
+                                <span style={{ color: '#3b82f6', fontWeight: 700 }}><i className="fas fa-circle-info" style={{ marginRight: 6 }}></i>Why these co-rank (no action needed):</span> Your page <b>{path(c.primary_page)}</b> is correctly the one targeting "{c.keyword}". Other pages of yours also appear in Google for it{c.best_position <= 10 ? ` — but you're already on page 1 (best position #${c.best_position})` : ''}, which is normal and isn't hurting you. Optionally, strengthen <b>{path(c.primary_page)}</b> with internal links if you'd like it to be the page that ranks — but there's nothing to fix here.
+                              </div>
+                            )}
+                            {c.is_real_issue && (c.reasons || []).length > 0 && (
                               <div style={{ margin: '10px 0' }}>
                                 <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}><i className="fas fa-triangle-exclamation" style={{ marginRight: 6 }}></i>Why these pages compete</div>
                                 {c.reasons.map((rs, ri) => (
