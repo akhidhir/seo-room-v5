@@ -30952,6 +30952,15 @@
       const [scanning, setScanning] = useState(false);
       const [expanded, setExpanded] = useState(null);
       const [filter, setFilter] = useState('all'); // all | overview | cited | opportunity
+      const [aioAnalysis, setAioAnalysis] = useState({}); // keyword -> {loading, data, error}
+      const analyzeAio = async (r) => {
+        setAioAnalysis(p => ({ ...p, [r.keyword]: { loading: true } }));
+        try {
+          const resp = await api(`/projects/${pid}/aio/analyze`, { method: 'POST', body: { keyword: r.keyword, overview_text: r.overview_text || '', sources: r.sources || [] } });
+          if (resp.error) setAioAnalysis(p => ({ ...p, [r.keyword]: { error: resp.error } }));
+          else setAioAnalysis(p => ({ ...p, [r.keyword]: { data: resp } }));
+        } catch (e) { setAioAnalysis(p => ({ ...p, [r.keyword]: { error: e.message } })); }
+      };
 
       useEffect(() => {
         if (!pid) return;
@@ -31058,7 +31067,51 @@
                                 <a href={src.link} target="_blank" rel="noopener" style={{ color: accent, fontSize: 12, textDecoration: 'none', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{src.title || src.link}</a>
                               </div>
                             ))}
-                            {!r.you_cited && <div style={{ fontSize: 12, padding: '8px 12px', background: '#f59e0b18', borderRadius: 8, marginTop: 8 }}><b style={{ color: '#f59e0b' }}><i className="fas fa-lightbulb" style={{ marginRight: 5 }}></i>Opportunity:</b> You're not cited here. Create content that directly answers "{r.keyword}" in a clear, structured way (concise answer up top, headings, FAQ, schema) to earn a citation.</div>}
+                            {!r.you_cited && (() => {
+                              const a = aioAnalysis[r.keyword];
+                              if (!a) return (
+                                <button className="btn" onClick={() => analyzeAio(r)} style={{ marginTop: 10, background: accent, color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontWeight: 700, fontSize: 12 }}>
+                                  <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }}></i>Build a plan to get cited
+                                </button>
+                              );
+                              if (a.loading) return <div style={{ marginTop: 10, fontSize: 13, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Analysing the AI answer & cited pages...</div>;
+                              if (a.error) return <div style={{ marginTop: 10, color: '#ef4444', fontSize: 13 }}>Error: {a.error} <button onClick={() => analyzeAio(r)} style={{ background: 'none', border: 'none', color: accent, cursor: 'pointer', textDecoration: 'underline' }}>Retry</button></div>;
+                              const an = a.data?.analysis || {};
+                              const hc = an;
+                              return (
+                                <div style={{ marginTop: 12, background: 'var(--card)', border: '1px solid ' + accent + '55', borderRadius: 10, padding: 16, maxWidth: 920 }}>
+                                  {an.raw ? <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{an.raw}</div> : <>
+                                    <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6, color: accent }}></i>Plan to earn the AI citation for "{r.keyword}"</div>
+                                    {hc.answer_snippet && <div style={{ background: '#22c55e14', border: '1px solid #22c55e55', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                        <span style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1 }}>Publish this answer at the top of the page</span>
+                                        <button onClick={() => navigator.clipboard.writeText(hc.answer_snippet)} style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}><i className="fas fa-copy" style={{ marginRight: 4 }}></i>Copy</button>
+                                      </div>
+                                      <div style={{ fontSize: 14, lineHeight: 1.5 }}>{hc.answer_snippet}</div>
+                                    </div>}
+                                    {hc.page_to_use && <div style={{ fontSize: 13, marginBottom: 10 }}><b>Where:</b> {hc.page_to_use}</div>}
+                                    {hc.why_these_are_cited?.length > 0 && <div style={{ marginBottom: 10 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Why the cited sites win</div>
+                                      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>{hc.why_these_are_cited.map((w, wi) => <li key={wi}>{w}</li>)}</ul>
+                                    </div>}
+                                    {hc.headings?.length > 0 && <div style={{ marginBottom: 10 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Headings (H2) to use</div>
+                                      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>{hc.headings.map((h, hi) => <li key={hi}>{h}</li>)}</ul>
+                                    </div>}
+                                    {hc.faqs?.length > 0 && <div style={{ marginBottom: 10 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>FAQ to add (great for citations)</div>
+                                      {hc.faqs.map((f, fi) => <div key={fi} style={{ marginBottom: 6, fontSize: 13 }}><b>{f.q}</b><br/><span style={{ color: 'var(--text2)' }}>{f.a}</span></div>)}
+                                    </div>}
+                                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
+                                      {hc.schema?.length > 0 && <div style={{ fontSize: 12 }}><b>Schema:</b> {hc.schema.join(', ')}</div>}
+                                      {hc.entities_to_mention?.length > 0 && <div style={{ fontSize: 12 }}><b>Entities:</b> {hc.entities_to_mention.join(', ')}</div>}
+                                    </div>
+                                    {hc.format_tips?.length > 0 && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}><b>Format:</b> {hc.format_tips.join(' · ')}</div>}
+                                    {hc.quick_win && <div style={{ fontSize: 13, padding: '8px 12px', background: '#22c55e18', borderRadius: 8 }}><b style={{ color: '#22c55e' }}><i className="fas fa-bolt" style={{ marginRight: 5 }}></i>Quick win:</b> {hc.quick_win}</div>}
+                                  </>}
+                                </div>
+                              );
+                            })()}
                           </td></tr>
                         )}
                         </React.Fragment>

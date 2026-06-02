@@ -38583,11 +38583,17 @@ app.post('/api/projects/:projectId/aio/scan', async (req, res) => {
     if (!keywords.length) return res.status(400).json({ error: 'No keywords to scan. Add keywords in SERP Rankings first.' });
 
     const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
+    const flattenOverview = (ov) => {
+      const parts = [];
+      const walk = (blocks) => { for (const b of (blocks || [])) { if (b.snippet) parts.push(b.snippet); if (b.title) parts.push(b.title); if (Array.isArray(b.list)) for (const li of b.list) { if (li.title) parts.push(li.title); if (li.snippet) parts.push(li.snippet); } if (b.text_blocks) walk(b.text_blocks); } };
+      walk(ov.text_blocks);
+      return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 1800);
+    };
     let cost = 0;
     const results = [];
 
     for (const kw of keywords) {
-      let present = false, refs = [], err = null;
+      let present = false, refs = [], err = null, overviewText = '';
       try {
         const data = await serpApiSearch({ engine: 'google', q: kw, google_domain: 'google.com.au', gl: 'au', hl: 'en' });
         cost += 0.012;
@@ -38598,6 +38604,7 @@ app.post('/api/projects/:projectId/aio/scan', async (req, res) => {
         }
         if (ov && (ov.text_blocks || ov.references)) {
           present = true;
+          overviewText = ov.text_blocks ? flattenOverview(ov) : '';
           refs = (ov.references || []).map(r => ({ domain: hostOf(r.link), title: r.title || r.source || '', link: r.link || '', index: r.index })).filter(r => r.domain);
         }
       } catch (e) { err = e.message; }
@@ -38605,7 +38612,7 @@ app.post('/api/projects/:projectId/aio/scan', async (req, res) => {
       const youCited = !!(clientHost && cited.includes(clientHost));
       const yourPos = youCited ? (refs.find(r => r.domain === clientHost)?.index ?? null) : null;
       const compsCited = competitors.filter(c => cited.includes(c));
-      results.push({ keyword: kw, ai_overview: present, you_cited: youCited, your_position: yourPos, competitors_cited: compsCited, sources: refs, error: err });
+      results.push({ keyword: kw, ai_overview: present, you_cited: youCited, your_position: yourPos, competitors_cited: compsCited, sources: refs, overview_text: overviewText, error: err });
     }
 
     const summary = {
@@ -38629,6 +38636,80 @@ app.get('/api/projects/:projectId/aio', async (req, res) => {
     if (row?.config) return res.json(row.config);
     res.json({ keywords: [], summary: {}, competitors: [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// AI analyser for one AI-Overview keyword: builds a concrete plan to EARN a citation — including the exact
+// answer snippet to publish, grounded in what Google's AI currently says and the pages it cites.
+app.post('/api/projects/:projectId/aio/analyze', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { keyword, overview_text, sources } = req.body || {};
+  try {
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+    if (!keyword) return res.status(400).json({ error: 'keyword required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Cache per keyword.
+    const cacheRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='aio_analysis'`, [projectId])).rows[0];
+    const cache = cacheRow?.config?.map || {};
+    if (cache[keyword.toLowerCase()] && !req.body.force) return res.json({ ...cache[keyword.toLowerCase()], cached: true });
+
+    const bizDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const industry = project.industry || 'local business';
+    const location = project.location || '';
+
+    // Crawl up to 2 cited pages for the structure that earns citations.
+    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+    const cited = [];
+    for (const src of (sources || []).slice(0, 2)) {
+      if (!src.link) continue;
+      try {
+        const resp = await fetch(src.link, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(9000) });
+        if (!resp.ok) { cited.push({ domain: src.domain, error: 'HTTP ' + resp.status }); continue; }
+        const html = await resp.text();
+        const h2s = [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/gi)].map(m => m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 12);
+        const hasFaqSchema = /FAQPage|"@type"\s*:\s*"Question"/i.test(html);
+        cited.push({ domain: src.domain, h2s, has_faq_schema: hasFaqSchema });
+      } catch (e) { cited.push({ domain: src.domain, error: e.message }); }
+    }
+
+    const citedText = cited.map(c => c.error ? `${c.domain}: [not fetchable]` : `${c.domain}: ${c.has_faq_schema ? 'has FAQ schema; ' : ''}H2s: ${(c.h2s || []).join(' | ')}`).join('\n') || '(cited page content unavailable)';
+    const srcList = (sources || []).map(s => `${s.domain}${s.title ? ' — ' + s.title : ''}`).join('\n');
+
+    const prompt = `You are a Generative Engine Optimisation (GEO / AI-search) specialist. Google shows an AI Overview for "${keyword}" and cites the sources below, but it does NOT cite the client ${bizDomain} (a ${industry}${location ? ' in ' + location : ''}). Build a concrete plan for the client to EARN a citation in this AI Overview.
+
+What Google's AI Overview currently says:
+"${(overview_text || '').slice(0, 1200) || '(text unavailable)'}"
+
+Sites the AI Overview cites:
+${srcList}
+
+Structure of cited pages:
+${citedText}
+
+AI Overviews cite content that gives a clear, direct, well-structured answer (concise answer up top, lists/tables, FAQ, schema, entities, recency). Produce a specific plan. Return STRICT JSON only:
+{
+  "why_these_are_cited": ["3-4 specific reasons these pages get cited for this query"],
+  "answer_snippet": "a publish-ready 40-70 word direct answer to '${keyword}' the client should put at the top of the page (specific to a ${industry}${location ? ' in ' + location : ''}, factual, no fluff)",
+  "page_to_use": "which page this belongs on (e.g. existing service page / a new page) and why",
+  "headings": ["5-7 H2 headings that match how the AI structures this topic"],
+  "faqs": [{"q": "question the AI is likely answering", "a": "short 1-2 sentence answer to publish"}],
+  "schema": ["specific schema types to add, e.g. FAQPage, LocalBusiness, Service"],
+  "entities_to_mention": ["key entities/terms to include for topical clarity"],
+  "format_tips": ["2-3 formatting moves that help get cited, e.g. comparison table, numbered steps"],
+  "quick_win": "the single highest-leverage action to do first"
+}`;
+
+    const msg = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1600, messages: [{ role: 'user', content: prompt }] });
+    let txt = (msg.content?.[0]?.text || '').trim();
+    const s = txt.indexOf('{'), e = txt.lastIndexOf('}'); if (s >= 0 && e > s) txt = txt.slice(s, e + 1);
+    let analysis; try { analysis = JSON.parse(txt); } catch { analysis = { raw: txt }; }
+
+    const result = { ok: true, keyword, cited, analysis };
+    cache[keyword.toLowerCase()] = result;
+    try { await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'aio_analysis',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify({ map: cache })]); } catch (e) {}
+    res.json(result);
+  } catch (e) { console.error('[aio-analyze]', e.message); res.status(500).json({ error: e.message }); }
 });
 
 // ── Outreach / Prospects CRUD ──
