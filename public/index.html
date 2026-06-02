@@ -31032,6 +31032,17 @@
                         </tr>
                         {open && (
                           <tr><td colSpan={6} style={{ padding: '4px 16px 14px 38px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                            {(c.reasons || []).length > 0 && (
+                              <div style={{ margin: '10px 0' }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}><i className="fas fa-triangle-exclamation" style={{ marginRight: 6 }}></i>Why these pages compete</div>
+                                {c.reasons.map((rs, ri) => (
+                                  <div key={ri} style={{ fontSize: 13, marginBottom: 5, lineHeight: 1.5 }}>
+                                    <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', marginRight: 8, background: (rs.type === 'title' ? '#ef4444' : rs.type === 'homepage' ? '#f59e0b' : rs.type === 'slug' ? '#8b5cf6' : '#64748b') + '22', color: rs.type === 'title' ? '#ef4444' : rs.type === 'homepage' ? '#f59e0b' : rs.type === 'slug' ? '#8b5cf6' : '#64748b' }}>{rs.type}</span>
+                                    <b>{rs.label}.</b> <span style={{ color: 'var(--text2)' }}>{rs.fix}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                             <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '8px 0' }}>Pages competing for "{c.keyword}"</div>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                               <thead><tr>{['Page', 'Pos', 'Impr', 'Clicks', 'CTR'].map(h => <th key={h} style={{ textAlign: 'left', padding: '4px 8px', fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>{h}</th>)}</tr></thead>
@@ -31041,6 +31052,7 @@
                                     <td style={{ padding: '4px 8px' }}>
                                       <a href={p.url} target="_blank" rel="noopener" style={{ color: 'var(--text1)', textDecoration: 'none', borderBottom: '1px dotted var(--text3)' }}>{path(p.url)}</a>
                                       {p.is_primary && <span style={{ marginLeft: 8, padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: '#22c55e22', color: '#22c55e' }}>PRIMARY</span>}
+                                      {(p.why || []).map((w, wi) => <span key={wi} title={w === 'title' ? 'Keyword is in this page’s title' : w === 'slug' ? 'Keyword is in this page’s URL' : w === 'homepage' ? 'This is your homepage' : w} style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: (w === 'title' ? '#ef4444' : w === 'homepage' ? '#f59e0b' : '#8b5cf6') + '22', color: w === 'title' ? '#ef4444' : w === 'homepage' ? '#f59e0b' : '#8b5cf6' }}>{w}</span>)}
                                     </td>
                                     <td style={{ padding: '4px 8px', fontWeight: 700, color: p.position <= 10 ? '#22c55e' : p.position <= 20 ? '#f59e0b' : 'var(--text3)' }}>#{p.position}</td>
                                     <td style={{ padding: '4px 8px' }}>{p.impressions.toLocaleString()}</td>

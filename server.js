@@ -38687,6 +38687,37 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
         pages: sig.map(p => ({ url: p.page, clicks: p.clicks, impressions: p.impressions, position: Math.round(p.position * 10) / 10, ctr: Math.round((p.ctr || 0) * 1000) / 10, is_primary: p.page === primary.page })),
       });
     }
+    // ── Detect WHY each set competes: shared keyword in title (from plugin-pushed pages), keyword in URL
+    //    slug, homepage involvement, otherwise overlapping intent. Tags each page with its reason(s).
+    const pushed = new Map();
+    try {
+      const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
+      for (const pp of (cc.rows[0]?.config?.pages || [])) { const u = (pp.url || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '').toLowerCase(); if (u) pushed.set(u, pp); }
+    } catch (e) {}
+    const normU = (u) => (u || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '').toLowerCase();
+    const slugOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return (u || '').toLowerCase(); } };
+    for (const c of competing) {
+      const kw = c.keyword.toLowerCase();
+      const kwWords = kw.split(/\s+/).filter(w => w.length > 2);
+      const titlePages = [], slugPages = [], homepage = [];
+      for (const p of c.pages) {
+        const slug = slugOf(p.url);
+        p.why = [];
+        if (slug === '' || slug === '/') { homepage.push(p.url); p.why.push('homepage'); }
+        const slugHits = kwWords.filter(w => slug.includes(w)).length;
+        if (kwWords.length && slugHits >= Math.ceil(kwWords.length * 0.6) && slug !== '/' && slug !== '') { slugPages.push(p.url); p.why.push('slug'); }
+        const pp = pushed.get(normU(p.url));
+        const title = (pp?.title || '').toLowerCase();
+        if (title && (title.includes(kw) || (kwWords.length && kwWords.every(w => title.includes(w))))) { titlePages.push(p.url); p.why.push('title'); }
+      }
+      const reasons = [];
+      if (titlePages.length >= 2) reasons.push({ type: 'title', label: `Same keyword "${c.keyword}" appears in the page title of ${titlePages.length} pages`, fix: 'Keep it only in the primary page’s title; remove it from the others’ title/H1.' });
+      if (homepage.length) reasons.push({ type: 'homepage', label: `Your homepage is competing for "${c.keyword}"`, fix: 'Point the homepage at your brand/overview, and let the dedicated page own this keyword.' });
+      if (slugPages.length >= 2) reasons.push({ type: 'slug', label: `${slugPages.length} pages have "${c.keyword}" terms in their URL slug`, fix: 'Consolidate to one page; redirect or re-slug the duplicates.' });
+      if (!reasons.length) reasons.push({ type: 'intent', label: `Multiple pages rank for "${c.keyword}" with overlapping content/intent`, fix: 'Differentiate each page’s focus, or merge them into one.' });
+      c.reasons = reasons;
+    }
+
     const sevRank = { high: 0, medium: 1, low: 2 };
     competing.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (b.total_impressions - a.total_impressions));
     const summary = {
