@@ -38488,6 +38488,80 @@ app.get('/api/projects/:projectId/serp-gap', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// AI analyser for one gap keyword: crawls the competitors' ranking pages and explains why they rank +
+// a concrete plan to compete. Cached per keyword so re-opening is instant and free.
+app.post('/api/projects/:projectId/serp-gap/analyze', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { keyword, competitors } = req.body || {};
+  try {
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+    if (!keyword) return res.status(400).json({ error: 'keyword required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Return cached analysis if present.
+    const cacheRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='serp_gap_analysis'`, [projectId])).rows[0];
+    const cache = cacheRow?.config?.map || {};
+    if (cache[keyword.toLowerCase()] && !req.body.force) return res.json({ ...cache[keyword.toLowerCase()], cached: true });
+
+    const bizDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const industry = project.industry || 'local business';
+    const location = project.location || '';
+
+    // Crawl up to 3 competitor ranking pages for real signals.
+    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+    const pages = [];
+    for (const c of (competitors || []).slice(0, 3)) {
+      if (!c.url) continue;
+      try {
+        const resp = await fetch(c.url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
+        if (!resp.ok) { pages.push({ domain: c.domain, position: c.position, error: 'HTTP ' + resp.status }); continue; }
+        const html = await resp.text();
+        const grab = (tag) => { const m = html.match(new RegExp('<' + tag + '[^>]*>([\\s\\S]*?)<\\/' + tag + '>', 'i')); return m ? m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) : ''; };
+        const h2s = [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/gi)].map(m => m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 14);
+        const text = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        pages.push({ domain: c.domain, position: c.position, title: grab('title'), h1: grab('h1'), h2s, wordCount: text.split(/\s+/).length });
+      } catch (e) { pages.push({ domain: c.domain, position: c.position, error: e.message }); }
+    }
+
+    const pagesText = pages.map(p => p.error
+      ? `${p.domain} (#${p.position}): [page not fetchable: ${p.error}]`
+      : `${p.domain} (#${p.position}): title="${p.title}" | H1="${p.h1}" | ~${p.wordCount} words | H2s: ${(p.h2s || []).join(' | ')}`
+    ).join('\n') || '(competitor page content unavailable — base your plan on the keyword and intent)';
+
+    const prompt = `You are a senior SEO strategist. The client ${bizDomain} (a ${industry}${location ? ' in ' + location : ''}) does NOT rank for "${keyword}", but these competitors do:
+
+${pagesText}
+
+Explain why the competitors rank and give a specific, practical plan for the client to compete and outrank them for "${keyword}". Tailor everything to this exact keyword and a local ${industry}. Return STRICT JSON only:
+{
+  "intent": "what the searcher actually wants (one sentence)",
+  "why_they_rank": ["3-4 concrete reasons grounded in the competitor pages above"],
+  "how_to_compete": {
+    "page_type": "e.g. dedicated service page | in-depth guide | comparison page",
+    "target_word_count": number,
+    "recommended_headings": ["5-8 H2 headings for the client's page"],
+    "must_cover": ["4-6 specific points/topics to include"],
+    "angle": "the differentiator the client should lead with to stand out"
+  },
+  "difficulty": "Easy|Medium|Hard",
+  "quick_win": "the single highest-leverage first action"
+}`;
+
+    const msg = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1300, messages: [{ role: 'user', content: prompt }] });
+    let txt = (msg.content?.[0]?.text || '').trim();
+    const s = txt.indexOf('{'), e = txt.lastIndexOf('}'); if (s >= 0 && e > s) txt = txt.slice(s, e + 1);
+    let analysis; try { analysis = JSON.parse(txt); } catch { analysis = { raw: txt }; }
+
+    const result = { ok: true, keyword, pages, analysis };
+    cache[keyword.toLowerCase()] = result;
+    try {
+      await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'serp_gap_analysis',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify({ map: cache })]);
+    } catch (e) {}
+    res.json(result);
+  } catch (e) { console.error('[serp-gap-analyze]', e.message); res.status(500).json({ error: e.message }); }
+});
+
 // ── Outreach / Prospects CRUD ──
 
 app.get('/api/projects/:projectId/backlinks/prospects', async (req, res) => {

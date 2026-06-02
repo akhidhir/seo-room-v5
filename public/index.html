@@ -24137,6 +24137,15 @@
       const [serpGapSort, setSerpGapSort] = useState({ key: 'competitors_count', dir: 'desc' });
       const [serpGapAdded, setSerpGapAdded] = useState({});
       const [serpGapExpanded, setSerpGapExpanded] = useState(null);
+      const [serpGapAnalysis, setSerpGapAnalysis] = useState({}); // keyword -> {loading, data, error}
+      const analyzeGap = async (o) => {
+        setSerpGapAnalysis(p => ({ ...p, [o.keyword]: { loading: true } }));
+        try {
+          const r = await api(`/projects/${project.id}/serp-gap/analyze`, { method: 'POST', body: { keyword: o.keyword, competitors: o.competitors || [] } });
+          if (r.error) setSerpGapAnalysis(p => ({ ...p, [o.keyword]: { error: r.error } }));
+          else setSerpGapAnalysis(p => ({ ...p, [o.keyword]: { data: r } }));
+        } catch (e) { setSerpGapAnalysis(p => ({ ...p, [o.keyword]: { error: e.message } })); }
+      };
       useEffect(() => {
         if (!project?.id) return;
         api(`/projects/${project.id}/serp-gap`).then(r => { if (r && (r.opportunities || []).length) setSerpGap(r); }).catch(() => {});
@@ -24965,6 +24974,52 @@
                                       <a href={c.url} target="_blank" rel="noopener" style={{ color: accent, fontSize: 12, textDecoration: 'none' }}><i className="fas fa-arrow-up-right-from-square" style={{ marginRight: 5 }}></i>View their page</a>
                                     </div>
                                   ))}
+                                  {/* AI analyser */}
+                                  {(() => {
+                                    const a = serpGapAnalysis[o.keyword];
+                                    if (!a) return (
+                                      <button className="btn" onClick={() => analyzeGap(o)} style={{ marginTop: 12, background: accent, color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontWeight: 700, fontSize: 12 }}>
+                                        <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }}></i>Analyse: why they rank & how to compete
+                                      </button>
+                                    );
+                                    if (a.loading) return <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Crawling competitor pages & analysing...</div>;
+                                    if (a.error) return <div style={{ marginTop: 12, color: '#ef4444', fontSize: 13 }}>Analysis error: {a.error} <button onClick={() => analyzeGap(o)} style={{ background: 'none', border: 'none', color: accent, cursor: 'pointer', textDecoration: 'underline' }}>Retry</button></div>;
+                                    const an = a.data?.analysis || {};
+                                    const hc = an.how_to_compete || {};
+                                    const diffColor = an.difficulty === 'Easy' ? '#22c55e' : an.difficulty === 'Hard' ? '#ef4444' : '#f59e0b';
+                                    return (
+                                      <div style={{ marginTop: 14, background: 'var(--card)', border: '1px solid ' + accent + '55', borderRadius: 10, padding: 16, maxWidth: 900 }}>
+                                        {an.raw ? <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{an.raw}</div> : <>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                                            <span style={{ fontSize: 13, fontWeight: 800 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6, color: accent }}></i>How to compete for "{o.keyword}"</span>
+                                            {an.difficulty && <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: diffColor + '22', color: diffColor }}>{an.difficulty}</span>}
+                                          </div>
+                                          {an.intent && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}><b>Search intent:</b> {an.intent}</div>}
+                                          {an.why_they_rank?.length > 0 && <div style={{ marginBottom: 12 }}>
+                                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>Why they rank</div>
+                                            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>{an.why_they_rank.map((w, wi) => <li key={wi}>{w}</li>)}</ul>
+                                          </div>}
+                                          <div style={{ background: 'var(--bg)', borderRadius: 8, padding: 12, marginBottom: 10 }}>
+                                            <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Your plan to outrank them</div>
+                                            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, marginBottom: 8 }}>
+                                              {hc.page_type && <span><b>Page:</b> {hc.page_type}</span>}
+                                              {hc.target_word_count && <span><b>Length:</b> ~{hc.target_word_count} words</span>}
+                                            </div>
+                                            {hc.angle && <div style={{ fontSize: 13, marginBottom: 8 }}><b style={{ color: accent }}>Angle:</b> {hc.angle}</div>}
+                                            {hc.recommended_headings?.length > 0 && <div style={{ marginBottom: 8 }}>
+                                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Recommended headings (H2)</div>
+                                              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>{hc.recommended_headings.map((h, hi) => <li key={hi}>{h}</li>)}</ul>
+                                            </div>}
+                                            {hc.must_cover?.length > 0 && <div>
+                                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', marginBottom: 4 }}>Must cover</div>
+                                              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>{hc.must_cover.map((m, mi) => <li key={mi}>{m}</li>)}</ul>
+                                            </div>}
+                                          </div>
+                                          {an.quick_win && <div style={{ fontSize: 13, padding: '8px 12px', background: '#22c55e18', borderRadius: 8 }}><b style={{ color: '#22c55e' }}><i className="fas fa-bolt" style={{ marginRight: 5 }}></i>Quick win:</b> {an.quick_win}</div>}
+                                        </>}
+                                      </div>
+                                    );
+                                  })()}
                                 </td>
                               </tr>
                             )}
