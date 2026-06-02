@@ -37335,13 +37335,18 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           if (pushedByUrl.size) console.log(`[internal-links] Loaded ${pushedByUrl.size} plugin-pushed pages`);
         } catch (e) {}
 
-        // 1. Discover pages
+        // 1. Discover pages.
+        // Prefer the plugin-pushed page list whenever we have it: it carries the real rendered content
+        // and, crucially, lets us SKIP the server-side crawl that Cloudflare blocks (the blocked fetches
+        // pile up at 10s each and hang the whole run). Only crawl live when there are no pushed pages.
         const authHeaders = getWpAuthHeaders(project);
-        let pages = await discoverPages(baseUrl, wpUrl, authHeaders);
-        // If discovery found nothing (site blocks crawling), fall back to the plugin-pushed page list
-        if (!pages.length && pushedByUrl.size) {
+        let pages;
+        if (pushedByUrl.size) {
           pages = [...pushedByUrl.values()].map(pp => ({ url: pp.url, title: pp.title }));
-          console.log(`[internal-links] Discovery empty — using ${pages.length} plugin-pushed pages`);
+          console.log(`[internal-links] Using ${pages.length} plugin-pushed pages (no crawl)`);
+        } else {
+          pages = await discoverPages(baseUrl, wpUrl, authHeaders);
+          console.log(`[internal-links] No pushed pages — crawled discovery found ${pages.length}`);
         }
         console.log(`[internal-links] ${pages.length} pages for project ${projectId}`);
         if (!pages.length) {
@@ -37357,6 +37362,25 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
 
         for (const page of pages) {
           const url = page.url;
+          const urlNorm0 = url.replace(/\/$/, '');
+          // Fast path: if we already have this page's rendered content from the plugin push, use it
+          // directly and skip the live fetch entirely (avoids Cloudflare-blocked requests that hang).
+          const ppFast = pushedByUrl.get(urlNorm0);
+          if (ppFast && (ppFast.text || (ppFast.links && ppFast.links.length))) {
+            const fullText = (ppFast.text || '').replace(/\s+/g, ' ').trim();
+            const outbound = [];
+            for (const l of (ppFast.links || [])) {
+              let href = (l.href || '').trim();
+              const anchor = (l.anchor || '').trim();
+              if (!anchor || anchor.length > 200) continue;
+              try { const rr = new URL(href, url); if (rr.hostname !== domain) continue; href = rr.href.replace(/\/$/, ''); } catch { continue; }
+              if (href === urlNorm0) continue;
+              outbound.push({ target_url: href, anchor_text: anchor, context_snippet: '' });
+              linkGraph.push({ source_url: urlNorm0, source_title: ppFast.title || page.title, target_url: href, anchor_text: anchor, context_snippet: '' });
+            }
+            pageMap.set(urlNorm0, { title: ppFast.title || page.title, outbound, inbound: [], wordCount: ppFast.wordCount || fullText.split(/\s+/).length, textSnippet: fullText.substring(0, 1500), fullText });
+            continue;
+          }
           try {
             const resp = await fetch(url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
