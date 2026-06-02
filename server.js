@@ -38695,9 +38695,22 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
     } catch (e) {}
     const has = (text, kw, kwWords) => { const t = (text || '').toLowerCase(); return !!t && (t.includes(kw) || (kwWords.length > 0 && kwWords.every(w => t.includes(w)))); };
 
+    // Branded keywords (the business name) appearing in every page's title is NORMAL — not cannibalization.
+    // Detect and exclude them so we never tell anyone to remove their brand from their titles.
+    const GENERIC_BRAND = new Set(['plumbing', 'plumber', 'plumbers', 'electrical', 'electrician', 'roofing', 'seo', 'marketing', 'digital', 'agency', 'services', 'service', 'group', 'co', 'company', 'solutions', 'the', 'and', 'pty', 'ltd', 'perth', 'brisbane', 'sydney', 'melbourne', 'adelaide', 'australia', 'au', 'wa', 'nsw', 'vic', 'qld']);
+    const brandRaw = (project.business_name || project.name || '').toLowerCase().trim();
+    const domainBase = (domain.split('.')[0] || '').toLowerCase();
+    const brandTokens = brandRaw.split(/\s+/).filter(w => w.length > 2 && !GENERIC_BRAND.has(w));
+    const isBranded = (kwLower) => {
+      if (brandRaw && brandRaw.length > 3 && kwLower.includes(brandRaw)) return true;
+      if (domainBase && domainBase.length > 5 && kwLower.replace(/\s+/g, '').includes(domainBase)) return true;
+      return brandTokens.some(t => kwLower.includes(t)); // distinctive brand word present
+    };
+
     const competing = [];
     for (const [kw, allPages] of byKw) {
       const kwl = kw.toLowerCase();
+      if (isBranded(kwl)) continue; // skip brand-name keywords entirely
       const kwWords = kwl.split(/\s+/).filter(w => w.length > 2);
       // Merge URL duplicates first — GSC reports the same page under with/without trailing slash (and
       // www/non-www), which would otherwise look like a page competing with itself.
