@@ -38771,8 +38771,24 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       const pages = enriched.filter(p => p.genuine);
       if (pages.length < 2) continue;
 
-      const exactCount = pages.filter(p => p.targets_exact).length;
-      const mode = exactCount >= 2 ? 'duplicate' : 'cluster'; // duplicate = real cannibalization; cluster = head term
+      // Work out what distinguishes each exact-target page beyond the keyword itself. If pages differ by a
+      // location/qualifier (e.g. "Computer Repairs Bayswater" vs "…Canning Vale"), they target DIFFERENT
+      // suburb keywords and only share the service words — that's normal local structure, NOT cannibalization.
+      const QUAL_NOISE = /\b(repairs?|services?|solutions?|the|and|in|near|me|best|top|local|cheap|fast|professional|expert|experts|company|au|wa|nsw|vic|qld|sa|nt|act|perth|brisbane|sydney|melbourne|adelaide|australia)\b/g;
+      const titleQualifier = (title) => {
+        let t = (title || '').toLowerCase();
+        if (brandRaw) t = t.split(brandRaw).join(' ');
+        for (const tok of brandTokens) t = t.replace(new RegExp('\\b' + tok + '\\b', 'g'), ' ');
+        t = t.replace(kwl, ' ').replace(/\d{3,6}/g, ' ').replace(QUAL_NOISE, ' ').replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+        return t;
+      };
+      const exactPages = pages.filter(p => p.targets_exact);
+      const exactCount = exactPages.length;
+      const distinctQuals = new Set(exactPages.map(p => titleQualifier(p.meta_title || p.focus_keyword)).filter(Boolean));
+      let mode;
+      if (exactCount >= 2 && distinctQuals.size >= 2) mode = 'variants';   // different suburbs/locations — not cannibalization
+      else if (exactCount >= 2) mode = 'duplicate';                        // genuinely the same target — real cannibalization
+      else mode = 'cluster';                                               // head term, no single dedicated page
 
       const totalImpr = pages.reduce((s, p) => s + p.impressions, 0);
       const totalClicks = pages.reduce((s, p) => s + p.clicks, 0);
