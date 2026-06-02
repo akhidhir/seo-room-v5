@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.12
+ * Version: 8.9.13
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.12');
+define('SEOROOM_VERSION', '8.9.13');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -4084,28 +4084,38 @@ function sropt_get_internal_links($force = false) {
     return $links;
 }
 
-add_filter('the_content', 'sropt_inject_internal_links', 50);
-function sropt_inject_internal_links($content) {
-    if (is_admin() || !is_singular() || in_the_loop() === false || empty($content)) return $content;
+// Inject internal links by output-buffering the WHOLE rendered page. This catches Elementor / any page
+// builder, because it acts on the final HTML — unlike the_content, which Elementor renders around.
+add_action('template_redirect', 'sropt_il_buffer_start', 1);
+function sropt_il_buffer_start() {
+    if (is_admin() || !is_singular()) return;
+
     $links_by_page = sropt_get_internal_links();
-    if (empty($links_by_page)) return $content;
+    if (empty($links_by_page)) return;
 
     $perma = rtrim((string) get_permalink(), '/');
     $links = isset($links_by_page[$perma]) ? $links_by_page[$perma] : null;
     if (empty($links)) {
-        // try without scheme/host variations
         $alt = rtrim(home_url(parse_url($perma, PHP_URL_PATH) ?: ''), '/');
         if (isset($links_by_page[$alt])) $links = $links_by_page[$alt];
     }
-    if (empty($links)) return $content;
+    if (empty($links)) return;
 
-    foreach ($links as $link) {
-        $anchor = isset($link['anchor']) ? trim($link['anchor']) : '';
-        $target = isset($link['target']) ? trim($link['target']) : '';
-        if ($anchor === '' || $target === '') continue;
-        $content = sropt_link_first_occurrence($content, $anchor, $target);
-    }
-    return $content;
+    ob_start(function ($html) use ($links) {
+        if (empty($html) || strlen($html) < 500) return $html;
+        // Only operate on the <body> so we never touch <head>; the first-occurrence logic skips text already in <a>.
+        $pos = stripos($html, '<body');
+        if ($pos === false) return $html;
+        $head = substr($html, 0, $pos);
+        $body = substr($html, $pos);
+        foreach ($links as $link) {
+            $anchor = isset($link['anchor']) ? trim($link['anchor']) : '';
+            $target = isset($link['target']) ? trim($link['target']) : '';
+            if ($anchor === '' || $target === '') continue;
+            $body = sropt_link_first_occurrence($body, $anchor, $target);
+        }
+        return $head . $body;
+    });
 }
 
 // Wrap the first occurrence of $anchor that is NOT already inside an <a> tag.
