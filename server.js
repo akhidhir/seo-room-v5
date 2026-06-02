@@ -38667,28 +38667,7 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
     const byKw = new Map();
     for (const r of rows) { if (!byKw.has(r.keyword)) byKw.set(r.keyword, []); byKw.get(r.keyword).push(r); }
 
-    const competing = [];
-    for (const [kw, pages] of byKw) {
-      const sig = pages.filter(p => p.impressions >= 5).sort((a, b) => b.impressions - a.impressions);
-      if (sig.length < 2) continue;
-      const top = sig[0], second = sig[1];
-      // second page must be a real contender (not noise) to count as cannibalization
-      if (second.impressions < Math.max(10, top.impressions * 0.15)) continue;
-      const totalImpr = sig.reduce((s, p) => s + p.impressions, 0);
-      const totalClicks = sig.reduce((s, p) => s + p.clicks, 0);
-      const bestPos = Math.min(...sig.map(p => p.position));
-      let severity = 'low';
-      if (totalImpr >= 500 && bestPos <= 20) severity = 'high';
-      else if (totalImpr >= 100) severity = 'medium';
-      const primary = [...sig].sort((a, b) => (b.clicks - a.clicks) || (a.position - b.position))[0];
-      competing.push({
-        keyword: kw, page_count: sig.length, total_impressions: totalImpr, total_clicks: totalClicks,
-        best_position: Math.round(bestPos * 10) / 10, severity, primary_page: primary.page,
-        pages: sig.map(p => ({ url: p.page, clicks: p.clicks, impressions: p.impressions, position: Math.round(p.position * 10) / 10, ctr: Math.round((p.ctr || 0) * 1000) / 10, is_primary: p.page === primary.page })),
-      });
-    }
-    // ── Attach each page's real on-page fields (title, H1, meta, focus keyword) from the On-Page Audit cache,
-    //    with plugin-pushed titles as fallback — so the user can see exactly WHAT each page has to fix it.
+    // On-page fields (title, H1, meta, focus keyword) from the On-Page Audit cache, plugin-pushed titles as fallback.
     const normU = (u) => (u || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '').toLowerCase();
     const slugOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return (u || '').toLowerCase(); } };
     const onpage = new Map();
@@ -38701,39 +38680,70 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
       for (const pp of (cc.rows[0]?.config?.pages || [])) { const u = normU(pp.url); if (u) pushed.set(u, pp); }
     } catch (e) {}
-
     const has = (text, kw, kwWords) => { const t = (text || '').toLowerCase(); return !!t && (t.includes(kw) || (kwWords.length > 0 && kwWords.every(w => t.includes(w)))); };
 
-    for (const c of competing) {
-      const kw = c.keyword.toLowerCase();
-      const kwWords = kw.split(/\s+/).filter(w => w.length > 2);
-      const titlePages = [], slugPages = [], focusPages = [], homepage = [];
-      for (const p of c.pages) {
-        const op = onpage.get(normU(p.url));
-        const pp = pushed.get(normU(p.url));
-        p.meta_title = op?.metaTitle || op?.title || pp?.title || '';
-        p.h1 = op?.h1 || '';
-        p.meta_desc = op?.metaDesc || '';
-        p.focus_keyword = op?.focusKeyword || '';
-        const slug = slugOf(p.url);
+    const competing = [];
+    for (const [kw, allPages] of byKw) {
+      const kwl = kw.toLowerCase();
+      const kwWords = kwl.split(/\s+/).filter(w => w.length > 2);
+      const cand = allPages.filter(p => p.impressions >= 3);
+      if (cand.length < 2) continue;
+      const topImpr = Math.max(...cand.map(p => p.impressions));
+
+      // Enrich every candidate, then keep only GENUINE competitors: a page counts only if it actually
+      // targets the keyword (title/H1/focus/slug) OR pulls substantial impressions — not a 13-impression fluke.
+      const enriched = cand.map(p => {
+        const op = onpage.get(normU(p.page)); const pp = pushed.get(normU(p.page));
+        const meta_title = op?.metaTitle || op?.title || pp?.title || '';
+        const h1 = op?.h1 || ''; const meta_desc = op?.metaDesc || ''; const focus_keyword = op?.focusKeyword || '';
+        const slug = slugOf(p.page);
+        const kw_in_title = has(meta_title, kwl, kwWords);
+        const kw_in_h1 = has(h1, kwl, kwWords);
+        const kw_in_focus = has(focus_keyword, kwl, kwWords);
+        const kw_in_slug = kwWords.length > 0 && kwWords.filter(w => slug.includes(w)).length >= Math.ceil(kwWords.length * 0.6) && slug !== '/' && slug !== '';
+        const isHome = slug === '' || slug === '/';
+        const targets = kw_in_title || kw_in_h1 || kw_in_focus || kw_in_slug;
+        const substantial = p.impressions >= Math.max(20, topImpr * 0.15);
+        return {
+          url: p.page, clicks: p.clicks, impressions: p.impressions, position: Math.round(p.position * 10) / 10, ctr: Math.round((p.ctr || 0) * 1000) / 10,
+          meta_title, h1, meta_desc, focus_keyword, kw_in_title, kw_in_h1, kw_in_focus, kw_in_slug, isHome,
+          genuine: targets || substantial,
+        };
+      });
+      const pages = enriched.filter(p => p.genuine);
+      if (pages.length < 2) continue; // not real cannibalization once flukes are removed
+
+      const totalImpr = pages.reduce((s, p) => s + p.impressions, 0);
+      const totalClicks = pages.reduce((s, p) => s + p.clicks, 0);
+      const bestPos = Math.min(...pages.map(p => p.position));
+      const primary = [...pages].sort((a, b) => (b.clicks - a.clicks) || (a.position - b.position))[0];
+
+      const titlePages = [], focusPages = [], slugPages = [], homepage = [];
+      for (const p of pages) {
+        p.is_primary = p.url === primary.url;
         p.why = [];
-        p.kw_in_title = has(p.meta_title, kw, kwWords);
-        p.kw_in_h1 = has(p.h1, kw, kwWords);
-        p.kw_in_focus = has(p.focus_keyword, kw, kwWords);
-        p.kw_in_slug = kwWords.length > 0 && kwWords.filter(w => slug.includes(w)).length >= Math.ceil(kwWords.length * 0.6) && slug !== '/' && slug !== '';
-        if (slug === '' || slug === '/') { homepage.push(p.url); p.why.push('homepage'); }
+        if (p.isHome) { homepage.push(p.url); p.why.push('homepage'); }
         if (p.kw_in_title) { titlePages.push(p.url); p.why.push('title'); }
         if (p.kw_in_h1) p.why.push('h1');
         if (p.kw_in_focus) { focusPages.push(p.url); p.why.push('focus kw'); }
         if (p.kw_in_slug) { slugPages.push(p.url); p.why.push('slug'); }
       }
       const reasons = [];
-      if (focusPages.length >= 2) reasons.push({ type: 'focus kw', label: `${focusPages.length} pages use "${c.keyword}" as their focus keyword`, fix: 'Only the primary page should target this keyword — change the others’ focus keyword.' });
-      if (titlePages.length >= 2) reasons.push({ type: 'title', label: `Same keyword "${c.keyword}" is in the title tag of ${titlePages.length} pages`, fix: 'Keep it in the primary page’s title; rewrite the others’ titles around a different term.' });
-      if (homepage.length) reasons.push({ type: 'homepage', label: `Your homepage is competing for "${c.keyword}"`, fix: 'Let the dedicated page own this keyword; point the homepage at your brand/overview.' });
-      if (slugPages.length >= 2) reasons.push({ type: 'slug', label: `${slugPages.length} pages have "${c.keyword}" terms in their URL`, fix: 'Consolidate to one page; redirect or re-slug the duplicates.' });
-      if (!reasons.length) reasons.push({ type: 'intent', label: `Multiple pages rank for "${c.keyword}" with overlapping content/intent`, fix: 'Differentiate each page’s focus, or merge them into one.' });
-      c.reasons = reasons;
+      if (focusPages.length >= 2) reasons.push({ type: 'focus kw', label: `${focusPages.length} pages use "${kw}" as their focus keyword`, fix: 'Only the primary page should target this keyword — change the others’ focus keyword.' });
+      if (titlePages.length >= 2) reasons.push({ type: 'title', label: `Same keyword "${kw}" is in the title tag of ${titlePages.length} pages`, fix: 'Keep it in the primary page’s title; rewrite the others’ titles around a different term.' });
+      if (homepage.length) reasons.push({ type: 'homepage', label: `Your homepage is competing for "${kw}"`, fix: 'Let the dedicated page own this keyword; point the homepage at your brand/overview.' });
+      if (slugPages.length >= 2) reasons.push({ type: 'slug', label: `${slugPages.length} pages have "${kw}" terms in their URL`, fix: 'Consolidate to one page; redirect or re-slug the duplicates.' });
+      if (!reasons.length) reasons.push({ type: 'intent', label: `${pages.length} pages each pull real impressions for "${kw}" with overlapping intent`, fix: 'Differentiate each page’s focus, or merge them into one.' });
+
+      let severity = 'low';
+      if (totalImpr >= 500 && bestPos <= 20) severity = 'high';
+      else if (totalImpr >= 100) severity = 'medium';
+
+      competing.push({
+        keyword: kw, page_count: pages.length, total_impressions: totalImpr, total_clicks: totalClicks,
+        best_position: Math.round(bestPos * 10) / 10, severity, primary_page: primary.url, reasons,
+        pages: pages.map(p => ({ url: p.url, clicks: p.clicks, impressions: p.impressions, position: p.position, ctr: p.ctr, is_primary: p.is_primary, why: p.why, meta_title: p.meta_title, h1: p.h1, meta_desc: p.meta_desc, focus_keyword: p.focus_keyword, kw_in_title: p.kw_in_title, kw_in_h1: p.kw_in_h1, kw_in_focus: p.kw_in_focus, kw_in_slug: p.kw_in_slug })),
+      });
     }
 
     const sevRank = { high: 0, medium: 1, low: 2 };
