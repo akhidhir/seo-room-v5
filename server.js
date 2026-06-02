@@ -38257,21 +38257,18 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
       .map(o => ({ ...o, link_type: classifyLinkType(o.domain), score: scoreOpportunity(o.rank, o.competitors_count) }))
       .sort((a, b) => b.score - a.score);
 
-    // Save to DB
-    for (const comp of cleanCompetitors) {
-      const compOpps = gapResult.opportunities.filter(o => {
-        const targets = o.targets || {};
-        return targets[comp];
-      });
-      await pool.query(`
-        INSERT INTO backlink_gap (project_id, competitor_domain, opportunities, total_opportunities, scanned_at)
-        VALUES ($1, $2, $3, $4, NOW())
-        ON CONFLICT DO NOTHING
-      `, [projectId, comp, JSON.stringify(compOpps), compOpps.length]).catch(() => {
-        pool.query(`INSERT INTO backlink_gap (project_id, competitor_domain, opportunities, total_opportunities, scanned_at) VALUES ($1, $2, $3, $4, NOW())`,
-          [projectId, comp, JSON.stringify(compOpps), compOpps.length]);
-      });
-    }
+    // Persist the full enriched result so it survives navigation/reload (single cache row).
+    const gapPayload = {
+      domain, competitors: cleanCompetitors, auto_discovered: autoDiscovered,
+      total: gapResult.total, opportunities: gapResult.opportunities, scanned_at: new Date().toISOString()
+    };
+    try {
+      await pool.query(
+        `INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'backlink_gap_cache',$2)
+         ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`,
+        [projectId, JSON.stringify(gapPayload)]
+      );
+    } catch (e) {}
 
     // Log cost
     try {
@@ -38305,12 +38302,13 @@ app.get('/api/projects/:projectId/backlinks/competitors', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Get saved gap data
+// Get the last saved gap result (full enriched list) so it survives navigation/reload.
 app.get('/api/projects/:projectId/backlinks/gap', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   try {
-    const gaps = await pool.query('SELECT * FROM backlink_gap WHERE project_id=$1 ORDER BY scanned_at DESC', [projectId]);
-    res.json({ gaps: gaps.rows });
+    const row = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='backlink_gap_cache'`, [projectId])).rows[0];
+    if (row?.config && row.config.opportunities) return res.json(row.config);
+    res.json({ opportunities: [], total: 0, competitors: [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

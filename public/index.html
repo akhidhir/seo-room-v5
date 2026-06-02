@@ -30793,6 +30793,8 @@
         setLoading(false);
         // Load auto-discovered competitors (non-blocking) so the Gap tab can preview them
         api(`/projects/${pid}/backlinks/competitors`).then(r => setDiscoveredComps(r.competitors || [])).catch(() => setDiscoveredComps([]));
+        // Restore the last gap analysis result so it isn't lost when navigating away
+        api(`/projects/${pid}/backlinks/gap`).then(r => { if (r && (r.opportunities || []).length) setGapData(r); }).catch(() => {});
       };
 
       useEffect(() => { loadData(); }, [pid]);
