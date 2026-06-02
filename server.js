@@ -38285,9 +38285,13 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
         const spam = !dir && isSpamLinkDir(o.domain);
         let score = scoreOpportunity(o.rank, o.competitors_count);
         if (spam) score = Math.round(score * 0.2); // de-prioritise spam link farms
+        let type;
+        if (dir) type = 'directory';            // verified directory (has pricing/difficulty)
+        else if (spam) type = 'spam';
+        else { type = classifyLinkType(o.domain); if (type === 'directory') type = 'resource'; } // only verified dirs get 'directory'
         return {
           ...o,
-          link_type: dir ? 'directory' : (spam ? 'spam' : classifyLinkType(o.domain)),
+          link_type: type,
           score,
           directory: dir, // {name, free, price, difficulty, url} or null
         };
