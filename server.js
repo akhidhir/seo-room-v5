@@ -7225,47 +7225,96 @@ function scoreOpportunity(rank, competitorsCount) {
 // Auto-discover competitor DOMAINS from data we already collected — Maps grid scans (competitors[].website)
 // and the Players Handshake analysis — so backlink gap (and anything else) doesn't depend on someone
 // manually typing competitors. Aggregates by domain, ranks by how dominant/frequent each competitor is.
-async function discoverCompetitorDomains(projectId, project) {
-  const ownDomain = (project?.domain || project?.website || '')
-    .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
-  const SKIP = /(facebook|instagram|google\.|google$|goo\.gl|yelp|tripadvisor|yellowpages|truelocal|hotfrog|localsearch|youtube|linkedin|twitter|wikipedia|\.gov|oneflare|hipages|airtasker|productreview|womo|startlocal|cylex|aussieweb|brownbook|pinterest|tiktok)/;
-  const agg = new Map();
-  const addComp = (name, website, weight, source) => {
-    let host = (website || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
-    if (!host || !host.includes('.')) return;
-    if (host === ownDomain || SKIP.test(host)) return;
-    const cur = agg.get(host) || { domain: host, name: name || host, score: 0, sources: new Set() };
-    cur.score += (weight || 0) + 1;
-    cur.sources.add(source);
+const COMP_SKIP_HOST = /(facebook|instagram|google\.|google$|goo\.gl|gstatic|yelp|tripadvisor|yellowpages|truelocal|hotfrog|localsearch|youtube|linkedin|twitter|wikipedia|\.gov|oneflare|hipages|airtasker|productreview|womo|startlocal|cylex|aussieweb|brownbook|pinterest|tiktok|maps\.|bing\.|apple\.)/;
+function cleanHost(url) {
+  return (url || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+}
+
+// Resolve a competitor business NAME to its website domain via SerpAPI (local pack → knowledge graph →
+// first non-aggregator organic result). Used when Maps grid scans captured the name but not the site.
+async function resolveCompetitorWebsite(name, locationHint, ownDomain) {
+  try {
+    const data = await serpApiSearch({ engine: 'google', q: `${name} ${locationHint || ''}`.trim(), gl: 'au', hl: 'en', num: 5 });
+    const lp = data?.local_results?.places || (Array.isArray(data?.local_results) ? data.local_results : []);
+    for (const p of lp) { const h = cleanHost(p.website); if (h && h.includes('.') && h !== ownDomain && !COMP_SKIP_HOST.test(h)) return h; }
+    const kg = cleanHost(data?.knowledge_graph?.website);
+    if (kg && kg.includes('.') && kg !== ownDomain && !COMP_SKIP_HOST.test(kg)) return kg;
+    for (const o of (data?.organic_results || [])) { const h = cleanHost(o.link); if (h && h.includes('.') && h !== ownDomain && !COMP_SKIP_HOST.test(h)) return h; }
+  } catch (e) {}
+  return null;
+}
+
+// Auto-discover competitor DOMAINS from data we already collected — Maps grid scans (competitors[].website
+// or name) and the Players Handshake. When a competitor only has a name, resolve it to a domain via SerpAPI
+// (cached in project_integrations kind='competitor_domains' so we never pay to resolve the same name twice).
+async function discoverCompetitorDomains(projectId, project, resolve = true) {
+  const ownDomain = cleanHost(project?.domain || project?.website || '');
+  const locationHint = project?.location || (Array.isArray(project?.service_areas) ? project.service_areas[0] : '') || '';
+  const domainAgg = new Map(); // host -> {domain,name,score,sources}
+  const nameAgg = new Map();   // nameLower -> {name,score,sources}
+
+  const addByDomain = (name, host, weight, source) => {
+    if (!host || !host.includes('.') || host === ownDomain || COMP_SKIP_HOST.test(host)) return;
+    const cur = domainAgg.get(host) || { domain: host, name: name || host, score: 0, sources: new Set() };
+    cur.score += (weight || 0) + 1; cur.sources.add(source);
     if (name && (cur.name === host || !cur.name)) cur.name = name;
-    agg.set(host, cur);
+    domainAgg.set(host, cur);
+  };
+  const addByName = (name, weight, source) => {
+    const key = (name || '').trim().toLowerCase();
+    if (!key) return;
+    const cur = nameAgg.get(key) || { name: name.trim(), score: 0, sources: new Set() };
+    cur.score += (weight || 0) + 1; cur.sources.add(source);
+    nameAgg.set(key, cur);
+  };
+  const ingest = (name, website, weight, source) => {
+    const host = cleanHost(website);
+    if (host && host.includes('.')) addByDomain(name, host, weight, source);
+    else if (name) addByName(name, weight, source);
   };
 
-  // 1. Maps grid scans — competitors.top carries website, dominance and appearances
+  // 1. Maps grid scans
   try {
-    const gs = await pool.query(
-      `SELECT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL ORDER BY scanned_at DESC LIMIT 8`,
-      [projectId]
-    );
+    const gs = await pool.query(`SELECT competitors FROM grid_scans WHERE project_id=$1 AND competitors IS NOT NULL ORDER BY scanned_at DESC LIMIT 8`, [projectId]);
     for (const row of gs.rows) {
       const c = row.competitors || {};
       const top = Array.isArray(c) ? c : (c.top || []);
-      for (const x of top) addComp(x.name, x.website, (x.dominance || 0) + (x.appearances || 0), 'grid');
+      for (const x of top) ingest(x.name, x.website, (x.dominance || 0) + (x.appearances || 0), 'grid');
     }
   } catch (e) {}
-
-  // 2. Players Handshake — data.competitors[] with gbp.website
+  // 2. Players Handshake
   try {
-    const hs = await pool.query(
-      `SELECT data FROM audits WHERE project_id=$1 AND pillar='handshake' ORDER BY created_at DESC LIMIT 1`,
-      [projectId]
-    );
-    for (const c of (hs.rows[0]?.data?.competitors || [])) {
-      addComp(c.name, c.website || c.gbp?.website, (c.appearances || 0) + (c.dominance || 0), 'handshake');
-    }
+    const hs = await pool.query(`SELECT data FROM audits WHERE project_id=$1 AND pillar='handshake' ORDER BY created_at DESC LIMIT 1`, [projectId]);
+    for (const c of (hs.rows[0]?.data?.competitors || [])) ingest(c.name, c.website || c.gbp?.website, (c.appearances || 0) + (c.dominance || 0), 'handshake');
   } catch (e) {}
 
-  return [...agg.values()]
+  // 3. Resolve the strongest name-only competitors to domains via SerpAPI (with a persistent cache).
+  if (resolve && nameAgg.size && SERPAPI_KEY) {
+    let cache = {};
+    try { cache = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='competitor_domains'`, [projectId])).rows[0]?.config?.map || {}; } catch (e) {}
+    const nameList = [...nameAgg.values()].sort((a, b) => b.score - a.score).slice(0, 8);
+    let cacheDirty = false;
+    for (const n of nameList) {
+      const key = n.name.toLowerCase();
+      let host = cache[key];
+      if (host === undefined) { // not resolved before
+        host = await resolveCompetitorWebsite(n.name, locationHint, ownDomain);
+        cache[key] = host || null; cacheDirty = true;
+      }
+      if (host) addByDomain(n.name, host, n.score, [...n.sources][0] || 'grid');
+    }
+    if (cacheDirty) {
+      try {
+        await pool.query(
+          `INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'competitor_domains',$2)
+           ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`,
+          [projectId, JSON.stringify({ map: cache })]
+        );
+      } catch (e) {}
+    }
+  }
+
+  return [...domainAgg.values()]
     .sort((a, b) => b.score - a.score)
     .map(c => ({ domain: c.domain, name: c.name, score: Math.round(c.score), sources: [...c.sources] }));
 }
