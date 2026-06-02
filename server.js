@@ -38562,6 +38562,75 @@ Explain why the competitors rank and give a specific, practical plan for the cli
   } catch (e) { console.error('[serp-gap-analyze]', e.message); res.status(500).json({ error: e.message }); }
 });
 
+// ==================== AIO — AI SEARCH (Google AI Overview citation tracking) ====================
+// For your tracked keywords, checks whether Google shows an AI Overview and which domains it cites —
+// so you can see where you're cited vs your competitors, and where the citation opportunities are.
+app.post('/api/projects/:projectId/aio/scan', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    if (!SERPAPI_KEY) return res.status(503).json({ error: 'SerpAPI not configured' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const clientHost = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+
+    let competitors = [];
+    try { competitors = (await discoverCompetitorDomains(projectId, project, false, true)).slice(0, 8).map(c => c.domain); } catch (e) {}
+
+    const kwRows = (await pool.query(`SELECT DISTINCT keyword FROM rank_keywords WHERE project_id=$1 AND (location IS NULL OR location='') ORDER BY keyword`, [projectId])).rows;
+    let keywords = kwRows.map(r => r.keyword).filter(Boolean);
+    if (Array.isArray(req.body.keywords) && req.body.keywords.length) keywords = req.body.keywords;
+    keywords = keywords.slice(0, 30);
+    if (!keywords.length) return res.status(400).json({ error: 'No keywords to scan. Add keywords in SERP Rankings first.' });
+
+    const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
+    let cost = 0;
+    const results = [];
+
+    for (const kw of keywords) {
+      let present = false, refs = [], err = null;
+      try {
+        const data = await serpApiSearch({ engine: 'google', q: kw, google_domain: 'google.com.au', gl: 'au', hl: 'en' });
+        cost += 0.012;
+        let ov = data.ai_overview;
+        // AI Overview sometimes returns only a page_token; fetch the full block in a 2nd call.
+        if (ov && ov.page_token && !(ov.text_blocks || ov.references)) {
+          try { const d2 = await serpApiSearch({ engine: 'google_ai_overview', page_token: ov.page_token }); cost += 0.012; ov = d2.ai_overview || ov; } catch (e) {}
+        }
+        if (ov && (ov.text_blocks || ov.references)) {
+          present = true;
+          refs = (ov.references || []).map(r => ({ domain: hostOf(r.link), title: r.title || r.source || '', link: r.link || '', index: r.index })).filter(r => r.domain);
+        }
+      } catch (e) { err = e.message; }
+      const cited = refs.map(r => r.domain);
+      const youCited = !!(clientHost && cited.includes(clientHost));
+      const yourPos = youCited ? (refs.find(r => r.domain === clientHost)?.index ?? null) : null;
+      const compsCited = competitors.filter(c => cited.includes(c));
+      results.push({ keyword: kw, ai_overview: present, you_cited: youCited, your_position: yourPos, competitors_cited: compsCited, sources: refs, error: err });
+    }
+
+    const summary = {
+      total: results.length,
+      with_overview: results.filter(r => r.ai_overview).length,
+      you_cited: results.filter(r => r.you_cited).length,
+      competitor_cited: results.filter(r => r.competitors_cited.length > 0).length,
+      opportunity: results.filter(r => r.ai_overview && !r.you_cited).length, // overview shows but you're not in it
+    };
+    const payload = { keywords: results, summary, competitors, scanned_at: new Date().toISOString() };
+    await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'aio_cache',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify(payload)]).catch(() => {});
+    try { await pool.query('INSERT INTO api_costs (project_id, feature, provider, api_calls, cost, details) VALUES ($1,$2,$3,$4,$5,$6)', [projectId, 'aio_scan', 'serpapi', keywords.length, cost, JSON.stringify({ count: keywords.length })]); } catch (e) {}
+    res.json({ ...payload, cost });
+  } catch (e) { console.error('[aio]', e.message); res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/aio', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const row = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='aio_cache'`, [projectId])).rows[0];
+    if (row?.config) return res.json(row.config);
+    res.json({ keywords: [], summary: {}, competitors: [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Outreach / Prospects CRUD ──
 
 app.get('/api/projects/:projectId/backlinks/prospects', async (req, res) => {
