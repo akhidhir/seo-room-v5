@@ -11740,6 +11740,9 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       // Extract fields
       const metaTitle = yoast.title || '';
       const metaDesc = yoast.description || '';
+      const canonical = yoast.canonical || '';
+      const robotsObj = yoast.robots || {};
+      const noindex = /noindex/i.test(robotsObj.index || '') || /noindex/i.test(JSON.stringify(robotsObj));
       const focusKeyword = pluginData?.focus_keyword || srYoast.focus_keyword || pgMeta._yoast_wpseo_focuskw || pgMeta.yoast_wpseo_focuskw || '';
       const plainText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       const wordCount = plainText.split(/\s+/).filter(Boolean).length;
@@ -11824,6 +11827,8 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
         metaTitleLen: metaTitle.length,
         metaDesc,
         metaDescLen: metaDesc.length,
+        canonical,
+        noindex,
         h1,
         internalLinks,
         externalLinks,
@@ -38693,7 +38698,16 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
       for (const pp of (cc.rows[0]?.config?.pages || [])) { const u = normU(pp.url); if (u) pushed.set(u, pp); }
     } catch (e) {}
+    // Internal-link graph (anchors pointing at each page) — for the "links split between pages" signal.
+    const ilg = new Map();
+    try {
+      const g = await pool.query(`SELECT target_url, anchor_text FROM internal_link_graph WHERE project_id=$1`, [projectId]);
+      for (const r of g.rows) { const t = normU(r.target_url); if (!ilg.has(t)) ilg.set(t, []); ilg.get(t).push((r.anchor_text || '').toLowerCase()); }
+    } catch (e) {}
     const has = (text, kw, kwWords) => { const t = (text || '').toLowerCase(); return !!t && (t.includes(kw) || (kwWords.length > 0 && kwWords.every(w => t.includes(w)))); };
+    const pathOf = (u) => { try { return new URL(u).pathname; } catch { return u; } };
+    const shingleSet = (t, n = 4) => { const w = (t || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean); const s = new Set(); for (let i = 0; i + n <= w.length; i++) s.add(w.slice(i, i + n).join(' ')); return s; };
+    const overlap = (a, b) => { const A = shingleSet(a), B = shingleSet(b); if (A.size < 5 || B.size < 5) return 0; let inter = 0; for (const x of A) if (B.has(x)) inter++; return inter / Math.min(A.size, B.size); };
 
     // Branded keywords (the business name) appearing in every page's title is NORMAL — not cannibalization.
     // Detect and exclude them so we never tell anyone to remove their brand from their titles.
@@ -38799,6 +38813,33 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
         }
       }
 
+      // ── Extra Google-aligned checks. Each reports ONLY from real data; otherwise it's marked not-checked. ──
+      // Canonical + noindex (from On-Page Audit cache).
+      for (const p of pages) {
+        const op = onpage.get(normU(p.url));
+        p.canonical = (op && op.canonical) ? op.canonical : null;       // null = not audited
+        p.noindex = !!(op && op.noindex);
+        p.canonical_elsewhere = !!(p.canonical && normU(p.canonical) !== normU(p.url));
+      }
+      // Content similarity (from plugin-pushed page text) — overlap coefficient on 4-word shingles.
+      const simPairs = [];
+      for (let i = 0; i < pages.length; i++) for (let j = i + 1; j < pages.length; j++) {
+        const ta = pushed.get(normU(pages[i].url))?.text, tb = pushed.get(normU(pages[j].url))?.text;
+        if (!ta || !tb) continue;
+        const sc = overlap(ta, tb);
+        if (sc >= 0.35) simPairs.push({ a: pathOf(pages[i].url), b: pathOf(pages[j].url), score: Math.round(sc * 100) });
+      }
+      // Internal-link split (from internal_link_graph).
+      const inbound = pages.map(p => ({ path: pathOf(p.url), count: (ilg.get(normU(p.url)) || []).length }));
+      const pagesWithInbound = inbound.filter(x => x.count > 0);
+      // What we actually checked, so the UI can be honest.
+      const coverage = {
+        on_page: pages.some(p => p.canonical !== null || p.meta_title) ? 'checked' : 'partial',
+        canonical: pages.some(p => p.canonical !== null) ? 'checked' : 'not_checked',
+        content: pages.some(p => pushed.get(normU(p.url))?.text) ? 'checked' : 'not_checked',
+        internal_links: ilg.size > 0 ? 'checked' : 'not_checked',
+      };
+
       const reasons = [];
       if (mode === 'duplicate') {
         reasons.push({ type: 'duplicate', label: `${exactCount} of your pages are optimised for the exact term "${kw}" (in their title, focus keyword or URL), so they cannibalise each other.`, fix: `Keep ${primaryPath} targeting it and re-focus the others.` });
@@ -38816,6 +38857,13 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       } else if (pages.some(p => p.isHome && !p.is_primary)) {
         reasons.push({ type: 'homepage', label: `Your homepage also surfaces for "${kw}".`, fix: 'Leave it brand-focused; let the main page own the keyword.' });
       }
+      // Extra real-data signals
+      if (simPairs.length) reasons.push({ type: 'duplicate content', label: `Near-duplicate content detected: ${simPairs.map(s => `${s.a} & ${s.b} (${s.score}% overlap)`).join('; ')}.`, fix: 'Make these pages genuinely different, or merge the weaker one into the primary and redirect.' });
+      const canonElse = pages.filter(p => p.canonical_elsewhere && !p.is_primary);
+      if (canonElse.length) reasons.push({ type: 'canonical', label: `${canonElse.length} page(s) already canonicalise elsewhere — good, but check they point to ${primaryPath}.`, fix: `Set their canonical to ${primaryPath} if it isn't already.` });
+      if (pages.some(p => p.is_primary && p.canonical_elsewhere)) reasons.push({ type: 'canonical', label: `Your main page ${primaryPath} has a canonical pointing to a DIFFERENT URL — Google may drop it.`, fix: `Set ${primaryPath}'s canonical to itself (self-referencing).` });
+      if (pages.some(p => p.noindex)) reasons.push({ type: 'noindex', label: `${pages.filter(p => p.noindex).length} of these pages is set to noindex.`, fix: 'Make sure the page you want to rank is indexable; noindex the genuine duplicates instead.' });
+      if (pagesWithInbound.length >= 2) reasons.push({ type: 'internal links', label: `Internal links point to ${pagesWithInbound.length} of these competing pages (${pagesWithInbound.map(x => x.path + ' ×' + x.count).join(', ')}), splitting link signals.`, fix: `Concentrate internal links — especially "${kw}" anchors — on ${primaryPath}.` });
 
       let severity = 'low';
       if (totalImpr >= 500 && bestPos <= 20) severity = 'high';
@@ -38823,8 +38871,8 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
 
       competing.push({
         keyword: kw, page_count: pages.length, total_impressions: totalImpr, total_clicks: totalClicks,
-        best_position: Math.round(bestPos * 10) / 10, severity, primary_page: primary.url, reasons,
-        pages: pages.map(p => ({ url: p.url, clicks: p.clicks, impressions: p.impressions, position: p.position, ctr: p.ctr, is_primary: p.is_primary, why: p.why, fix: p.fix, fix_type: p.fix_type, meta_title: p.meta_title, h1: p.h1, meta_desc: p.meta_desc, focus_keyword: p.focus_keyword, kw_in_title: p.kw_in_title, kw_in_h1: p.kw_in_h1, kw_in_focus: p.kw_in_focus, kw_in_slug: p.kw_in_slug })),
+        best_position: Math.round(bestPos * 10) / 10, severity, primary_page: primary.url, reasons, coverage,
+        pages: pages.map(p => ({ url: p.url, clicks: p.clicks, impressions: p.impressions, position: p.position, ctr: p.ctr, is_primary: p.is_primary, why: p.why, fix: p.fix, fix_type: p.fix_type, meta_title: p.meta_title, h1: p.h1, meta_desc: p.meta_desc, focus_keyword: p.focus_keyword, canonical: p.canonical, noindex: p.noindex, canonical_elsewhere: p.canonical_elsewhere, kw_in_title: p.kw_in_title, kw_in_h1: p.kw_in_h1, kw_in_focus: p.kw_in_focus, kw_in_slug: p.kw_in_slug })),
       });
     }
 

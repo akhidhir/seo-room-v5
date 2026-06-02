@@ -31046,9 +31046,19 @@
                                 <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}><i className="fas fa-triangle-exclamation" style={{ marginRight: 6 }}></i>Why these pages compete</div>
                                 {c.reasons.map((rs, ri) => (
                                   <div key={ri} style={{ fontSize: 13, marginBottom: 5, lineHeight: 1.5 }}>
-                                    {(() => { const rc = rs.type === 'duplicate' || rs.type === 'title' || rs.type === 'outranked' ? '#ef4444' : rs.type === 'cluster' || rs.type === 'dilution' ? '#3b82f6' : rs.type === 'homepage' ? '#f59e0b' : rs.type === 'slug' ? '#8b5cf6' : '#64748b'; return <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', marginRight: 8, background: rc + '22', color: rc }}>{rs.type}</span>; })()}
+                                    {(() => { const red = ['duplicate', 'title', 'outranked', 'duplicate content', 'noindex']; const blue = ['cluster', 'dilution']; const amber = ['homepage', 'canonical']; const purple = ['slug', 'internal links']; const rc = red.includes(rs.type) ? '#ef4444' : blue.includes(rs.type) ? '#3b82f6' : amber.includes(rs.type) ? '#f59e0b' : purple.includes(rs.type) ? '#8b5cf6' : '#64748b'; return <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', marginRight: 8, background: rc + '22', color: rc }}>{rs.type}</span>; })()}
                                     <b>{rs.label}</b> <span style={{ color: 'var(--text2)' }}>{rs.fix}</span>
                                   </div>
+                                ))}
+                              </div>
+                            )}
+                            {c.coverage && (
+                              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, margin: '8px 0' }}>
+                                <span style={{ color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>Checks:</span>
+                                {[['Ranking (GSC)', 'checked'], ['Title/H1/Focus', c.coverage.on_page], ['Canonical', c.coverage.canonical], ['Content overlap', c.coverage.content], ['Internal links', c.coverage.internal_links]].map(([label, st], ci) => (
+                                  <span key={ci} style={{ color: st === 'checked' ? '#22c55e' : st === 'partial' ? '#f59e0b' : 'var(--text3)' }}>
+                                    <i className={`fas fa-${st === 'checked' ? 'circle-check' : st === 'partial' ? 'circle-half-stroke' : 'circle-minus'}`} style={{ marginRight: 4 }}></i>{label}{st === 'not_checked' ? ' (not run)' : ''}
+                                  </span>
                                 ))}
                               </div>
                             )}
@@ -31078,6 +31088,12 @@
                                   {fieldRow('H1', p.h1, p.kw_in_h1, p.is_primary)}
                                   {fieldRow('Focus KW', p.focus_keyword, p.kw_in_focus, p.is_primary)}
                                   {p.kw_in_slug && <div style={{ fontSize: 11, color: '#8b5cf6', marginTop: 2 }}><i className="fas fa-link" style={{ marginRight: 4 }}></i>URL also contains the keyword</div>}
+                                  <div style={{ display: 'flex', gap: 8, fontSize: 11, marginTop: 4, flexWrap: 'wrap' }}>
+                                    {p.noindex && <span style={{ padding: '1px 6px', borderRadius: 4, fontWeight: 700, background: '#ef444422', color: '#ef4444' }}>NOINDEX</span>}
+                                    {p.canonical_elsewhere && <span title={'Canonical → ' + p.canonical} style={{ padding: '1px 6px', borderRadius: 4, fontWeight: 700, background: '#f59e0b22', color: '#f59e0b' }}>CANONICAL → ELSEWHERE</span>}
+                                    {p.canonical && !p.canonical_elsewhere && <span style={{ color: 'var(--text3)' }}>canonical: self ✓</span>}
+                                    {p.canonical === null && <span style={{ color: 'var(--text3)', opacity: 0.7 }}>canonical not checked</span>}
+                                  </div>
                                   {p.fix && (
                                     <div style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8, padding: '7px 10px', borderRadius: 6, background: ftColor + '18' }}>
                                       <b style={{ color: ftColor }}>{ft === 'keep' ? <><i className="fas fa-check" style={{ marginRight: 5 }}></i>Do this:</> : ft === 'ok' ? <><i className="fas fa-circle-info" style={{ marginRight: 5 }}></i>Note:</> : <><i className="fas fa-wrench" style={{ marginRight: 5 }}></i>Fix:</>}</b> {p.fix}
