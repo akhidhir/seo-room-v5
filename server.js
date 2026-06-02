@@ -38872,10 +38872,9 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       const nearDuplicate = simPairs.some(s => s.score >= 50);
       const is_real_issue = (mode === 'duplicate') || nearDuplicate || primaryMisconfigured;
 
-      let severity = 'minor';
-      if (is_real_issue) {
-        severity = (totalImpr >= 500 || primaryMisconfigured || nearDuplicate) ? 'high' : (totalImpr >= 100 ? 'medium' : 'low');
-      }
+      // Only keep genuine, fixable SEO problems — minor co-ranking is not stored at all.
+      if (!is_real_issue) continue;
+      const severity = (totalImpr >= 500 || primaryMisconfigured || nearDuplicate) ? 'high' : (totalImpr >= 100 ? 'medium' : 'low');
 
       competing.push({
         keyword: kw, page_count: pages.length, total_impressions: totalImpr, total_clicks: totalClicks,
