@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.11
+ * Version: 8.9.12
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.11');
+define('SEOROOM_VERSION', '8.9.12');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -446,6 +446,22 @@ function sropt_settings_page() {
                             .finally(function() { btn.disabled = false; });
                         });
                         </script>
+                    </td>
+                </tr>
+
+                <!-- PLUGIN UPDATES -->
+                <tr><th colspan="2"><h2 style="margin:0;padding:0;font-size:16px;">🔄 Plugin Updates</h2></th></tr>
+                <tr>
+                    <th>Version</th>
+                    <td>
+                        <span style="font-weight:600;">v<?php echo esc_html(SEOROOM_VERSION); ?></span>
+                        <?php if (isset($_GET['sropt_updated'])):
+                            $f = $_GET['sropt_updated'];
+                            $c = $f === '1' ? '#22c55e' : ($f === 'current' ? '#666' : '#ef4444');
+                            $t = $f === '1' ? '✓ Updated to v' . esc_html(SEOROOM_VERSION) : ($f === 'current' ? '✓ Already on the latest version' : '✗ ' . esc_html($_GET['sropt_msg'] ?? 'failed'));
+                        ?><span style="margin-left:10px;color:<?php echo $c; ?>;font-weight:600;"><?php echo $t; ?></span><?php endif; ?>
+                        <p class="description">Updates install automatically every day. Click below to check and install right now.</p>
+                        <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=sropt_self_update'), 'sropt_self_update')); ?>" class="button button-primary">Check for Updates &amp; Install</a>
                     </td>
                 </tr>
 
@@ -4187,10 +4203,12 @@ function sropt_self_update_notice() {
     if (($_GET['page'] ?? '') !== 'seoroom' || !current_user_can('update_plugins')) return;
 
     if (isset($_GET['sropt_updated'])) {
-        $ok = $_GET['sropt_updated'] === '1';
-        echo '<div class="notice notice-' . ($ok ? 'success' : 'error') . ' is-dismissible"><p>'
-            . ($ok ? 'SEO Room updated successfully to v' . esc_html(SEOROOM_VERSION) . '.' : 'SEO Room update failed: ' . esc_html($_GET['sropt_msg'] ?? 'unknown error'))
-            . '</p></div>';
+        $f = $_GET['sropt_updated'];
+        $cls = $f === '1' ? 'success' : ($f === 'current' ? 'info' : 'error');
+        $msg = $f === '1' ? 'SEO Room updated successfully to v' . esc_html(SEOROOM_VERSION) . '.'
+             : ($f === 'current' ? 'SEO Room is already on the latest version (v' . esc_html(SEOROOM_VERSION) . ').'
+             : 'SEO Room update failed: ' . esc_html($_GET['sropt_msg'] ?? 'unknown error'));
+        echo '<div class="notice notice-' . $cls . ' is-dismissible"><p>' . $msg . '</p></div>';
     }
 
     $data = sropt_get_remote_update(true);
@@ -4246,7 +4264,8 @@ function sropt_handle_self_update() {
     if (!current_user_can('update_plugins')) wp_die('You are not allowed to update plugins.');
     check_admin_referer('sropt_self_update');
     $r = sropt_perform_self_update();
-    wp_safe_redirect(add_query_arg(array('sropt_updated' => $r['ok'] ? '1' : '0', 'sropt_msg' => rawurlencode($r['msg'])), admin_url('options-general.php?page=seoroom')));
+    $flag = !empty($r['updated']) ? '1' : (!empty($r['ok']) ? 'current' : '0');
+    wp_safe_redirect(add_query_arg(array('sropt_updated' => $flag, 'sropt_msg' => rawurlencode($r['msg'])), admin_url('options-general.php?page=seoroom')));
     exit;
 }
 
