@@ -7212,6 +7212,25 @@ function classifyLinkType(domain) {
   return 'resource';
 }
 
+// Match a gap domain to a known Australian directory (for free/paid, price, difficulty, link metadata).
+let _dirByDomain = null;
+function normDirHost(h) { return (h || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase().replace(/\.au$/, ''); }
+function directoryInfo(domain) {
+  if (!_dirByDomain) {
+    _dirByDomain = {};
+    for (const d of AUSTRALIAN_DIRECTORIES) { const k = normDirHost(d.url); if (k) _dirByDomain[k] = d; }
+  }
+  const d = _dirByDomain[normDirHost(domain)];
+  if (!d) return null;
+  return {
+    name: d.name,
+    free: !!d.free,
+    price: d.paid_option || (d.free ? 'Free' : ''),
+    difficulty: d.difficulty || 'Easy',
+    url: 'https://' + (d.url || '').replace(/^https?:\/\//, ''),
+  };
+}
+
 // Composite opportunity score (0-100): authority (domain rank) weighted with how many competitors already
 // earned the link (more competitors = more proven-relevant and attainable for this niche).
 function scoreOpportunity(rank, competitorsCount) {
@@ -38254,8 +38273,17 @@ app.post('/api/projects/:projectId/backlinks/gap', async (req, res) => {
 
     // Enrich each opportunity with a composite score and a link-type classification, then sort best-first.
     gapResult.opportunities = (gapResult.opportunities || [])
-      .map(o => ({ ...o, link_type: classifyLinkType(o.domain), score: scoreOpportunity(o.rank, o.competitors_count) }))
-      .sort((a, b) => b.score - a.score);
+      .map(o => {
+        const dir = directoryInfo(o.domain);
+        return {
+          ...o,
+          link_type: dir ? 'directory' : classifyLinkType(o.domain),
+          score: scoreOpportunity(o.rank, o.competitors_count),
+          directory: dir, // {name, free, price, difficulty, url} or null
+        };
+      })
+      // Most competitors linked first (strongest signal), then score.
+      .sort((a, b) => (b.competitors_count - a.competitors_count) || (b.score - a.score));
 
     // Persist the full enriched result so it survives navigation/reload (single cache row).
     const gapPayload = {

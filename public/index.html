@@ -30762,6 +30762,7 @@
       const [gapLoading, setGapLoading] = useState(false);
       const [discoveredComps, setDiscoveredComps] = useState(null);
       const [gapTypeFilter, setGapTypeFilter] = useState('all');
+      const [gapSort, setGapSort] = useState({ key: 'competitors_count', dir: 'desc' });
       const [showAddProspect, setShowAddProspect] = useState(false);
       const [newProspect, setNewProspect] = useState({ domain: '', url: '', contact_email: '', contact_name: '', notes: '' });
       const [history, setHistory] = useState([]);
@@ -31099,24 +31100,48 @@
                     <div style={{ maxHeight: 500, overflowY: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr>
-                          <th style={thStyle}>Score</th>
-                          <th style={thStyle}>Domain</th>
-                          <th style={thStyle}>Type</th>
-                          <th style={thStyle}>Domain Rank</th>
-                          <th style={thStyle}>Competitors Linked</th>
-                          <th style={thStyle}>Action</th>
+                          {[['score', 'Score'], ['domain', 'Domain'], ['link_type', 'Type'], ['rank', 'Domain Rank'], ['competitors_count', 'Competitors'], [null, 'Action']].map(([key, label]) => (
+                            <th key={label} onClick={() => key && setGapSort(s => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
+                                style={{ ...thStyle, position: 'sticky', top: 0, background: 'var(--card)', cursor: key ? 'pointer' : 'default', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                              {label}{key && gapSort.key === key && <i className={`fas fa-caret-${gapSort.dir === 'desc' ? 'down' : 'up'}`} style={{ marginLeft: 5, color: accent }}></i>}
+                            </th>
+                          ))}
                         </tr></thead>
                         <tbody>
-                          {(gapData.opportunities || []).filter(o => gapTypeFilter === 'all' || (o.link_type || 'resource') === gapTypeFilter).map((o, i) => (
+                          {(gapData.opportunities || [])
+                            .filter(o => gapTypeFilter === 'all' || (o.link_type || 'resource') === gapTypeFilter)
+                            .slice().sort((a, b) => {
+                              const k = gapSort.key, dir = gapSort.dir === 'desc' ? -1 : 1;
+                              let av = a[k], bv = b[k];
+                              if (k === 'domain' || k === 'link_type') { av = (av || '').toString(); bv = (bv || '').toString(); return av < bv ? dir : av > bv ? -dir : 0; }
+                              return ((av || 0) - (bv || 0)) * dir;
+                            })
+                            .map((o, i) => {
+                              const d = o.directory;
+                              return (
                             <tr key={i}>
                               <td style={tdStyle}><span style={{ fontWeight: 800, fontSize: 15, color: o.score >= 60 ? '#22c55e' : o.score >= 35 ? '#f59e0b' : 'var(--text3)' }}>{o.score ?? '-'}</span></td>
-                              <td style={{ ...tdStyle, fontWeight: 600 }}>{o.domain}</td>
-                              <td style={tdStyle}>{o.link_type && <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: (linkTypeColors[o.link_type] || '#666') + '22', color: linkTypeColors[o.link_type] || '#666' }}>{o.link_type}</span>}</td>
+                              <td style={{ ...tdStyle, fontWeight: 600 }}>
+                                <a href={(d && d.url) || ('https://' + o.domain)} target="_blank" rel="noopener" style={{ color: 'var(--text)', textDecoration: 'none', borderBottom: '1px dotted var(--text3)' }}>{o.domain}</a>
+                                {d && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>{d.name}</span>}
+                              </td>
+                              <td style={tdStyle}>
+                                {o.link_type && <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: (linkTypeColors[o.link_type] || '#666') + '22', color: linkTypeColors[o.link_type] || '#666' }}>{o.link_type}</span>}
+                                {d && (
+                                  <div style={{ marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                                    <span style={{ padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', background: (d.free ? '#22c55e' : '#f59e0b') + '22', color: d.free ? '#22c55e' : '#f59e0b' }}>{d.free ? 'Free' : 'Paid'}</span>
+                                    {d.price && d.price !== 'Free' && <span style={{ fontSize: 10, color: 'var(--text3)' }}>{d.price}</span>}
+                                    <span style={{ padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', background: (d.difficulty === 'Easy' ? '#22c55e' : d.difficulty === 'Medium' ? '#f59e0b' : '#ef4444') + '22', color: d.difficulty === 'Easy' ? '#22c55e' : d.difficulty === 'Medium' ? '#f59e0b' : '#ef4444' }}>{d.difficulty}</span>
+                                  </div>
+                                )}
+                              </td>
                               <td style={tdStyle}><span style={{ fontWeight: 700, color: o.rank > 50 ? '#22c55e' : o.rank > 20 ? '#f59e0b' : 'var(--text3)' }}>{o.rank}</span></td>
-                              <td style={tdStyle}>{o.competitors_count}</td>
+                              <td style={tdStyle}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 26, padding: '2px 8px', borderRadius: 12, fontSize: 13, fontWeight: 800, background: (o.competitors_count >= 4 ? '#22c55e' : o.competitors_count >= 2 ? '#14b8a6' : '#64748b') + '22', color: o.competitors_count >= 4 ? '#22c55e' : o.competitors_count >= 2 ? '#14b8a6' : '#94a3b8' }} title={`${o.competitors_count} of your competitors have this link`}>{o.competitors_count}</span>
+                              </td>
                               <td style={tdStyle}>
                                 <button onClick={async () => {
-                                  await api(`/projects/${pid}/backlinks/prospects`, { method: 'POST', body: { domain: o.domain, domain_rank: o.rank || 0, source: 'gap_analysis', notes: `Gap: ${o.link_type || 'resource'} · score ${o.score ?? '-'} · ${o.competitors_count} competitors` } });
+                                  await api(`/projects/${pid}/backlinks/prospects`, { method: 'POST', body: { domain: o.domain, domain_rank: o.rank || 0, source: 'gap_analysis', notes: `Gap: ${o.link_type || 'resource'}${d ? ` (${d.free ? 'free' : 'paid'}${d.price && d.price !== 'Free' ? ' ' + d.price : ''}, ${d.difficulty})` : ''} · score ${o.score ?? '-'} · ${o.competitors_count} competitors` } });
                                   loadData();
                                   setTab('outreach');
                                 }} style={{ ...btnOutline, padding: '4px 10px', fontSize: 11 }}>
@@ -31124,7 +31149,8 @@
                                 </button>
                               </td>
                             </tr>
-                          ))}
+                              );
+                            })}
                         </tbody>
                       </table>
                     </div>
