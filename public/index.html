@@ -24136,6 +24136,7 @@
       const [serpGapComps, setSerpGapComps] = useState(null);
       const [serpGapSort, setSerpGapSort] = useState({ key: 'competitors_count', dir: 'desc' });
       const [serpGapAdded, setSerpGapAdded] = useState({});
+      const [serpGapExpanded, setSerpGapExpanded] = useState(null);
       useEffect(() => {
         if (!project?.id) return;
         api(`/projects/${project.id}/serp-gap`).then(r => { if (r && (r.opportunities || []).length) setSerpGap(r); }).catch(() => {});
@@ -24916,33 +24917,60 @@
                         {serpGap.auto_discovered && <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: accent + '22', color: accent }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }}></i>Auto-found</span>}
                       </div>
                     </div>
-                    <div style={{ maxHeight: 'calc(100vh - 360px)', overflowY: 'auto' }}>
+                    {/* How to use */}
+                    <div style={{ padding: '10px 16px', background: accent + '11', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}>
+                      <i className="fas fa-circle-info" style={{ marginRight: 6, color: accent }}></i>
+                      Each keyword is a page a competitor ranks for and you don't. <b>Top Competitor</b> shows who ranks best and at what position — click a row to see <b>their exact page</b>, so you can create/improve a page to beat it. Use <b>Track</b> to start monitoring, then write content targeting that keyword.
+                    </div>
+                    <div style={{ maxHeight: 'calc(100vh - 400px)', overflowY: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr>
                           {sortHead('score', 'Score')}
                           {sortHead('keyword', 'Keyword')}
                           {sortHead('volume', 'Volume')}
-                          {sortHead('competitors_count', 'Competitors')}
-                          {sortHead('best_position', 'Best Pos')}
+                          <th style={{ ...th, cursor: 'default' }}>Top Competitor</th>
+                          {sortHead('competitors_count', '# Comp')}
                           <th style={{ ...th, cursor: 'default' }}>Action</th>
                         </tr></thead>
                         <tbody>
-                          {sorted.map((o, i) => (
-                            <tr key={i}>
+                          {sorted.map((o, i) => {
+                            const comps = o.competitors || [];
+                            const top = comps[0] || {};
+                            const open = serpGapExpanded === o.keyword;
+                            return (
+                            <React.Fragment key={i}>
+                            <tr onClick={() => setSerpGapExpanded(open ? null : o.keyword)} style={{ cursor: 'pointer', background: open ? 'var(--bg)' : 'transparent' }}>
                               <td style={td}><span style={{ fontWeight: 800, fontSize: 15, color: o.score >= 60 ? '#22c55e' : o.score >= 35 ? '#f59e0b' : 'var(--text3)' }}>{o.score}</span></td>
-                              <td style={{ ...td, fontWeight: 600 }}>{o.keyword}</td>
+                              <td style={{ ...td, fontWeight: 600 }}><i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>{o.keyword}</td>
                               <td style={td}>{o.volume ? o.volume.toLocaleString() : '-'}</td>
                               <td style={td}>
-                                <span title={(o.competitors || []).map(c => `${c.domain} #${c.position}`).join('\n')} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 26, padding: '2px 8px', borderRadius: 12, fontSize: 13, fontWeight: 800, background: (o.competitors_count >= 4 ? '#22c55e' : o.competitors_count >= 2 ? accent : '#64748b') + '22', color: o.competitors_count >= 4 ? '#22c55e' : o.competitors_count >= 2 ? accent : '#94a3b8' }}>{o.competitors_count}</span>
+                                <span style={{ fontWeight: 600 }}>{top.domain}</span>
+                                <span style={{ marginLeft: 6, fontWeight: 800, color: top.position <= 3 ? '#22c55e' : top.position <= 10 ? '#f59e0b' : 'var(--text3)' }}>#{top.position}</span>
                               </td>
-                              <td style={td}><span style={{ fontWeight: 700, color: o.best_position <= 3 ? '#22c55e' : o.best_position <= 10 ? '#f59e0b' : 'var(--text3)' }}>#{o.best_position}</span></td>
-                              <td style={td}>
+                              <td style={td}><span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 24, padding: '2px 8px', borderRadius: 12, fontSize: 12, fontWeight: 800, background: (o.competitors_count >= 3 ? '#22c55e' : accent) + '22', color: o.competitors_count >= 3 ? '#22c55e' : accent }}>{o.competitors_count}</span></td>
+                              <td style={td} onClick={e => e.stopPropagation()}>
                                 {serpGapAdded[o.keyword]
                                   ? <span style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-check" style={{ marginRight: 4 }}></i>Tracking</span>
                                   : <button className="btn" onClick={() => trackGapKeyword(o.keyword)} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text1)', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}><i className="fas fa-plus" style={{ marginRight: 4 }}></i>Track</button>}
                               </td>
                             </tr>
-                          ))}
+                            {open && (
+                              <tr>
+                                <td colSpan={6} style={{ padding: '4px 16px 14px 44px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '8px 0' }}>Pages ranking for "{o.keyword}" (beat these)</div>
+                                  {comps.map((c, ci) => (
+                                    <div key={ci} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0', fontSize: 13 }}>
+                                      <span style={{ fontWeight: 800, minWidth: 34, color: c.position <= 3 ? '#22c55e' : c.position <= 10 ? '#f59e0b' : 'var(--text3)' }}>#{c.position}</span>
+                                      <span style={{ fontWeight: 600, minWidth: 200 }}>{c.domain}</span>
+                                      <a href={c.url} target="_blank" rel="noopener" style={{ color: accent, fontSize: 12, textDecoration: 'none' }}><i className="fas fa-arrow-up-right-from-square" style={{ marginRight: 5 }}></i>View their page</a>
+                                    </div>
+                                  ))}
+                                </td>
+                              </tr>
+                            )}
+                            </React.Fragment>
+                            );
+                          })}
                           {sorted.length === 0 && <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No gap keywords found.</td></tr>}
                         </tbody>
                       </table>

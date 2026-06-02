@@ -38450,7 +38450,9 @@ app.post('/api/projects/:projectId/serp-gap', async (req, res) => {
         if (!kw || pos > 20) continue;          // only their page 1-2 rankings
         if (ourKeywords.has(kwl)) continue;      // we already rank for it → not a gap
         const cur = gap.get(kwl) || { keyword: kw, volume: k.volume || 0, cpc: k.cpc || 0, competitors: [], best_position: pos };
-        cur.competitors.push({ domain: comp, position: pos });
+        const rel = k.url || '';
+        const fullUrl = rel ? ('https://' + comp + (rel.startsWith('/') ? rel : '/' + rel)) : ('https://' + comp);
+        cur.competitors.push({ domain: comp, position: pos, url: fullUrl });
         if (pos < cur.best_position) cur.best_position = pos;
         if ((k.volume || 0) > cur.volume) cur.volume = k.volume || 0;
         gap.set(kwl, cur);
@@ -38459,9 +38461,10 @@ app.post('/api/projects/:projectId/serp-gap', async (req, res) => {
 
     let opportunities = [...gap.values()].map(o => ({
       ...o,
+      competitors: o.competitors.sort((a, b) => a.position - b.position), // best-ranked competitor first
       competitors_count: o.competitors.length,
       score: scoreKeywordGap(o.volume, o.competitors.length, o.best_position),
-    })).sort((a, b) => (b.competitors_count - a.competitors_count) || (b.volume - a.volume) || (b.score - a.score));
+    })).sort((a, b) => (b.score - a.score) || (b.volume - a.volume) || (b.competitors_count - a.competitors_count));
 
     const payload = { domain, competitors, auto_discovered: autoDiscovered, total: opportunities.length, opportunities, scanned_at: new Date().toISOString() };
     try {
