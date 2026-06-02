@@ -30943,6 +30943,132 @@
       );
     }
 
+    // ============ COMPETING PAGES (cannibalization) ============
+    function CompetingPagesPage({ project, setPage }) {
+      const accent = '#f59e0b';
+      const pid = project?.id;
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [scanning, setScanning] = useState(false);
+      const [expanded, setExpanded] = useState(null);
+      const [sev, setSev] = useState('all');
+
+      useEffect(() => {
+        if (!pid) return;
+        setLoading(true);
+        api(`/projects/${pid}/competing-pages`).then(r => { if (r && (r.competing || []).length) setData(r); }).catch(() => {}).finally(() => setLoading(false));
+      }, [pid]);
+
+      const runScan = async () => {
+        setScanning(true);
+        try { const r = await api(`/projects/${pid}/competing-pages/scan`, { method: 'POST' }); if (r.error) alert(r.error); else setData(r); }
+        catch (e) { alert('Scan error: ' + e.message); }
+        setScanning(false);
+      };
+
+      if (!pid) return <div style={{ padding: 40, color: 'var(--text3)' }}>Select a project first</div>;
+      const path = (u) => { try { return new URL(u).pathname || u; } catch { return u; } };
+      const sevColor = (s) => s === 'high' ? '#ef4444' : s === 'medium' ? '#f59e0b' : '#64748b';
+      const s = data?.summary || {};
+      const rows = (data?.competing || []).filter(c => sev === 'all' || c.severity === sev);
+      const card = { background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)' };
+      const th = { textAlign: 'left', padding: '10px 14px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: 'var(--card)' };
+      const td = { padding: '10px 14px', fontSize: 13, borderBottom: '1px solid var(--border)', verticalAlign: 'top' };
+      const stat = (label, value, color) => (<div style={{ ...card, padding: 16, flex: 1 }}><div style={{ fontSize: 28, fontWeight: 800, color: color || 'var(--text1)' }}>{value}</div><div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>{label}</div></div>);
+
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-clone" style={{ marginRight: 10, color: accent }} />Competing Pages</h2>
+            <button className="btn" onClick={runScan} disabled={scanning} style={{ background: accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, opacity: scanning ? 0.6 : 1 }}>
+              {scanning ? <><span className="spinner" style={{ marginRight: 6 }}></span>Scanning Search Console...</> : <><i className="fas fa-clone" style={{ marginRight: 6 }}></i>{data ? 'Re-scan' : 'Run Scan'}</>}
+            </button>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 20 }}>Finds keywords where 2+ of your own pages compete in Google (keyword cannibalization) — splitting clicks and confusing Google about which page to rank. Based on 90 days of real Search Console data.</div>
+
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Loading...</div>
+          ) : !data ? (
+            <div style={{ textAlign: 'center', padding: 48, color: 'var(--text3)' }}>
+              <i className="fas fa-clone" style={{ fontSize: 36, opacity: 0.3, marginBottom: 14, display: 'block' }}></i>
+              Run a scan to find pages cannibalizing each other.<br/><span style={{ fontSize: 12 }}>Requires Google Search Console connected (Settings → Agency Integrations).</span>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+                {stat('Competing keywords', s.total || 0, accent)}
+                {stat('High severity', s.high || 0, '#ef4444')}
+                {stat('Impressions at stake', (s.impressions_at_stake || 0).toLocaleString())}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                {[['all', 'All'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']].map(([k, l]) => (
+                  <button key={k} onClick={() => setSev(k)} style={{ padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1px solid ' + (sev === k ? accent : 'var(--border)'), background: sev === k ? accent + '22' : 'transparent', color: sev === k ? accent : 'var(--text3)' }}>{l}</button>
+                ))}
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>Last scan: {data.scanned_at ? new Date(data.scanned_at).toLocaleString() : '-'}</span>
+              </div>
+              <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
+                <div style={{ maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr>
+                      <th style={th}>Keyword</th>
+                      <th style={th}>Severity</th>
+                      <th style={th}># Pages</th>
+                      <th style={th}>Impressions</th>
+                      <th style={th}>Clicks</th>
+                      <th style={th}>Best Pos</th>
+                    </tr></thead>
+                    <tbody>
+                      {rows.map((c, i) => {
+                        const open = expanded === c.keyword;
+                        return (
+                        <React.Fragment key={i}>
+                        <tr onClick={() => setExpanded(open ? null : c.keyword)} style={{ cursor: 'pointer', background: open ? 'var(--bg)' : 'transparent' }}>
+                          <td style={{ ...td, fontWeight: 600 }}><i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>{c.keyword}</td>
+                          <td style={td}><span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: sevColor(c.severity) + '22', color: sevColor(c.severity) }}>{c.severity}</span></td>
+                          <td style={td}>{c.page_count}</td>
+                          <td style={td}>{c.total_impressions.toLocaleString()}</td>
+                          <td style={td}>{c.total_clicks.toLocaleString()}</td>
+                          <td style={td}><span style={{ fontWeight: 700, color: c.best_position <= 10 ? '#22c55e' : c.best_position <= 20 ? '#f59e0b' : 'var(--text3)' }}>#{c.best_position}</span></td>
+                        </tr>
+                        {open && (
+                          <tr><td colSpan={6} style={{ padding: '4px 16px 14px 38px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '8px 0' }}>Pages competing for "{c.keyword}"</div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                              <thead><tr>{['Page', 'Pos', 'Impr', 'Clicks', 'CTR'].map(h => <th key={h} style={{ textAlign: 'left', padding: '4px 8px', fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>{h}</th>)}</tr></thead>
+                              <tbody>
+                                {c.pages.map((p, pi) => (
+                                  <tr key={pi}>
+                                    <td style={{ padding: '4px 8px' }}>
+                                      <a href={p.url} target="_blank" rel="noopener" style={{ color: 'var(--text1)', textDecoration: 'none', borderBottom: '1px dotted var(--text3)' }}>{path(p.url)}</a>
+                                      {p.is_primary && <span style={{ marginLeft: 8, padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: '#22c55e22', color: '#22c55e' }}>PRIMARY</span>}
+                                    </td>
+                                    <td style={{ padding: '4px 8px', fontWeight: 700, color: p.position <= 10 ? '#22c55e' : p.position <= 20 ? '#f59e0b' : 'var(--text3)' }}>#{p.position}</td>
+                                    <td style={{ padding: '4px 8px' }}>{p.impressions.toLocaleString()}</td>
+                                    <td style={{ padding: '4px 8px' }}>{p.clicks.toLocaleString()}</td>
+                                    <td style={{ padding: '4px 8px' }}>{p.ctr}%</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <div style={{ fontSize: 13, padding: '8px 12px', background: accent + '18', borderRadius: 8, marginTop: 10 }}>
+                              <b style={{ color: accent }}><i className="fas fa-lightbulb" style={{ marginRight: 5 }}></i>How to fix:</b> Keep <b>{path(c.primary_page)}</b> as the single page targeting "{c.keyword}" (it has the best clicks/position). For the other page{c.page_count > 2 ? 's' : ''}: either merge the content into the primary and 301-redirect, or re-target {c.page_count > 2 ? 'them' : 'it'} to a different keyword and remove "{c.keyword}" from {c.page_count > 2 ? 'their' : 'its'} title/H1/meta. Then add an internal link from the other page{c.page_count > 2 ? 's' : ''} to the primary.
+                            </div>
+                          </td></tr>
+                        )}
+                        </React.Fragment>
+                        );
+                      })}
+                      {rows.length === 0 && <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No competing pages at this severity. {data.competing?.length ? '' : 'Your pages are well-differentiated.'}</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
     // ============ AI SEARCH (AIO) PAGE ============
     function AISearchPage({ project, setPage }) {
       const accent = '#8b5cf6';
@@ -32837,6 +32963,8 @@ case 'action-plan':
             return <SERPRankingsPage project={project} setPage={setActiveTab} />;
           case 'ai-search':
             return <AISearchPage project={project} setPage={setActiveTab} />;
+          case 'competing-pages':
+            return <CompetingPagesPage project={project} setPage={setActiveTab} />;
           case 'discover-local':
             return <DiscoverLocalPage project={project} />;
           case 'baseline-report':
@@ -32891,6 +33019,7 @@ case 'action-plan':
             { id: 'user-behaviour', label: 'User Behaviour', icon: 'fas fa-fire' },
             { id: 'redirects', label: '404s & Redirects', icon: 'fas fa-directions' },
             { id: 'internal-linking', label: 'Internal Linking', icon: 'fas fa-link' },
+            { id: 'competing-pages', label: 'Competing Pages', icon: 'fas fa-clone' },
           ] },
           { id: 'security-audit', label: 'Security Audit', icon: 'fas fa-shield-halved' },
         ]},

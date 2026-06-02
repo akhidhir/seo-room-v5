@@ -38638,6 +38638,78 @@ app.get('/api/projects/:projectId/aio', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==================== COMPETING PAGES (keyword cannibalization) ====================
+// Detects queries where 2+ of YOUR OWN pages compete in Google Search Console — splitting authority/CTR.
+// Uses GSC query+page data (90 days) so it's based on real Google ranking behaviour, not guesses.
+app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const accessToken = await getGscAccessToken(project.user_id || req.auth?.userId);
+    if (!accessToken) return res.status(400).json({ error: 'Connect Google Search Console first (Settings → Agency Integrations).' });
+
+    const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', { headers: { Authorization: `Bearer ${accessToken}` } }).then(r => r.json());
+    const available = (sites.siteEntry || []).map(s => s.siteUrl);
+    let matchedSite = project.gsc_property || available.find(s => s.includes(domain.replace(/^www\./, ''))) || available[0];
+    if (!matchedSite) return res.status(400).json({ error: 'No matching GSC property found for this site.' });
+
+    const endDate = new Date().toISOString().split('T')[0];
+    const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+    const pq = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/searchAnalytics/query`, {
+      method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startDate, endDate, dimensions: ['query', 'page'], rowLimit: 5000 })
+    }).then(r => r.json());
+    if (pq.error) return res.status(400).json({ error: 'GSC error: ' + (pq.error.message || 'request failed') });
+
+    const rows = (pq.rows || []).map(r => ({ keyword: r.keys[0], page: r.keys[1], clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
+    const byKw = new Map();
+    for (const r of rows) { if (!byKw.has(r.keyword)) byKw.set(r.keyword, []); byKw.get(r.keyword).push(r); }
+
+    const competing = [];
+    for (const [kw, pages] of byKw) {
+      const sig = pages.filter(p => p.impressions >= 5).sort((a, b) => b.impressions - a.impressions);
+      if (sig.length < 2) continue;
+      const top = sig[0], second = sig[1];
+      // second page must be a real contender (not noise) to count as cannibalization
+      if (second.impressions < Math.max(10, top.impressions * 0.15)) continue;
+      const totalImpr = sig.reduce((s, p) => s + p.impressions, 0);
+      const totalClicks = sig.reduce((s, p) => s + p.clicks, 0);
+      const bestPos = Math.min(...sig.map(p => p.position));
+      let severity = 'low';
+      if (totalImpr >= 500 && bestPos <= 20) severity = 'high';
+      else if (totalImpr >= 100) severity = 'medium';
+      const primary = [...sig].sort((a, b) => (b.clicks - a.clicks) || (a.position - b.position))[0];
+      competing.push({
+        keyword: kw, page_count: sig.length, total_impressions: totalImpr, total_clicks: totalClicks,
+        best_position: Math.round(bestPos * 10) / 10, severity, primary_page: primary.page,
+        pages: sig.map(p => ({ url: p.page, clicks: p.clicks, impressions: p.impressions, position: Math.round(p.position * 10) / 10, ctr: Math.round((p.ctr || 0) * 1000) / 10, is_primary: p.page === primary.page })),
+      });
+    }
+    const sevRank = { high: 0, medium: 1, low: 2 };
+    competing.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (b.total_impressions - a.total_impressions));
+    const summary = {
+      total: competing.length,
+      high: competing.filter(c => c.severity === 'high').length,
+      medium: competing.filter(c => c.severity === 'medium').length,
+      impressions_at_stake: competing.reduce((s, c) => s + c.total_impressions, 0),
+    };
+    const payload = { competing, summary, site: matchedSite, range: { startDate, endDate }, scanned_at: new Date().toISOString() };
+    await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'competing_pages_cache',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify(payload)]).catch(() => {});
+    res.json(payload);
+  } catch (e) { console.error('[competing-pages]', e.message); res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/competing-pages', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const row = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='competing_pages_cache'`, [projectId])).rows[0];
+    if (row?.config) return res.json(row.config);
+    res.json({ competing: [], summary: {} });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // AI analyser for one AI-Overview keyword: builds a concrete plan to EARN a citation — including the exact
 // answer snippet to publish, grounded in what Google's AI currently says and the pages it cites.
 app.post('/api/projects/:projectId/aio/analyze', async (req, res) => {
