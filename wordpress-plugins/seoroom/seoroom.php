@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.13
+ * Version: 8.9.14
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.13');
+define('SEOROOM_VERSION', '8.9.14');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -4123,6 +4123,7 @@ function sropt_link_first_occurrence($html, $anchor, $target) {
     $parts = preg_split('/(<[^>]+>)/', $html, -1, PREG_SPLIT_DELIM_CAPTURE);
     if (!is_array($parts)) return $html;
     $in_anchor = false;
+    $heading_depth = 0;
     $done = false;
     $quoted = preg_quote($anchor, '/');
     foreach ($parts as $i => $part) {
@@ -4130,9 +4131,12 @@ function sropt_link_first_occurrence($html, $anchor, $target) {
         if ($part !== '' && $part[0] === '<') {
             if (preg_match('/^<a[\s>]/i', $part)) $in_anchor = true;
             elseif (preg_match('/^<\/a>/i', $part)) $in_anchor = false;
+            // Never place links inside headings (h1-h6) — anchors must live in body text only.
+            elseif (preg_match('/^<h[1-6][\s>]/i', $part)) $heading_depth++;
+            elseif (preg_match('/^<\/h[1-6]>/i', $part) && $heading_depth > 0) $heading_depth--;
             continue;
         }
-        if ($in_anchor || $part === '') continue;
+        if ($in_anchor || $heading_depth > 0 || $part === '') continue;
         if (preg_match('/' . $quoted . '/i', $part, $m, PREG_OFFSET_CAPTURE)) {
             $pos = $m[0][1];
             $matched = $m[0][0];
