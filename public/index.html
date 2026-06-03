@@ -26255,15 +26255,44 @@
       const [loading, setLoading] = useState(false);
       const [result, setResult] = useState(null);
       const [error, setError] = useState('');
+      const [accepted, setAccepted] = useState(false);
+      const [savedAt, setSavedAt] = useState(null);
+      const [saving, setSaving] = useState(false);
+
+      // Load a previously accepted plan so it persists across navigation/refresh
+      useEffect(() => {
+        (async () => {
+          try {
+            const r = await api(`/projects/${project.id}/smart-map-ranking/latest`);
+            if (r && r.saved && r.plan) { setResult(r.plan); setAccepted(true); setSavedAt(r.saved_at); if (r.plan.radiusKm) setRadius(r.plan.radiusKm); }
+          } catch (e) {}
+        })();
+      }, [project.id]);
 
       const runSurvey = async () => {
-        setError(''); setLoading(true); setResult(null);
+        setError(''); setLoading(true); setResult(null); setAccepted(false); setSavedAt(null);
         try {
           const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius } });
           if (r.error) { setError(r.error); setLoading(false); return; }
           setResult(r);
         } catch (e) { setError(e.message || 'Survey failed'); }
         setLoading(false);
+      };
+
+      const acceptPlan = async () => {
+        if (!result) return;
+        setSaving(true);
+        try {
+          const r = await api(`/projects/${project.id}/smart-map-ranking/save`, { method: 'POST', body: result });
+          if (r.error) { setError(r.error); setSaving(false); return; }
+          setAccepted(true); setSavedAt(r.saved_at);
+        } catch (e) { setError(e.message || 'Failed to save'); }
+        setSaving(false);
+      };
+
+      const clearPlan = async () => {
+        try { await api(`/projects/${project.id}/smart-map-ranking`, { method: 'DELETE' }); } catch (e) {}
+        setResult(null); setAccepted(false); setSavedAt(null);
       };
 
       const tierColor = (t) => t === 'High' ? '#22c55e' : t === 'Medium' ? '#f59e0b' : '#64748b';
@@ -26300,6 +26329,17 @@
 
           {result && (
             <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 13, color: accepted ? '#22c55e' : 'var(--text3)' }}>
+                  {accepted
+                    ? <><i className="fas fa-check-circle" style={{ marginRight: 6 }}></i>Plan accepted{savedAt ? ` · saved ${new Date(savedAt).toLocaleDateString()}` : ''} — it will stay here.</>
+                    : <><i className="fas fa-circle-info" style={{ marginRight: 6 }}></i>Survey only — accept it to keep this plan.</>}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {!accepted && <button className="btn btn-primary" onClick={acceptPlan} disabled={saving} style={{ fontSize: 13 }}>{saving ? <span className="spinner"></span> : <i className="fas fa-check" style={{ marginRight: 6 }}></i>}Accept Plan</button>}
+                  {accepted && <button className="btn" onClick={clearPlan} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef444440' }}><i className="fas fa-trash" style={{ marginRight: 6 }}></i>Clear</button>}
+                </div>
+              </div>
               <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
                 <div className="integration-card" style={{ flex: '1 1 160px', textAlign: 'center' }}>
                   <div style={{ fontSize: 28, fontWeight: 700, color: '#a855f7' }}>{result.total}</div>

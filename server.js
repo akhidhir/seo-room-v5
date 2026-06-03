@@ -31616,6 +31616,38 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Save (accept) a Smart Map Ranking plan so it persists
+app.post('/api/projects/:projectId/smart-map-ranking/save', async (req, res) => {
+  try {
+    const plan = req.body && req.body.plan ? req.body : (req.body || {});
+    if (!plan || !plan.suburbs) return res.status(400).json({ error: 'No plan to save' });
+    // Keep only the latest accepted plan per project
+    await pool.query(`DELETE FROM audits WHERE project_id=$1 AND pillar='smart_map'`, [req.params.projectId]);
+    const r = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, data, created_at, completed_at) VALUES ($1, 'smart_map', 'completed', $2, NOW(), NOW()) RETURNING id, created_at`,
+      [req.params.projectId, plan]
+    );
+    res.json({ ok: true, id: r.rows[0].id, saved_at: r.rows[0].created_at });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Load the saved (accepted) Smart Map Ranking plan
+app.get('/api/projects/:projectId/smart-map-ranking/latest', async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT data, created_at FROM audits WHERE project_id=$1 AND pillar='smart_map' ORDER BY created_at DESC LIMIT 1`, [req.params.projectId]);
+    if (!r.rows[0]) return res.json({ saved: false });
+    res.json({ saved: true, plan: r.rows[0].data, saved_at: r.rows[0].created_at });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Clear the saved Smart Map Ranking plan
+app.delete('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM audits WHERE project_id=$1 AND pillar='smart_map'`, [req.params.projectId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
   const { projectId } = req.params;
