@@ -26484,7 +26484,16 @@
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>{s.per_capita == null ? '—' : s.per_capita}</td>}
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
                           <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
-                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: completionColor(s.completion || 0) }}>{s.completion != null ? s.completion + '%' : '—'}</td>
+                          <td style={{ padding: '6px 8px' }}>
+                            {s.completion != null ? (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                                <div style={{ width: 44, height: 6, background: 'var(--bg2)', borderRadius: 3, overflow: 'hidden' }}>
+                                  <div style={{ width: s.completion + '%', height: '100%', background: completionColor(s.completion) }}></div>
+                                </div>
+                                <span style={{ fontWeight: 700, color: completionColor(s.completion), minWidth: 34, textAlign: 'right' }}>{s.completion}%</span>
+                              </div>
+                            ) : <span style={{ color: 'var(--text3)', display: 'block', textAlign: 'right' }}>—</span>}
+                          </td>
                         </tr>
                         {expandedRank === s.rank && (
                           <tr style={{ background: 'rgba(99,102,241,0.04)' }}>
