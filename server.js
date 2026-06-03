@@ -15672,6 +15672,33 @@ app.post('/api/projects/:projectId/content-queue/:id/revert-staging', async (req
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Diagnostic: read the actual WP post/page (authenticated) to confirm mapping + where the content lives
+app.get('/api/projects/:projectId/content-queue/:id/wp-info', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    const out = { page_id: item.page_id, page_url: item.page_url };
+    for (const type of ['pages', 'posts']) {
+      try {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.page_id}?context=edit`, { headers: authHeaders });
+        if (r.ok) {
+          const p = await r.json();
+          const rendered = (p.content && (p.content.raw || p.content.rendered)) || '';
+          out.found_as = type;
+          out.wp = { id: p.id, type: p.type, status: p.status, slug: p.slug, link: p.link, title: (p.title && (p.title.raw || p.title.rendered)) || '', content_len: rendered.length, content_snippet: rendered.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200), template: p.template, meta_keys: p.meta ? Object.keys(p.meta) : [] };
+          break;
+        } else { out[type + '_status'] = r.status; }
+      } catch (e) { out[type + '_err'] = e.message; }
+    }
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Dry-run the Elementor publish — returns the match log without writing anything
 app.post('/api/projects/:projectId/content-queue/:id/elementor-dry-run', async (req, res) => {
   try {
