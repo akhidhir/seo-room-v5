@@ -88,6 +88,9 @@
   }
 
   function run(){
+    // Run-once guard — prevents double insertion/reflow if the script loads twice (cached inline + live dashboard copy)
+    if(window.__seoRoomPreviewRan){ console.log('[SEO Room] Already ran — skipping duplicate'); return; }
+    window.__seoRoomPreviewRan = true;
     var dataEl = document.getElementById('seo-section-data');
     if(!dataEl){ console.log('[SEO Room] No section data found'); return; }
     var sections = JSON.parse(dataEl.textContent);
@@ -274,12 +277,12 @@
           var htx = (heads[hi].textContent||'').toLowerCase().trim();
           if(/^related|related posts|you (might|may) also|more (posts|articles)|keep reading/.test(htx)){
             var rsec = heads[hi].closest('.elementor-top-section') || heads[hi].closest('section');
-            if(rsec && insertTarget && insertTarget.contains(rsec)){ insertBefore = rsec; break; }
+            if(rsec){ insertBefore = rsec; break; }
           }
         }
       }
-      // 2. Else before the footer if it lives inside our target
-      if(!insertBefore && footer && insertTarget.contains(footer)) insertBefore = footer;
+      // 2. Else before the site footer (works even when the footer is outside the content wrap)
+      if(!insertBefore && footer && footer.parentNode) insertBefore = footer;
       // 3. Else append to the content wrapper (end of article) — handled below when insertBefore is null
 
       // Inject a one-time stylesheet so new sections read as designed content blocks (matching site spacing/card feel)
