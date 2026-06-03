@@ -26278,6 +26278,7 @@
             case 'population': return s.population || 0;
             case 'distance': return s.distance || 0;
             case 'competitors': return s.competitors == null ? Infinity : s.competitors;
+            case 'per_capita': return s.per_capita == null ? Infinity : s.per_capita;
             case 'opportunity': return hasComp ? (s.opportunity ?? s.score) : s.score;
             default: return s.rank;
           }
@@ -26443,6 +26444,7 @@
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('population')}>Population{sortArrow('population')}</th>
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('distance')}>Distance{sortArrow('distance')}</th>
                         {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('competitors')}>Competitors{sortArrow('competitors')}</th>}
+                        {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('per_capita')} title="Competitors per 10,000 residents — lower = less saturated">Per 10k{sortArrow('per_capita')}</th>}
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('opportunity')}>{result.hasCompetitors ? 'Opportunity' : 'Score'}{sortArrow('opportunity')}</th>
                         <th style={{ padding: '6px 8px' }}>Tier</th>
                       </tr>
@@ -26456,6 +26458,7 @@
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.distance} km</td>
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : s.competitors}</td>}
+                          {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>{s.per_capita == null ? '—' : s.per_capita}</td>}
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
                           <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
                         </tr>

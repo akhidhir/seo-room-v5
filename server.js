@@ -31685,7 +31685,9 @@ app.post('/api/projects/:projectId/smart-map-ranking/competitors/run', async (re
         // known: fewer competitors = higher; failed lookup (null) = worst-case so it doesn't float up
         const compN = (typeof competitors === 'number') ? (1 - (competitors / maxComp)) : 0;
         const opportunity = Math.round((0.30 * prox + 0.30 * popN + 0.40 * compN) * 1000) / 10;
-        return { ...s, competitors, competitorTop: c.top, opportunity };
+        // competitors per 10,000 residents (saturation; lower = less saturated)
+        const per_capita = (typeof competitors === 'number' && (s.population || 0) > 0) ? Math.round((competitors / s.population) * 10000 * 100) / 100 : null;
+        return { ...s, competitors, competitorTop: c.top, per_capita, opportunity };
       });
       merged.sort((a, b) => (b.opportunity || 0) - (a.opportunity || 0) || (a.distance || 0) - (b.distance || 0));
       const n = merged.length;
