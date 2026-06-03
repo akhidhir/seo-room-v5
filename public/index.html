@@ -26261,6 +26261,34 @@
       const [service, setService] = useState(project.industry || '');
       const [checkingComp, setCheckingComp] = useState(false);
       const [compProgress, setCompProgress] = useState(null);
+      const [sortBy, setSortBy] = useState('rank');
+      const [sortDir, setSortDir] = useState('asc');
+
+      const toggleSort = (col) => {
+        if (sortBy === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
+        else { setSortBy(col); setSortDir(col === 'suburb' || col === 'state' || col === 'distance' || col === 'rank' ? 'asc' : 'desc'); }
+      };
+      const sortArrow = (col) => sortBy === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+      const sortSuburbs = (arr) => {
+        const hasComp = result && result.hasCompetitors;
+        const val = (s) => {
+          switch (sortBy) {
+            case 'suburb': return s.suburb.toLowerCase();
+            case 'state': return (s.state || '').toLowerCase();
+            case 'population': return s.population || 0;
+            case 'distance': return s.distance || 0;
+            case 'competitors': return s.competitors == null ? Infinity : s.competitors;
+            case 'opportunity': return hasComp ? (s.opportunity ?? s.score) : s.score;
+            default: return s.rank;
+          }
+        };
+        return [...arr].sort((a, b) => {
+          const av = val(a), bv = val(b);
+          if (av < bv) return sortDir === 'asc' ? -1 : 1;
+          if (av > bv) return sortDir === 'asc' ? 1 : -1;
+          return 0;
+        });
+      };
 
       const checkCompetitors = async () => {
         if (!result || !result.suburbs) return;
@@ -26408,19 +26436,19 @@
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
-                      <tr style={{ textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 11 }}>
-                        <th style={{ padding: '6px 8px' }}>#</th>
-                        <th style={{ padding: '6px 8px' }}>Suburb</th>
-                        <th style={{ padding: '6px 8px' }}>State</th>
-                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Population</th>
-                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Distance</th>
-                        {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }}>Competitors</th>}
-                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>{result.hasCompetitors ? 'Opportunity' : 'Score'}</th>
+                      <tr style={{ textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 11, cursor: 'pointer', userSelect: 'none' }}>
+                        <th style={{ padding: '6px 8px' }} onClick={() => toggleSort('rank')}>#{sortArrow('rank')}</th>
+                        <th style={{ padding: '6px 8px' }} onClick={() => toggleSort('suburb')}>Suburb{sortArrow('suburb')}</th>
+                        <th style={{ padding: '6px 8px' }} onClick={() => toggleSort('state')}>State{sortArrow('state')}</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('population')}>Population{sortArrow('population')}</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('distance')}>Distance{sortArrow('distance')}</th>
+                        {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('competitors')}>Competitors{sortArrow('competitors')}</th>}
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('opportunity')}>{result.hasCompetitors ? 'Opportunity' : 'Score'}{sortArrow('opportunity')}</th>
                         <th style={{ padding: '6px 8px' }}>Tier</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {result.suburbs.map((s) => (
+                      {sortSuburbs(result.suburbs).map((s) => (
                         <tr key={s.rank} style={{ borderTop: '1px solid var(--border)' }}>
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.rank}</td>
                           <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.suburb}{s.isHome && <span style={{ marginLeft: 6, fontSize: 10, color: '#a855f7' }}>(HOME)</span>}</td>
