@@ -310,59 +310,53 @@ const PILLAR_CATEGORIES = {
 10. **Grid scan history** — track position changes over time.
 11. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
 
-## Recent Changes (This Session)
+## Recent Changes (This Session — June 3 2026)
 
-### Section Builder (Copywriter)
-- **Backend endpoints**: `POST add-section`, `POST delete-section`, `POST reorder-sections`, `POST write-section` — per-section AI content generation
-- **`write-section`**: AI generates content for a single section heading. FAQ type returns `<details><summary>` accordion HTML. Uses page context (other sections) to avoid repetition.
-- **Frontend Section View**: numbered cards with Write/Rewrite/Delete buttons, inline heading editing, expand/collapse content preview, Add Text Section + Add FAQ Section buttons
-- **`writingSection` state**: tracks which section is being AI-written, shows spinner
+### Design-Safe Preview — FIXED ✅ (Plugin 8.9.16 → 8.9.19, tested on seoroom.com.au)
+- **Matcher rewrite (8.9.16)**: pairs each DRAFT paragraph to its most-similar ORIGINAL by **shared-word overlap** (not by position). Fixes off-by-one (heading was being overwritten with body text, trailing paragraphs dropped). Requires ≥2 shared words → protects headings, author bios, forms. `team`/`author` types excluded from promotion.
+- **FAQ rendering (8.9.17)**: new sections of type `faq` (or containing `<details>/<summary>`) render as a clean FULL-WIDTH accordion (`buildFaqSection`), not squeezed into the two-column split card.
+- **Placement (8.9.18→8.9.19)**: new sections insert at the END of the article — before a "Related Posts"/related section if present, else before the site footer (works even when footer is outside the content wrap).
+- **Live-from-dashboard (8.9.19)** ⭐: plugin loads `section-preview.js` from the dashboard (`?dash=` origin, cache-busted per load) instead of the bundled copy. **JS changes deploy via git push — NO plugin reinstall needed.** Falls back to inlined copy if dash unavailable. Console logs `script: dashboard (live)`.
+- **Run-once guard**: `window.__seoRoomPreviewRan` prevents double insertion/reflow ("up and down") if a cached inline copy + dashboard copy both load.
+- **Files**: edit `wordpress-plugins/seoroom/section-preview.js`, then `cp` to `public/section-preview.js` (dashboard serves the public copy via `express.static`). Plugin loader in `seoroom.php` ~line 943. Only PHP changes need a plugin reinstall now.
+- **Verified**: 4/4 sections, FAQ accordion at end of article, author block skipped, matcher pairs correctly.
 
-### Import Current Copy — Cheerio Extraction
-- **`cheerio` npm dependency added** — proper HTML DOM parsing for live page content
-- **Elementor widget-level extraction**: walks `.elementor-top-section` elements, extracts `.elementor-widget-heading`, `.elementor-widget-text-editor`, `.elementor-widget-iaccordions` (FAQ)
-- **FAQ parsed as `<details><summary>`**: iaccordions text parsed into Q&A pairs, stored as native HTML5 accordion
-- **Always prefers live HTML over WP REST API** — WP REST gives unstructured Elementor fallback text
-- **FAQ accordion CSS** added to dashboard (teal +/− toggles, dark mode styled)
+### Humanize → Preview → Publish (works)
+- `/humanize-only` rewrites `<p>` paragraphs (50+ chars) via GPTHuman API + rule-based pass; preserves headings, links, FAQ accordion. `GPTHUMAN_API_KEY` is set. Flow: write → Humanize → Preview (shows humanized copy) → Publish.
 
-### Design-Safe Preview — Plugin 8.8.2
-- **Hash-based approach** (v8.8.0+): sections base64-encoded in URL hash. No POST form, no server-to-WP call. Plugin decodes hash client-side.
-- **`section-preview.js` bundled in plugin** (v8.8.2): no cross-origin script loading. File at `wordpress-plugins/seoroom/section-preview.js`.
-- **Output buffer injects**: hash loader script + local section-preview.js + preview bar + FAQ CSS
-- **Three preview methods**: hash (URL fragment), POST (form data), transient (server-created token)
-- **Plugin versions 8.5.5→8.8.2**: multiple iterations fixing activation crashes, output buffer logic, preview rendering
+### Team Members ✅ NEW (Settings → Agency Integrations → "Team Members")
+- Invite by email → Resend email (or copyable link fallback) → invitee sets password → full-access admin (role 'admin', sees ALL projects; per-project "limited" tier is future).
+- Backend: `POST /api/team/invite`, `GET /api/team`, `DELETE /api/team/invite/:id`, `DELETE /api/team/member/:id`, `GET/POST /api/team-invite/:token[/register]`. Table `team_invites`. Email via Resend (`RESEND_API_KEY`, `RESEND_FROM` — add to Railway; falls back to link). Frontend route `/team-invite/:token` → `TeamInvitePage`.
+- **Open self-registration disabled** — `/api/auth/register` blocks unless zero users (bootstrap). New users only via invite.
 
-### section-preview.js Improvements
-- **Unmatched sections → NEW SECTIONS**: if paragraph matching fails, section is inserted on the page as a new Elementor-structured block
-- **Skip display fonts**: elements with computed font-size >20px skipped during matching (prevents hero/CTA text from being replaced with body content)
-- **Extended skip list**: testimonials, CTAs, pricing tables, service boxes, icon boxes, image carousels, shortcodes
-- **New section placement**: inserts before 2nd-to-last Elementor top-section (before CTA), not appended at top
-- **FAQ `<details>` CSS**: light theme styling for accordion toggles on live page
+### Smart Map Ranking ✅ NEW (Rankings → Smart Map Ranking)
+- Surveys all suburbs within a radius of the business, ranks by **proximity + population** (free); optional **competitor check** re-ranks by **opportunity** (close + populous + LOW competition, competition weighted 0.40).
+- **Dataset**: ABS 2016 census (michalsn/australian-suburbs, MIT) — suburb/state/postcode/population/GPS. Loaded at RUNTIME by the server (jsDelivr CDN + GitHub fallback), cached in memory + `data/au_suburbs.json`. Robust loader: retries, never caches empty, boot warm-load. Helpers: `loadAuSuburbs`, `geocodeSuburbText`, `resolveSmartCenter`, `haversineKm`, `rankByOpportunity`, `buildSmartPlan`.
+- **Controls**: center (suburb+state, geocoded), radius slider (5–50km, default 25), **Min population** (default 200 — excludes 0-pop industrial estates/parks/airports that distort per-capita).
+- **Competitor scan**: BACKGROUND job (`/competitors/run` + `/competitors/status`), checks EVERY suburb via DataForSEO Maps `{service} {suburb}`, progress bar, retries. Cached per **project+service+suburb** (`smart_comp_cache`, 30-day reuse) so it persists + isn't re-paid. Service term saved per project (`projects.smart_service`, Save button).
+- **Columns** (sortable headers): #, Suburb, State, Population, Distance, Competitors, **Per 10k** (competitors per 10k residents = saturation), Opportunity/Score, Tier, **Done %** (checklist w/ progress bar). "Arrange by plan" button = phase order.
+- **Per-suburb checklist** (expand row): suburb landing page / in GBP service areas / review mentions suburb / GBP post mentions suburb — done=green, 100%="Fully covered". Computed server-side from sitemap pages + `reviews_cache` + `posts_cache` + `service_areas`.
+- **Rollout plan**: Phase 1/2/3 (shaded purple/blue/grey) with suburbs + actions. **Accept Plan** (auto-saves silently; explicit Accept locks). Persistence: survey auto-saves; scan auto-saves; survey merges cached competitors + falls back to last saved plan so data never disappears on reload.
+- Stored in `audits` table `pillar='smart_map'` (uses `audit_data` column, NOT `data`).
+- **Competitor count caveat**: it's the # of Maps results for `{service} {suburb}` (depth ~20) = local-pack visibility, NOT a directory count. Use a clean keyword ("plumber", not the business name).
 
-### Visual Editor (DROPPED)
-- **Attempted iframe-based approach** with contenteditable text and Apply Changes postMessage — fundamentally unreliable with Elementor's complex DOM
-- **Issues encountered**: paragraph matching hitting testimonials/CTAs/footer, FAQ accordion cloning breaking, heading matching too loose, content going to wrong widgets
-- **Decision**: dropped in favor of Design-Safe Preview (section-preview.js) which renders the actual WordPress page
+### Maps Rankings fixes
+- **Grid-scan cost estimate** fixed: `estimateFeatureCost('grid_scan')` now uses DataForSEO rate ($0.002) + label, not SerpAPI ($0.01). (Grid scan has always run on DataForSEO.)
+- **Gap "What To Do" actions verified**: checks live sitemap pages + GBP service areas before recommending a landing page (4 accurate variants). Hardcoded `'Locksmith'` category fallback → `our.type || comps[0]?.type || project.industry`.
 
-### Cloudflare/403 Blocking
-- **seoroom.com.au blocks Railway server IP** — all server-to-WP requests return 403 (REST API, sitemaps, page fetches)
-- **Fix**: hash-based preview bypasses server-to-WP communication entirely. User's browser (not blocked) opens the preview URL.
-- **Ongoing**: `Import Current Copy` server-side fetch also gets 403. Works when not blocked. Consider whitelisting Railway IP.
+### Provider clarity (DataForSEO vs SerpAPI)
+- **DataForSEO**: grid scan, all keyword discovery (Generate/Smart/Discover Keywords), handshake maps, Smart Map Ranking.
+- **SerpAPI** (default, switchable): rank-tracking Sync, Discover Maps tab; plus competitor-domain discovery, citation `site:` search, AI Overview detection.
 
-### UNFIXED — Carry to next session
-- **Preview not showing new sections** — Plugin 8.8.2 has hash mode + local section-preview.js but sections still don't appear. `$is_hash_mode` was undefined in output buffer callback (fixed in code but plugin needs rebuild/reinstall). Verify: check browser console for `[SEO Room]` logs on preview page.
-- **Font sizes wrong in preview** — section-preview.js `isDisplayFont()` check added but not fully tested. Elements >20px font-size should be skipped.
-- **Only sections with `draft_text` sent to preview** — full editor Rewrite puts content in `editContent`/`draft_content`, NOT in `page_sections[].draft_text`. Section View Rewrite button correctly updates `page_sections[].draft_text`. Users must use Section View for preview to work.
-- **Sidebar scroll not independent**
-- **Backlinks data consistency** — summary totals vs list counts mismatch
-- **DataForSEO SERP returns 0 for some AU keywords**
+### New DB columns/tables this session
+- `projects.smart_service TEXT`; `team_invites`; `smart_comp_cache (project_id, service, suburb, competitors, top, checked_at, UNIQUE(project_id,service,suburb))`; `data/au_suburbs.json` (runtime suburb dataset cache).
 
 ### Next Session Priorities
-1. **Fix Design-Safe Preview** — verify plugin 8.8.2 hash mode works end-to-end. Check browser console for errors. The `$is_hash_mode` variable is now passed via `use()` in the output buffer closure. Rebuild plugin zip, install, test with Section View content.
-2. **Sync Rewrite → page_sections** — when user clicks top-level Rewrite button, parse the result by H2 and update `page_sections[].draft_text` so preview shows all sections.
-3. **AI Replace popup** — port from New Website editor to Copywriter
-4. **Accept/reject topics & keywords flow** — port from NewWebsitePipelinePage
-5. **Full copywriter flow**: Section View → Write per section → FAQ accordion → Preview (Design-Safe) → Publish
+1. **Limited team-member tier** — per-project / read-only roles (currently all invited users are full-access admins).
+2. **Smart Map Ranking → Action Plan** — push accepted plan suburbs as page/GBP tasks.
+3. **AI Replace popup** — port from New Website editor to Copywriter.
+4. **Sync Rewrite → page_sections** — top-level Rewrite should update `page_sections[].draft_text` so preview shows all sections (currently must use Section View).
+5. **Carry-over**: sidebar scroll not independent; backlinks summary vs list count mismatch; DataForSEO SERP returns 0 for some AU keywords.
 
 ### Previous Sessions (Summarized)
 - SERP Analysis rule-based engine (17 checks, 90%+ accuracy)
