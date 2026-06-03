@@ -5231,7 +5231,10 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 let AU_SUBURBS = null;        // [{suburb, state, postcode, population, lat, lng}]
 let AU_SUBURBS_BY_KEY = null; // normalized lookup
 let auSuburbsLoading = null;
-const AU_SUBURBS_URL = 'https://raw.githubusercontent.com/michalsn/australian-suburbs/master/data/suburbs.csv';
+const AU_SUBURBS_URLS = [
+  'https://cdn.jsdelivr.net/gh/michalsn/australian-suburbs@master/data/suburbs.csv',
+  'https://raw.githubusercontent.com/michalsn/australian-suburbs/master/data/suburbs.csv',
+];
 const AU_STATES = { nsw:'NSW', vic:'VIC', qld:'QLD', wa:'WA', sa:'SA', tas:'TAS', act:'ACT', nt:'NT',
   'new south wales':'NSW', 'victoria':'VIC', 'queensland':'QLD', 'western australia':'WA',
   'south australia':'SA', 'tasmania':'TAS', 'northern territory':'NT', 'australian capital territory':'ACT' };
@@ -5276,7 +5279,7 @@ function buildSuburbIndex() {
 }
 
 async function loadAuSuburbs() {
-  if (AU_SUBURBS) return AU_SUBURBS;
+  if (AU_SUBURBS && AU_SUBURBS.length) return AU_SUBURBS;   // only treat a NON-empty load as cached
   if (auSuburbsLoading) return auSuburbsLoading;
   auSuburbsLoading = (async () => {
     const fs = require('fs'); const path = require('path');
@@ -5287,23 +5290,26 @@ async function loadAuSuburbs() {
         if (Array.isArray(arr) && arr.length > 1000) { AU_SUBURBS = arr; buildSuburbIndex(); console.log(`[au-suburbs] loaded ${arr.length} from cache`); return AU_SUBURBS; }
       }
     } catch (e) { /* fall through to fetch */ }
-    try {
-      const r = await fetch(AU_SUBURBS_URL, { signal: AbortSignal.timeout(30000) });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const arr = parseAuSuburbsCsv(await r.text());
-      if (arr.length < 1000) throw new Error('parsed too few rows: ' + arr.length);
-      AU_SUBURBS = arr; buildSuburbIndex();
-      try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(arr)); } catch (e) {}
-      console.log(`[au-suburbs] fetched + cached ${arr.length} suburbs`);
-      return AU_SUBURBS;
-    } catch (e) {
-      console.error('[au-suburbs] load failed:', e.message);
-      AU_SUBURBS = AU_SUBURBS || []; buildSuburbIndex();
-      return AU_SUBURBS;
-    } finally { auSuburbsLoading = null; }
-  })();
+    for (const url of AU_SUBURBS_URLS) {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(45000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const arr = parseAuSuburbsCsv(await r.text());
+        if (arr.length < 1000) throw new Error('parsed too few rows: ' + arr.length);
+        AU_SUBURBS = arr; buildSuburbIndex();
+        try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(arr)); } catch (e) {}
+        console.log(`[au-suburbs] fetched ${arr.length} suburbs from ${url}`);
+        return AU_SUBURBS;
+      } catch (e) { console.error(`[au-suburbs] ${url} failed:`, e.message); }
+    }
+    // Total failure — leave AU_SUBURBS null so the next call retries instead of caching emptiness
+    console.error('[au-suburbs] all sources failed; will retry on next request');
+    return [];
+  })().finally(() => { auSuburbsLoading = null; });
   return auSuburbsLoading;
 }
+// Warm the dataset at boot so the first survey is instant (non-blocking)
+setTimeout(() => { loadAuSuburbs().then(a => console.log(`[au-suburbs] warm load: ${(a || []).length} suburbs`)).catch(() => {}); }, 3000);
 
 // Geocode a free-text location ("Applecross WA", "Perth, Western Australia") to a suburb record
 function geocodeSuburbText(t) {
