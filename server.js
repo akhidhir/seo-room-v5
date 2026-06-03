@@ -556,6 +556,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_service TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_color TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_api_token TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cloudflare_api_token TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_connection_code TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_key TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_expires TIMESTAMPTZ`).catch(() => {});
@@ -12247,8 +12248,17 @@ function getWpAuthHeaders(project) {
 }
 
 // Helper: purge Cloudflare cache for specific URLs
+// Resolve the Cloudflare token for a project: per-project override → agency-wide (owner's) → global env
+async function resolveCfToken(project) {
+  if (project.cloudflare_api_token) return project.cloudflare_api_token;
+  if (project.user_id) {
+    try { const u = (await pool.query('SELECT cloudflare_api_token FROM users WHERE id=$1', [project.user_id])).rows[0]; if (u && u.cloudflare_api_token) return u.cloudflare_api_token; } catch (e) {}
+  }
+  return process.env.CLOUDFLARE_API_TOKEN || null;
+}
+
 async function purgeCloudflareCache(project, urls) {
-  const apiToken = project.cloudflare_api_token || process.env.CLOUDFLARE_API_TOKEN;
+  let apiToken = await resolveCfToken(project);
   let zoneId = project.cloudflare_zone_id;
   if (!apiToken || !urls.length) return { purged: false, reason: 'no_cloudflare_config' };
   // Auto-resolve the zone from the domain if not stored yet
@@ -15747,9 +15757,17 @@ app.post('/api/projects/:projectId/cloudflare-purge', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const apiToken = project.cloudflare_api_token || process.env.CLOUDFLARE_API_TOKEN;
-    if (!apiToken || !project.cloudflare_zone_id) return res.status(400).json({ error: 'Cloudflare not connected — paste your token in Settings first.' });
-    const r = await fetch(`https://api.cloudflare.com/client/v4/zones/${project.cloudflare_zone_id}/purge_cache`, {
+    const apiToken = await resolveCfToken(project);
+    if (!apiToken) return res.status(400).json({ error: 'Cloudflare not connected — add a token in Agency Integrations or this project.' });
+    let zoneId = project.cloudflare_zone_id;
+    if (!zoneId) {
+      const root = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+      const zr = await fetch(`https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(root)}`, { headers: { 'Authorization': `Bearer ${apiToken}` } });
+      const zd = await zr.json();
+      if (zd.success && zd.result && zd.result[0]) { zoneId = zd.result[0].id; await pool.query('UPDATE projects SET cloudflare_zone_id=$1 WHERE id=$2', [zoneId, project.id]).catch(() => {}); }
+    }
+    if (!zoneId) return res.status(400).json({ error: 'No Cloudflare site found for this domain.' });
+    const r = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ purge_everything: true }),
     });
@@ -15760,8 +15778,33 @@ app.post('/api/projects/:projectId/cloudflare-purge', async (req, res) => {
 
 app.get('/api/projects/:projectId/cloudflare-status', async (req, res) => {
   try {
-    const p = (await pool.query('SELECT cloudflare_zone_id, cloudflare_api_token FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
-    res.json({ connected: !!(p && p.cloudflare_api_token), zone_id: (p && p.cloudflare_zone_id) || null });
+    const p = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!p) return res.json({ connected: false });
+    const tok = await resolveCfToken(p);
+    res.json({ connected: !!tok, viaAgency: !p.cloudflare_api_token && !!tok, zone_id: p.cloudflare_zone_id || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Agency-wide Cloudflare token (covers all projects under this account)
+app.post('/api/cloudflare/account-token', authMiddleware, async (req, res) => {
+  try {
+    const token = (req.body && req.body.token || '').trim();
+    if (!token) { await pool.query('UPDATE users SET cloudflare_api_token=NULL WHERE id=$1', [req.auth.userId]); return res.json({ ok: true, connected: false }); }
+    // Validate the token can list zones
+    try {
+      const zr = await fetch('https://api.cloudflare.com/client/v4/zones?per_page=1', { headers: { 'Authorization': `Bearer ${token}` } });
+      const zd = await zr.json();
+      if (!zd.success) return res.status(400).json({ error: 'Cloudflare rejected the token. Give it Zone → Cache Purge permission (all zones).' });
+    } catch (e) { return res.status(400).json({ error: 'Could not reach Cloudflare: ' + e.message }); }
+    await pool.query('UPDATE users SET cloudflare_api_token=$1 WHERE id=$2', [token, req.auth.userId]);
+    res.json({ ok: true, connected: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/cloudflare/account-status', authMiddleware, async (req, res) => {
+  try {
+    const u = (await pool.query('SELECT cloudflare_api_token FROM users WHERE id=$1', [req.auth.userId])).rows[0];
+    res.json({ connected: !!(u && u.cloudflare_api_token) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

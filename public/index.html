@@ -32827,6 +32827,49 @@
       );
     }
 
+    // Account-wide Cloudflare token — covers every project under this Cloudflare account (set once)
+    function CloudflareAccountConnect() {
+      const [token, setToken] = useState('');
+      const [connected, setConnected] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [msg, setMsg] = useState(null);
+      useEffect(() => { api('/cloudflare/account-status').then(r => { if (r && !r.error) setConnected(r.connected); }).catch(() => {}); }, []);
+      const connect = async () => {
+        if (!token.trim()) { setMsg({ ok: false, text: 'Paste your Cloudflare API token first.' }); return; }
+        setBusy(true); setMsg(null);
+        try {
+          const r = await api('/cloudflare/account-token', { method: 'POST', body: { token: token.trim() } });
+          if (r.error) setMsg({ ok: false, text: r.error });
+          else { setConnected(true); setToken(''); setMsg({ ok: true, text: 'Connected — Cloudflare cache now clears automatically on publish for all your sites.' }); }
+        } catch (e) { setMsg({ ok: false, text: e.message }); }
+        setBusy(false);
+      };
+      const disconnect = async () => { setBusy(true); try { await api('/cloudflare/account-token', { method: 'POST', body: { token: '' } }); setConnected(false); setMsg(null); } catch (e) {} setBusy(false); };
+      return (
+        <div className="integration-card">
+          <div className="integration-header">
+            <div className="integration-title"><i className="fas fa-shield-alt" style={{ marginRight: 8, color: '#f38020' }}></i>Cloudflare cache <span style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 8, fontWeight: 400 }}>Account-level — covers all sites</span></div>
+            <div className="integration-status"><div className={`status-dot ${connected ? 'connected' : 'disconnected'}`}></div><span>{connected ? 'Connected' : 'Not Connected'}</span></div>
+          </div>
+          {connected ? (
+            <div style={{ fontSize: 13, color: 'var(--text2)' }}>Published changes clear Cloudflare automatically across all your client sites. <button className="btn" onClick={disconnect} disabled={busy} style={{ marginLeft: 10, fontSize: 12, color: '#ef4444', borderColor: '#ef444440' }}>Disconnect</button></div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+                Paste one Cloudflare API token and it covers every project in that Cloudflare account — set once.{' '}
+                <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" style={{ color: '#6366f1' }}>Create a token →</a> with permission <b>Zone → Cache Purge → Purge</b> for <b>All zones</b>.
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}><input type="password" className="form-input" value={token} onChange={e => setToken(e.target.value)} placeholder="paste Cloudflare API token" style={{ fontSize: 12 }} /></div>
+                <button className="btn btn-primary" onClick={connect} disabled={busy} style={{ height: 38 }}>{busy ? <span className="spinner"></span> : 'Connect'}</button>
+              </div>
+            </div>
+          )}
+          {msg && <div style={{ marginTop: 10, fontSize: 12, color: msg.ok ? '#22c55e' : '#ef4444' }}>{msg.text}</div>}
+        </div>
+      );
+    }
+
     function IntegrationsPage({ project }) {
       const [integrations, setIntegrations] = useState({
         gbp: { connected: false },
@@ -32977,6 +33020,9 @@
 
           {/* Team Members */}
           <TeamMembersCard />
+
+          {/* Cloudflare cache (account-wide) */}
+          <CloudflareAccountConnect />
 
           {/* Google Business Profile */}
           <div className="integration-card">
