@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.21
+ * Version: 8.9.22
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.21');
+define('SEOROOM_VERSION', '8.9.22');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1036,6 +1036,35 @@ function sropt_clear_cache_route($request) {
         try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
     }
     return rest_ensure_response(['ok' => true, 'cleared' => true, 'page_id' => $page_id]);
+}
+
+// Style published FAQ <details> accordions to match the site's branding (auto-detects the brand accent).
+add_action('wp_footer', 'sropt_faq_styler', 99);
+function sropt_faq_styler() {
+    if (is_admin() || !is_singular()) return;
+    echo <<<'SROPTFAQ'
+<script>
+(function(){
+  var sel = '.entry-content details, article details, main details, .e-con details, .elementor-widget-theme-post-content details';
+  if(!document.querySelector(sel)) return;
+  function parseRgb(s){var m=(s||'').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?/);return m?[+m[1],+m[2],+m[3],m[4]===undefined?1:+m[4]]:null;}
+  function isVivid(rgb){if(!rgb||rgb[3]<0.4)return false;var r=rgb[0],g=rgb[1],b=rgb[2],mx=Math.max(r,g,b),mn=Math.min(r,g,b);if(mx<70)return false;if(mn>225)return false;if(mx-mn<28)return false;return true;}
+  function accent(){var c={};function add(col,w){var rgb=parseRgb(col);if(!isVivid(rgb))return;var k='rgb('+rgb[0]+','+rgb[1]+','+rgb[2]+')';c[k]=(c[k]||0)+(w||1);}
+    function scan(s,p,max,w){var els=document.querySelectorAll(s),n=0;for(var i=0;i<els.length;i++){var e=els[i];if(e.closest('footer'))continue;try{add(getComputedStyle(e)[p],w);}catch(x){}if(++n>=max)break;}}
+    scan('a','color',50,1);scan('.elementor-button,button,.btn,[class*="cta"]','backgroundColor',14,2);scan('h2,h3','color',16,1);
+    var best='#1f4fe0',bn=0;for(var k in c){if(c[k]>bn){bn=c[k];best=k;}}return best;}
+  var a=accent();
+  var css = sel.split(',').join('{background:#fff;border:1px solid #eceef3;border-radius:12px;margin:0 0 12px;overflow:hidden;box-shadow:0 4px 14px rgba(2,6,23,.05)},')
+    + '{background:#fff;border:1px solid #eceef3;border-radius:12px;margin:0 0 12px;overflow:hidden;box-shadow:0 4px 14px rgba(2,6,23,.05)}'
+    + ' details>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px;font-weight:700;font-size:16px;line-height:1.4;color:' + a + '}'
+    + ' details>summary::-webkit-details-marker{display:none}'
+    + ' details>summary::after{content:"\\2193";flex:0 0 auto;width:28px;height:28px;border-radius:50%;background:' + a + ';color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;line-height:1;transition:transform .2s}'
+    + ' details[open]>summary::after{transform:rotate(180deg)}'
+    + ' details>*:not(summary){padding:2px 20px 18px;color:#5b6470;line-height:1.7;font-size:15px;margin:0}';
+  var st=document.createElement('style');st.id='seoroom-faq-style';st.textContent=css;document.head.appendChild(st);
+})();
+</script>
+SROPTFAQ;
 }
 
 // Elementor Design-Safe Preview: intercept page output and modify rendered HTML
