@@ -31551,8 +31551,13 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     await loadAuSuburbs();
     if (!AU_SUBURBS || AU_SUBURBS.length === 0) return res.status(503).json({ error: 'Suburb dataset is still loading or unavailable. Please try again in a moment.' });
 
+    const hasInput = (center && center.trim()) || (lat != null && lng != null) || (project.location && project.location.trim());
     const ctr = resolveSmartCenter({ center, lat, lng, project });
-    if (!ctr) return res.status(400).json({ error: 'Could not determine the business location. Enter a suburb (with state) or coordinates.' });
+    if (!ctr) {
+      if (!hasInput) return res.status(400).json({ error: 'No business location set. Type a suburb and state (e.g. "Applecross, WA") in the box to run the survey.' });
+      const tried = (center && center.trim()) || project.location || '';
+      return res.status(400).json({ error: `Couldn't find "${tried}" on the map. Enter a suburb and state, e.g. "Applecross, WA".` });
+    }
 
     // Survey suburbs within the radius
     const within = [];
