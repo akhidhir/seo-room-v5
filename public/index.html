@@ -26263,6 +26263,13 @@
       const [compProgress, setCompProgress] = useState(null);
       const [sortBy, setSortBy] = useState('rank');
       const [sortDir, setSortDir] = useState('asc');
+      const [expandedRank, setExpandedRank] = useState(null);
+      const phaseStyles = [
+        { bg: 'rgba(168,85,247,0.12)', border: '#a855f7' },
+        { bg: 'rgba(59,130,246,0.09)', border: '#3b82f6' },
+        { bg: 'rgba(100,116,139,0.07)', border: '#64748b' },
+      ];
+      const completionColor = (c) => c >= 100 ? '#22c55e' : c >= 50 ? '#f59e0b' : c > 0 ? '#eab308' : 'var(--text3)';
 
       const toggleSort = (col) => {
         if (sortBy === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
@@ -26280,6 +26287,7 @@
             case 'competitors': return s.competitors == null ? Infinity : s.competitors;
             case 'per_capita': return s.per_capita == null ? Infinity : s.per_capita;
             case 'opportunity': return hasComp ? (s.opportunity ?? s.score) : s.score;
+            case 'completion': return s.completion || 0;
             default: return s.rank;
           }
         };
@@ -26428,7 +26436,7 @@
 
               {/* Rollout plan */}
               {(result.plan || []).map((ph, i) => ph.count > 0 && (
-                <div key={i} className="integration-card" style={{ marginBottom: 12 }}>
+                <div key={i} className="integration-card" style={{ marginBottom: 12, background: (phaseStyles[i] || {}).bg, borderLeft: '4px solid ' + ((phaseStyles[i] || {}).border || 'var(--border)') }}>
                   <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{ph.phase} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>· {ph.count} suburbs</span></div>
                   <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>{ph.suburbs.slice(0, 12).join(' · ')}{ph.suburbs.length > 12 ? ` · +${ph.suburbs.length - 12} more` : ''}</div>
                   <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: 'var(--text2)' }}>
@@ -26453,12 +26461,14 @@
                         {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('per_capita')} title="Competitors per 10,000 residents — lower = less saturated">Per 10k{sortArrow('per_capita')}</th>}
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('opportunity')}>{result.hasCompetitors ? 'Opportunity' : 'Score'}{sortArrow('opportunity')}</th>
                         <th style={{ padding: '6px 8px' }}>Tier</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('completion')} title="How much of the suburb checklist is already done">Done{sortArrow('completion')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {sortSuburbs(result.suburbs).map((s) => (
-                        <tr key={s.rank} style={{ borderTop: '1px solid var(--border)' }}>
-                          <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.rank}</td>
+                        <React.Fragment key={s.rank}>
+                        <tr onClick={() => setExpandedRank(expandedRank === s.rank ? null : s.rank)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: expandedRank === s.rank ? 'rgba(99,102,241,0.05)' : 'transparent' }}>
+                          <td style={{ padding: '6px 8px', color: 'var(--text3)' }}><i className={`fas fa-chevron-${expandedRank === s.rank ? 'down' : 'right'}`} style={{ fontSize: 9, marginRight: 6, color: 'var(--text3)' }}></i>{s.rank}</td>
                           <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.suburb}{s.isHome && <span style={{ marginLeft: 6, fontSize: 10, color: '#a855f7' }}>(HOME)</span>}</td>
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.state}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
@@ -26467,7 +26477,36 @@
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>{s.per_capita == null ? '—' : s.per_capita}</td>}
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
                           <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: completionColor(s.completion || 0) }}>{s.completion != null ? s.completion + '%' : '—'}</td>
                         </tr>
+                        {expandedRank === s.rank && (
+                          <tr style={{ background: 'rgba(99,102,241,0.04)' }}>
+                            <td colSpan={12} style={{ padding: '12px 18px' }}>
+                              {s.tasks && s.tasks.length ? (
+                                <>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                                    <div style={{ fontWeight: 700, color: completionColor(s.completion || 0) }}>{s.completion}% done</div>
+                                    <div style={{ flex: 1, maxWidth: 320, height: 8, background: 'var(--bg2)', borderRadius: 4, overflow: 'hidden' }}>
+                                      <div style={{ width: (s.completion || 0) + '%', height: '100%', background: completionColor(s.completion || 0) }}></div>
+                                    </div>
+                                    {s.completion >= 100 && <span style={{ color: '#22c55e', fontWeight: 700, fontSize: 13 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }}></i>Fully covered</span>}
+                                  </div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 28px' }}>
+                                    {s.tasks.map((t, ti) => (
+                                      <div key={ti} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: t.done ? '#22c55e' : 'var(--text2)' }}>
+                                        <i className={t.done ? 'fas fa-circle-check' : 'far fa-circle'} style={{ color: t.done ? '#22c55e' : 'var(--text3)' }}></i>
+                                        <span style={{ textDecoration: t.done ? 'none' : 'none' }}>{t.label}{t.done ? ' ✓ done' : ' — to do'}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </>
+                              ) : (
+                                <div style={{ fontSize: 13, color: 'var(--text3)' }}>Run a fresh survey to see the per-suburb checklist (page, GBP area, reviews, posts).</div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>

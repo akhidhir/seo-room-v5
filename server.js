@@ -31620,11 +31620,38 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     const n = within.length;
     const highCut = Math.max(1, Math.ceil(n * 0.25));
     const medCut = Math.max(highCut, Math.ceil(n * 0.6));
-    const ranked = within.map((s, i) => ({
-      rank: i + 1, ...s,
-      tier: i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low',
-      isHome: normSuburbKey(s.suburb) === centerKey,
-    }));
+
+    // Gather "what's already done" signals once: GBP service areas, live pages, review text, post text
+    const serviceAreaSet = new Set();
+    (Array.isArray(project.service_areas) ? project.service_areas : []).forEach(a => {
+      const nm = normSuburbKey(typeof a === 'string' ? a : (a.name || a.suburb || '')); if (nm) serviceAreaSet.add(nm);
+    });
+    let pageBlob = '', reviewsBlob = '', postsBlob = '';
+    try {
+      const projUrl = (project.domain || '').startsWith('http') ? project.domain : 'https://' + (project.domain || '').replace(/^https?:\/\//, '');
+      const pages = await discoverPages(projUrl, project.wordpress_url || projUrl, getWpAuthHeaders(project));
+      pageBlob = ' ' + normSuburbKey(pages.map(p => `${p.slug || ''} ${p.title || ''}`).join(' ')) + ' ';
+    } catch (e) {}
+    try { const rc = (await pool.query('SELECT reviews FROM reviews_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (rc) reviewsBlob = ' ' + normSuburbKey(JSON.stringify(rc.reviews || '')) + ' '; } catch (e) {}
+    try { const pc = (await pool.query('SELECT posts FROM posts_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (pc) postsBlob = ' ' + normSuburbKey(JSON.stringify(pc.posts || '')) + ' '; } catch (e) {}
+    const hasWord = (blob, word) => blob.length > 2 && word.length > 1 && blob.includes(' ' + word + ' ');
+
+    const ranked = within.map((s, i) => {
+      const sk = normSuburbKey(s.suburb);
+      const tasks = [
+        { label: 'Suburb landing page', done: hasWord(pageBlob, sk) },
+        { label: 'In GBP service areas', done: serviceAreaSet.has(sk) },
+        { label: 'Review mentions suburb', done: hasWord(reviewsBlob, sk) },
+        { label: 'GBP post mentions suburb', done: hasWord(postsBlob, sk) },
+      ];
+      const doneCount = tasks.filter(t => t.done).length;
+      return {
+        rank: i + 1, ...s,
+        tier: i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low',
+        isHome: normSuburbKey(s.suburb) === centerKey,
+        tasks, completion: Math.round((doneCount / tasks.length) * 100),
+      };
+    });
 
     const plan = buildSmartPlan(ranked);
 
