@@ -26346,6 +26346,8 @@
           const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius, minPopulation: minPop, service } });
           if (r.error) { setError(r.error); setLoading(false); return; }
           setResult(r);
+          // Auto-save the full analysis (checklist + any merged competitors) so it persists across reloads
+          try { const sv = await api(`/projects/${project.id}/smart-map-ranking/save`, { method: 'POST', body: r }); setAccepted(true); setSavedAt(sv && sv.saved_at); } catch (e) {}
         } catch (e) { setError(e.message || 'Survey failed'); }
         setLoading(false);
       };
