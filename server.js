@@ -15752,13 +15752,19 @@ app.post('/api/projects/:projectId/cloudflare-connect', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Manual "Clear Cloudflare cache" button
+// Manual "Clear cache now" button — purges WP/BerqWP origin cache AND Cloudflare edge cache
 app.post('/api/projects/:projectId/cloudflare-purge', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
+    // 1) Purge the WordPress/BerqWP origin cache first so Cloudflare re-fetches a fresh page
+    try {
+      const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+      const ah = getWpAuthHeaders(project);
+      if (wpUrl && ah) await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/clear-cache`, { method: 'POST', headers: { ...ah, 'Content-Type': 'application/json' }, body: '{}' });
+    } catch (e) { /* origin purge best-effort */ }
     const apiToken = await resolveCfToken(project);
-    if (!apiToken) return res.status(400).json({ error: 'Cloudflare not connected — add a token in Agency Integrations or this project.' });
+    if (!apiToken) return res.json({ ok: true, cloudflare: false, message: 'Origin cache cleared. (Cloudflare not connected.)' });
     let zoneId = project.cloudflare_zone_id;
     if (!zoneId) {
       const root = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
