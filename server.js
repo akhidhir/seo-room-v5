@@ -554,6 +554,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 50`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_service TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_color TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_connection_code TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_key TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_expires TIMESTAMPTZ`).catch(() => {});
@@ -15618,7 +15619,15 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
           const headLc = (s.heading || '').toLowerCase().trim();
           const already = (headLc && lc.includes(headLc)) || (dt.length > 100 && cleanContent.includes(dt.slice(0, 80)));
           if (already) continue;
-          cleanContent += '\n' + (s.heading ? `<h2>${s.heading}</h2>\n` : '') + dt;
+          const isFaqSec = s.type === 'faq' || /<details|<summary/i.test(dt);
+          if (isFaqSec) {
+            // Bake branded accordion styling INTO the content so it renders correctly regardless of caching/JS optimization
+            const brand = (project.brand_color || '#00C3FF');
+            const faqCss = `<style>.seoroom-faq details{background:#fff;border:1px solid #eceef3;border-radius:12px;margin:0 0 12px;overflow:hidden;box-shadow:0 4px 14px rgba(2,6,23,.05)}.seoroom-faq summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px;font-weight:700;font-size:16px;line-height:1.4;color:${brand}}.seoroom-faq summary::-webkit-details-marker{display:none}.seoroom-faq summary::after{content:"\\2193";flex:0 0 auto;width:28px;height:28px;border-radius:50%;background:${brand};color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;line-height:1;transition:transform .2s}.seoroom-faq details[open] summary::after{transform:rotate(180deg)}.seoroom-faq details>*:not(summary){padding:2px 20px 18px;color:#5b6470;line-height:1.7;font-size:15px;margin:0}</style>`;
+            cleanContent += `\n${s.heading ? `<h2>${s.heading}</h2>` : ''}\n<div class="seoroom-faq">${faqCss}${dt}</div>`;
+          } else {
+            cleanContent += '\n' + (s.heading ? `<h2>${s.heading}</h2>\n` : '') + dt;
+          }
         }
       }
       payload.content = cleanContent;
@@ -15650,13 +15659,17 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
       return res.status(400).json({ error: 'Nothing to publish (no draft content or meta).' });
     }
 
-    // 4) Purge caches (BerqWP/page cache/Elementor CSS) so the change shows immediately
+    // 4) Purge caches so the change shows immediately — BerqWP/page cache (plugin) AND Cloudflare edge (API)
     try {
       await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/clear-cache/${item.page_id}`, {
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: '{}',
       });
-      console.log(`[go-live] cache purged for page ${item.page_id}`);
-    } catch (e) { console.log('[go-live] cache purge skipped:', e.message); }
+      console.log(`[go-live] WP cache purged for page ${item.page_id}`);
+    } catch (e) { console.log('[go-live] WP cache purge skipped:', e.message); }
+    try {
+      const cf = await purgeCloudflareCache(project, [item.page_url].filter(Boolean));
+      if (cf.purged) console.log(`[go-live] Cloudflare purged ${item.page_url}`);
+    } catch (e) { console.log('[go-live] Cloudflare purge skipped:', e.message); }
 
     // Save to wp_change_history for rollback
     for (const ch of changes) {
