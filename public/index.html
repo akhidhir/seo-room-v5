@@ -26343,7 +26343,7 @@
       const runSurvey = async () => {
         setError(''); setLoading(true); setResult(null); setAccepted(false); setSavedAt(null);
         try {
-          const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius, minPopulation: minPop } });
+          const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius, minPopulation: minPop, service } });
           if (r.error) { setError(r.error); setLoading(false); return; }
           setResult(r);
         } catch (e) { setError(e.message || 'Survey failed'); }

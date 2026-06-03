@@ -667,6 +667,19 @@ async function initDb() {
         used_at TIMESTAMPTZ
       )
     `).catch(() => {});
+    // Smart Map Ranking — cached competitor counts per suburb (so they persist + aren't re-paid each survey)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS smart_comp_cache (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        service TEXT NOT NULL,
+        suburb TEXT NOT NULL,
+        competitors INTEGER,
+        top JSONB DEFAULT '[]',
+        checked_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (project_id, service, suburb)
+      )
+    `).catch(() => {});
     // Client draft — separate from agency draft so client edits don't overwrite agency work
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_content TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_meta JSONB`).catch(() => {});
@@ -5378,6 +5391,26 @@ function buildSmartPlan(ranked) {
       'Internal links from Phase 1/2 pages; add to a combined service-area page',
     ]),
   ];
+}
+
+// Re-rank suburbs by opportunity (close + populous + LOW competition); fills opportunity, per_capita, rank, tier
+function rankByOpportunity(suburbs, radius) {
+  const maxPop = Math.max(1, ...suburbs.map(s => s.population || 0));
+  const comps = suburbs.map(s => s.competitors).filter(v => typeof v === 'number');
+  const maxComp = Math.max(1, ...comps);
+  suburbs.forEach(s => {
+    const competitors = s.competitors;
+    const prox = 1 - ((s.distance || 0) / radius);
+    const popN = (s.population || 0) / maxPop;
+    const compN = (typeof competitors === 'number') ? (1 - (competitors / maxComp)) : 0;
+    s.opportunity = Math.round((0.30 * prox + 0.30 * popN + 0.40 * compN) * 1000) / 10;
+    s.per_capita = (typeof competitors === 'number' && (s.population || 0) > 0) ? Math.round((competitors / s.population) * 10000 * 100) / 100 : null;
+  });
+  suburbs.sort((a, b) => (b.opportunity || 0) - (a.opportunity || 0) || (a.distance || 0) - (b.distance || 0));
+  const n = suburbs.length;
+  const highCut = Math.max(1, Math.ceil(n * 0.25)), medCut = Math.max(highCut, Math.ceil(n * 0.6));
+  suburbs.forEach((s, i) => { s.rank = i + 1; s.tier = i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low'; });
+  return suburbs;
 }
 
 // Perth suburb GPS coordinates for distance calculation
@@ -31658,9 +31691,27 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       };
     });
 
+    // Merge cached competitor counts (free) so they persist across surveys and aren't re-paid for
+    let hasCompetitors = false;
+    const svcKey = normSuburbKey((req.body && req.body.service) || project.industry || '');
+    if (svcKey) {
+      try {
+        const cacheRows = (await pool.query('SELECT suburb, competitors, top, checked_at FROM smart_comp_cache WHERE project_id=$1 AND service=$2', [req.params.projectId, svcKey])).rows;
+        if (cacheRows.length) {
+          const cmap = {};
+          for (const r of cacheRows) cmap[r.suburb] = r;
+          ranked.forEach(s => {
+            const c = cmap[normSuburbKey(s.suburb)];
+            if (c && typeof c.competitors === 'number') { s.competitors = c.competitors; s.competitorTop = c.top || []; s.compCheckedAt = c.checked_at; hasCompetitors = true; }
+          });
+        }
+      } catch (e) {}
+    }
+    if (hasCompetitors) rankByOpportunity(ranked, radius);
+
     const plan = buildSmartPlan(ranked);
 
-    res.json({ center: ctr, radiusKm: radius, total: n, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
+    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -31685,16 +31736,30 @@ app.post('/api/projects/:projectId/smart-map-ranking/competitors/run', async (re
     const job = { status: 'running', checked: 0, total: suburbs.length, suburbs: null, plan: null, error: null, service };
     smartCompJobs[projectId] = job;
 
+    const svcKey = normSuburbKey(service);
     (async () => {
       const ownName = (project.business_name || '').toLowerCase();
       const results = {};
+      // Load fresh cache (< 30 days) so we don't re-pay for recently-scanned suburbs
+      const cmap = {};
+      try {
+        const rows = (await pool.query(`SELECT suburb, competitors, top, checked_at FROM smart_comp_cache WHERE project_id=$1 AND service=$2 AND checked_at > NOW() - INTERVAL '30 days'`, [projectId, svcKey])).rows;
+        for (const r of rows) cmap[r.suburb] = r;
+      } catch (e) {}
+      let fromCache = 0, fetched = 0;
       const checkOne = async (s) => {
+        const cached = cmap[normSuburbKey(s.suburb)];
+        if (cached && typeof cached.competitors === 'number') { fromCache++; return { competitors: cached.competitors, top: cached.top || [] }; }
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
             const data = await dataForSeoMaps({ keyword: `${service} ${s.suburb}`, lat: s.lat, lng: s.lng });
             const lr = data.local_results || [];
             const comp = lr.filter(r => { const t = (r.title || '').toLowerCase(); return !(ownName && (t.includes(ownName) || ownName.includes(t))); });
-            return { competitors: comp.length, top: comp.slice(0, 3).map(r => r.title) };
+            const out = { competitors: comp.length, top: comp.slice(0, 3).map(r => r.title) };
+            fetched++;
+            // write to cache
+            try { await pool.query(`INSERT INTO smart_comp_cache (project_id, service, suburb, competitors, top, checked_at) VALUES ($1,$2,$3,$4,$5,NOW()) ON CONFLICT (project_id, service, suburb) DO UPDATE SET competitors=$4, top=$5, checked_at=NOW()`, [projectId, svcKey, normSuburbKey(s.suburb), out.competitors, JSON.stringify(out.top)]); } catch (e) {}
+            return out;
           } catch (e) { if (attempt === 1) return { competitors: null, top: [] }; }
         }
       };
@@ -31705,27 +31770,14 @@ app.post('/api/projects/:projectId/smart-map-ranking/competitors/run', async (re
         batch.forEach((s, j) => { results[s.rank] = out[j]; });
         job.checked = Math.min(suburbs.length, i + CONC);
       }
-      // Opportunity = close + populous + LOW competition (competition weighted highest at 0.40)
-      const maxPop = Math.max(1, ...suburbs.map(s => s.population || 0));
-      const comps = Object.values(results).map(c => c.competitors).filter(v => typeof v === 'number');
-      const maxComp = Math.max(1, ...comps);
       const merged = suburbs.map(s => {
         const c = results[s.rank] || { competitors: null, top: [] };
-        const competitors = c.competitors;
-        const prox = 1 - ((s.distance || 0) / radius);
-        const popN = (s.population || 0) / maxPop;
-        // known: fewer competitors = higher; failed lookup (null) = worst-case so it doesn't float up
-        const compN = (typeof competitors === 'number') ? (1 - (competitors / maxComp)) : 0;
-        const opportunity = Math.round((0.30 * prox + 0.30 * popN + 0.40 * compN) * 1000) / 10;
-        // competitors per 10,000 residents (saturation; lower = less saturated)
-        const per_capita = (typeof competitors === 'number' && (s.population || 0) > 0) ? Math.round((competitors / s.population) * 10000 * 100) / 100 : null;
-        return { ...s, competitors, competitorTop: c.top, per_capita, opportunity };
+        return { ...s, competitors: c.competitors, competitorTop: c.top };
       });
-      merged.sort((a, b) => (b.opportunity || 0) - (a.opportunity || 0) || (a.distance || 0) - (b.distance || 0));
-      const n = merged.length;
-      const highCut = Math.max(1, Math.ceil(n * 0.25)), medCut = Math.max(highCut, Math.ceil(n * 0.6));
-      merged.forEach((s, i) => { s.rank = i + 1; s.tier = i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low'; });
+      rankByOpportunity(merged, radius);
       job.suburbs = merged; job.plan = buildSmartPlan(merged); job.status = 'done';
+      job.fromCache = fromCache; job.fetched = fetched;
+      console.log(`[smart-comp] project ${projectId}: ${fetched} fetched, ${fromCache} from cache`);
     })().catch(e => { job.status = 'error'; job.error = e.message; });
 
     res.json({ started: true, total: suburbs.length });
