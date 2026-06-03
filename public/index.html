@@ -26258,6 +26258,25 @@
       const [accepted, setAccepted] = useState(false);
       const [savedAt, setSavedAt] = useState(null);
       const [saving, setSaving] = useState(false);
+      const [service, setService] = useState(project.industry || '');
+      const [checkingComp, setCheckingComp] = useState(false);
+
+      const checkCompetitors = async () => {
+        if (!result || !result.suburbs) return;
+        if (!service.trim()) { setError('Enter the service to check competition for (e.g. "plumber").'); return; }
+        const count = Math.min(result.suburbs.length, 50);
+        if (!window.confirm(`Check competitors for ${count} suburb${count !== 1 ? 's' : ''} via DataForSEO Maps?\nEstimated cost: $${(count * 0.002).toFixed(2)}.`)) return;
+        setError(''); setCheckingComp(true);
+        try {
+          const r = await api(`/projects/${project.id}/smart-map-ranking/competitors`, { method: 'POST', body: { service, suburbs: result.suburbs, radiusKm: result.radiusKm } });
+          if (r.error) { setError(r.error); setCheckingComp(false); return; }
+          setResult({ ...result, suburbs: r.suburbs, plan: r.plan, hasCompetitors: true });
+          setAccepted(false); setSavedAt(null);
+        } catch (e) { setError(e.message || 'Competitor check failed'); }
+        setCheckingComp(false);
+      };
+
+      const compColor = (c) => c == null ? 'var(--text3)' : c <= 5 ? '#22c55e' : c <= 12 ? '#f59e0b' : '#ef4444';
 
       // Load a previously accepted plan so it persists across navigation/refresh
       useEffect(() => {
@@ -26340,6 +26359,18 @@
                   {accepted && <button className="btn" onClick={clearPlan} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef444440' }}><i className="fas fa-trash" style={{ marginRight: 6 }}></i>Clear</button>}
                 </div>
               </div>
+
+              <div className="integration-card" style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ flex: '1 1 220px' }}>
+                  <label className="form-label" style={{ fontSize: 12 }}>Service to check competition for</label>
+                  <input className="form-input" value={service} onChange={e => setService(e.target.value)} placeholder="e.g. plumber" disabled={checkingComp} />
+                </div>
+                <button className="btn" onClick={checkCompetitors} disabled={checkingComp} style={{ height: 38 }}>
+                  {checkingComp ? <span className="spinner"></span> : <i className="fas fa-users-viewfinder" style={{ marginRight: 6 }}></i>}
+                  {result.hasCompetitors ? 'Re-check Competitors' : 'Check Competitors'}
+                </button>
+                {result.hasCompetitors && <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>Re-ranked by opportunity: close + populous + low competition.</div>}
+              </div>
               <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
                 <div className="integration-card" style={{ flex: '1 1 160px', textAlign: 'center' }}>
                   <div style={{ fontSize: 28, fontWeight: 700, color: '#a855f7' }}>{result.total}</div>
@@ -26374,7 +26405,8 @@
                         <th style={{ padding: '6px 8px' }}>State</th>
                         <th style={{ padding: '6px 8px', textAlign: 'right' }}>Population</th>
                         <th style={{ padding: '6px 8px', textAlign: 'right' }}>Distance</th>
-                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Score</th>
+                        {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }}>Competitors</th>}
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>{result.hasCompetitors ? 'Opportunity' : 'Score'}</th>
                         <th style={{ padding: '6px 8px' }}>Tier</th>
                       </tr>
                     </thead>
@@ -26386,7 +26418,8 @@
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.state}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.distance} km</td>
-                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{s.score}</td>
+                          {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : s.competitors}</td>}
+                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
                           <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
                         </tr>
                       ))}

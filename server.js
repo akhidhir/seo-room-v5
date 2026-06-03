@@ -5344,6 +5344,36 @@ function resolveSmartCenter({ center, lat, lng, project }) {
   return null;
 }
 
+// Build the phased rollout plan from ranked suburbs (shared by survey + competitor re-rank)
+function buildSmartPlan(ranked) {
+  const phase = (label, list, actions) => ({
+    phase: label,
+    suburbs: list.map(s => `${s.suburb} (${(s.population || 0).toLocaleString()}${s.distance != null ? ', ' + s.distance + 'km' : ''}${typeof s.competitors === 'number' ? ', ' + s.competitors + ' comp' : ''})`),
+    count: list.length,
+    actions,
+  });
+  const high = ranked.filter(s => s.tier === 'High');
+  const med = ranked.filter(s => s.tier === 'Medium');
+  const low = ranked.filter(s => s.tier === 'Low');
+  return [
+    phase('Phase 1 — Priority', high, [
+      'Create a dedicated suburb landing page for each (service + suburb), unique content',
+      'Add each suburb to your GBP service areas',
+      'Target Google reviews that mention these suburbs by name',
+      'Post weekly GBP updates referencing these suburbs',
+    ]),
+    phase('Phase 2 — Growth', med, [
+      'Build suburb landing pages after Phase 1 is indexed',
+      'Add to GBP service areas; request reviews mentioning the suburb',
+      'Monthly GBP posts referencing these suburbs',
+    ]),
+    phase('Phase 3 — Reach', low, [
+      'Local citations/directory listings mentioning these suburbs',
+      'Internal links from Phase 1/2 pages; add to a combined service-area page',
+    ]),
+  ];
+}
+
 // Perth suburb GPS coordinates for distance calculation
 const SUBURB_GPS = {
   'leeming': { lat: -32.0728, lng: 115.8640 }, 'cannington': { lat: -32.0170, lng: 115.9340 },
@@ -31590,29 +31620,63 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       isHome: normSuburbKey(s.suburb) === centerKey,
     }));
 
-    const phase = (label, list, actions) => ({ phase: label, suburbs: list.map(s => `${s.suburb} (${s.population.toLocaleString()}, ${s.distance}km)`), count: list.length, actions });
-    const high = ranked.filter(s => s.tier === 'High');
-    const med = ranked.filter(s => s.tier === 'Medium');
-    const low = ranked.filter(s => s.tier === 'Low');
-    const plan = [
-      phase('Phase 1 — Priority (closest + most populous)', high, [
-        'Create a dedicated suburb landing page for each (service + suburb), unique content',
-        'Add each suburb to your GBP service areas',
-        'Target Google reviews that mention these suburbs by name',
-        'Post weekly GBP updates referencing these suburbs',
-      ]),
-      phase('Phase 2 — Growth', med, [
-        'Build suburb landing pages after Phase 1 is indexed',
-        'Add to GBP service areas; request reviews mentioning the suburb',
-        'Monthly GBP posts referencing these suburbs',
-      ]),
-      phase('Phase 3 — Reach', low, [
-        'Local citations/directory listings mentioning these suburbs',
-        'Internal links from Phase 1/2 pages; add to a combined service-area page',
-      ]),
-    ];
+    const plan = buildSmartPlan(ranked);
 
     res.json({ center: ctr, radiusKm: radius, total: n, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Count competitors per suburb (DataForSEO Maps for "service + suburb") and re-rank by opportunity
+app.post('/api/projects/:projectId/smart-map-ranking/competitors', async (req, res) => {
+  try {
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured.' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const service = (req.body.service || project.industry || '').toString().trim();
+    if (!service) return res.status(400).json({ error: 'Enter the service to check competitors for (e.g. "plumber").' });
+    let suburbs = Array.isArray(req.body.suburbs) ? req.body.suburbs.slice() : [];
+    if (suburbs.length === 0) return res.status(400).json({ error: 'No suburbs to check. Run the survey first.' });
+    const radius = parseFloat(req.body.radiusKm) || 25;
+
+    const CAP = 50;
+    suburbs.sort((a, b) => (b.score || 0) - (a.score || 0));
+    const toCheck = suburbs.slice(0, CAP);
+    const ownName = (project.business_name || '').toLowerCase();
+    const counts = {};
+    let apiCost = 0;
+
+    // Process in parallel batches of 5 to bound time
+    for (let i = 0; i < toCheck.length; i += 5) {
+      const batch = toCheck.slice(i, i + 5);
+      await Promise.all(batch.map(async (s) => {
+        try {
+          const data = await dataForSeoMaps({ keyword: `${service} ${s.suburb}`, lat: s.lat, lng: s.lng });
+          const lr = data.local_results || [];
+          const comp = lr.filter(r => { const t = (r.title || '').toLowerCase(); return !(ownName && (t.includes(ownName) || ownName.includes(t))); });
+          counts[s.rank] = { competitors: comp.length, top: comp.slice(0, 3).map(r => r.title) };
+          apiCost += data.cost || 0.002;
+        } catch (e) { counts[s.rank] = { competitors: null, top: [] }; }
+      }));
+    }
+
+    const maxPop = Math.max(1, ...suburbs.map(s => s.population || 0));
+    const checkedComps = Object.values(counts).map(c => c.competitors).filter(v => typeof v === 'number');
+    const maxComp = Math.max(1, ...checkedComps);
+    const merged = suburbs.map(s => {
+      const c = counts[s.rank];
+      const competitors = c ? c.competitors : null;
+      const prox = 1 - ((s.distance || 0) / radius);
+      const popN = (s.population || 0) / maxPop;
+      const compN = (typeof competitors === 'number') ? (1 - (competitors / maxComp)) : 0.5; // unknown = neutral
+      const opportunity = Math.round((0.40 * prox + 0.30 * popN + 0.30 * compN) * 1000) / 10;
+      return { ...s, competitors, competitorTop: c ? c.top : [], opportunity };
+    });
+    merged.sort((a, b) => (b.opportunity || 0) - (a.opportunity || 0) || (a.distance || 0) - (b.distance || 0));
+    const n = merged.length;
+    const highCut = Math.max(1, Math.ceil(n * 0.25)), medCut = Math.max(highCut, Math.ceil(n * 0.6));
+    merged.forEach((s, i) => { s.rank = i + 1; s.tier = i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low'; });
+
+    res.json({ ok: true, service, checked: toCheck.length, capped: suburbs.length > CAP, suburbs: merged, plan: buildSmartPlan(merged), hasCompetitors: true, api_cost: +apiCost.toFixed(4) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
