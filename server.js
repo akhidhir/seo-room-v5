@@ -31707,6 +31707,18 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         }
       } catch (e) {}
     }
+    // Fallback: recover competitor data from the last saved plan (covers data saved before the cache existed)
+    if (!hasCompetitors) {
+      try {
+        const saved = (await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='smart_map' ORDER BY created_at DESC LIMIT 1`, [req.params.projectId])).rows[0];
+        const savedSubs = saved && saved.audit_data && saved.audit_data.suburbs;
+        if (Array.isArray(savedSubs)) {
+          const smap = {};
+          for (const ss of savedSubs) if (typeof ss.competitors === 'number') smap[normSuburbKey(ss.suburb)] = ss;
+          ranked.forEach(s => { const ss = smap[normSuburbKey(s.suburb)]; if (ss) { s.competitors = ss.competitors; s.competitorTop = ss.competitorTop || []; hasCompetitors = true; } });
+        }
+      } catch (e) {}
+    }
     if (hasCompetitors) rankByOpportunity(ranked, radius);
 
     const plan = buildSmartPlan(ranked);
