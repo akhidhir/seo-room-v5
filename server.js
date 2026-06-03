@@ -15580,47 +15580,61 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
     const authHeaders = getWpAuthHeaders(project);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
-    // Build payload with all changes — push directly as published
-    const payload = {};
     const changes = [];
 
-    // Always push draft_content if it exists — user explicitly wrote/edited this content
-    if (item.draft_content) {
-      // Strip leading H1 to avoid repetition — WP themes render page title as H1 already
+    // 1) Elementor-aware content publish — writes _elementor_data via the SEO Room plugin so it actually renders.
+    //    Returns { elementor:false } when the page isn't Elementor, so we fall back to the standard post_content write.
+    let elementorPublished = false;
+    if (Array.isArray(item.page_sections) && item.page_sections.length) {
+      try {
+        const epResp = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/publish-elementor/${item.page_id}`, {
+          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sections: item.page_sections }),
+        });
+        if (epResp.ok) {
+          const ep = await epResp.json();
+          if (ep && ep.elementor) {
+            elementorPublished = true;
+            console.log(`[go-live] Elementor publish for page ${item.page_id}: replaced ${JSON.stringify(ep.replaced)}`);
+            changes.push({ field: 'elementor_content', old: '(elementor data)', new: JSON.stringify(ep.replaced || {}) });
+          }
+        } else {
+          console.log(`[go-live] Elementor route returned ${epResp.status} — falling back to post_content`);
+        }
+      } catch (e) { console.log('[go-live] Elementor route error:', e.message); }
+    }
+
+    // 2) Build the standard REST payload — meta always; post_content only when NOT an Elementor publish
+    const payload = {};
+    if (item.draft_content && !elementorPublished) {
       let cleanContent = item.draft_content.replace(/^\s*<h1[^>]*>.*?<\/h1>\s*/i, '');
       payload.content = cleanContent;
       changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: cleanContent.slice(0, 5000) });
     }
-
     const metaPayload = {};
-    if (item.draft_meta_title) {
-      metaPayload._yoast_wpseo_title = item.draft_meta_title;
-      changes.push({ field: 'yoast_wpseo_title', old: '', new: item.draft_meta_title });
-    }
-    if (item.draft_meta_desc) {
-      metaPayload._yoast_wpseo_metadesc = item.draft_meta_desc;
-      changes.push({ field: 'yoast_wpseo_metadesc', old: '', new: item.draft_meta_desc });
-    }
-    if (item.draft_focus_keyword) {
-      metaPayload._yoast_wpseo_focuskw = item.draft_focus_keyword;
-      changes.push({ field: 'yoast_wpseo_focuskw', old: '', new: item.draft_focus_keyword });
-    }
+    if (item.draft_meta_title) { metaPayload._yoast_wpseo_title = item.draft_meta_title; changes.push({ field: 'yoast_wpseo_title', old: '', new: item.draft_meta_title }); }
+    if (item.draft_meta_desc) { metaPayload._yoast_wpseo_metadesc = item.draft_meta_desc; changes.push({ field: 'yoast_wpseo_metadesc', old: '', new: item.draft_meta_desc }); }
+    if (item.draft_focus_keyword) { metaPayload._yoast_wpseo_focuskw = item.draft_focus_keyword; changes.push({ field: 'yoast_wpseo_focuskw', old: '', new: item.draft_focus_keyword }); }
     if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
 
-    // Push to WP — keep status as-is (published stays published)
-    let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
-      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!writeResp.ok) {
-      writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
+    // 3) Write meta (and post_content for non-Elementor) — skip if there's nothing left to write
+    if (Object.keys(payload).length > 0) {
+      let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-    }
-    if (!writeResp.ok) {
-      const errText = await writeResp.text();
-      return res.status(500).json({ error: `WordPress publish failed: ${errText.slice(0, 300)}` });
+      if (!writeResp.ok) {
+        writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${item.page_id}`, {
+          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+      if (!writeResp.ok && !elementorPublished) {
+        const errText = await writeResp.text();
+        return res.status(500).json({ error: `WordPress publish failed: ${errText.slice(0, 300)}` });
+      }
+    } else if (!elementorPublished) {
+      return res.status(400).json({ error: 'Nothing to publish (no draft content or meta).' });
     }
 
     // Save to wp_change_history for rollback
@@ -15658,6 +15672,27 @@ app.post('/api/projects/:projectId/content-queue/:id/revert-staging', async (req
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Dry-run the Elementor publish — returns the match log without writing anything
+app.post('/api/projects/:projectId/content-queue/:id/elementor-dry-run', async (req, res) => {
+  try {
+    const { projectId, id } = req.params;
+    const item = (await pool.query('SELECT * FROM content_queue WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    if (!item.page_id) return res.status(400).json({ error: 'No WordPress page ID' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    const r = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/publish-elementor/${item.page_id}`, {
+      method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sections: item.page_sections || [], dry: true }),
+    });
+    const text = await r.text();
+    let data; try { data = JSON.parse(text); } catch (e) { data = { raw: text.slice(0, 600) }; }
+    res.json({ status: r.status, ...data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Rollback published — restore original content from wp_change_history
 app.post('/api/projects/:projectId/content-queue/:id/rollback', async (req, res) => {
   try {
@@ -15672,12 +15707,21 @@ app.post('/api/projects/:projectId/content-queue/:id/rollback', async (req, res)
     const authHeaders = getWpAuthHeaders(project);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
+    // Best-effort: restore the original Elementor data if this page was published via the Elementor writer
+    let elementorRestored = false;
+    try {
+      const rr = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/restore-elementor/${item.page_id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: '{}',
+      });
+      if (rr.ok) { const rj = await rr.json(); if (rj && rj.restored) { elementorRestored = true; console.log('[rollback] Elementor data restored for page', item.page_id); } }
+    } catch (e) { /* not Elementor or plugin missing — fall through */ }
+
     // Get all change history entries for this page from this copywriter item
     const historyRes = await pool.query(
       `SELECT * FROM wp_change_history WHERE project_id=$1 AND page_id=$2 AND change_type='copywriter' AND rolled_back_at IS NULL ORDER BY applied_at DESC`,
       [projectId, item.page_id]
     );
-    if (historyRes.rows.length === 0) return res.status(400).json({ error: 'No change history found to rollback' });
+    if (historyRes.rows.length === 0 && !elementorRestored) return res.status(400).json({ error: 'No change history found to rollback' });
 
     // Build restore payload from original values
     const payload = {};
@@ -15698,7 +15742,15 @@ app.post('/api/projects/:projectId/content-queue/:id/rollback', async (req, res)
     }
     if (Object.keys(metaPayload).length > 0) payload.meta = metaPayload;
 
-    if (Object.keys(payload).length === 0) return res.status(400).json({ error: 'Nothing to rollback — no original values saved' });
+    // Elementor-only publish: the content lives in _elementor_data (already restored above), so a WP payload may be empty
+    if (Object.keys(payload).length === 0) {
+      if (elementorRestored) {
+        for (const cid of rolledBackIds) await pool.query(`UPDATE wp_change_history SET rolled_back_at=NOW() WHERE id=$1`, [cid]);
+        await pool.query(`UPDATE content_queue SET stage='approved', published_at=NULL, updated_at=NOW() WHERE id=$1`, [id]);
+        return res.json({ success: true, stage: 'approved', changes_rolled_back: rolledBackIds.length, elementor_restored: true });
+      }
+      return res.status(400).json({ error: 'Nothing to rollback — no original values saved' });
+    }
 
     // Push original content back to WP
     let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${item.page_id}`, {

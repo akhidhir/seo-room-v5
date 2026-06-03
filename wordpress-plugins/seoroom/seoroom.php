@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.19
+ * Version: 8.9.20
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.19');
+define('SEOROOM_VERSION', '8.9.20');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -859,6 +859,154 @@ function sropt_elementor_preview_create($request) {
         'token' => $token,
         'expires_in' => 600,
     ]);
+}
+
+// ============================================================================
+// ELEMENTOR PUBLISH — write new section content into _elementor_data (server-side)
+// so changes actually render on Elementor pages. Falls back signals when not Elementor.
+// ============================================================================
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom-opt/v1', '/publish-elementor/(?P<page_id>\d+)', [
+        'methods' => 'POST',
+        'callback' => 'sropt_publish_elementor',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+});
+
+function sropt_norm_text($s) {
+    $s = wp_strip_all_tags((string)$s);
+    $s = html_entity_decode($s, ENT_QUOTES);
+    $s = strtolower($s);
+    $s = preg_replace('/[^a-z0-9]+/', ' ', $s);
+    return trim($s);
+}
+function sropt_word_set($s) {
+    $set = [];
+    foreach (explode(' ', sropt_norm_text($s)) as $w) { if (strlen($w) >= 4) $set[$w] = 1; }
+    return $set;
+}
+function sropt_shared_count($setA, $str) {
+    $shared = 0;
+    foreach (sropt_word_set($str) as $w => $_) { if (isset($setA[$w])) $shared++; }
+    return $shared;
+}
+
+// Recursively walk Elementor elements, replacing text-editor + heading widgets that match a section
+function sropt_walk_elements(&$elements, &$bodySecs, &$headSecs, &$count, &$log) {
+    if (!is_array($elements)) return;
+    foreach ($elements as &$el) {
+        if (!is_array($el)) continue;
+        $type = isset($el['elType']) ? $el['elType'] : '';
+        $widget = isset($el['widgetType']) ? $el['widgetType'] : '';
+        if ($type === 'widget' && isset($el['settings']) && is_array($el['settings'])) {
+            if ($widget === 'text-editor' && isset($el['settings']['editor'])) {
+                $cur = $el['settings']['editor'];
+                $bestIdx = -1; $bestShared = 0;
+                foreach ($bodySecs as $i => $sec) {
+                    if ($sec['used']) continue;
+                    $sh = sropt_shared_count($sec['set'], $cur);
+                    if ($sh > $bestShared) { $bestShared = $sh; $bestIdx = $i; }
+                }
+                if ($bestIdx >= 0 && $bestShared >= 3) {
+                    $log[] = ['widget'=>'text-editor', 'shared'=>$bestShared, 'from'=>mb_substr(wp_strip_all_tags($cur),0,40), 'to'=>mb_substr(wp_strip_all_tags($bodySecs[$bestIdx]['draft']),0,40)];
+                    $el['settings']['editor'] = $bodySecs[$bestIdx]['draft'];
+                    $bodySecs[$bestIdx]['used'] = true;
+                    $count['text']++;
+                } else {
+                    $log[] = ['widget'=>'text-editor', 'shared'=>$bestShared, 'unmatched'=>mb_substr(wp_strip_all_tags($cur),0,40)];
+                }
+            } else if ($widget === 'heading' && isset($el['settings']['title'])) {
+                $curNorm = sropt_norm_text($el['settings']['title']);
+                foreach ($headSecs as $i => $sec) {
+                    if ($sec['used']) continue;
+                    if ($sec['norm'] === $curNorm) {
+                        $el['settings']['title'] = $sec['draft'];
+                        $headSecs[$i]['used'] = true;
+                        $count['heading']++;
+                        break;
+                    }
+                }
+            }
+        }
+        if (isset($el['elements']) && is_array($el['elements'])) {
+            sropt_walk_elements($el['elements'], $bodySecs, $headSecs, $count, $log);
+        }
+    }
+}
+
+function sropt_publish_elementor($request) {
+    $page_id = intval($request->get_param('page_id'));
+    $body = $request->get_json_params();
+    $sections = (isset($body['sections']) && is_array($body['sections'])) ? $body['sections'] : [];
+    $dry = !empty($body['dry']);
+    if (!$page_id) return new WP_Error('missing', 'page_id required', ['status' => 400]);
+
+    $raw = get_post_meta($page_id, '_elementor_data', true);
+    if (empty($raw)) {
+        return rest_ensure_response(['ok' => true, 'elementor' => false, 'message' => 'Page has no Elementor data — use standard publish.']);
+    }
+    $data = json_decode($raw, true);
+    if (!is_array($data)) return new WP_Error('parse', 'Could not parse Elementor data', ['status' => 500]);
+
+    // Build matchable section sets from original_text/heading
+    $bodySecs = []; $headSecs = [];
+    foreach ($sections as $s) {
+        $orig  = isset($s['original_text']) ? $s['original_text'] : '';
+        $draft = isset($s['draft_text']) ? $s['draft_text'] : '';
+        if ($orig && $draft) $bodySecs[] = ['set' => sropt_word_set($orig), 'draft' => $draft, 'used' => false];
+        $oh = isset($s['original_heading']) ? $s['original_heading'] : (isset($s['heading']) ? $s['heading'] : '');
+        $dh = isset($s['draft_heading']) ? $s['draft_heading'] : '';
+        if ($oh && $dh && sropt_norm_text($oh) !== sropt_norm_text($dh)) $headSecs[] = ['norm' => sropt_norm_text($oh), 'draft' => $dh, 'used' => false];
+    }
+
+    $count = ['text' => 0, 'heading' => 0];
+    $log = [];
+    sropt_walk_elements($data, $bodySecs, $headSecs, $count, $log);
+
+    if ($dry) {
+        return rest_ensure_response(['ok' => true, 'elementor' => true, 'dry' => true, 'would_replace' => $count, 'log' => $log]);
+    }
+
+    // Back up the ORIGINAL Elementor data once (for rollback) before the first overwrite
+    if (!get_post_meta($page_id, '_seoroom_elementor_backup', true)) {
+        update_post_meta($page_id, '_seoroom_elementor_backup', $raw);
+    }
+    // Save updated Elementor data + clear caches so it renders
+    update_post_meta($page_id, '_elementor_data', wp_slash(wp_json_encode($data)));
+    delete_post_meta($page_id, '_elementor_css');
+    if (class_exists('\\Elementor\\Plugin')) {
+        try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
+    }
+    do_action('berqwp_clear_all_cache');
+    do_action('berqwp_clear_cache');
+    if (function_exists('wp_cache_flush')) wp_cache_flush();
+    clean_post_cache($page_id);
+
+    return rest_ensure_response(['ok' => true, 'elementor' => true, 'replaced' => $count]);
+}
+
+// Restore the original Elementor data (rollback for an Elementor publish)
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom-opt/v1', '/restore-elementor/(?P<page_id>\d+)', [
+        'methods' => 'POST',
+        'callback' => 'sropt_restore_elementor',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+});
+function sropt_restore_elementor($request) {
+    $page_id = intval($request->get_param('page_id'));
+    if (!$page_id) return new WP_Error('missing', 'page_id required', ['status' => 400]);
+    $backup = get_post_meta($page_id, '_seoroom_elementor_backup', true);
+    if (empty($backup)) return rest_ensure_response(['ok' => false, 'message' => 'No Elementor backup found']);
+    update_post_meta($page_id, '_elementor_data', wp_slash($backup));
+    delete_post_meta($page_id, '_elementor_css');
+    if (class_exists('\\Elementor\\Plugin')) {
+        try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
+    }
+    do_action('berqwp_clear_all_cache');
+    if (function_exists('wp_cache_flush')) wp_cache_flush();
+    clean_post_cache($page_id);
+    return rest_ensure_response(['ok' => true, 'restored' => true]);
 }
 
 // Elementor Design-Safe Preview: intercept page output and modify rendered HTML
