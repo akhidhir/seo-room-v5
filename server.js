@@ -15608,6 +15608,19 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
     const payload = {};
     if (item.draft_content && !elementorPublished) {
       let cleanContent = item.draft_content.replace(/^\s*<h1[^>]*>.*?<\/h1>\s*/i, '');
+      // Append any NEW sections (e.g. FAQ) that exist in page_sections but were never merged into draft_content
+      if (Array.isArray(item.page_sections)) {
+        const lc = cleanContent.toLowerCase();
+        for (const s of item.page_sections) {
+          if (!s.is_new) continue;
+          const dt = (s.draft_text || '').trim();
+          if (dt.length < 30) continue; // skip empty placeholder sections
+          const headLc = (s.heading || '').toLowerCase().trim();
+          const already = (headLc && lc.includes(headLc)) || (dt.length > 100 && cleanContent.includes(dt.slice(0, 80)));
+          if (already) continue;
+          cleanContent += '\n' + (s.heading ? `<h2>${s.heading}</h2>\n` : '') + dt;
+        }
+      }
       payload.content = cleanContent;
       changes.push({ field: 'content', old: (item.wp_previous_content || '').slice(0, 5000), new: cleanContent.slice(0, 5000) });
     }
