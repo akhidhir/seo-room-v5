@@ -259,6 +259,7 @@
 
     // Handle NEW sections + unmatched sections (insert on page)
     var newSections = sections.filter(function(s){ return s.is_new || s._unmatched; });
+    console.log('[SEO Room] New/unmatched sections: ' + (newSections.length ? newSections.map(function(s){ return (s.type||'?') + (s.is_new?'(new)':'(unmatched)'); }).join(', ') : 'none'));
     if(newSections.length > 0){
       // Use Elementor's own class structure so the page's CSS styles everything automatically
       var isElementor = !!document.querySelector('.elementor');
@@ -444,15 +445,38 @@
         return section;
       }
 
+      // Build a clean FULL-WIDTH FAQ section (accordions render properly, not squeezed into a split card)
+      function buildFaqSection(headingText, bodyHtml){
+        var section=document.createElement('section');
+        section.className='elementor-section elementor-top-section elementor-element elementor-section-boxed seo-new-block seo-faq-block';
+        var inner=document.createElement('div');
+        inner.style.cssText='max-width:880px;margin:0 auto;padding:0 24px';
+        if(headingText){
+          var donorH=findHeadingDonor(null);
+          if(donorH){ var hw=donorH.cloneNode(true); stripDyn(hw); hw.style.setProperty('background','transparent','important'); var ht=hw.querySelector('.elementor-heading-title')||hw.querySelector('h1,h2,h3,h4,h5,h6'); if(ht){ ht.textContent=headingText; ht.style.setProperty('text-align','center','important'); } hw.style.marginBottom='22px'; inner.appendChild(hw); }
+          else { var h=document.createElement('h2'); h.textContent=headingText; h.style.cssText='text-align:center;margin:0 0 22px;font-weight:700;font-size:30px'; inner.appendChild(h); }
+        }
+        var body=document.createElement('div'); body.innerHTML=bodyHtml; inner.appendChild(body);
+        section.appendChild(inner);
+        return section;
+      }
+
       newSections.forEach(function(ns){
         var heading = ns.draft_heading || ns.heading;
         var bodyHtml = ns.draft_text || '';
         var contentHtml = (heading ? '<h2>'+heading+'</h2>' : '') + bodyHtml;
+        var isFaq = (ns.type === 'faq') || /<details|<summary/i.test(bodyHtml);
 
         var section = null;
         if(isElementor){
-          try { section = buildSplitSection(heading, bodyHtml); }
-          catch(e0){ console.warn('[SEO Room] split build failed:', e0); section = null; }
+          if(isFaq){
+            try { section = buildFaqSection(heading, bodyHtml); }
+            catch(eF){ console.warn('[SEO Room] FAQ build failed:', eF); section = null; }
+          }
+          if(!section){
+            try { section = buildSplitSection(heading, bodyHtml); }
+            catch(e0){ console.warn('[SEO Room] split build failed:', e0); section = null; }
+          }
           if(!section){
             try { section = buildDesignedSection(heading, bodyHtml); }
             catch(e){ console.warn('[SEO Room] designed clone failed, using fallback:', e); section = null; }
@@ -480,6 +504,7 @@
         // Use the reference node's real parent — insertTarget may not be its direct parent (caused NotFoundError)
         if(insertBefore && insertBefore.parentNode) insertBefore.parentNode.insertBefore(section, insertBefore);
         else if(insertTarget) insertTarget.appendChild(section);
+        console.log('[SEO Room] Inserted new section: ' + (ns.type||'?') + ' "' + (heading||'').slice(0,30) + '" (faq=' + isFaq + ')');
         matched++;
       });
     }

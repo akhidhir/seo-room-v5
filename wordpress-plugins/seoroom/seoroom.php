@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.16
+ * Version: 8.9.17
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.16');
+define('SEOROOM_VERSION', '8.9.17');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -867,6 +867,14 @@ add_action('template_redirect', 'sropt_elementor_preview_intercept', 1);
 function sropt_elementor_preview_intercept() {
     if (empty($_GET['seoroom_preview'])) return;
     if (!is_singular()) return;
+
+    // Preview pages must NEVER be cached — a cached preview serves a stale copy (old plugin output, wrong
+    // sections) which is exactly the "preview not updating / not showing everything" symptom.
+    if (!defined('DONOTCACHEPAGE')) define('DONOTCACHEPAGE', true);
+    nocache_headers();
+    do_action('litespeed_control_set_nocache', 'seoroom preview');
+    do_action('berqwp_exclude_url', $_SERVER['REQUEST_URI'] ?? '');
+    add_filter('berqwp_is_cacheable', '__return_false');
 
     $page_id = get_queried_object_id();
     $sections = null;
