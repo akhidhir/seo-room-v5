@@ -30437,6 +30437,72 @@
       );
     }
 
+    // Cloudflare: paste a token, auto-detect the zone, purge on demand
+    function CloudflareConnect({ project }) {
+      const [token, setToken] = useState('');
+      const [status, setStatus] = useState({ connected: false, zone_id: null });
+      const [busy, setBusy] = useState(false);
+      const [msg, setMsg] = useState(null);
+      useEffect(() => {
+        if (!project?.id) return;
+        api(`/projects/${project.id}/cloudflare-status`).then(r => { if (r && !r.error) setStatus(r); }).catch(() => {});
+      }, [project?.id]);
+      const connect = async () => {
+        if (!token.trim()) { setMsg({ type: 'err', text: 'Paste your Cloudflare API token first.' }); return; }
+        setBusy(true); setMsg(null);
+        try {
+          const r = await api(`/projects/${project.id}/cloudflare-connect`, { method: 'POST', body: { token: token.trim() } });
+          if (r.error) { setMsg({ type: 'err', text: r.error }); }
+          else { setStatus({ connected: true, zone_id: r.zone_id }); setToken(''); setMsg({ type: 'ok', text: `Connected to ${r.zone_name || 'Cloudflare'} — cache now clears automatically on publish.` }); }
+        } catch (e) { setMsg({ type: 'err', text: e.message }); }
+        setBusy(false);
+      };
+      const purge = async () => {
+        setBusy(true); setMsg(null);
+        try {
+          const r = await api(`/projects/${project.id}/cloudflare-purge`, { method: 'POST', body: {} });
+          setMsg(r.ok ? { type: 'ok', text: 'Cloudflare cache cleared.' } : { type: 'err', text: r.error || 'Purge failed' });
+        } catch (e) { setMsg({ type: 'err', text: e.message }); }
+        setBusy(false);
+      };
+      const disconnect = async () => {
+        setBusy(true);
+        try { await api(`/projects/${project.id}/cloudflare-connect`, { method: 'POST', body: { token: '' } }); setStatus({ connected: false, zone_id: null }); setMsg(null); } catch (e) {}
+        setBusy(false);
+      };
+      return (
+        <div className="card">
+          <div className="card-title" style={{ marginBottom: 16 }}>
+            <i className="fas fa-shield-alt" style={{ marginRight: 8, color: '#f38020' }} />Cloudflare cache
+          </div>
+          {status.connected ? (
+            <div>
+              <div style={{ fontSize: 13, color: '#22c55e', marginBottom: 12 }}><i className="fas fa-check-circle" style={{ marginRight: 6 }}></i>Connected — your published changes clear Cloudflare automatically.</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn" onClick={purge} disabled={busy}>{busy ? <span className="spinner"></span> : <i className="fas fa-broom" style={{ marginRight: 6 }}></i>}Clear cache now</button>
+                <button className="btn" onClick={disconnect} disabled={busy} style={{ color: '#ef4444', borderColor: '#ef444440' }}>Disconnect</button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
+                Paste a Cloudflare API token and I'll do the rest (auto-detect your site). After this, every Publish clears the cache automatically — no more stale pages.<br />
+                <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" style={{ color: '#6366f1' }}>Create a token →</a> (use the "Edit zone" template, or permission <b>Zone → Cache Purge → Purge</b>).
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <label className="form-label" style={{ fontSize: 11 }}>Cloudflare API token</label>
+                  <input type="password" className="form-input" value={token} onChange={e => setToken(e.target.value)} placeholder="paste token here" style={{ fontSize: 12 }} />
+                </div>
+                <button className="btn btn-primary" onClick={connect} disabled={busy} style={{ height: 38 }}>{busy ? <span className="spinner"></span> : 'Connect'}</button>
+              </div>
+            </div>
+          )}
+          {msg && <div style={{ marginTop: 10, fontSize: 12, color: msg.type === 'ok' ? '#22c55e' : '#ef4444' }}>{msg.text}</div>}
+        </div>
+      );
+    }
+
     function ProjectSettingsPage({ project: currentProject }) {
       const [project, setProject] = useState(null);
       const [loading, setLoading] = useState(false);
@@ -30919,21 +30985,7 @@
           </div>
 
           {/* Cloudflare */}
-          <div className="card">
-            <div className="card-title" style={{ marginBottom: '16px' }}>
-              <i className="fas fa-shield-alt" style={{ marginRight: 8, color: '#f38020' }} />Cloudflare CDN
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
-              Auto-purge Cloudflare cache after schema fixes. Find your Zone ID in Cloudflare dashboard → your domain → Overview → right sidebar.
-              Set <code>CLOUDFLARE_API_TOKEN</code> as a Railway env var (API Tokens → Create Token → Zone:Cache Purge:Purge).
-            </div>
-            <div>
-              <label className="form-label" style={{ fontSize: 11 }}>Cloudflare Zone ID</label>
-              <input type="text" className="form-input" value={formData.cloudflareZoneId}
-                onChange={(e) => setFormData(prev => ({ ...prev, cloudflareZoneId: e.target.value }))}
-                placeholder="32-char hex string from Cloudflare Overview" style={{ fontSize: 12 }} />
-            </div>
-          </div>
+          <CloudflareConnect project={currentProject} />
 
           {/* Plugin License */}
           <div className="card">
