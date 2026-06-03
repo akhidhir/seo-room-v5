@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.20
+ * Version: 8.9.21
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.20');
+define('SEOROOM_VERSION', '8.9.21');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1007,6 +1007,35 @@ function sropt_restore_elementor($request) {
     if (function_exists('wp_cache_flush')) wp_cache_flush();
     clean_post_cache($page_id);
     return rest_ensure_response(['ok' => true, 'restored' => true]);
+}
+
+// Purge caches for a page (called after publish so changes show immediately)
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom-opt/v1', '/clear-cache(?:/(?P<page_id>\d+))?', [
+        'methods' => 'POST',
+        'callback' => 'sropt_clear_cache_route',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+});
+function sropt_clear_cache_route($request) {
+    $page_id = intval($request->get_param('page_id'));
+    if ($page_id) {
+        delete_post_meta($page_id, '_elementor_css');
+        clean_post_cache($page_id);
+        do_action('berqwp_clear_url', get_permalink($page_id));
+    }
+    // Global purges across common cache plugins
+    do_action('berqwp_clear_all_cache');
+    do_action('berqwp_clear_cache');
+    do_action('litespeed_purge_all');
+    do_action('rocket_clean_domain');
+    do_action('w3tc_flush_all');
+    do_action('wpfc_clear_all_cache');
+    if (function_exists('wp_cache_flush')) wp_cache_flush();
+    if (class_exists('\\Elementor\\Plugin')) {
+        try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
+    }
+    return rest_ensure_response(['ok' => true, 'cleared' => true, 'page_id' => $page_id]);
 }
 
 // Elementor Design-Safe Preview: intercept page output and modify rendered HTML

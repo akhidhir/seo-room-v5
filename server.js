@@ -15637,6 +15637,14 @@ app.post('/api/projects/:projectId/content-queue/:id/go-live', async (req, res) 
       return res.status(400).json({ error: 'Nothing to publish (no draft content or meta).' });
     }
 
+    // 4) Purge caches (BerqWP/page cache/Elementor CSS) so the change shows immediately
+    try {
+      await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/clear-cache/${item.page_id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: '{}',
+      });
+      console.log(`[go-live] cache purged for page ${item.page_id}`);
+    } catch (e) { console.log('[go-live] cache purge skipped:', e.message); }
+
     // Save to wp_change_history for rollback
     for (const ch of changes) {
       await pool.query(
