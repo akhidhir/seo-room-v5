@@ -33501,22 +33501,24 @@
           if (!token) { setAppLoading(false); return; }
           try {
             const meData = await api('/auth/me');
-            if (meData?.user) {
-              setUser(meData.user);
-              // Load projects
-              const projData = await api('/projects');
-              if (projData?.projects?.length > 0) {
-                setAllProjects(projData.projects);
-                const savedId = localStorage.getItem('currentProject');
-                const found = projData.projects.find(p => String(p.id) === savedId);
-                setProject(found || projData.projects[0]);
-              }
-            } else {
-              localStorage.removeItem('token');
-            }
-          } catch {
-            localStorage.removeItem('token');
+            if (!meData?.user) { localStorage.removeItem('token'); setAppLoading(false); return; }
+            setUser(meData.user);
+          } catch (e) {
+            // Only log out on a real auth rejection (401). A transient/network/5xx error (e.g. during a
+            // redeploy) must NOT clear the session — keep the token so a refresh recovers automatically.
+            if (e && (e.status === 401 || /invalid token/i.test(e.message || ''))) localStorage.removeItem('token');
+            setAppLoading(false); return;
           }
+          // Load projects — a failure here must not log the user out
+          try {
+            const projData = await api('/projects');
+            if (projData?.projects?.length > 0) {
+              setAllProjects(projData.projects);
+              const savedId = localStorage.getItem('currentProject');
+              const found = projData.projects.find(p => String(p.id) === savedId);
+              setProject(found || projData.projects[0]);
+            }
+          } catch (e) { /* keep session; projects can load on next interaction */ }
           setAppLoading(false);
         };
         init();
