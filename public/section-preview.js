@@ -267,13 +267,20 @@
       var footer = document.querySelector('footer, .site-footer, .elementor-location-footer');
       var insertTarget = sectionWrap || (footer ? footer.parentNode : (document.querySelector('.entry-content, article, main') || document.body));
       var insertBefore = null;
-      // Insert before footer if it's inside our target
-      if(footer && insertTarget.contains(footer)) insertBefore = footer;
-      // Fallback: insert before the last 2 Elementor sections (usually CTA + footer widgets)
-      if(!insertBefore && isElementor) {
-        var allTopSections = document.querySelectorAll('.elementor-top-section');
-        if(allTopSections.length >= 3) insertBefore = allTopSections[allTopSections.length - 2];
+      // 1. Before a "Related Posts"/related section if present — puts new sections at the END of the article
+      if(isElementor){
+        var heads = document.querySelectorAll('h1,h2,h3,h4');
+        for(var hi=0; hi<heads.length; hi++){
+          var htx = (heads[hi].textContent||'').toLowerCase().trim();
+          if(/^related|related posts|you (might|may) also|more (posts|articles)|keep reading/.test(htx)){
+            var rsec = heads[hi].closest('.elementor-top-section') || heads[hi].closest('section');
+            if(rsec && insertTarget && insertTarget.contains(rsec)){ insertBefore = rsec; break; }
+          }
+        }
       }
+      // 2. Else before the footer if it lives inside our target
+      if(!insertBefore && footer && insertTarget.contains(footer)) insertBefore = footer;
+      // 3. Else append to the content wrapper (end of article) — handled below when insertBefore is null
 
       // Inject a one-time stylesheet so new sections read as designed content blocks (matching site spacing/card feel)
       if(!document.getElementById('seo-new-block-css')){
