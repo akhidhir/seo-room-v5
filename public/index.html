@@ -26265,7 +26265,13 @@
       const [compProgress, setCompProgress] = useState(null);
 
       const saveService = async () => {
-        try { await api(`/projects/${project.id}/smart-map-ranking/service`, { method: 'POST', body: { service } }); setServiceSaved(true); setTimeout(() => setServiceSaved(false), 2000); } catch (e) {}
+        setError('');
+        try {
+          const r = await api(`/projects/${project.id}/smart-map-ranking/service`, { method: 'POST', body: { service } });
+          if (r && r.error) { setError('Save failed: ' + r.error); return; }
+          project.smart_service = service; // keep across re-mounts this session
+          setServiceSaved(true); setTimeout(() => setServiceSaved(false), 2000);
+        } catch (e) { setError('Save failed: ' + (e.message || 'unknown error')); }
       };
       const [sortBy, setSortBy] = useState('rank');
       const [sortDir, setSortDir] = useState('asc');
