@@ -26248,6 +26248,118 @@
       );
     }
 
+    // ============ SMART MAP RANKING — radius suburb survey + prioritized rollout plan ============
+    function SmartMapRankingPage({ project }) {
+      const [center, setCenter] = useState(project.location || project.business_name || '');
+      const [radius, setRadius] = useState(25);
+      const [loading, setLoading] = useState(false);
+      const [result, setResult] = useState(null);
+      const [error, setError] = useState('');
+
+      const runSurvey = async () => {
+        setError(''); setLoading(true); setResult(null);
+        try {
+          const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius } });
+          if (r.error) { setError(r.error); setLoading(false); return; }
+          setResult(r);
+        } catch (e) { setError(e.message || 'Survey failed'); }
+        setLoading(false);
+      };
+
+      const tierColor = (t) => t === 'High' ? '#22c55e' : t === 'Medium' ? '#f59e0b' : '#64748b';
+
+      return (
+        <div>
+          <div className="page-header">
+            <div className="page-title"><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 8, color: '#a855f7' }}></i> Smart Map Ranking</div>
+            <div className="page-subtitle">Survey suburbs around the business, ranked by proximity + population, with a prioritized rollout plan.</div>
+          </div>
+
+          <div className="integration-card" style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '1 1 260px' }}>
+                <label className="form-label" style={{ fontSize: 12 }}>Business location (suburb + state)</label>
+                <input className="form-input" value={center} onChange={e => setCenter(e.target.value)} placeholder="e.g. Applecross, WA" disabled={loading} />
+              </div>
+              <div style={{ flex: '1 1 220px' }}>
+                <label className="form-label" style={{ fontSize: 12 }}>Radius: <strong>{radius} km</strong></label>
+                <input type="range" min={5} max={50} step={5} value={radius} onChange={e => setRadius(parseInt(e.target.value))} disabled={loading} style={{ width: '100%' }} />
+              </div>
+              <button className="btn btn-primary" onClick={runSurvey} disabled={loading} style={{ height: 38 }}>
+                {loading ? <span className="spinner"></span> : <i className="fas fa-radar" style={{ marginRight: 6 }}></i>}
+                Run Survey
+              </button>
+            </div>
+            {error && <div className="alert alert-error" style={{ marginTop: 12 }}><i className="fas fa-exclamation-circle"></i> {error}</div>}
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
+              Population is ABS census data. Suburbs are ranked by a blend of how close (55%) and how populous (45%) they are.
+            </div>
+          </div>
+
+          {loading && <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}><span className="spinner" style={{ width: 28, height: 28 }}></span><div style={{ marginTop: 10 }}>Surveying suburbs…</div></div>}
+
+          {result && (
+            <>
+              <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+                <div className="integration-card" style={{ flex: '1 1 160px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: '#a855f7' }}>{result.total}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase' }}>Suburbs in range</div>
+                </div>
+                <div className="integration-card" style={{ flex: '1 1 160px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>{result.center?.label}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase' }}>Center · {result.radiusKm}km</div>
+                </div>
+              </div>
+
+              {/* Rollout plan */}
+              {(result.plan || []).map((ph, i) => ph.count > 0 && (
+                <div key={i} className="integration-card" style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{ph.phase} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>· {ph.count} suburbs</span></div>
+                  <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>{ph.suburbs.slice(0, 12).join(' · ')}{ph.suburbs.length > 12 ? ` · +${ph.suburbs.length - 12} more` : ''}</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: 'var(--text2)' }}>
+                    {ph.actions.map((a, j) => <li key={j} style={{ marginBottom: 2 }}>{a}</li>)}
+                  </ul>
+                </div>
+              ))}
+
+              {/* Ranked table */}
+              <div className="integration-card">
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Ranked suburbs</div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 11 }}>
+                        <th style={{ padding: '6px 8px' }}>#</th>
+                        <th style={{ padding: '6px 8px' }}>Suburb</th>
+                        <th style={{ padding: '6px 8px' }}>State</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Population</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Distance</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Score</th>
+                        <th style={{ padding: '6px 8px' }}>Tier</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.suburbs.map((s) => (
+                        <tr key={s.rank} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.rank}</td>
+                          <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.suburb}{s.isHome && <span style={{ marginLeft: 6, fontSize: 10, color: '#a855f7' }}>(HOME)</span>}</td>
+                          <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.state}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.distance} km</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{s.score}</td>
+                          <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
     function MapsRankingsPage({ project, setPage }) {
       const { keywords, rankings, merged, addKeyword, removeKeyword, loadData } = useRankData(project);
       const [syncing, setSyncing] = useState(false);
@@ -33356,6 +33468,8 @@ case 'action-plan':
             return <CopywriterPage stage="published" project={project} setPage={setActiveTab} />;
           case 'maps-rankings':
             return <MapsRankingsPage project={project} setPage={setActiveTab} />;
+          case 'smart-map':
+            return <SmartMapRankingPage project={project} />;
           case 'serp-rankings':
             return <SERPRankingsPage project={project} setPage={setActiveTab} />;
           case 'ai-search':
@@ -33428,6 +33542,7 @@ case 'action-plan':
         ]},
         { section: 'RANKINGS', items: [
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
+          { id: 'smart-map', label: 'Smart Map Ranking', icon: 'fas fa-wand-magic-sparkles', localOnly: true },
           { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
           { id: 'ai-search', label: 'AI Search', icon: 'fas fa-robot' },
           { id: 'discover-local', label: 'Discover Local Keywords', icon: 'fas fa-magnifying-glass-chart' },

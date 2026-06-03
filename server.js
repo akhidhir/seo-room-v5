@@ -5226,6 +5226,124 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+// ===== Australian suburb dataset — suburb, state, postcode, population (ABS 2016 Census), GPS =====
+// Source: michalsn/australian-suburbs (MIT). Fetched once at runtime and cached in memory + on disk.
+let AU_SUBURBS = null;        // [{suburb, state, postcode, population, lat, lng}]
+let AU_SUBURBS_BY_KEY = null; // normalized lookup
+let auSuburbsLoading = null;
+const AU_SUBURBS_URL = 'https://raw.githubusercontent.com/michalsn/australian-suburbs/master/data/suburbs.csv';
+const AU_STATES = { nsw:'NSW', vic:'VIC', qld:'QLD', wa:'WA', sa:'SA', tas:'TAS', act:'ACT', nt:'NT',
+  'new south wales':'NSW', 'victoria':'VIC', 'queensland':'QLD', 'western australia':'WA',
+  'south australia':'SA', 'tasmania':'TAS', 'northern territory':'NT', 'australian capital territory':'ACT' };
+
+function normSuburbKey(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+
+function parseCsvLine(line) {
+  const out = []; let cur = ''; let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (q) { if (ch === '"') { if (line[i+1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else { if (ch === '"') q = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch; }
+  }
+  out.push(cur); return out;
+}
+
+// Columns: ssc_code,suburb,urban_area,postcode,state,...,population(10),median_income,sqkm,lat(13),lng(14),timezone
+function parseAuSuburbsCsv(text) {
+  const lines = text.split(/\r?\n/);
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const c = parseCsvLine(lines[i]);
+    if (c.length < 15) continue;
+    const suburb = (c[1] || '').trim();
+    const lat = parseFloat(c[13]), lng = parseFloat(c[14]);
+    if (!suburb || isNaN(lat) || isNaN(lng)) continue;
+    out.push({ suburb, state: (c[4] || '').trim(), postcode: (c[3] || '').trim(), population: parseInt(c[10]) || 0, lat, lng });
+  }
+  return out;
+}
+
+function buildSuburbIndex() {
+  AU_SUBURBS_BY_KEY = {};
+  for (const r of (AU_SUBURBS || [])) {
+    const sk = normSuburbKey(r.suburb);
+    const fullKey = sk + '|' + normSuburbKey(r.state);
+    if (!AU_SUBURBS_BY_KEY[fullKey]) AU_SUBURBS_BY_KEY[fullKey] = r;
+    // name-only key resolves to the most-populous match (handles same name across states)
+    if (!AU_SUBURBS_BY_KEY[sk] || r.population > AU_SUBURBS_BY_KEY[sk].population) AU_SUBURBS_BY_KEY[sk] = r;
+  }
+}
+
+async function loadAuSuburbs() {
+  if (AU_SUBURBS) return AU_SUBURBS;
+  if (auSuburbsLoading) return auSuburbsLoading;
+  auSuburbsLoading = (async () => {
+    const fs = require('fs'); const path = require('path');
+    const cacheFile = path.join(__dirname, 'data', 'au_suburbs.json');
+    try {
+      if (fs.existsSync(cacheFile)) {
+        const arr = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        if (Array.isArray(arr) && arr.length > 1000) { AU_SUBURBS = arr; buildSuburbIndex(); console.log(`[au-suburbs] loaded ${arr.length} from cache`); return AU_SUBURBS; }
+      }
+    } catch (e) { /* fall through to fetch */ }
+    try {
+      const r = await fetch(AU_SUBURBS_URL, { signal: AbortSignal.timeout(30000) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const arr = parseAuSuburbsCsv(await r.text());
+      if (arr.length < 1000) throw new Error('parsed too few rows: ' + arr.length);
+      AU_SUBURBS = arr; buildSuburbIndex();
+      try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(arr)); } catch (e) {}
+      console.log(`[au-suburbs] fetched + cached ${arr.length} suburbs`);
+      return AU_SUBURBS;
+    } catch (e) {
+      console.error('[au-suburbs] load failed:', e.message);
+      AU_SUBURBS = AU_SUBURBS || []; buildSuburbIndex();
+      return AU_SUBURBS;
+    } finally { auSuburbsLoading = null; }
+  })();
+  return auSuburbsLoading;
+}
+
+// Geocode a free-text location ("Applecross WA", "Perth, Western Australia") to a suburb record
+function geocodeSuburbText(t) {
+  if (!t || !AU_SUBURBS_BY_KEY) return null;
+  let raw = t.toString().toLowerCase();
+  let state = null;
+  for (const k of Object.keys(AU_STATES)) {
+    if (new RegExp('\\b' + k + '\\b').test(raw)) { state = AU_STATES[k]; raw = raw.replace(new RegExp('\\b' + k + '\\b', 'g'), ' '); }
+  }
+  raw = raw.replace(/\baustralia\b/g, ' ');
+  const key = normSuburbKey(raw);
+  if (!key) return null;
+  const stateK = state ? normSuburbKey(state) : null;
+  if (stateK && AU_SUBURBS_BY_KEY[key + '|' + stateK]) return AU_SUBURBS_BY_KEY[key + '|' + stateK];
+  if (AU_SUBURBS_BY_KEY[key]) return AU_SUBURBS_BY_KEY[key];
+  const toks = key.split(' ');
+  for (let n = Math.min(3, toks.length); n >= 1; n--) {
+    const sub = toks.slice(0, n).join(' ');
+    if (stateK && AU_SUBURBS_BY_KEY[sub + '|' + stateK]) return AU_SUBURBS_BY_KEY[sub + '|' + stateK];
+    if (AU_SUBURBS_BY_KEY[sub]) return AU_SUBURBS_BY_KEY[sub];
+  }
+  return null;
+}
+
+// Resolve the survey center from request + project (coords > explicit suburb > project location/name)
+function resolveSmartCenter({ center, lat, lng, project }) {
+  if (lat != null && lng != null && !isNaN(+lat) && !isNaN(+lng)) return { lat: +lat, lng: +lng, label: center || 'Custom point', source: 'coords' };
+  const texts = [center, project && project.location, project && project.business_name].filter(Boolean);
+  for (const t of texts) {
+    const f = geocodeSuburbText(t);
+    if (f) return { lat: f.lat, lng: f.lng, label: f.suburb + ', ' + f.state, population: f.population, source: 'dataset' };
+  }
+  for (const t of texts) {
+    const parts = (t || '').toLowerCase().replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+    const cands = [(t || '').toLowerCase().trim(), parts[0], parts.slice(0, 2).join(' ')].filter(Boolean);
+    for (const c of cands) { if (SUBURB_GPS[c]) return { lat: SUBURB_GPS[c].lat, lng: SUBURB_GPS[c].lng, label: c, source: 'suburb_gps' }; }
+  }
+  return null;
+}
+
 // Perth suburb GPS coordinates for distance calculation
 const SUBURB_GPS = {
   'leeming': { lat: -32.0728, lng: 115.8640 }, 'cannington': { lat: -32.0170, lng: 115.9340 },
@@ -31422,6 +31540,77 @@ function generateGrid(centerLat, centerLng, radiusKm, gridSize) {
 }
 
 // Run grid scan for selected keywords
+// ===== SMART MAP RANKING — survey suburbs in a radius, rank by proximity + population, return a rollout plan =====
+app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const { center, lat, lng } = req.body || {};
+    const radius = Math.min(Math.max(parseFloat(req.body && req.body.radiusKm) || 25, 5), 50);
+
+    await loadAuSuburbs();
+    if (!AU_SUBURBS || AU_SUBURBS.length === 0) return res.status(503).json({ error: 'Suburb dataset is still loading or unavailable. Please try again in a moment.' });
+
+    const ctr = resolveSmartCenter({ center, lat, lng, project });
+    if (!ctr) return res.status(400).json({ error: 'Could not determine the business location. Enter a suburb (with state) or coordinates.' });
+
+    // Survey suburbs within the radius
+    const within = [];
+    let maxPop = 1;
+    const centerKey = normSuburbKey(ctr.label.split(',')[0]);
+    for (const s of AU_SUBURBS) {
+      const d = haversineKm(ctr.lat, ctr.lng, s.lat, s.lng);
+      if (d <= radius) {
+        within.push({ suburb: s.suburb, state: s.state, postcode: s.postcode, population: s.population, distance: Math.round(d * 10) / 10 });
+        if (s.population > maxPop) maxPop = s.population;
+      }
+    }
+    if (within.length === 0) return res.json({ center: ctr, radiusKm: radius, total: 0, suburbs: [], plan: [], note: 'No suburbs found in range — the location may not be in the dataset.' });
+
+    // Score: blend proximity (closer = higher) and population (bigger = higher)
+    const wDist = 0.55, wPop = 0.45;
+    within.forEach(s => {
+      const prox = 1 - (s.distance / radius);
+      const popN = maxPop > 0 ? (s.population / maxPop) : 0;
+      s.score = Math.round((wDist * prox + wPop * popN) * 1000) / 10; // 0..100
+    });
+    within.sort((a, b) => b.score - a.score || a.distance - b.distance);
+
+    const n = within.length;
+    const highCut = Math.max(1, Math.ceil(n * 0.25));
+    const medCut = Math.max(highCut, Math.ceil(n * 0.6));
+    const ranked = within.map((s, i) => ({
+      rank: i + 1, ...s,
+      tier: i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low',
+      isHome: normSuburbKey(s.suburb) === centerKey,
+    }));
+
+    const phase = (label, list, actions) => ({ phase: label, suburbs: list.map(s => `${s.suburb} (${s.population.toLocaleString()}, ${s.distance}km)`), count: list.length, actions });
+    const high = ranked.filter(s => s.tier === 'High');
+    const med = ranked.filter(s => s.tier === 'Medium');
+    const low = ranked.filter(s => s.tier === 'Low');
+    const plan = [
+      phase('Phase 1 — Priority (closest + most populous)', high, [
+        'Create a dedicated suburb landing page for each (service + suburb), unique content',
+        'Add each suburb to your GBP service areas',
+        'Target Google reviews that mention these suburbs by name',
+        'Post weekly GBP updates referencing these suburbs',
+      ]),
+      phase('Phase 2 — Growth', med, [
+        'Build suburb landing pages after Phase 1 is indexed',
+        'Add to GBP service areas; request reviews mentioning the suburb',
+        'Monthly GBP posts referencing these suburbs',
+      ]),
+      phase('Phase 3 — Reach', low, [
+        'Local citations/directory listings mentioning these suburbs',
+        'Internal links from Phase 1/2 pages; add to a combined service-area page',
+      ]),
+    ];
+
+    res.json({ center: ctr, radiusKm: radius, total: n, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
   if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
   const { projectId } = req.params;
