@@ -26304,7 +26304,13 @@
             try {
               const st = await api(`/projects/${project.id}/smart-map-ranking/competitors/status`);
               if (st.status === 'running') { setCompProgress({ checked: st.checked, total: st.total }); setTimeout(poll, 2500); return; }
-              if (st.status === 'done') { setResult({ ...result, suburbs: st.suburbs, plan: st.plan, hasCompetitors: true }); setAccepted(false); setSavedAt(null); setCheckingComp(false); setCompProgress(null); return; }
+              if (st.status === 'done') {
+                const updated = { ...result, suburbs: st.suburbs, plan: st.plan, hasCompetitors: true };
+                setResult(updated); setCheckingComp(false); setCompProgress(null);
+                // Auto-save so the (paid) competitor data survives a reload
+                try { const sv = await api(`/projects/${project.id}/smart-map-ranking/save`, { method: 'POST', body: updated }); setAccepted(true); setSavedAt(sv && sv.saved_at); } catch (e) {}
+                return;
+              }
               if (st.status === 'error') { setError('Competitor check failed: ' + (st.error || '')); setCheckingComp(false); return; }
               setCheckingComp(false);
             } catch (e) { setError(e.message); setCheckingComp(false); }
