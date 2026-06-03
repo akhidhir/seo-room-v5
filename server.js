@@ -553,6 +553,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 50`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_service TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_connection_code TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_key TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_expires TIMESTAMPTZ`).catch(() => {});
@@ -31693,7 +31694,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
 
     // Merge cached competitor counts (free) so they persist across surveys and aren't re-paid for
     let hasCompetitors = false;
-    const svcKey = normSuburbKey((req.body && req.body.service) || project.industry || '');
+    const svcKey = normSuburbKey((req.body && req.body.service) || project.smart_service || project.industry || '');
     if (svcKey) {
       try {
         const cacheRows = (await pool.query('SELECT suburb, competitors, top, checked_at FROM smart_comp_cache WHERE project_id=$1 AND service=$2', [req.params.projectId, svcKey])).rows;
@@ -31727,6 +31728,15 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Save the default "service to check competition for" per project
+app.post('/api/projects/:projectId/smart-map-ranking/service', async (req, res) => {
+  try {
+    const service = (req.body && req.body.service || '').toString().trim();
+    await pool.query('UPDATE projects SET smart_service=$1 WHERE id=$2', [service, req.params.projectId]);
+    res.json({ ok: true, service });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Background competitor scan: checks EVERY suburb in range, re-ranks by opportunity (low competition weighted highest)
 const smartCompJobs = {}; // projectId -> { status, checked, total, suburbs, plan, error, service }
 
@@ -31736,7 +31746,7 @@ app.post('/api/projects/:projectId/smart-map-ranking/competitors/run', async (re
     const projectId = req.params.projectId;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const service = (req.body.service || project.industry || '').toString().trim();
+    const service = (req.body.service || project.smart_service || project.industry || '').toString().trim();
     if (!service) return res.status(400).json({ error: 'Enter the service to check competitors for (e.g. "plumber").' });
     const suburbs = Array.isArray(req.body.suburbs) ? req.body.suburbs.slice() : [];
     if (suburbs.length === 0) return res.status(400).json({ error: 'No suburbs to check. Run the survey first.' });

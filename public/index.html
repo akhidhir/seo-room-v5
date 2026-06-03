@@ -26259,9 +26259,14 @@
       const [accepted, setAccepted] = useState(false);
       const [savedAt, setSavedAt] = useState(null);
       const [saving, setSaving] = useState(false);
-      const [service, setService] = useState(project.industry || '');
+      const [service, setService] = useState(project.smart_service || project.industry || '');
+      const [serviceSaved, setServiceSaved] = useState(false);
       const [checkingComp, setCheckingComp] = useState(false);
       const [compProgress, setCompProgress] = useState(null);
+
+      const saveService = async () => {
+        try { await api(`/projects/${project.id}/smart-map-ranking/service`, { method: 'POST', body: { service } }); setServiceSaved(true); setTimeout(() => setServiceSaved(false), 2000); } catch (e) {}
+      };
       const [sortBy, setSortBy] = useState('rank');
       const [sortDir, setSortDir] = useState('asc');
       const [expandedRank, setExpandedRank] = useState(null);
@@ -26426,6 +26431,9 @@
                   <label className="form-label" style={{ fontSize: 12 }}>Service to check competition for</label>
                   <input className="form-input" value={service} onChange={e => setService(e.target.value)} placeholder="e.g. plumber" disabled={checkingComp} />
                 </div>
+                <button className="btn" onClick={saveService} disabled={checkingComp} style={{ height: 38 }} title="Save this as the default service for this project">
+                  {serviceSaved ? <><i className="fas fa-check" style={{ marginRight: 6, color: '#22c55e' }}></i>Saved</> : <><i className="fas fa-floppy-disk" style={{ marginRight: 6 }}></i>Save</>}
+                </button>
                 <button className="btn" onClick={checkCompetitors} disabled={checkingComp} style={{ height: 38 }}>
                   {checkingComp ? <span className="spinner"></span> : <i className="fas fa-users-viewfinder" style={{ marginRight: 6 }}></i>}
                   {checkingComp ? 'Checking…' : (result.hasCompetitors ? 'Re-check Competitors' : 'Check Competitors')}
