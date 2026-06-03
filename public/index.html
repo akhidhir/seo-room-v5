@@ -26260,20 +26260,28 @@
       const [saving, setSaving] = useState(false);
       const [service, setService] = useState(project.industry || '');
       const [checkingComp, setCheckingComp] = useState(false);
+      const [compProgress, setCompProgress] = useState(null);
 
       const checkCompetitors = async () => {
         if (!result || !result.suburbs) return;
         if (!service.trim()) { setError('Enter the service to check competition for (e.g. "plumber").'); return; }
-        const count = Math.min(result.suburbs.length, 50);
-        if (!window.confirm(`Check competitors for ${count} suburb${count !== 1 ? 's' : ''} via DataForSEO Maps?\nEstimated cost: $${(count * 0.002).toFixed(2)}.`)) return;
-        setError(''); setCheckingComp(true);
+        const count = result.suburbs.length;
+        if (!window.confirm(`Check competitors for all ${count} suburbs via DataForSEO Maps?\nEstimated cost: $${(count * 0.002).toFixed(2)}. Runs in the background (~1–3 min).`)) return;
+        setError(''); setCheckingComp(true); setCompProgress({ checked: 0, total: count });
         try {
-          const r = await api(`/projects/${project.id}/smart-map-ranking/competitors`, { method: 'POST', body: { service, suburbs: result.suburbs, radiusKm: result.radiusKm } });
-          if (r.error) { setError(r.error); setCheckingComp(false); return; }
-          setResult({ ...result, suburbs: r.suburbs, plan: r.plan, hasCompetitors: true });
-          setAccepted(false); setSavedAt(null);
-        } catch (e) { setError(e.message || 'Competitor check failed'); }
-        setCheckingComp(false);
+          const start = await api(`/projects/${project.id}/smart-map-ranking/competitors/run`, { method: 'POST', body: { service, suburbs: result.suburbs, radiusKm: result.radiusKm } });
+          if (start.error) { setError(start.error); setCheckingComp(false); return; }
+          const poll = async () => {
+            try {
+              const st = await api(`/projects/${project.id}/smart-map-ranking/competitors/status`);
+              if (st.status === 'running') { setCompProgress({ checked: st.checked, total: st.total }); setTimeout(poll, 2500); return; }
+              if (st.status === 'done') { setResult({ ...result, suburbs: st.suburbs, plan: st.plan, hasCompetitors: true }); setAccepted(false); setSavedAt(null); setCheckingComp(false); setCompProgress(null); return; }
+              if (st.status === 'error') { setError('Competitor check failed: ' + (st.error || '')); setCheckingComp(false); return; }
+              setCheckingComp(false);
+            } catch (e) { setError(e.message); setCheckingComp(false); }
+          };
+          setTimeout(poll, 2000);
+        } catch (e) { setError(e.message || 'Competitor check failed'); setCheckingComp(false); }
       };
 
       const compColor = (c) => c == null ? 'var(--text3)' : c <= 5 ? '#22c55e' : c <= 12 ? '#f59e0b' : '#ef4444';
@@ -26367,9 +26375,10 @@
                 </div>
                 <button className="btn" onClick={checkCompetitors} disabled={checkingComp} style={{ height: 38 }}>
                   {checkingComp ? <span className="spinner"></span> : <i className="fas fa-users-viewfinder" style={{ marginRight: 6 }}></i>}
-                  {result.hasCompetitors ? 'Re-check Competitors' : 'Check Competitors'}
+                  {checkingComp ? 'Checking…' : (result.hasCompetitors ? 'Re-check Competitors' : 'Check Competitors')}
                 </button>
-                {result.hasCompetitors && <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>Re-ranked by opportunity: close + populous + low competition.</div>}
+                {checkingComp && compProgress && <div style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>Checked {compProgress.checked} / {compProgress.total} suburbs…</div>}
+                {!checkingComp && result.hasCompetitors && <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>Re-ranked by opportunity — fewer competitors weighted highest. "—" = lookup failed.</div>}
               </div>
               <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
                 <div className="integration-card" style={{ flex: '1 1 160px', textAlign: 'center' }}>
