@@ -27686,7 +27686,8 @@
                               if (ourRating && ourRating < parseFloat(avgCompRating)) actions.push({ icon: 'fa-star-half-stroke', color: '#3b82f6', text: `Improve rating from ${ourRating} to ${avgCompRating}+ (competitor average).`, priority: 'medium' });
                               if (solv < 50) actions.push({ icon: 'fa-map-pin', color: '#8b5cf6', text: `Add "${kw.location}" to GBP service areas and create a dedicated landing page for "${kw.keyword} ${kw.location}".`, priority: 'high' });
                               if (comps.some(c => c.top1 > foundIn)) actions.push({ icon: 'fa-bullseye', color: '#ef4444', text: `Post GBP updates mentioning "${kw.keyword}" and "${kw.location}" weekly to boost relevance.`, priority: 'medium' });
-                              actions.push({ icon: 'fa-building', color: '#22c55e', text: `Ensure NAP consistency across all directories. Check that business categories match: "${comps[0]?.type || 'Locksmith'}".`, priority: 'medium' });
+                              const ourCategory = our.type || comps[0]?.type || project.industry || project.business_name || 'your primary category';
+                              actions.push({ icon: 'fa-building', color: '#22c55e', text: `Ensure NAP consistency across all directories. Check that business categories match: "${ourCategory}".`, priority: 'medium' });
                               return (
                                 <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
                                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 14 }}>
