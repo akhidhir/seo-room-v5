@@ -26346,8 +26346,8 @@
           const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius, minPopulation: minPop, service } });
           if (r.error) { setError(r.error); setLoading(false); return; }
           setResult(r);
-          // Auto-save the full analysis (checklist + any merged competitors) so it persists across reloads
-          try { const sv = await api(`/projects/${project.id}/smart-map-ranking/save`, { method: 'POST', body: r }); setAccepted(true); setSavedAt(sv && sv.saved_at); } catch (e) {}
+          // Persist silently so a reload never loses it; user still explicitly Accepts to lock the plan
+          try { await api(`/projects/${project.id}/smart-map-ranking/save`, { method: 'POST', body: r }); } catch (e) {}
         } catch (e) { setError(e.message || 'Survey failed'); }
         setLoading(false);
       };
@@ -26409,10 +26409,13 @@
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
                 <div style={{ fontSize: 13, color: accepted ? '#22c55e' : 'var(--text3)' }}>
                   {accepted
-                    ? <><i className="fas fa-check-circle" style={{ marginRight: 6 }}></i>Plan accepted{savedAt ? ` · saved ${new Date(savedAt).toLocaleDateString()}` : ''} — it will stay here.</>
-                    : <><i className="fas fa-circle-info" style={{ marginRight: 6 }}></i>Survey only — accept it to keep this plan.</>}
+                    ? <><i className="fas fa-check-circle" style={{ marginRight: 6 }}></i>Plan accepted{savedAt ? ` · ${new Date(savedAt).toLocaleDateString()}` : ''}</>
+                    : <><i className="fas fa-circle-info" style={{ marginRight: 6 }}></i>Review the plan, then Accept to lock it in.</>}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn" onClick={() => { setSortBy('rank'); setSortDir('asc'); }} style={{ fontSize: 13, borderColor: sortBy === 'rank' && sortDir === 'asc' ? '#a855f7' : 'var(--border)', color: sortBy === 'rank' && sortDir === 'asc' ? '#a855f7' : 'var(--text2)' }} title="Order the suburbs by the plan: Phase 1 → 2 → 3">
+                    <i className="fas fa-list-ol" style={{ marginRight: 6 }}></i>Arrange by plan
+                  </button>
                   {!accepted && <button className="btn btn-primary" onClick={acceptPlan} disabled={saving} style={{ fontSize: 13 }}>{saving ? <span className="spinner"></span> : <i className="fas fa-check" style={{ marginRight: 6 }}></i>}Accept Plan</button>}
                   {accepted && <button className="btn" onClick={clearPlan} style={{ fontSize: 13, color: '#ef4444', borderColor: '#ef444440' }}><i className="fas fa-trash" style={{ marginRight: 6 }}></i>Clear</button>}
                 </div>
