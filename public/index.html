@@ -21833,6 +21833,23 @@
         } catch (e) { alert('Error: ' + e.message); }
       };
 
+      // Move an item one step back/forward through the editorial stages (queue → drafts → approved).
+      // Forward past "approved" hands off to Publish (WP-side). Staging/published use Revert/Rollback.
+      const EDITORIAL_STAGES = ['queue', 'drafts', 'approved'];
+      const STAGE_LABELS = { queue: 'Queue', drafts: 'Drafts', approved: 'Approval', staging: 'Staging', published: 'Published' };
+      const moveStage = async (item, dir) => {
+        if (!pid) return;
+        const idx = EDITORIAL_STAGES.indexOf(item.stage);
+        if (idx === -1) return; // staging/published handled by Revert/Rollback
+        const target = EDITORIAL_STAGES[idx + dir];
+        if (!target) { if (dir > 0 && item.stage === 'approved') return handlePublish(item); return; }
+        try {
+          await api('/projects/' + pid + '/content-queue/' + item.id, { method: 'PUT', body: { stage: target } });
+          await loadItems();
+          setSelectedItem(prev => (prev && prev.id === item.id) ? { ...prev, stage: target } : prev);
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+
       // Generate Draft for a queue item — auto-uses section-aware when sections exist
       const handleGenerateDraft = async (item) => {
         if (!pid || generating) return;
@@ -23525,6 +23542,17 @@
                   )
                 ),
                 React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                  // Editorial stage move: back / forward (queue → drafts → approval)
+                  EDITORIAL_STAGES.includes(stage) && stage !== 'queue' && React.createElement('button', {
+                    onClick: (e) => { e.stopPropagation(); moveStage(item, -1); },
+                    title: 'Move back to ' + STAGE_LABELS[EDITORIAL_STAGES[EDITORIAL_STAGES.indexOf(stage) - 1]],
+                    style: { padding: '6px 10px', background: 'var(--bg3)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+                  }, React.createElement('i', { className: 'fas fa-arrow-left' })),
+                  EDITORIAL_STAGES.includes(stage) && React.createElement('button', {
+                    onClick: (e) => { e.stopPropagation(); moveStage(item, 1); },
+                    title: stage === 'approved' ? 'Move forward to Publishing' : 'Move forward to ' + STAGE_LABELS[EDITORIAL_STAGES[EDITORIAL_STAGES.indexOf(stage) + 1]],
+                    style: { padding: '6px 10px', background: 'var(--bg3)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontSize: 12 }
+                  }, React.createElement('i', { className: 'fas fa-arrow-right' })),
                   // Split button for multi-location items
                   stage === 'queue' && /\b(?:for|:)\s+.+\s*[+&,]\s*.+/.test(item.page_title || '') && React.createElement('button', {
                     onClick: async (e) => {
