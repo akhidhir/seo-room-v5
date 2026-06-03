@@ -1513,6 +1513,129 @@
       );
     }
 
+    // ============ TEAM INVITE PAGE — Full-access team member signup ============
+    function TeamInvitePage({ token, onLogin }) {
+      const [inviteData, setInviteData] = useState(null);
+      const [inviteError, setInviteError] = useState('');
+      const [name, setName] = useState('');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [confirmPassword, setConfirmPassword] = useState('');
+      const [loading, setLoading] = useState(true);
+      const [submitting, setSubmitting] = useState(false);
+      const [error, setError] = useState('');
+      const [alreadyUsed, setAlreadyUsed] = useState(false);
+
+      useEffect(() => {
+        fetch('/api/team-invite/' + token)
+          .then(r => r.json())
+          .then(data => {
+            if (data.error) {
+              setInviteError(data.error);
+              if (data.already_used) setAlreadyUsed(true);
+            } else {
+              setInviteData(data);
+              if (data.email) setEmail(data.email);
+              if (data.name) setName(data.name);
+            }
+            setLoading(false);
+          })
+          .catch(() => { setInviteError('Failed to validate invite link'); setLoading(false); });
+      }, [token]);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        if (password !== confirmPassword) { setError('Passwords do not match'); return; }
+        if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+        setSubmitting(true);
+        try {
+          const r = await fetch('/api/team-invite/' + token + '/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email, password })
+          });
+          const data = await r.json();
+          if (data.error) { setError(data.error); setSubmitting(false); return; }
+          localStorage.setItem('token', data.token);
+          onLogin(data.user);
+        } catch (err) {
+          setError('Something went wrong. Please try again.');
+          setSubmitting(false);
+        }
+      };
+
+      if (loading) return (
+        <div className="login-page">
+          <div className="login-form" style={{ textAlign: 'center' }}>
+            <span className="spinner" style={{ width: 32, height: 32 }}></span>
+            <div style={{ marginTop: 12, color: 'var(--text3)' }}>Validating invite...</div>
+          </div>
+        </div>
+      );
+
+      if (inviteError) return (
+        <div className="login-page">
+          <div className="login-form" style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }}><i className="fas fa-link-slash"></i></div>
+            <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>{inviteError}</div>
+            {alreadyUsed && <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16 }}>
+              If you already created your account, you can log in below.
+            </div>}
+            <a href="/" style={{ color: '#6366f1', fontSize: 13 }}>Go to login</a>
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="login-page">
+          <div className="login-form">
+            <div className="login-header">
+              <div className="login-title">
+                <i className="fas fa-user-plus" style={{ marginRight: 8 }}></i> Join the Team
+              </div>
+              <div className="login-subtitle">
+                You've been invited to <strong>The SEO Room</strong> dashboard with full access
+              </div>
+            </div>
+
+            {error && <div className="alert alert-error"><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+            <form onSubmit={handleSubmit}>
+              <div className="form-group">
+                <label className="form-label">Full Name</label>
+                <input type="text" className="form-input" value={name} onChange={e => setName(e.target.value)}
+                  placeholder="Your name" required disabled={submitting} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Email</label>
+                <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)}
+                  placeholder="you@example.com" required disabled={submitting || !!inviteData?.email} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <input type="password" className="form-input" value={password} onChange={e => setPassword(e.target.value)}
+                  placeholder="Min 6 characters" required disabled={submitting} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Confirm Password</label>
+                <input type="password" className="form-input" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter password" required disabled={submitting} />
+              </div>
+              <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={submitting}>
+                {submitting ? <span className="spinner"></span> : null}
+                Create Account
+              </button>
+            </form>
+
+            <div style={{ textAlign: 'center', marginTop: 16, fontSize: 13, color: 'var(--text3)' }}>
+              Already have an account? <a href="/" style={{ color: '#6366f1' }}>Log in</a>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // ============ CLIENT APPROVAL VIEW — stripped-down view for clients ============
     function ClientApprovalView({ user, project, onLogout }) {
       const [items, setItems] = useState([]);
@@ -32150,6 +32273,135 @@
     }
 
     // ============ INTEGRATIONS PAGE ============
+    // ============ TEAM MEMBERS CARD — invite + manage full-access agency users ============
+    function TeamMembersCard() {
+      const [data, setData] = useState({ members: [], invites: [] });
+      const [loading, setLoading] = useState(true);
+      const [email, setEmail] = useState('');
+      const [name, setName] = useState('');
+      const [sending, setSending] = useState(false);
+      const [result, setResult] = useState(null);
+      const [error, setError] = useState('');
+
+      const load = async () => {
+        setLoading(true);
+        try {
+          const r = await api('/team');
+          if (!r.error) setData({ members: r.members || [], invites: r.invites || [] });
+        } catch (e) { /* ignore */ }
+        setLoading(false);
+      };
+      useEffect(() => { load(); }, []);
+
+      const sendInvite = async () => {
+        setError(''); setResult(null);
+        if (!email.trim()) { setError('Enter an email address'); return; }
+        setSending(true);
+        try {
+          const r = await api('/team/invite', { method: 'POST', body: { email: email.trim(), name: name.trim() } });
+          if (r.error) { setError(r.error); setSending(false); return; }
+          setResult(r);
+          setEmail(''); setName('');
+          load();
+        } catch (e) { setError(e.message || 'Failed to send invitation'); }
+        setSending(false);
+      };
+
+      const revokeInvite = async (id) => {
+        await api('/team/invite/' + id, { method: 'DELETE' });
+        load();
+      };
+      const removeMember = async (id) => {
+        if (!window.confirm('Remove this team member? They will lose access.')) return;
+        const r = await api('/team/member/' + id, { method: 'DELETE' });
+        if (r.error) { alert(r.error); return; }
+        load();
+      };
+      const copyLink = (url) => { navigator.clipboard?.writeText(url); };
+
+      const pending = (data.invites || []).filter(i => !i.used_by);
+
+      return (
+        <div className="integration-card">
+          <div className="integration-header">
+            <div className="integration-title">
+              <i className="fas fa-users" style={{ marginRight: 8, color: '#6366f1' }}></i>
+              Team Members
+              <span style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 8, fontWeight: 400 }}>Full-access agency users</span>
+            </div>
+          </div>
+
+          {error && <div className="alert alert-error" style={{ marginBottom: 12 }}><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+          {/* Invite form */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 14 }}>
+            <div style={{ flex: '1 1 200px' }}>
+              <label className="form-label" style={{ fontSize: 12 }}>Email</label>
+              <input type="email" className="form-input" value={email} onChange={e => setEmail(e.target.value)} placeholder="teammate@agency.com" disabled={sending} />
+            </div>
+            <div style={{ flex: '1 1 160px' }}>
+              <label className="form-label" style={{ fontSize: 12 }}>Name (optional)</label>
+              <input type="text" className="form-input" value={name} onChange={e => setName(e.target.value)} placeholder="Their name" disabled={sending} />
+            </div>
+            <button className="btn btn-primary" onClick={sendInvite} disabled={sending} style={{ height: 38 }}>
+              {sending ? <span className="spinner"></span> : <i className="fas fa-paper-plane" style={{ marginRight: 6 }}></i>}
+              Send Invitation
+            </button>
+          </div>
+
+          {/* Result after sending */}
+          {result && (
+            <div style={{ marginBottom: 14, padding: '10px 14px', background: 'var(--bg2)', borderRadius: 8, fontSize: 13 }}>
+              {result.emailed
+                ? <div style={{ color: '#22c55e' }}><i className="fas fa-check-circle" style={{ marginRight: 6 }}></i>Invitation emailed.</div>
+                : <div style={{ color: '#f59e0b' }}><i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }}></i>Email not sent ({result.email_error === 'no_api_key' ? 'no RESEND_API_KEY set' : result.email_error}). Share this link manually:</div>}
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                <input className="form-input" readOnly value={result.url} style={{ fontSize: 12 }} onFocus={e => e.target.select()} />
+                <button className="btn" onClick={() => copyLink(result.url)} style={{ whiteSpace: 'nowrap' }}><i className="fas fa-copy" style={{ marginRight: 4 }}></i>Copy</button>
+              </div>
+            </div>
+          )}
+
+          {loading ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> : (
+            <>
+              {/* Members */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', marginBottom: 6 }}>Members ({data.members.length})</div>
+              <div style={{ marginBottom: 14 }}>
+                {data.members.map(m => (
+                  <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{m.name || m.email}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>{m.email} · {m.role || 'admin'}</div>
+                    </div>
+                    <button className="btn" onClick={() => removeMember(m.id)} style={{ fontSize: 12, color: '#ef4444', borderColor: '#ef444440' }}><i className="fas fa-user-minus"></i></button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Pending invites */}
+              {pending.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', marginBottom: 6 }}>Pending invites ({pending.length})</div>
+                  {pending.map(inv => (
+                    <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                      <div>
+                        <div style={{ fontSize: 14 }}>{inv.email || '(link invite)'}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)' }}>Expires {new Date(inv.expires_at).toLocaleDateString()}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn" onClick={() => copyLink(`${window.location.origin}/team-invite/${inv.invite_token}`)} style={{ fontSize: 12 }}><i className="fas fa-copy"></i></button>
+                        <button className="btn" onClick={() => revokeInvite(inv.id)} style={{ fontSize: 12, color: '#ef4444', borderColor: '#ef444440' }}><i className="fas fa-times"></i></button>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      );
+    }
+
     function IntegrationsPage({ project }) {
       const [integrations, setIntegrations] = useState({
         gbp: { connected: false },
@@ -32297,6 +32549,9 @@
             <i className="fas fa-info-circle" style={{ marginRight: '6px' }}></i>
             Google connections are <strong>account-level</strong> — connect once and they work across all your projects.
           </div>
+
+          {/* Team Members */}
+          <TeamMembersCard />
 
           {/* Google Business Profile */}
           <div className="integration-card">
@@ -32897,7 +33152,7 @@
       const handleLogin = async (userData) => {
         setUser(userData);
         // If on invite page, redirect to root after signup
-        if (window.location.pathname.startsWith('/invite/')) {
+        if (window.location.pathname.startsWith('/invite/') || window.location.pathname.startsWith('/team-invite/')) {
           window.history.pushState({}, '', '/');
         }
         // Load projects after login
@@ -32943,6 +33198,12 @@
       const inviteMatch = window.location.pathname.match(/^\/invite\/([a-f0-9]+)$/i);
       if (inviteMatch) {
         return <InvitePage token={inviteMatch[1]} onLogin={handleLogin} />;
+      }
+
+      // Check for team invite page (full-access team member signup, no auth)
+      const teamInviteMatch = window.location.pathname.match(/^\/team-invite\/([a-f0-9]+)$/i);
+      if (teamInviteMatch) {
+        return <TeamInvitePage token={teamInviteMatch[1]} onLogin={handleLogin} />;
       }
 
       if (!user) {

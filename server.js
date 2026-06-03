@@ -652,6 +652,21 @@ async function initDb() {
         used_at TIMESTAMPTZ
       )
     `).catch(() => {});
+    // Team invites — full-access agency users (not tied to a single project)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS team_invites (
+        id SERIAL PRIMARY KEY,
+        email TEXT,
+        name TEXT,
+        invite_token TEXT UNIQUE NOT NULL,
+        role TEXT DEFAULT 'admin',
+        created_by INTEGER REFERENCES users(id),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'),
+        used_by INTEGER REFERENCES users(id),
+        used_at TIMESTAMPTZ
+      )
+    `).catch(() => {});
     // Client draft — separate from agency draft so client edits don't overwrite agency work
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_content TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_meta JSONB`).catch(() => {});
@@ -1260,6 +1275,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
   if (req.path.match(/^\/api\/invite\//)) return next();
+  // Allow team-invite routes without auth (team member signup flow)
+  if (req.path.match(/^\/api\/team-invite\//)) return next();
   // Allow connector-push routes (they use their own push token auth)
   if (req.path.match(/^\/api\/connector-push\//)) return next();
   // Allow RC grid sync (called by scheduled automation)
@@ -1283,6 +1300,10 @@ app.post('/api/auth/register', async (req, res) => {
   const { email, password, name } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
   try {
+    // Open self-registration is disabled. Only the very first (bootstrap) admin may self-register;
+    // everyone else must be added via an agency team invitation (/api/team/invite).
+    const userCount = parseInt((await pool.query('SELECT COUNT(*)::int AS n FROM users')).rows[0].n);
+    if (userCount > 0) return res.status(403).json({ error: 'Self-registration is disabled. Ask an admin to send you a team invitation.' });
     const hash = await bcrypt.hash(password, 10);
     const result = await pool.query(
       'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email',
@@ -1425,6 +1446,127 @@ app.post('/api/invite/:token/register', async (req, res) => {
     await pool.query('UPDATE project_invites SET used_by=$1, used_at=NOW() WHERE id=$2', [user.id, invite.id]);
 
     const token = generateToken(user.id, user.email, 'client', invite.project_id);
+    res.json({ ok: true, user, token });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Email already registered' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== TEAM INVITES (full-access agency users) ====================
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM = process.env.RESEND_FROM || 'The SEO Room <onboarding@resend.dev>';
+
+// Send an email via Resend. Returns { sent, reason }. No-ops gracefully if not configured.
+async function sendEmail({ to, subject, html }) {
+  if (!RESEND_API_KEY) return { sent: false, reason: 'no_api_key' };
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: RESEND_FROM, to: [to], subject, html }),
+    });
+    if (!r.ok) { const t = await r.text(); return { sent: false, reason: t.slice(0, 200) }; }
+    const d = await r.json();
+    return { sent: true, id: d.id };
+  } catch (e) { return { sent: false, reason: e.message }; }
+}
+
+// Agency-only guard (anything that isn't a client). Returns false + sends 403 if not allowed.
+function requireAgency(req, res) {
+  if (req.auth?.role === 'client') { res.status(403).json({ error: 'Agency access only' }); return false; }
+  return true;
+}
+
+// Create + send a team invitation (agency only)
+app.post('/api/team/invite', authMiddleware, async (req, res) => {
+  try {
+    if (!requireAgency(req, res)) return;
+    const { email, name } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    const existing = (await pool.query('SELECT id FROM users WHERE email=$1', [email])).rows[0];
+    if (existing) return res.status(409).json({ error: 'A user with this email already exists' });
+
+    const crypto = require('crypto');
+    const inviteToken = crypto.randomBytes(24).toString('hex');
+    await pool.query(
+      'INSERT INTO team_invites (email, name, invite_token, role, created_by) VALUES ($1,$2,$3,$4,$5)',
+      [email, name || '', inviteToken, 'admin', req.auth.userId]
+    );
+
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const url = `${baseUrl}/team-invite/${inviteToken}`;
+    const inviter = (await pool.query('SELECT name, email FROM users WHERE id=$1', [req.auth.userId])).rows[0] || {};
+    const html = `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:520px;margin:0 auto;color:#1e293b">
+      <h2 style="margin:0 0 12px">You've been invited to The SEO Room dashboard</h2>
+      <p style="margin:0 0 16px">${inviter.name || inviter.email || 'Your team'} invited you to join as a team member with full access.</p>
+      <p style="margin:0 0 16px"><a href="${url}" style="display:inline-block;background:#6366f1;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Accept invitation</a></p>
+      <p style="color:#64748b;font-size:13px;margin:0">Or paste this link into your browser:<br>${url}<br><br>This link expires in 14 days.</p>
+    </div>`;
+    const mail = await sendEmail({ to: email, subject: "You're invited to The SEO Room dashboard", html });
+    res.json({ ok: true, url, emailed: mail.sent, email_error: mail.sent ? null : mail.reason });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// List team members + pending team invites (agency only)
+app.get('/api/team', authMiddleware, async (req, res) => {
+  try {
+    if (!requireAgency(req, res)) return;
+    const members = await pool.query("SELECT id, email, name, role, created_at FROM users WHERE role IS DISTINCT FROM 'client' ORDER BY created_at ASC");
+    const invites = await pool.query('SELECT id, email, name, invite_token, created_at, expires_at, used_by, used_at FROM team_invites ORDER BY created_at DESC');
+    res.json({ members: members.rows, invites: invites.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Revoke a pending team invite (agency only)
+app.delete('/api/team/invite/:id', authMiddleware, async (req, res) => {
+  try {
+    if (!requireAgency(req, res)) return;
+    await pool.query('DELETE FROM team_invites WHERE id=$1 AND used_by IS NULL', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Remove a team member (agency only; cannot remove yourself or clients)
+app.delete('/api/team/member/:id', authMiddleware, async (req, res) => {
+  try {
+    if (!requireAgency(req, res)) return;
+    if (parseInt(req.params.id) === req.auth.userId) return res.status(400).json({ error: "You can't remove yourself" });
+    await pool.query("DELETE FROM users WHERE id=$1 AND role IS DISTINCT FROM 'client'", [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Validate a team invite token (no auth — invitee opening the link)
+app.get('/api/team-invite/:token', async (req, res) => {
+  try {
+    const inv = (await pool.query('SELECT * FROM team_invites WHERE invite_token=$1 AND expires_at > NOW()', [req.params.token])).rows[0];
+    if (!inv) return res.status(404).json({ error: 'Invite link is invalid or expired' });
+    if (inv.used_by) return res.status(400).json({ error: 'This invite has already been used', already_used: true });
+    res.json({ email: inv.email, name: inv.name, role: inv.role });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Register via team invite (no auth) — creates a full-access agency user
+app.post('/api/team-invite/:token/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!password || password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const inv = (await pool.query('SELECT * FROM team_invites WHERE invite_token=$1 AND expires_at > NOW()', [req.params.token])).rows[0];
+    if (!inv) return res.status(404).json({ error: 'Invite link is invalid or expired' });
+    if (inv.used_by) return res.status(400).json({ error: 'This invite has already been used' });
+    const finalEmail = inv.email || email;
+    if (!finalEmail) return res.status(400).json({ error: 'Email is required' });
+    const existing = (await pool.query('SELECT id FROM users WHERE email=$1', [finalEmail])).rows[0];
+    if (existing) return res.status(409).json({ error: 'An account with this email already exists. Please log in instead.' });
+
+    const hash = await bcrypt.hash(password, 10);
+    const user = (await pool.query(
+      'INSERT INTO users (email, password_hash, name, role) VALUES ($1,$2,$3,$4) RETURNING id, email, name, role',
+      [finalEmail, hash, name || inv.name || '', inv.role || 'admin']
+    )).rows[0];
+    await pool.query('UPDATE team_invites SET used_by=$1, used_at=NOW() WHERE id=$2', [user.id, inv.id]);
+    const token = generateToken(user.id, user.email, user.role || 'admin', null);
     res.json({ ok: true, user, token });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Email already registered' });
