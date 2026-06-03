@@ -6750,10 +6750,11 @@ function estimateFeatureCost(feature, params = {}) {
       return { calls: kwCount, cost: +(kwCount * rate).toFixed(4), provider };
     }
     case 'grid_scan': {
+      // Grid scan runs on DataForSEO Maps (dataForSeoMaps), not SerpAPI — estimate must match the real provider/rate
       const kwCount = params.keywords || 0;
       const gridPoints = (params.gridSize || 5) * (params.gridSize || 5);
       const totalCalls = kwCount * gridPoints;
-      return { calls: totalCalls, cost: +(totalCalls * API_COST_RATES.serpapi.google_maps).toFixed(4), provider: 'serpapi' };
+      return { calls: totalCalls, cost: +(totalCalls * API_COST_RATES.dataforseo.maps).toFixed(4), provider: 'dataforseo' };
     }
     case 'discover_serp': {
       return { calls: 1, cost: +(API_COST_RATES.dataforseo.ranked_keywords).toFixed(4), provider: 'dataforseo' };
