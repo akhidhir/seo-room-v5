@@ -31595,11 +31595,16 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       return res.status(400).json({ error: `Couldn't find "${tried}" on the map. Enter a suburb and state, e.g. "Applecross, WA".` });
     }
 
+    // Minimum residential population — excludes industrial estates, parks, airports (ABS ~0 residents)
+    const minPopRaw = parseInt(req.body && req.body.minPopulation);
+    const MIN_POP = Number.isFinite(minPopRaw) ? Math.max(0, minPopRaw) : 200;
+
     // Survey suburbs within the radius
     const within = [];
     let maxPop = 1;
     const centerKey = normSuburbKey(ctr.label.split(',')[0]);
     for (const s of AU_SUBURBS) {
+      if ((s.population || 0) < MIN_POP && normSuburbKey(s.suburb) !== centerKey) continue; // skip non-residential localities
       const d = haversineKm(ctr.lat, ctr.lng, s.lat, s.lng);
       if (d <= radius) {
         within.push({ suburb: s.suburb, state: s.state, postcode: s.postcode, population: s.population, distance: Math.round(d * 10) / 10 });

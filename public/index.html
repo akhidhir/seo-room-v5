@@ -26252,6 +26252,7 @@
     function SmartMapRankingPage({ project }) {
       const [center, setCenter] = useState(project.location || project.business_name || '');
       const [radius, setRadius] = useState(25);
+      const [minPop, setMinPop] = useState(200);
       const [loading, setLoading] = useState(false);
       const [result, setResult] = useState(null);
       const [error, setError] = useState('');
@@ -26342,7 +26343,7 @@
       const runSurvey = async () => {
         setError(''); setLoading(true); setResult(null); setAccepted(false); setSavedAt(null);
         try {
-          const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius } });
+          const r = await api(`/projects/${project.id}/smart-map-ranking`, { method: 'POST', body: { center, radiusKm: radius, minPopulation: minPop } });
           if (r.error) { setError(r.error); setLoading(false); return; }
           setResult(r);
         } catch (e) { setError(e.message || 'Survey failed'); }
@@ -26380,9 +26381,13 @@
                 <label className="form-label" style={{ fontSize: 12 }}>Business location (suburb + state)</label>
                 <input className="form-input" value={center} onChange={e => setCenter(e.target.value)} placeholder="e.g. Applecross, WA" disabled={loading} />
               </div>
-              <div style={{ flex: '1 1 220px' }}>
+              <div style={{ flex: '1 1 180px' }}>
                 <label className="form-label" style={{ fontSize: 12 }}>Radius: <strong>{radius} km</strong></label>
                 <input type="range" min={5} max={50} step={5} value={radius} onChange={e => setRadius(parseInt(e.target.value))} disabled={loading} style={{ width: '100%' }} />
+              </div>
+              <div style={{ flex: '0 1 130px' }}>
+                <label className="form-label" style={{ fontSize: 12 }}>Min population</label>
+                <input type="number" min={0} step={50} className="form-input" value={minPop} onChange={e => setMinPop(parseInt(e.target.value) || 0)} disabled={loading} title="Excludes industrial estates, parks, etc. with few/no residents" />
               </div>
               <button className="btn btn-primary" onClick={runSurvey} disabled={loading} style={{ height: 38 }}>
                 {loading ? <span className="spinner"></span> : <i className="fas fa-radar" style={{ marginRight: 6 }}></i>}
