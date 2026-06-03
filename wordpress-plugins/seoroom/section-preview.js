@@ -134,94 +134,95 @@
 
       var sectionMatched = 0;
 
-      // For each original paragraph, find matching DOM element and replace
-      origParas.forEach(function(orig, idx){
-        if(idx >= draftParas.length) return;
-        var draft = draftParas[idx];
-
+      // ── Content-similarity pairing ──────────────────────────────────────────
+      // original_text usually carries the section HEADING as its first line (and
+      // sometimes a leading intro paragraph) while draft_text holds only the
+      // rewritten body. Pairing draft<->original by POSITION therefore lands
+      // off-by-one — the heading gets overwritten with body text and trailing
+      // paragraphs drop. Instead, match each draft paragraph to its most similar
+      // original by shared-word overlap, and only replace when there's a real
+      // match. This keeps headings/author bios/forms untouched.
+      function wordSet(s){
+        var w = norm(s).split(' '), set = {};
+        for(var wi=0; wi<w.length; wi++){ if(w[wi].length >= 4) set[w[wi]] = 1; }
+        return set;
+      }
+      function sharedCount(setA, str){
+        var b = wordSet(str), shared = 0, n = 0;
+        for(var k in b){ n++; if(setA[k]) shared++; }
+        return { shared: shared, ratio: n ? shared / n : 0 };
+      }
+      function isDisplayFont(el){
+        try { return parseFloat(window.getComputedStyle(el).fontSize) > 20; } catch(e){ return false; }
+      }
+      // Locate the DOM element holding an original paragraph (exact → first-50 → contains)
+      function findDomEl(orig){
         var candidates = document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, span, div');
-        var found = null;
-
-        // Helper: skip elements with display/heading font sizes (>20px) to avoid breaking hero/CTA areas
-        function isDisplayFont(el) {
-          try { var fs = parseFloat(window.getComputedStyle(el).fontSize); return fs > 20; } catch(e) { return false; }
+        function ok(el){
+          if(replacedEls.has(el)) return false;
+          if(el.closest(skipSelector)) return false;
+          if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) return false;
+          if(isDisplayFont(el)) return false;
+          return true;
         }
+        var i, el, elNorm;
+        for(i=0; i<candidates.length; i++){ el = candidates[i]; if(!ok(el)) continue; if(norm(el.textContent) === orig.normText) return el; }
+        var short = orig.normText.slice(0,50);
+        if(short.length >= 15){ for(i=0; i<candidates.length; i++){ el = candidates[i]; if(!ok(el)) continue; elNorm = norm(el.textContent); if(elNorm.length >= 15 && elNorm.slice(0,50) === short) return el; } }
+        if(orig.normText.length >= 30){ var snip = orig.normText.slice(0,60); for(i=0; i<candidates.length; i++){ el = candidates[i]; if(!ok(el)) continue; elNorm = norm(el.textContent); if(elNorm.length >= 20 && elNorm.indexOf(snip) !== -1) return el; } }
+        return null;
+      }
 
-        // Exact match on normalized text
-        for(var i=0; i<candidates.length; i++){
-          var el = candidates[i];
-          if(replacedEls.has(el)) continue;
-          if(el.closest(skipSelector)) continue;
-          if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
-          if(isDisplayFont(el)) continue;
-          var elNorm = norm(el.textContent);
-          if(elNorm === orig.normText){ found = el; break; }
+      // Drop original paragraphs that are really the section heading — no draft maps to them
+      var headingNorms = {};
+      if(section.heading) headingNorms[norm(section.heading)] = 1;
+      if(section.draft_heading) headingNorms[norm(section.draft_heading)] = 1;
+      var bodyOrig = origParas.filter(function(o){ return !headingNorms[o.normText]; });
+      var origSets = bodyOrig.map(function(o){ return wordSet(o.text); });
+      var usedOrig = {};
+      var lastReplaced = null;
+      var extras = [];
+
+      draftParas.forEach(function(draft){
+        // Pick the most similar UNUSED original by shared-word overlap
+        var bestIdx = -1, bestShared = 0, bestRatio = 0;
+        for(var oi=0; oi<bodyOrig.length; oi++){
+          if(usedOrig[oi]) continue;
+          var ov = sharedCount(origSets[oi], draft.text);
+          if(ov.shared > bestShared || (ov.shared === bestShared && ov.ratio > bestRatio)){ bestShared = ov.shared; bestRatio = ov.ratio; bestIdx = oi; }
         }
-
-        // Fuzzy: first 50 chars match
-        if(!found){
-          var short = orig.normText.slice(0,50);
-          if(short.length >= 15){
-            for(var i=0; i<candidates.length; i++){
-              var el = candidates[i];
-              if(replacedEls.has(el)) continue;
-              if(el.closest(skipSelector)) continue;
-              if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
-              if(isDisplayFont(el)) continue;
-              var elNorm = norm(el.textContent);
-              if(elNorm.length >= 15 && elNorm.slice(0,50) === short){ found = el; break; }
-            }
-          }
-        }
-
-        // Fuzzy: contains match
-        if(!found && orig.normText.length >= 30){
-          var snippet = orig.normText.slice(0,60);
-          for(var i=0; i<candidates.length; i++){
-            var el = candidates[i];
-            if(replacedEls.has(el)) continue;
-            if(el.closest(skipSelector)) continue;
-            if(el.tagName !== 'P' && el.tagName !== 'LI' && el.querySelector('p,li,h1,h2,h3,h4,h5,h6')) continue;
-            if(isDisplayFont(el)) continue;
-            var elNorm = norm(el.textContent);
-            if(elNorm.length >= 20 && elNorm.indexOf(snippet) !== -1){ found = el; break; }
-          }
-        }
-
+        // Require a genuine content match before touching the page
+        if(bestIdx < 0 || bestShared < 2){ extras.push(draft); return; }
+        usedOrig[bestIdx] = true;
+        var found = findDomEl(bodyOrig[bestIdx]);
         if(found){
           var oldText = norm(found.textContent);
           found.innerHTML = draft.html;
           replacedEls.add(found);
-          if(norm(found.textContent) !== oldText){
-            applyHL(found);
-            totalReplacements++;
-          }
+          lastReplaced = found;
+          if(norm(found.textContent) !== oldText){ applyHL(found); totalReplacements++; }
           sectionMatched++;
         } else {
-          console.log('[SEO Room] No DOM match for: "'+orig.normText.slice(0,50)+'..."');
+          console.log('[SEO Room] No DOM match for: "'+bodyOrig[bestIdx].normText.slice(0,50)+'..."');
+          extras.push(draft);
         }
       });
 
-      // Handle extra draft paragraphs
-      if(draftParas.length > origParas.length && sectionMatched > 0){
-        var lastReplaced = null;
-        replacedEls.forEach(function(el){ lastReplaced = el; });
-        if(lastReplaced){
-          for(var extra = origParas.length; extra < draftParas.length; extra++){
-            var dp = draftParas[extra];
-            var newEl = document.createElement(dp.tag === 'li' ? 'p' : dp.tag);
-            newEl.innerHTML = dp.html;
-            applyHL(newEl);
-            if(lastReplaced.className){
-              var origClasses = lastReplaced.className.replace(/seo-text-hl/g,'').trim();
-              if(origClasses) newEl.className = origClasses;
-            }
-            if(lastReplaced.nextSibling) lastReplaced.parentNode.insertBefore(newEl, lastReplaced.nextSibling);
-            else lastReplaced.parentNode.appendChild(newEl);
-            lastReplaced = newEl;
-            totalReplacements++;
+      // Insert draft paragraphs that had no original counterpart, after the last replaced element
+      if(extras.length && lastReplaced){
+        extras.forEach(function(dp){
+          var newEl = document.createElement(dp.tag === 'li' ? 'p' : dp.tag);
+          newEl.innerHTML = dp.html;
+          applyHL(newEl);
+          if(lastReplaced.className){
+            var origClasses = lastReplaced.className.replace(/seo-text-hl/g,'').trim();
+            if(origClasses) newEl.className = origClasses;
           }
-        }
+          if(lastReplaced.nextSibling) lastReplaced.parentNode.insertBefore(newEl, lastReplaced.nextSibling);
+          else lastReplaced.parentNode.appendChild(newEl);
+          lastReplaced = newEl;
+          totalReplacements++;
+        });
       }
 
       // Replace heading if changed
@@ -244,7 +245,7 @@
       }
 
       // Section types that already exist as design elements on the page — never duplicate them as "new"
-      var noPromoteTypes = {cta:1, button:1, testimonial:1, testimonials:1, pricing:1, hero:1, image:1, gallery:1, form:1};
+      var noPromoteTypes = {cta:1, button:1, testimonial:1, testimonials:1, pricing:1, hero:1, image:1, gallery:1, form:1, team:1, author:1};
       if(sectionMatched > 0) matched++;
       else if(section.draft_text && !section.is_new && !noPromoteTypes[section.type]) {
         // No paragraphs matched — promote to NEW section so it gets inserted on the page
