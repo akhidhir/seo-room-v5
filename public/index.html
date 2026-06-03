@@ -26260,6 +26260,8 @@
       const [rcSyncing, setRcSyncing] = useState(false);
 
       const [auditInsights, setAuditInsights] = useState({ serviceAreas: [], sitePages: [], gbpFindings: [], citations: [] });
+      const [livePages, setLivePages] = useState([]);
+      const [livePagesLoaded, setLivePagesLoaded] = useState(false);
       const [suburbGps, setSuburbGps] = useState(null);
       const [showGuide, setShowGuide] = useState(false);
       const [discovering, setDiscovering] = useState(false);
@@ -26316,8 +26318,36 @@
             if (citResp && Array.isArray(citResp.directories)) citations = citResp.directories;
           } catch(e) {}
           setAuditInsights({ serviceAreas: Array.isArray(serviceAreas) ? serviceAreas : [], sitePages, gbpFindings, citations });
+          // Fetch the live site's real published pages (sitemap) so action items can verify page existence
+          try {
+            const lp = await api(`/projects/${project.id}/discover-pages`);
+            if (Array.isArray(lp)) setLivePages(lp);
+          } catch(e) {}
+          setLivePagesLoaded(true);
         })();
       }, [project.id]);
+
+      // Normalize text for matching (lowercase, strip punctuation/hyphens)
+      const normTxt = (s) => (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      // Is a suburb already listed in the project's GBP service areas?
+      const isInServiceAreas = (loc) => {
+        const n = normTxt(loc);
+        if (!n) return false;
+        return (auditInsights.serviceAreas || []).some(a => normTxt(typeof a === 'string' ? a : (a.name || a.suburb || '')) === n);
+      };
+      // Find an existing published page that targets a suburb (checks live sitemap + known site pages)
+      const findLocationPage = (loc) => {
+        const locN = normTxt(loc);
+        if (!locN) return null;
+        const pool = [...(livePages || []), ...((auditInsights.sitePages) || [])];
+        for (const p of pool) {
+          const hay = normTxt([p.slug, p.title, p.page_name, p.url, p.page_url].filter(Boolean).join(' '));
+          if (hay.split(' ').join(' ').includes(locN)) {
+            return { url: p.url || p.page_url || ('/' + (p.slug || '')), title: p.title || p.page_name || p.slug };
+          }
+        }
+        return null;
+      };
 
       const handleRcSync = async () => {
         setRcSyncing(true);
@@ -27807,7 +27837,19 @@
                               const actions = [];
                               if (reviewGap > 0) actions.push({ icon: 'fa-star', color: '#f59e0b', text: `Get ${reviewGap}+ more reviews to match competitor average (${avgCompReviews}). Top competitor has ${reviewTarget}.`, priority: 'high' });
                               if (ourRating && ourRating < parseFloat(avgCompRating)) actions.push({ icon: 'fa-star-half-stroke', color: '#3b82f6', text: `Improve rating from ${ourRating} to ${avgCompRating}+ (competitor average).`, priority: 'medium' });
-                              if (solv < 50) actions.push({ icon: 'fa-map-pin', color: '#8b5cf6', text: `Add "${kw.location}" to GBP service areas and create a dedicated landing page for "${kw.keyword} ${kw.location}".`, priority: 'high' });
+                              if (solv < 50 && kw.location) {
+                                const inSA = isInServiceAreas(kw.location);
+                                const locPage = findLocationPage(kw.location);
+                                if (!inSA && !locPage) {
+                                  actions.push({ icon: 'fa-map-pin', color: '#8b5cf6', text: `Add "${kw.location}" to your GBP service areas and create a landing page targeting "${kw.keyword} ${kw.location}" — neither exists yet.`, priority: 'high' });
+                                } else if (inSA && !locPage) {
+                                  actions.push({ icon: 'fa-map-pin', color: '#8b5cf6', text: `"${kw.location}" is already in your GBP service areas, but there's no landing page for it — create one targeting "${kw.keyword} ${kw.location}".`, priority: 'high' });
+                                } else if (!inSA && locPage) {
+                                  actions.push({ icon: 'fa-map-pin', color: '#8b5cf6', text: `You already have a page for "${kw.location}" (${locPage.url}) but it's not in your GBP service areas — add it there, and optimize that page for "${kw.keyword}".`, priority: 'high' });
+                                } else {
+                                  actions.push({ icon: 'fa-map-pin', color: '#8b5cf6', text: `"${kw.location}" is already covered (GBP service area + page ${locPage.url}) — strengthen that page for "${kw.keyword}" and build local links/reviews instead.`, priority: 'medium' });
+                                }
+                              }
                               if (comps.some(c => c.top1 > foundIn)) actions.push({ icon: 'fa-bullseye', color: '#ef4444', text: `Post GBP updates mentioning "${kw.keyword}" and "${kw.location}" weekly to boost relevance.`, priority: 'medium' });
                               const ourCategory = our.type || comps[0]?.type || project.industry || project.business_name || 'your primary category';
                               actions.push({ icon: 'fa-building', color: '#22c55e', text: `Ensure NAP consistency across all directories. Check that business categories match: "${ourCategory}".`, priority: 'medium' });
