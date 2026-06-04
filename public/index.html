@@ -16320,7 +16320,9 @@
             }
           }
         } catch(e) {
-          alert('Humanize error: ' + (e.message || e));
+          var m = (e && e.message) || String(e);
+          if (m === 'Request failed' || e.status === 502 || e.status === 504) m = 'The humanize request timed out (long content). Paragraphs now run in parallel — please retry; a second attempt should succeed.';
+          alert('Humanize error: ' + m);
         }
         setHumanizing(false);
       };
@@ -21672,7 +21674,11 @@
             msg += ' Run AI Detection to check the score.';
             alert(msg);
           }
-        } catch (e) { alert('Humanize error: ' + (e.message || e)); }
+        } catch (e) {
+          let m = (e && e.message) || String(e);
+          if (m === 'Request failed' || e.status === 502 || e.status === 504) m = 'The humanize request timed out (long content). Paragraphs now run in parallel — please retry; a second attempt should succeed.';
+          alert('Humanize error: ' + m);
+        }
         setHumanizing(false);
       };
 

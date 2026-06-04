@@ -4858,26 +4858,38 @@ app.post(['/api/projects/:id/humanize-smart', '/api/builds/:id/humanize-smart'],
         let htmlResult = content_html;
         let successCount = 0;
 
-        for (let i = 0; i < paragraphs.length; i++) {
-          const para = paragraphs[i];
+        // Humanize a single paragraph (with timeout) — returns the replacement or null
+        const humanizePara = async (para, i) => {
           try {
             const ghResp = await fetch('https://api.gpthuman.ai/v1/humanize', {
               method: 'POST',
               headers: { 'Authorization': 'Bearer ' + GPTHUMAN_KEY, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text: para.innerPlain, tone: 'Standard', mode: 'Professional' })
+              body: JSON.stringify({ text: para.innerPlain, tone: 'Standard', mode: 'Professional' }),
+              signal: AbortSignal.timeout(25000)
             });
+            if (!ghResp.ok) { console.error('[smart-humanize] GPTHuman para ' + (i+1) + ' HTTP ' + ghResp.status); return null; }
             const ghData = await ghResp.json();
             if (ghData.output && ghData.output.length > 20) {
               const cleanOutput = ghData.output.replace(/\n+/g, ' ').trim();
               const lenRatio = cleanOutput.length / para.innerPlain.length;
-              if (lenRatio > 0.5 && lenRatio < 2.5) {
-                htmlResult = htmlResult.replace(para.full, '<p' + para.attrs + '>' + cleanOutput + '</p>');
-                successCount++;
-              }
-              gpthCredits += (ghData.creditUsage || 0);
+              return { para, cleanOutput, ok: (lenRatio > 0.5 && lenRatio < 2.5), credits: (ghData.creditUsage || 0) };
             }
+            return null;
           } catch (paraErr) {
             console.error('[smart-humanize] GPTHuman para ' + (i+1) + ' error:', paraErr.message);
+            return null;
+          }
+        };
+
+        // Process in parallel batches of 6 — fast enough to avoid proxy timeout on long articles
+        const CONCURRENCY = 6;
+        for (let b = 0; b < paragraphs.length; b += CONCURRENCY) {
+          const batch = paragraphs.slice(b, b + CONCURRENCY);
+          const settled = await Promise.all(batch.map((p, j) => humanizePara(p, b + j)));
+          for (const r of settled) {
+            if (!r) continue;
+            gpthCredits += r.credits;
+            if (r.ok) { htmlResult = htmlResult.replace(r.para.full, '<p' + r.para.attrs + '>' + r.cleanOutput + '</p>'); successCount++; }
           }
         }
 
