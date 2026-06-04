@@ -2749,6 +2749,7 @@ app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
 
       // Check referrer (from plugin data) — must check hostname AND referrer must be a real page
       const referrer = referrers ? referrers[url] : null;
+      if (referrer) details.referrer = referrer; // capture for tracking, even if external (e.g. Google)
       if (referrer) {
         let referrerHost = '';
         try { referrerHost = new URL(referrer).hostname.replace(/^www\./, ''); } catch {}
@@ -2788,20 +2789,25 @@ app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
         causes.push('orphan');
       }
 
-      // Fix recommendations per cause
+      // Fix recommendations per cause — each explains WHY so the problem is trackable
       const fixes = [];
+      let reason = '';
       if (causes.includes('sitemap')) {
-        fixes.push('Remove from sitemap — exclude in Yoast SEO or sitemap plugin settings, then resubmit sitemap in GSC');
+        reason = 'Listed in your XML sitemap, but the page returns 404.';
+        fixes.push('Remove this URL from the sitemap (Yoast SEO → exclude, or your sitemap plugin), then resubmit the sitemap in Google Search Console. If the page just moved, 301-redirect it to the new URL instead.');
       }
       if (causes.includes('internal_link')) {
-        const srcList = (details.linked_from || []).map(u => u.replace(baseUrl, '')).slice(0, 3).join(', ');
-        fixes.push('Fix broken link on: ' + srcList + ' — update or remove the <a> tag');
+        const linked = details.linked_from || [];
+        const srcList = linked.map(u => (u.replace(baseUrl, '') || '/')).slice(0, 3).join(', ');
+        reason = `A live page on your site links to this missing URL (${linked.length} source${linked.length !== 1 ? 's' : ''}).`;
+        fixes.push('Update or remove the broken <a> link on: ' + srcList + '. If the target moved, 301-redirect this URL to the correct page so the link still works.');
       }
       if (causes.includes('orphan')) {
-        fixes.push('Old Google index — use GSC URL Removal tool for faster de-indexing, or return 410 Gone');
+        reason = 'Not linked anywhere on your site and not in your sitemap' + (details.referrer ? ` — last hit came from ${details.referrer}.` : ' — likely an old or renamed URL Google still has indexed.');
+        fixes.push('If this page moved or was renamed, 301-redirect it to the new URL (recovers any lost traffic/links). If it is gone for good, return 410 Gone and use the GSC Removal tool to de-index it faster.');
       }
 
-      diagnoses[url] = { causes, ...details, fixes };
+      diagnoses[url] = { causes, reason, ...details, fixes };
     }
 
     res.json({ diagnoses, sitemap_urls: sitemapUrlSet.size, pages_scanned: pagesToScan.length });

@@ -10706,12 +10706,13 @@
                   const key = item.url || item.url_path || '';
                   const diag = diagnoses[key];
                   if (!diag || !diag.fixes || !diag.fixes.length) return null;
-                  return e('tr', { style: { background: 'rgba(245,158,11,0.04)' } },
-                    e('td', { colSpan: 6, style: { padding: '6px 12px', fontSize: 12 } },
+                  return e('tr', { style: { background: 'rgba(59,130,246,0.07)' } },
+                    e('td', { colSpan: 6, style: { padding: '8px 12px', fontSize: 12, borderLeft: '3px solid #3b82f6' } },
                       e('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' } },
-                        e('i', { className: 'fas fa-tools', style: { color: '#f59e0b', fontSize: 11 } }),
+                        e('i', { className: 'fas fa-lightbulb', style: { color: '#3b82f6', fontSize: 12 } }),
+                        e('span', { style: { color: '#3b82f6', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, marginRight: 2 } }, 'Suggested fix'),
                         diag.fixes.map(function(fix, fi) {
-                          return e('span', { key: fi, style: { color: 'var(--text2)', fontSize: 12 } },
+                          return e('span', { key: fi, style: { color: 'var(--text)', fontSize: 12 } },
                             fix,
                             fi < diag.fixes.length - 1 ? e('span', { style: { color: 'var(--text3)', margin: '0 4px' } }, '·') : null
                           );
@@ -10722,6 +10723,13 @@
                             return e('a', { key: si, href: src, target: '_blank', rel: 'noopener', style: { color: '#6366f1', textDecoration: 'none', marginLeft: 4 } }, src.replace(/^https?:\/\/[^/]+/, ''));
                           })
                         )
+                      ),
+                      // Why (trackable reason) + referrer
+                      diag.reason && e('div', { style: { marginTop: 5, fontSize: 11, color: 'var(--text3)' } },
+                        e('strong', { style: { color: 'var(--text2)' } }, 'Why: '), diag.reason
+                      ),
+                      diag.referrer && (!diag.linked_from || !diag.linked_from.length) && e('div', { style: { marginTop: 2, fontSize: 11, color: 'var(--text3)' } },
+                        'Last hit referrer: ', e('a', { href: diag.referrer, target: '_blank', rel: 'noopener', style: { color: '#6366f1', textDecoration: 'none' } }, diag.referrer)
                       )
                     )
                   );
