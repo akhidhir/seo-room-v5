@@ -39113,10 +39113,20 @@ app.post('/api/projects/:projectId/internal-links/build-hubs', async (req, res) 
         .sort((a, b) => label(a.title, a.url).localeCompare(label(b.title, b.url)))
         .map(c => `<li><a href="${c.url}/">${label(c.title, c.url)}</a></li>`).join('');
       const html = `<div class="seoroom-hub"><h2>Explore ${cleanName}</h2><p>Browse all of our related pages below:</p><ul>${items}</ul></div>`;
+      // Full clean page used only to RECOVER a page whose Elementor data is corrupt (replaces it).
+      const fullHtml = `<h2>${cleanName}</h2><p>We provide car key replacement, cutting and programming across all of the areas below — a fully mobile service, we come to you anywhere in Perth.</p><div class="seoroom-hub"><ul>${items}</ul></div>`;
       try {
         if (rebuild) { try { await callPluginApi(project, '/restore-content-block', 'POST', { url: hub.url }); } catch (e) {} } // remove the old block first
         const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: hub.url, html });
         if (r && r.ok && (r.inserted || r.already)) { built++; results.push({ hub: hub.url, children: children.length, already: !!r.already }); }
+        else if (r && r.message && /parse/i.test(r.message)) {
+          // The page's Elementor data is corrupted — recover it by writing a clean valid page (backs up current).
+          try {
+            const rb = await callPluginApi(project, '/rebuild-elementor', 'POST', { url: hub.url, html: fullHtml });
+            if (rb && rb.ok) { built++; results.push({ hub: hub.url, children: children.length, rebuilt: true }); }
+            else results.push({ hub: hub.url, error: (rb && rb.message) || 'rebuild failed' });
+          } catch (e2) { results.push({ hub: hub.url, error: e2.message }); }
+        }
         else results.push({ hub: hub.url, error: (r && r.message) || 'insert failed' });
       } catch (e) { results.push({ hub: hub.url, error: e.message }); }
     }
