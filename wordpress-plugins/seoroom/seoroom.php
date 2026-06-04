@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.25
+ * Version: 8.9.26
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.25');
+define('SEOROOM_VERSION', '8.9.26');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1104,6 +1104,89 @@ function sropt_restore_links($request) {
     do_action('berqwp_clear_all_cache');
     if (function_exists('wp_cache_flush')) wp_cache_flush();
     clean_post_cache($page_id);
+    return rest_ensure_response(['ok' => true, 'restored' => $restored]);
+}
+
+// ================================================================
+// HUB CONTENT BLOCK — append an in-content links block (e.g. a list of all child pages) into a hub page,
+// so empty index pages (/a-f, /service-areas …) actually link their children in BODY content. Reversible.
+// ================================================================
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom-opt/v1', '/insert-content-block', [
+        'methods' => 'POST', 'callback' => 'sropt_insert_content_block',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+    register_rest_route('seoroom-opt/v1', '/restore-content-block', [
+        'methods' => 'POST', 'callback' => 'sropt_restore_content_block',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+});
+
+function sropt_insert_content_block($request) {
+    $body = $request->get_json_params();
+    $url  = isset($body['url']) ? trim($body['url']) : '';
+    $page_id = isset($body['page_id']) ? intval($body['page_id']) : 0;
+    $html = isset($body['html']) ? $body['html'] : '';
+    $dry  = !empty($body['dry']);
+    if (!$page_id && $url) $page_id = url_to_postid($url);
+    if (!$page_id) return rest_ensure_response(['ok' => false, 'message' => 'Could not resolve page from URL', 'url' => $url]);
+    if (!$html) return rest_ensure_response(['ok' => false, 'message' => 'No HTML block provided']);
+
+    $isElementor = (get_post_meta($page_id, '_elementor_edit_mode', true) === 'builder') && get_post_meta($page_id, '_elementor_data', true);
+    if ($dry) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'elementor' => (bool)$isElementor, 'dry' => true]);
+    $gid = function() { return substr(md5(uniqid('', true)), 0, 7); };
+
+    if ($isElementor) {
+        $raw = get_post_meta($page_id, '_elementor_data', true);
+        if (strpos($raw, 'seoroom-hub') !== false) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'already' => true]);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) return rest_ensure_response(['ok' => false, 'message' => 'Could not parse Elementor data']);
+        $section = [
+            'id' => $gid(), 'elType' => 'section', 'settings' => new stdClass(), 'elements' => [[
+                'id' => $gid(), 'elType' => 'column', 'settings' => ['_column_size' => 100, '_inline_size' => null], 'elements' => [[
+                    'id' => $gid(), 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => ['editor' => $html]
+                ]]
+            ]]
+        ];
+        $data[] = $section;
+        if (!get_post_meta($page_id, '_seoroom_hub_backup_elem', true)) update_post_meta($page_id, '_seoroom_hub_backup_elem', $raw);
+        update_post_meta($page_id, '_elementor_data', wp_slash(wp_json_encode($data)));
+        delete_post_meta($page_id, '_elementor_css');
+        if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
+    } else {
+        $post = get_post($page_id);
+        if (!$post) return rest_ensure_response(['ok' => false, 'message' => 'Post not found']);
+        if (strpos($post->post_content, 'seoroom-hub') !== false) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'already' => true]);
+        if (!get_post_meta($page_id, '_seoroom_hub_backup_content', true)) update_post_meta($page_id, '_seoroom_hub_backup_content', $post->post_content);
+        wp_update_post(['ID' => $page_id, 'post_content' => $post->post_content . "\n\n" . $html]);
+    }
+    do_action('berqwp_clear_all_cache'); do_action('berqwp_clear_cache');
+    if (function_exists('wp_cache_flush')) wp_cache_flush();
+    clean_post_cache($page_id);
+    return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'elementor' => (bool)$isElementor, 'inserted' => true]);
+}
+
+function sropt_restore_content_block($request) {
+    $body = $request->get_json_params();
+    $url  = isset($body['url']) ? trim($body['url']) : '';
+    $page_id = isset($body['page_id']) ? intval($body['page_id']) : 0;
+    if (!$page_id && $url) $page_id = url_to_postid($url);
+    if (!$page_id) return rest_ensure_response(['ok' => false, 'message' => 'Could not resolve page']);
+    $restored = false;
+    $elem = get_post_meta($page_id, '_seoroom_hub_backup_elem', true);
+    if (!empty($elem)) {
+        update_post_meta($page_id, '_elementor_data', wp_slash($elem));
+        delete_post_meta($page_id, '_seoroom_hub_backup_elem'); delete_post_meta($page_id, '_elementor_css');
+        if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
+        $restored = true;
+    }
+    $content = get_post_meta($page_id, '_seoroom_hub_backup_content', true);
+    if (!empty($content)) {
+        wp_update_post(['ID' => $page_id, 'post_content' => $content]);
+        delete_post_meta($page_id, '_seoroom_hub_backup_content');
+        $restored = true;
+    }
+    do_action('berqwp_clear_all_cache'); if (function_exists('wp_cache_flush')) wp_cache_flush(); clean_post_cache($page_id);
     return rest_ensure_response(['ok' => true, 'restored' => $restored]);
 }
 

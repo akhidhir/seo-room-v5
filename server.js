@@ -39073,6 +39073,60 @@ app.post('/api/projects/:projectId/internal-links/confirm', async (req, res) => 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Build Hubs — turn empty index/parent pages (e.g. /a-f, /services) into real hubs by injecting an
+// in-content list of links to all their child pages (/a-f/*). Fixes orphaned model/area pages that are
+// only linked from the nav menu. Reversible (plugin backs up the page).
+app.post('/api/projects/:projectId/internal-links/build-hubs', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!getWpAuthHeaders(project)) return res.status(400).json({ error: 'WordPress Application Password not configured in Project Settings.' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const discovered = await discoverPages(`https://${domain}`, project.wordpress_url, getWpAuthHeaders(project));
+    const pathOf = (u) => { try { return new URL(u).pathname.replace(/\/+$/, ''); } catch { return (u || '').replace(/\/+$/, ''); } };
+    const slugTitle = (u) => { const seg = pathOf(u).split('/').pop() || ''; return seg.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); };
+    const pages = (discovered || []).map(d => ({ url: (d.url || '').replace(/\/+$/, ''), title: (d.title || '').trim() })).filter(p => p.url);
+
+    // Index pages by their path; group children by parent path
+    const byPath = new Map(pages.map(p => [pathOf(p.url), p]));
+    const childrenByParent = {};
+    for (const p of pages) {
+      const pa = pathOf(p.url);
+      const parent = pa.replace(/\/[^/]+$/, '');
+      if (parent && parent !== pa) (childrenByParent[parent] = childrenByParent[parent] || []).push(p);
+    }
+
+    let built = 0; const results = [];
+    for (const [parentPath, children] of Object.entries(childrenByParent)) {
+      if (children.length < 3) continue;            // needs enough children to be a real hub
+      const hub = byPath.get(parentPath);
+      if (!hub) continue;                            // the parent must be an actual existing page
+      const cleanName = (hub.title || slugTitle(hub.url)).replace(/\s*[\|\-–—].*$/, '').trim();
+      const items = children
+        .slice()
+        .sort((a, b) => (a.title || a.url).localeCompare(b.title || b.url))
+        .map(c => {
+          const t = ((c.title || '').replace(/\s*[\|\-–—].*$/, '').trim()) || slugTitle(c.url);
+          return `<li><a href="${c.url}/">${t}</a></li>`;
+        }).join('');
+      const html = `<div class="seoroom-hub"><h2>Explore ${cleanName}</h2><p>Browse all of our related pages below:</p><ul>${items}</ul></div>`;
+      try {
+        const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: hub.url, html });
+        if (r && r.ok && (r.inserted || r.already)) { built++; results.push({ hub: hub.url, children: children.length, already: !!r.already }); }
+        else results.push({ hub: hub.url, error: (r && r.message) || 'insert failed' });
+      } catch (e) { results.push({ hub: hub.url, error: e.message }); }
+    }
+
+    try { const urls = results.filter(r => !r.error).map(r => r.hub); if (urls.length) await purgeCloudflareCache(project, urls.slice(0, 30)); } catch (e) {}
+    res.json({ ok: true, built, hubs: results, message: built ? `${built} hub page(s) now link their child pages in body content.` : 'No hub pages found (need a parent page like /a-f with 3+ child pages).' });
+  } catch (e) {
+    console.error('[build-hubs] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Insert Permanently — write approved/applied links INTO the page content via the plugin (survives all
 // caching). Marks inserted links 'live', records rollback history, purges caches.
 app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req, res) => {

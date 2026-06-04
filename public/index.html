@@ -11844,6 +11844,26 @@
             React.createElement('button', {
               className: 'btn',
               disabled: verifying || isRunning,
+              title: 'Turn empty index pages (e.g. /a-f, /services) into hubs that link all their child pages in body content',
+              onClick: async () => {
+                if (!confirm('Build hub pages?\n\nFinds parent/index pages (like /a-f or /services) that have 3+ child pages, and inserts an in-content list linking to those children — fixing pages that are only linked from the nav menu. Reversible (the page is backed up).')) return;
+                setVerifying(true);
+                try {
+                  const r = await api('/projects/' + project.id + '/internal-links/build-hubs', { method: 'POST' });
+                  if (r.error) { alert(r.error); }
+                  else {
+                    let msg = r.message || (r.built + ' hubs built');
+                    if (r.hubs && r.hubs.length) msg += '\n\n' + r.hubs.map(h => '• ' + (h.hub || '').replace(/^https?:\/\/[^/]+/, '') + (h.error ? ' — ' + h.error : h.already ? ' (already done)' : ' — ' + h.children + ' links added')).join('\n');
+                    alert(msg);
+                  }
+                } catch (e) { alert('Error: ' + e.message); }
+                setVerifying(false);
+              },
+              style: { fontSize: 13, padding: '8px 20px', background: '#8b5cf6', color: '#fff', border: 'none', marginRight: 8 }
+            }, React.createElement('i', { className: 'fas fa-diagram-project', style: { marginRight: 6 } }), 'Build Hubs'),
+            React.createElement('button', {
+              className: 'btn',
+              disabled: verifying || isRunning,
               title: 'Re-anchor failed links to phrases that actually exist on the source page, so they can be placed',
               onClick: async () => {
                 if (!confirm('Fix failed links?\n\nFor every "Failed" link, this finds a relevant phrase that actually exists on the source page and uses it as the anchor, then sets them back to Approved. After it runs, open SEO Room → Settings on the site, then click Verify Now.')) return;
