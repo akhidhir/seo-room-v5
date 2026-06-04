@@ -40200,7 +40200,8 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       medium: competing.filter(c => c.severity === 'medium').length,
       impressions_at_stake: competing.filter(c => c.is_real_issue).reduce((s, c) => s + c.total_impressions, 0),
     };
-    const payload = { competing, summary, site: matchedSite, range: { startDate, endDate }, scanned_at: new Date().toISOString() };
+    const analyzed = { queries: byKw.size, pages: new Set(rows.map(r => normU(r.page))).size, gsc_rows: rows.length };
+    const payload = { competing, summary, analyzed, site: matchedSite, range: { startDate, endDate }, scanned_at: new Date().toISOString() };
     await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'competing_pages_cache',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify(payload)]).catch(() => {});
     res.json(payload);
   } catch (e) { console.error('[competing-pages]', e.message); res.status(500).json({ error: e.message }); }

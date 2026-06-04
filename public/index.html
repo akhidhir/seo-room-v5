@@ -31752,7 +31752,7 @@
       useEffect(() => {
         if (!pid) return;
         setLoading(true);
-        api(`/projects/${pid}/competing-pages`).then(r => { if (r && (r.competing || []).length) setData(r); }).catch(() => {}).finally(() => setLoading(false));
+        api(`/projects/${pid}/competing-pages`).then(r => { if (r && (r.scanned_at || (r.competing || []).length)) setData(r); }).catch(() => {}).finally(() => setLoading(false));
       }, [pid]);
 
       const runScan = async () => {
@@ -31935,8 +31935,18 @@
                       })}
                       {rows.length === 0 && (
                         <tr><td colSpan={6} style={{ padding: 28, textAlign: 'center' }}>
-                          <div style={{ color: '#22c55e', fontWeight: 700, fontSize: 15, marginBottom: 6 }}><i className="fas fa-circle-check" style={{ marginRight: 8 }}></i>No cannibalization issues</div>
-                          <div style={{ color: 'var(--text3)', fontSize: 13 }}>Your pages are well-structured — each targets its own keyword. Nothing to fix here.</div>
+                          {data.analyzed && data.analyzed.gsc_rows === 0 ? (
+                            <>
+                              <div style={{ color: '#f59e0b', fontWeight: 700, fontSize: 15, marginBottom: 6 }}><i className="fas fa-triangle-exclamation" style={{ marginRight: 8 }}></i>No Search Console data returned</div>
+                              <div style={{ color: 'var(--text3)', fontSize: 13 }}>Couldn't read any query data for this property in the last 90 days. Check the GSC property is correct in Settings → Project Settings (it may be the www vs non-www or domain-property variant).</div>
+                            </>
+                          ) : (
+                            <>
+                              <div style={{ color: '#22c55e', fontWeight: 700, fontSize: 15, marginBottom: 6 }}><i className="fas fa-circle-check" style={{ marginRight: 8 }}></i>No cannibalization issues</div>
+                              <div style={{ color: 'var(--text3)', fontSize: 13 }}>Your pages are well-structured — each targets its own keyword. Nothing to fix here.</div>
+                              {data.analyzed && <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 8 }}>Checked {Number(data.analyzed.queries || 0).toLocaleString()} keywords across {Number(data.analyzed.pages || 0).toLocaleString()} pages of real Search Console data. Only genuine, fixable cannibalization is flagged — minor co-ranking is ignored.</div>}
+                            </>
+                          )}
                         </td></tr>
                       )}
                     </tbody>
