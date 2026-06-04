@@ -39275,17 +39275,28 @@ app.post('/api/projects/:projectId/internal-links/apply', async (req, res) => {
       q = await pool.query(
         `UPDATE internal_link_suggestions SET status='applied', applied_at=NOW()
            WHERE project_id=$1 AND id = ANY($2) AND status IN ('approved','pending')
-           RETURNING id`,
+           RETURNING id, source_url`,
         [projectId, suggestion_ids]
       );
     } else {
       q = await pool.query(
         `UPDATE internal_link_suggestions SET status='applied', applied_at=NOW()
            WHERE project_id=$1 AND status IN ('approved','pending')
-           RETURNING id`,
+           RETURNING id, source_url`,
         [projectId]
       );
     }
+
+    // Purge Cloudflare for the affected source pages so the render-time-injected links actually serve
+    // (otherwise the edge keeps serving the pre-injection HTML and the plugin reports "can't place").
+    try {
+      const srcUrls = [...new Set(q.rows.map(r => r.source_url).filter(Boolean))];
+      if (srcUrls.length) {
+        const proj = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+        if (proj) { const cf = await purgeCloudflareCache(proj, srcUrls.slice(0, 30)); console.log('[internal-links] Cloudflare purge:', JSON.stringify(cf)); }
+      }
+    } catch (e) { console.log('[internal-links] purge skipped:', e.message); }
+
     res.json({
       ok: true,
       applied: q.rowCount,

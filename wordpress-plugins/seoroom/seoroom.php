@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.23
+ * Version: 8.9.24
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.23');
+define('SEOROOM_VERSION', '8.9.24');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -4389,7 +4389,10 @@ function sropt_link_first_occurrence($html, $anchor, $target) {
     $in_anchor = false;
     $heading_depth = 0;
     $done = false;
+    // Whitespace/entity-flexible: a space in the anchor matches any run of whitespace or &nbsp; in the
+    // rendered HTML, so anchors still place across line breaks, double spaces, or non-breaking spaces.
     $quoted = preg_quote($anchor, '/');
+    $quoted = preg_replace('/\s+/', '(?:\\\\s|&nbsp;|&#160;)+', $quoted);
     foreach ($parts as $i => $part) {
         if ($done) break;
         if ($part !== '' && $part[0] === '<') {
@@ -4404,8 +4407,9 @@ function sropt_link_first_occurrence($html, $anchor, $target) {
         if (preg_match('/' . $quoted . '/i', $part, $m, PREG_OFFSET_CAPTURE)) {
             $pos = $m[0][1];
             $matched = $m[0][0];
+            // $matched is the page's own rendered text (may contain entities like &nbsp;) — output as-is, do NOT re-escape
             $parts[$i] = substr($part, 0, $pos)
-                . '<a href="' . esc_url($target) . '" class="seoroom-internal-link">' . esc_html($matched) . '</a>'
+                . '<a href="' . esc_url($target) . '" class="seoroom-internal-link">' . $matched . '</a>'
                 . substr($part, $pos + strlen($matched));
             $done = true;
         }
@@ -4437,7 +4441,17 @@ function sropt_confirm_internal_links() {
 
     $confirmations = array();
     foreach ($links_by_page as $page_url => $links) {
-        $resp = wp_remote_get($page_url, array('timeout' => 15, 'headers' => array('User-Agent' => 'SEORoomBot/1.0')));
+        // Cache-bypass: a unique query string + no-cache headers force BerqWP/Cloudflare to serve a FRESH
+        // PHP render, so the render-time link injector actually runs and we see the real placed links.
+        $bust = (strpos($page_url, '?') === false ? '?' : '&') . 'seoroom_verify=' . time();
+        $resp = wp_remote_get($page_url . $bust, array(
+            'timeout' => 20,
+            'headers' => array(
+                'User-Agent'    => 'SEORoomBot/1.0',
+                'Cache-Control' => 'no-cache, no-store, max-age=0',
+                'Pragma'        => 'no-cache',
+            ),
+        ));
         $html = is_wp_error($resp) ? '' : wp_remote_retrieve_body($resp);
         // Collect hrefs of OUR injected links on this page
         $injected = array();
