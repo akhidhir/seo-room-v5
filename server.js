@@ -39098,21 +39098,23 @@ app.post('/api/projects/:projectId/internal-links/build-hubs', async (req, res) 
       if (parent && parent !== pa) (childrenByParent[parent] = childrenByParent[parent] || []).push(p);
     }
 
+    // Clean link label: page's own name only — drop any "Parent/" path prefix and " | brand" suffix.
+    const label = (titleOrUrl, url) => { const t = (titleOrUrl || '').split('/').pop().replace(/\s*[\|\-–—].*$/, '').trim(); return t || slugTitle(url); };
+    const rebuild = req.body && req.body.rebuild === true; // re-do existing hub blocks (e.g. to refresh labels)
+
     let built = 0; const results = [];
     for (const [parentPath, children] of Object.entries(childrenByParent)) {
       if (children.length < 3) continue;            // needs enough children to be a real hub
       const hub = byPath.get(parentPath);
       if (!hub) continue;                            // the parent must be an actual existing page
-      const cleanName = (hub.title || slugTitle(hub.url)).replace(/\s*[\|\-–—].*$/, '').trim();
+      const cleanName = label(hub.title, hub.url);
       const items = children
         .slice()
-        .sort((a, b) => (a.title || a.url).localeCompare(b.title || b.url))
-        .map(c => {
-          const t = ((c.title || '').replace(/\s*[\|\-–—].*$/, '').trim()) || slugTitle(c.url);
-          return `<li><a href="${c.url}/">${t}</a></li>`;
-        }).join('');
+        .sort((a, b) => label(a.title, a.url).localeCompare(label(b.title, b.url)))
+        .map(c => `<li><a href="${c.url}/">${label(c.title, c.url)}</a></li>`).join('');
       const html = `<div class="seoroom-hub"><h2>Explore ${cleanName}</h2><p>Browse all of our related pages below:</p><ul>${items}</ul></div>`;
       try {
+        if (rebuild) { try { await callPluginApi(project, '/restore-content-block', 'POST', { url: hub.url }); } catch (e) {} } // remove the old block first
         const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: hub.url, html });
         if (r && r.ok && (r.inserted || r.already)) { built++; results.push({ hub: hub.url, children: children.length, already: !!r.already }); }
         else results.push({ hub: hub.url, error: (r && r.message) || 'insert failed' });
