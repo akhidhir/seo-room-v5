@@ -20510,7 +20510,9 @@
 
       const handleSectionChat = async (sectionId) => {
         const instruction = chatInput.trim();
-        if (!instruction) return;
+        const _sec = (sections || []).find(s => s.id === sectionId);
+        const _secEmpty = !((_sec?.draft_text || _sec?.content || _sec?.original_text || '').replace(/<[^>]+>/g, '').trim());
+        if (!instruction && !_secEmpty) return; // empty section → allow "write from scratch" with no instruction
         setRewritingSection(sectionId);
         const history = chatHistory[sectionId] || [];
         const newHistory = [...history, { role: 'user', text: instruction }];
@@ -20642,25 +20644,30 @@
                   )
                 )
               ),
-              // Quick chips + input in one row
-              React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
-                ['Shorter', 'Longer', 'Casual', 'Persuasive', 'Add stats'].map(chip =>
-                  React.createElement('button', { key: chip, onClick: () => { setChatInput(chip === 'Shorter' ? 'Make it 50% shorter' : chip === 'Longer' ? 'Make it 50% longer' : chip === 'Casual' ? 'Make it more conversational' : chip === 'Persuasive' ? 'Make it more persuasive' : 'Add relevant statistics or data points'); }, style: { fontSize: 9, padding: '2px 6px', background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.15)', borderRadius: 10, cursor: 'pointer', whiteSpace: 'nowrap' } }, chip)
-                ),
-                React.createElement('input', {
-                  value: chatInput, onChange: e => setChatInput(e.target.value),
-                  placeholder: 'Tell AI what to change...',
-                  onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); handleSectionChat(section.id); } },
-                  disabled: rewritingSection === section.id,
-                  autoFocus: true,
-                  style: { flex: 1, minWidth: 200, padding: '6px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, fontFamily: 'inherit' }
-                }),
-                React.createElement('button', {
-                  onClick: () => handleSectionChat(section.id),
-                  disabled: rewritingSection === section.id || !chatInput.trim(),
-                  style: { padding: '6px 12px', background: rewritingSection === section.id ? 'var(--bg3)' : '#a855f7', color: '#fff', border: 'none', borderRadius: 6, cursor: rewritingSection === section.id ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
-                }, rewritingSection === section.id ? React.createElement('i', { className: 'fas fa-spinner fa-spin' }) : React.createElement(React.Fragment, null, React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 4, fontSize: 10 } }), 'Send'))
-              )
+              // Quick chips + input in one row — switches to "write" mode for empty sections
+              (() => {
+                const secEmpty = !((section.draft_text || section.content || section.original_text || '').replace(/<[^>]+>/g, '').trim());
+                const chips = secEmpty ? ['Write this section', 'Detailed', 'Short & punchy'] : ['Shorter', 'Longer', 'Casual', 'Persuasive', 'Add stats'];
+                const chipInstr = { 'Shorter': 'Make it 50% shorter', 'Longer': 'Make it 50% longer', 'Casual': 'Make it more conversational', 'Persuasive': 'Make it more persuasive', 'Add stats': 'Add relevant statistics or data points', 'Write this section': 'Write this section based on the heading and the business services', 'Detailed': 'Write a detailed, thorough version of this section', 'Short & punchy': 'Write a short, punchy version of this section' };
+                return React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+                  chips.map(chip =>
+                    React.createElement('button', { key: chip, onClick: () => { setChatInput(chipInstr[chip] || chip); }, style: { fontSize: 9, padding: '2px 6px', background: 'rgba(168,85,247,0.1)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.15)', borderRadius: 10, cursor: 'pointer', whiteSpace: 'nowrap' } }, chip)
+                  ),
+                  React.createElement('input', {
+                    value: chatInput, onChange: e => setChatInput(e.target.value),
+                    placeholder: secEmpty ? 'Tell AI what to write (or just hit Write)…' : 'Tell AI what to change...',
+                    onKeyDown: e => { if (e.key === 'Enter') { e.preventDefault(); handleSectionChat(section.id); } },
+                    disabled: rewritingSection === section.id,
+                    autoFocus: true,
+                    style: { flex: 1, minWidth: 200, padding: '6px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, fontFamily: 'inherit' }
+                  }),
+                  React.createElement('button', {
+                    onClick: () => handleSectionChat(section.id),
+                    disabled: rewritingSection === section.id || (!chatInput.trim() && !secEmpty),
+                    style: { padding: '6px 12px', background: rewritingSection === section.id ? 'var(--bg3)' : '#a855f7', color: '#fff', border: 'none', borderRadius: 6, cursor: rewritingSection === section.id ? 'wait' : 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }
+                  }, rewritingSection === section.id ? React.createElement('i', { className: 'fas fa-spinner fa-spin' }) : React.createElement(React.Fragment, null, React.createElement('i', { className: secEmpty ? 'fas fa-wand-magic-sparkles' : 'fas fa-paper-plane', style: { marginRight: 4, fontSize: 10 } }), secEmpty ? 'Write' : 'Send'))
+                );
+              })()
             ),
 
             // Section content — inline editor or selectable text

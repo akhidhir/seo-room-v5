@@ -19139,15 +19139,19 @@ app.post('/api/projects/:projectId/content-queue/:id/rewrite-section', async (re
     const acceptedKeywords = (compAnalysis.topicGaps?.missingKeywords || []).filter(k => k.status === 'accepted').map(k => k.text);
 
     const hasInstruction = instruction && instruction.trim();
+    const isEmpty = !(section.draft_text || section.original_text || '').replace(/<[^>]+>/g, '').trim();
 
     const systemPrompt = `You are an SEO copywriter implementing edits for "${project.business_name || project.name}" in ${project.location || 'Australia'}.
 
-${hasInstruction ? `YOU ARE AN IMPLEMENTOR. The user gave you a direct instruction — execute it precisely on the section content below.
+${isEmpty ? `YOU ARE WRITING THIS SECTION FROM SCRATCH — it is currently empty. Generate real, specific content for the section "${section.heading || section.type}" tailored to THIS business — never generic placeholder text. ${hasInstruction ? 'Follow the user instruction below.' : ''}
+- For a "services-grid" or "services" section: output the business's 4–8 services, each as <h3>Service name</h3><p>one benefit-led sentence</p> (or a <ul> with <strong>Service</strong> — description).
+- For other types: write a concise, compelling paragraph or two.
+- Include the focus keyword naturally; be concrete to this business and location.` : (hasInstruction ? `YOU ARE AN IMPLEMENTOR. The user gave you a direct instruction — execute it precisely on the section content below.
 - "make it shorter" = aggressively cut content, remove filler, keep only essential points
 - "make it longer" or "add N words" = expand with NEW specific details, examples, facts — count your words carefully
 - "add X" = add X to the content
 - Any word count instruction is STRICT — count your words and hit the target
-- The output MUST be visibly different from the input. If the user says change it, CHANGE IT.` : 'Rewrite this section with better SEO and readability.'}
+- The output MUST be visibly different from the input. If the user says change it, CHANGE IT.` : 'Rewrite this section with better SEO and readability.')}
 
 Return ONLY JSON: { "heading": "heading text", "content_html": "<p>the full modified section HTML</p>", "word_count": N, "changes_summary": "1-line what changed" }
 
@@ -19156,7 +19160,7 @@ Rules: proper HTML (p, h3, ul/li, strong, em, a), Australian English, natural to
 ${HUMAN_WRITING_RULES}
 ${buildCopywriterContext(project, item)}`;
 
-    const userPrompt = `${hasInstruction ? 'INSTRUCTION: ' + instruction + '\n\n' : ''}${hasInstruction ? 'Apply the above instruction to' : 'Rewrite'} this ${section.type} section for page "${item.page_title}" (${item.page_url})
+    const userPrompt = `${hasInstruction ? 'INSTRUCTION: ' + instruction + '\n\n' : ''}${isEmpty ? 'Write' : (hasInstruction ? 'Apply the above instruction to' : 'Rewrite')} this ${section.type} section for page "${item.page_title}" (${item.page_url})
 Focus keyword: ${focusKw}
 ${targetKeywords.length ? 'Target keywords: ' + targetKeywords.map(k => typeof k === 'string' ? k : k.keyword || k).join(', ') : ''}
 ${acceptedTopics.length ? 'Must cover topics: ' + acceptedTopics.join(', ') : ''}
