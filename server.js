@@ -38676,7 +38676,9 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           const urlNorm0 = url.replace(/\/$/, '');
           // Fast path: if we already have this page's rendered content from the plugin push, use it
           // directly and skip the live fetch entirely (avoids Cloudflare-blocked requests that hang).
-          const ppFast = pushedByUrl.get(urlNorm0);
+          // On a forced re-run, ignore stale plugin-pushed content and crawl the live page, so newly
+          // added in-content links (hubs, spokes) are actually picked up.
+          const ppFast = force ? null : pushedByUrl.get(urlNorm0);
           if (ppFast && (ppFast.text || (ppFast.links && ppFast.links.length))) {
             const fullText = (ppFast.text || '').replace(/\s+/g, ' ').trim();
             const outbound = [];
@@ -38693,7 +38695,9 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
             continue;
           }
           try {
-            const resp = await fetch(url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
+            // Cache-bust on forced re-runs so we read the freshly-updated page, not a cached copy.
+            const fetchUrl = force ? (url + (url.includes('?') ? '&' : '?') + 'sr=' + Date.now()) : url;
+            const resp = await fetch(fetchUrl, { headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store, max-age=0', 'Pragma': 'no-cache' }, signal: AbortSignal.timeout(12000) });
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const html = await resp.text();
             const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);

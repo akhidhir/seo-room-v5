@@ -11983,7 +11983,8 @@
             React.createElement('button', {
               className: 'btn',
               disabled: isRunning,
-              onClick: () => runAudit(),
+              onClick: () => runAudit(true),
+              title: 'Re-crawl your live pages (fresh) and recount internal links / orphans',
               style: { fontSize: 13, padding: '8px 20px' }
             }, React.createElement('i', { className: 'fas fa-search', style: { marginRight: 6 } }), audit?.audited_at ? 'Re-run Audit' : 'Run Audit')
           )
