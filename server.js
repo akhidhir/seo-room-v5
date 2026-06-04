@@ -39264,17 +39264,54 @@ app.post('/api/projects/:projectId/internal-links/verify', async (req, res) => {
 app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
     const cache = await pool.query(`SELECT orphan_pages FROM internal_link_audit_cache WHERE project_id=$1`, [projectId]);
     const orphanList = (cache.rows[0]?.orphan_pages) || [];
     if (!orphanList.length) return res.json({ ok: true, created: 0, message: 'No orphan pages — run the audit first.' });
 
-    const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
-    const sources = ((cc.rows[0]?.config?.pages) || [])
-      .filter(p => p.text && p.text.length > 50)
-      .map(p => ({ url: (p.url || '').replace(/\/$/, ''), title: p.title || '', text: (p.text || '').toLowerCase() }));
-    if (!sources.length) return res.json({ ok: true, created: 0, message: 'No page content available — run Push Data Now on the site, then re-run the audit.' });
-
     const norm = s => (s || '').replace(/\/$/, '');
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const orphanUrlSet = new Set(orphanList.map(o => norm(o.url)));
+
+    // Source pages = where we can place an inbound link. Prefer plugin-pushed content; if none, fetch the
+    // site's pages LIVE (cache-busted) so this works without "Push Data Now".
+    let sources = [];
+    const cc = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='connector_cache'`, [projectId]);
+    const pushed = ((cc.rows[0]?.config?.pages) || []).filter(p => p.text && p.text.length > 50);
+    if (pushed.length) {
+      sources = pushed.map(p => ({ url: norm(p.url), title: p.title || '', text: (p.text || '').toLowerCase() }));
+    } else {
+      let urls = [];
+      try {
+        const authHeaders = getWpAuthHeaders(project);
+        const discovered = await discoverPages(`https://${domain}`, project.wordpress_url, authHeaders);
+        urls = (discovered || []).map(d => norm(d.url)).filter(Boolean);
+      } catch (e) {}
+      // Prefer non-orphan "hub" pages as link sources, then fall back to any page; cap to 30 fetches.
+      const nonOrphans = urls.filter(u => !orphanUrlSet.has(u));
+      const fetchList = [...new Set([`https://${domain}`, ...nonOrphans, ...urls])].slice(0, 30);
+      for (let i = 0; i < fetchList.length; i += 8) {
+        const batch = fetchList.slice(i, i + 8);
+        await Promise.all(batch.map(async (u) => {
+          try {
+            const bust = (u.includes('?') ? '&' : '?') + 'seoroom_verify=' + Date.now();
+            const r = await fetch(u + bust, { headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store, max-age=0', 'Pragma': 'no-cache' }, signal: AbortSignal.timeout(12000) });
+            if (!r.ok) return;
+            const h = await r.text();
+            const body = h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+              .replace(/<nav[\s\S]*?<\/nav>/gi, ' ').replace(/<header[\s\S]*?<\/header>/gi, ' ').replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+              .replace(/<a\b[\s\S]*?<\/a>/gi, ' ');
+            const text = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+            if (text.length > 50) sources.push({ url: norm(u), title: '', text });
+          } catch (e) {}
+        }));
+      }
+    }
+    if (!sources.length) return res.json({ ok: true, created: 0, message: 'Could not read any page content (the site may be blocking requests). Try again, or use Build Clusters instead.' });
+
+    // Anchors must be distinctive — skip ultra-generic phrases that appear on every page.
+    const GENERIC = new Set(['car key', 'car keys', 'key replacement', 'car key replacement', 'replacement', 'services', 'service', 'repair', 'repairs', 'perth', 'locksmith', 'mobile locksmith']);
     // Clear previous orphan-rescue suggestions that are still pending (so re-runs don't duplicate)
     await pool.query(`DELETE FROM internal_link_suggestions WHERE project_id=$1 AND status='pending' AND reason LIKE 'Orphan rescue%'`, [projectId]);
 
@@ -39285,11 +39322,13 @@ app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, r
       const cleanTitle = (orphan.title || '').replace(/\s*[\|\-–—].*$/, '').trim();
       const words = cleanTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2);
       const candidates = [];
-      if (cleanTitle.length >= 6) candidates.push(cleanTitle.toLowerCase());
+      if (cleanTitle.length >= 8 && !GENERIC.has(cleanTitle.toLowerCase())) candidates.push(cleanTitle.toLowerCase());
       for (let n = 4; n >= 2; n--) for (let i = 0; i + n <= words.length; i++) {
         const ph = words.slice(i, i + n).join(' ');
-        if (ph.length >= 6) candidates.push(ph);
+        if (ph.length >= 8 && !GENERIC.has(ph)) candidates.push(ph);
       }
+      // Distinctive single words (suburb/model names like "armadale", "mitsubishi") — last resort
+      for (const w of words) if (w.length >= 6 && !GENERIC.has(w)) candidates.push(w);
       const uniq = [...new Set(candidates)].sort((a, b) => b.length - a.length);
 
       let best = null;
