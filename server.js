@@ -39121,7 +39121,7 @@ app.post('/api/projects/:projectId/internal-links/reanchor-failed', async (req, 
           let pick = null;
           for (const c of cands) { if (c && c.length >= 4 && text.includes(c)) { pick = c; break; } }
           if (pick) {
-            await pool.query(`UPDATE internal_link_suggestions SET suggested_anchor=$1, anchor_text=$1, status='approved' WHERE id=$2`, [pick, link.id]);
+            await pool.query(`UPDATE internal_link_suggestions SET suggested_anchor=$1, status='approved' WHERE id=$2`, [pick, link.id]);
             reanchored++;
           } else { skipped++; }
         }
