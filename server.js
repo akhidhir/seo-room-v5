@@ -39073,6 +39073,67 @@ app.post('/api/projects/:projectId/internal-links/confirm', async (req, res) => 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Fix Failed Anchors — for each FAILED link, fetch the source page and re-anchor to a phrase that
+// actually exists in the page body (derived from the target's title), so the injector can place it.
+app.post('/api/projects/:projectId/internal-links/reanchor-failed', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const rows = (await pool.query(
+      `SELECT id, source_url, target_url, target_title, suggested_anchor FROM internal_link_suggestions
+        WHERE project_id=$1 AND status='failed'`, [projectId])).rows;
+    if (!rows.length) return res.json({ ok: true, reanchored: 0, skipped: 0, message: 'No failed links to fix.' });
+
+    const STOP = new Set(['the','and','for','with','your','you','our','are','was','will','how','does','what','when','from','this','that','into','out','can','perth','services','service','guide','tips','need','know','about','your','have','get','a','an','in','on','of','to','is','it','do','my','at','be','or','as','if']);
+    // Build candidate anchor phrases from a target title: longest meaningful n-grams first, then key words
+    const candidates = (title) => {
+      const words = (title || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+      const out = [];
+      for (let n = 4; n >= 2; n--) for (let i = 0; i + n <= words.length; i++) {
+        const g = words.slice(i, i + n);
+        if (g.filter(w => !STOP.has(w) && w.length > 3).length >= 1) out.push(g.join(' '));
+      }
+      for (const w of words) if (!STOP.has(w) && w.length > 4) out.push(w);
+      return [...new Set(out)];
+    };
+
+    const byPage = {};
+    for (const r of rows) { const s = (r.source_url || '').replace(/\/+$/, ''); if (s) (byPage[s] = byPage[s] || []).push(r); }
+
+    let reanchored = 0, skipped = 0;
+    const pages = Object.keys(byPage);
+    for (let b = 0; b < pages.length; b += 5) {
+      const batch = pages.slice(b, b + 5);
+      await Promise.all(batch.map(async (src) => {
+        let html = '';
+        try {
+          const bust = (src.includes('?') ? '&' : '?') + 'seoroom_verify=' + Date.now();
+          const resp = await fetch(src + bust, { headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store, max-age=0', 'Pragma': 'no-cache' }, signal: AbortSignal.timeout(20000) });
+          if (resp.ok) html = await resp.text();
+        } catch (e) {}
+        if (!html) { skipped += byPage[src].length; return; }
+        // Body text only — strip scripts/styles, headings and existing links (we won't anchor inside those)
+        const body = html
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<h[1-6][\s\S]*?<\/h[1-6]>/gi, ' ').replace(/<a\b[\s\S]*?<\/a>/gi, ' ');
+        const text = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+        for (const link of byPage[src]) {
+          const cands = [(link.suggested_anchor || '').toLowerCase(), ...candidates(link.target_title)];
+          let pick = null;
+          for (const c of cands) { if (c && c.length >= 4 && text.includes(c)) { pick = c; break; } }
+          if (pick) {
+            await pool.query(`UPDATE internal_link_suggestions SET suggested_anchor=$1, anchor_text=$1, status='approved' WHERE id=$2`, [pick, link.id]);
+            reanchored++;
+          } else { skipped++; }
+        }
+      }));
+    }
+    res.json({ ok: true, reanchored, skipped, message: `${reanchored} re-anchored to on-page phrases, ${skipped} had no usable phrase. Open SEO Room → Settings on the site (refreshes the plugin), then click Verify Now.` });
+  } catch (e) {
+    console.error('[internal-links] reanchor error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Verify Now — the dashboard fetches each source page (cache-busted) and checks whether the internal
 // link to the target is actually present, then flips status to 'live' or 'failed'. Independent of the
 // plugin's hourly WP-cron, so the user doesn't have to wait.

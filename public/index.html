@@ -11843,6 +11843,22 @@
             React.createElement('button', {
               className: 'btn',
               disabled: verifying || isRunning,
+              title: 'Re-anchor failed links to phrases that actually exist on the source page, so they can be placed',
+              onClick: async () => {
+                if (!confirm('Fix failed links?\n\nFor every "Failed" link, this finds a relevant phrase that actually exists on the source page and uses it as the anchor, then sets them back to Approved. After it runs, open SEO Room → Settings on the site, then click Verify Now.')) return;
+                setVerifying(true);
+                try {
+                  const r = await api('/projects/' + project.id + '/internal-links/reanchor-failed', { method: 'POST' });
+                  if (r.error) { alert(r.error); }
+                  else { alert(r.message || (r.reanchored + ' re-anchored')); loadData(); }
+                } catch (e) { alert('Error: ' + e.message); }
+                setVerifying(false);
+              },
+              style: { fontSize: 13, padding: '8px 20px', background: '#f59e0b', color: '#fff', border: 'none', marginRight: 8 }
+            }, React.createElement('i', { className: 'fas fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'Fix Failed Anchors'),
+            React.createElement('button', {
+              className: 'btn',
+              disabled: verifying || isRunning,
               title: 'Check the live pages now and mark links Live (no need to wait for the plugin)',
               onClick: async () => {
                 setVerifying(true);
