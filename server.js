@@ -17269,7 +17269,7 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
       }
     }
     console.log(`[competitor-wordcount] Checking: "${keyword}" in ${loc}`);
-    const serpData = await dataForSeoSerp({ keyword, location: loc, depth: 10 });
+    const serpData = await dataForSeoSerp({ keyword, location: loc, depth: 20 });
     console.log(`[competitor-wordcount] DataForSEO returned: ${serpData.organic_results?.length || 0} organic, source=${serpData.source}, cost=${serpData.cost}`);
     if (!serpData.organic_results?.length) {
       console.log(`[competitor-wordcount] No results — trying with SerpAPI fallback`);
@@ -17288,7 +17288,24 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
       }
     }
 
-    const organicResults = (serpData.organic_results || []).slice(0, 10);
+    // Exclude non-competitor domains: job boards, dictionaries, directories, social, marketplaces, reference, gov/edu.
+    // These rank for broad terms but are NOT real business competitors and pollute the analysis.
+    const NON_COMPETITOR_RE = /(^|\.)(seek\.com|indeed\.|jora\.|careerone\.|adzuna\.|glassdoor\.|jobsearch\.|au\.jora|linkedin\.com|cambridge\.org|merriam-webster\.|dictionary\.com|thefreedictionary\.|collinsdictionary\.|vocabulary\.com|wordnik\.|thesaurus\.|britannica\.|wikipedia\.org|wiktionary\.|wikihow\.|yelp\.|yellowpages\.|truelocal\.|hotfrog\.|localsearch\.|oneflare\.|hipages\.|productreview\.|whereis\.|startlocal\.|aussieweb\.|facebook\.com|instagram\.com|youtube\.com|twitter\.com|x\.com|pinterest\.|reddit\.com|tiktok\.com|amazon\.|ebay\.|gumtree\.|alibaba\.|aliexpress\.|quora\.com|medium\.com|pdffiller\.|scribd\.|coursehero\.)|\.gov(\.|$)|\.edu(\.|$)|google\.com\/maps/i;
+    const isNonCompetitor = (domain) => NON_COMPETITOR_RE.test(domain || '');
+
+    const allOrganic = (serpData.organic_results || []).slice(0, 20);
+    const filteredOut = [];
+    // Keep each result's REAL SERP rank so the UI shows true positions (#1, #3, #4…) after filtering.
+    // Pull a deeper SERP (20) and drop directories/job-boards/etc., then keep the top 6 REAL competitors to fetch.
+    const organicResults = allOrganic
+      .map((r, i) => ({ ...r, _serpPos: r.position || i + 1 }))
+      .filter(r => {
+        const d = (r.link || '').replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
+        if (isNonCompetitor(d)) { filteredOut.push(d); return false; }
+        return true;
+      })
+      .slice(0, 6);
+    if (filteredOut.length) console.log(`[competitor-wordcount] Excluded ${filteredOut.length} non-competitor domains: ${[...new Set(filteredOut)].join(', ')}`);
     const competitors = [];
     const ownDomain = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
 
@@ -17296,6 +17313,7 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
     const fetchPromises = organicResults.map(async (result, idx) => {
       const url = result.link;
       if (!url) return null;
+      const serpPos = result._serpPos || (idx + 1);
       const domain = url.replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
       const isOwn = ownDomain && domain.includes(ownDomain.replace('www.', ''));
 
@@ -17308,7 +17326,7 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
         });
         clearTimeout(timeout);
 
-        if (!resp.ok) return { position: idx + 1, url, domain, title: result.title, words: null, error: 'HTTP ' + resp.status, isOwn };
+        if (!resp.ok) return { position: serpPos, url, domain, title: result.title, words: null, error: 'HTTP ' + resp.status, isOwn };
 
         const html = await resp.text();
         // Extract main content — strip scripts, styles, nav, header, footer
@@ -17332,9 +17350,9 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
           if (ht.length > 2 && ht.length < 200) h2Texts.push(ht);
         }
 
-        return { position: idx + 1, url, domain, title: result.title, words, h2s, h3s, h2Texts, isOwn, textSnippet: text.slice(0, 3000) };
+        return { position: serpPos, url, domain, title: result.title, words, h2s, h3s, h2Texts, isOwn, textSnippet: text.slice(0, 3000) };
       } catch (e) {
-        return { position: idx + 1, url, domain, title: result.title, words: null, error: e.message?.includes('abort') ? 'Timeout' : e.message, isOwn };
+        return { position: serpPos, url, domain, title: result.title, words: null, error: e.message?.includes('abort') ? 'Timeout' : e.message, isOwn };
       }
     });
 
