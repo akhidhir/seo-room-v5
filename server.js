@@ -2446,8 +2446,8 @@ async function callPluginApi(project, path, method = 'GET', body = null) {
   if (!wpUrl) throw new Error('No WordPress URL configured');
   const authHeaders = getWpAuthHeaders(project);
   if (!authHeaders) throw new Error('No WP Application Password configured');
-  const opts = { method, headers: authHeaders, signal: AbortSignal.timeout(30000) };
-  if (body && method !== 'GET') opts.body = JSON.stringify(body);
+  const opts = { method, headers: { ...authHeaders }, signal: AbortSignal.timeout(45000) };
+  if (body && method !== 'GET') { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const resp = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1${path}`, opts);
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
@@ -39071,6 +39071,67 @@ app.post('/api/projects/:projectId/internal-links/confirm', async (req, res) => 
     }
     res.json({ ok: true, live, failed });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Insert Permanently — write approved/applied links INTO the page content via the plugin (survives all
+// caching). Marks inserted links 'live', records rollback history, purges caches.
+app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!getWpAuthHeaders(project)) return res.status(400).json({ error: 'WordPress Application Password not configured in Project Settings.' });
+
+    const ids = Array.isArray(req.body?.suggestion_ids) ? req.body.suggestion_ids : null;
+    const rows = (await pool.query(
+      ids && ids.length
+        ? `SELECT id, source_url, target_url, target_title, suggested_anchor FROM internal_link_suggestions WHERE project_id=$1 AND id=ANY($2) AND status IN ('pending','approved','applied','live')`
+        : `SELECT id, source_url, target_url, target_title, suggested_anchor FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('approved','applied','live')`,
+      ids && ids.length ? [projectId, ids] : [projectId])).rows;
+    if (!rows.length) return res.json({ ok: true, inserted: 0, failed: 0, message: 'No approved links to insert.' });
+
+    // Group by source page
+    const byPage = {};
+    for (const r of rows) { const s = (r.source_url || '').replace(/\/+$/, ''); if (s) (byPage[s] = byPage[s] || []).push(r); }
+
+    let inserted = 0, failed = 0; const purgeUrls = [];
+    for (const src of Object.keys(byPage)) {
+      const linkList = byPage[src].map(r => ({ anchor: r.suggested_anchor, target: r.target_url }));
+      let result = null;
+      try {
+        result = await callPluginApi(project, '/insert-links', 'POST', { url: src, links: linkList });
+      } catch (e) {
+        console.log('[insert-permanent] plugin call failed for', src, e.message);
+        for (const r of byPage[src]) { await pool.query(`UPDATE internal_link_suggestions SET status='failed' WHERE id=$1`, [r.id]); failed++; }
+        continue;
+      }
+      const okSet = new Set((result && result.inserted || []).map(a => (a || '').toLowerCase().trim()));
+      for (const r of byPage[src]) {
+        const a = (r.suggested_anchor || '').toLowerCase().trim();
+        if (okSet.has(a)) {
+          await pool.query(`UPDATE internal_link_suggestions SET status='live' WHERE id=$1`, [r.id]);
+          inserted++;
+          // Rollback history
+          try {
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+               VALUES ($1,$2,$3,$4,'internal_link','post_content', $5, $6)`,
+              [projectId, result.page_id || 0, src, '', '[no link]', `<a href="${r.target_url}">${r.suggested_anchor}</a>`]
+            );
+          } catch (e) {}
+        } else { await pool.query(`UPDATE internal_link_suggestions SET status='failed' WHERE id=$1`, [r.id]); failed++; }
+      }
+      purgeUrls.push(src);
+    }
+
+    // Purge edge cache for the modified pages
+    try { if (purgeUrls.length) await purgeCloudflareCache(project, purgeUrls.slice(0, 30)); } catch (e) {}
+
+    res.json({ ok: true, inserted, failed, message: `${inserted} link(s) written into page content (permanent), ${failed} could not be placed.` });
+  } catch (e) {
+    console.error('[insert-permanent] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Fix Failed Anchors — for each FAILED link, fetch the source page and re-anchor to a phrase that

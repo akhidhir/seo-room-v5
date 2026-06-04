@@ -11759,9 +11759,10 @@
       const applySuggestions = async (ids) => {
         setApplying(true);
         try {
-          const r = await api(`/projects/${project.id}/internal-links/apply`, { method: 'POST', body: { suggestion_ids: ids || [] } });
-          const failReasons = (r.results || []).filter(x => x.status === 'failed' || x.status === 'skipped').map(x => x.reason).filter(Boolean);
-          alert(`Applied: ${r.applied}, Failed: ${r.failed}${failReasons.length ? '\n\nReasons:\n' + failReasons.slice(0,5).join('\n') : ''}`);
+          // Permanent insert: writes the links into the page content (survives all caching) and marks them Live.
+          const r = await api(`/projects/${project.id}/internal-links/insert-permanent`, { method: 'POST', body: { suggestion_ids: ids || [] } });
+          if (r.error) { alert(r.error); }
+          else { alert(r.message || `${r.inserted} inserted, ${r.failed} failed`); }
           loadData();
         } catch (e) { alert(e.message); }
         setApplying(false);
@@ -12098,7 +12099,7 @@
               disabled: applying,
               onClick: () => applySuggestions(),
               style: { fontSize: 12, padding: '6px 14px', background: '#22c55e', color: '#000' }
-            }, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 4 } }), applying ? 'Applying...' : 'Apply All Approved')
+            }, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 4 } }), applying ? 'Inserting…' : 'Insert All Approved (Permanent)')
           ),
 
           // Suggestions table

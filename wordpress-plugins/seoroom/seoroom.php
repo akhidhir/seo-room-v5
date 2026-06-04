@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.24
+ * Version: 8.9.25
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.24');
+define('SEOROOM_VERSION', '8.9.25');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -983,6 +983,128 @@ function sropt_publish_elementor($request) {
     clean_post_cache($page_id);
 
     return rest_ensure_response(['ok' => true, 'elementor' => true, 'replaced' => $count]);
+}
+
+// ================================================================
+// PERMANENT INTERNAL LINKS — write links INTO the page content (post_content or Elementor text
+// widgets) so they survive ALL caching (Cloudflare/BerqWP). Reversible via per-page backup.
+// ================================================================
+add_action('rest_api_init', function() {
+    register_rest_route('seoroom-opt/v1', '/insert-links', [
+        'methods' => 'POST',
+        'callback' => 'sropt_insert_links',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+    register_rest_route('seoroom-opt/v1', '/restore-links', [
+        'methods' => 'POST',
+        'callback' => 'sropt_restore_links',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
+});
+
+// Recursively insert links into Elementor text-editor widgets (first matching occurrence, once per link)
+function sropt_walk_insert_links(&$elements, &$todo, &$inserted) {
+    if (!is_array($elements)) return;
+    foreach ($elements as &$el) {
+        if (!is_array($el)) continue;
+        if ((isset($el['widgetType']) ? $el['widgetType'] : '') === 'text-editor' && isset($el['settings']['editor'])) {
+            foreach ($todo as &$l) {
+                if ($l['done']) continue;
+                $new = sropt_link_first_occurrence($el['settings']['editor'], $l['anchor'], $l['target']);
+                if ($new !== $el['settings']['editor']) { $el['settings']['editor'] = $new; $l['done'] = true; $inserted[] = $l['anchor']; }
+            }
+            unset($l);
+        }
+        if (isset($el['elements']) && is_array($el['elements'])) sropt_walk_insert_links($el['elements'], $todo, $inserted);
+    }
+    unset($el);
+}
+
+function sropt_insert_links($request) {
+    $body  = $request->get_json_params();
+    $url   = isset($body['url']) ? trim($body['url']) : '';
+    $links = (isset($body['links']) && is_array($body['links'])) ? $body['links'] : [];
+    $dry   = !empty($body['dry']);
+    $page_id = isset($body['page_id']) ? intval($body['page_id']) : 0;
+    if (!$page_id && $url) $page_id = url_to_postid($url);
+    if (!$page_id) return rest_ensure_response(['ok' => false, 'message' => 'Could not resolve page from URL', 'url' => $url]);
+    if (empty($links)) return rest_ensure_response(['ok' => false, 'message' => 'No links provided']);
+
+    $todo = [];
+    foreach ($links as $l) {
+        $a = isset($l['anchor']) ? trim($l['anchor']) : '';
+        $t = isset($l['target']) ? trim($l['target']) : '';
+        if ($a !== '' && $t !== '') $todo[] = ['anchor' => $a, 'target' => $t, 'done' => false];
+    }
+    if (empty($todo)) return rest_ensure_response(['ok' => false, 'message' => 'No valid links']);
+
+    $isElementor = (get_post_meta($page_id, '_elementor_edit_mode', true) === 'builder') && get_post_meta($page_id, '_elementor_data', true);
+    $inserted = [];
+
+    if ($isElementor) {
+        $raw = get_post_meta($page_id, '_elementor_data', true);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) return rest_ensure_response(['ok' => false, 'message' => 'Could not parse Elementor data']);
+        sropt_walk_insert_links($data, $todo, $inserted);
+        if (!$dry && $inserted) {
+            if (!get_post_meta($page_id, '_seoroom_links_backup_elem', true)) update_post_meta($page_id, '_seoroom_links_backup_elem', $raw);
+            update_post_meta($page_id, '_elementor_data', wp_slash(wp_json_encode($data)));
+            delete_post_meta($page_id, '_elementor_css');
+            if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
+        }
+    } else {
+        $post = get_post($page_id);
+        if (!$post) return rest_ensure_response(['ok' => false, 'message' => 'Post not found']);
+        $content = $post->post_content;
+        $orig = $content;
+        foreach ($todo as &$l) {
+            if ($l['done']) continue;
+            $new = sropt_link_first_occurrence($content, $l['anchor'], $l['target']);
+            if ($new !== $content) { $content = $new; $l['done'] = true; $inserted[] = $l['anchor']; }
+        }
+        unset($l);
+        if (!$dry && $inserted) {
+            if (!get_post_meta($page_id, '_seoroom_links_backup_content', true)) update_post_meta($page_id, '_seoroom_links_backup_content', $orig);
+            wp_update_post(['ID' => $page_id, 'post_content' => $content]);
+        }
+    }
+
+    $failed = [];
+    foreach ($todo as $l) if (!$l['done']) $failed[] = $l['anchor'];
+
+    if (!$dry && $inserted) {
+        do_action('berqwp_clear_all_cache'); do_action('berqwp_clear_cache');
+        if (function_exists('wp_cache_flush')) wp_cache_flush();
+        clean_post_cache($page_id);
+    }
+    return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'elementor' => (bool)$isElementor, 'inserted' => $inserted, 'failed' => $failed, 'dry' => $dry]);
+}
+
+function sropt_restore_links($request) {
+    $body = $request->get_json_params();
+    $url  = isset($body['url']) ? trim($body['url']) : '';
+    $page_id = isset($body['page_id']) ? intval($body['page_id']) : 0;
+    if (!$page_id && $url) $page_id = url_to_postid($url);
+    if (!$page_id) return rest_ensure_response(['ok' => false, 'message' => 'Could not resolve page']);
+    $restored = false;
+    $elem = get_post_meta($page_id, '_seoroom_links_backup_elem', true);
+    if (!empty($elem)) {
+        update_post_meta($page_id, '_elementor_data', wp_slash($elem));
+        delete_post_meta($page_id, '_seoroom_links_backup_elem');
+        delete_post_meta($page_id, '_elementor_css');
+        if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
+        $restored = true;
+    }
+    $content = get_post_meta($page_id, '_seoroom_links_backup_content', true);
+    if (!empty($content)) {
+        wp_update_post(['ID' => $page_id, 'post_content' => $content]);
+        delete_post_meta($page_id, '_seoroom_links_backup_content');
+        $restored = true;
+    }
+    do_action('berqwp_clear_all_cache');
+    if (function_exists('wp_cache_flush')) wp_cache_flush();
+    clean_post_cache($page_id);
+    return rest_ensure_response(['ok' => true, 'restored' => $restored]);
 }
 
 // Restore the original Elementor data (rollback for an Elementor publish)
