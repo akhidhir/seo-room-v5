@@ -39073,6 +39073,68 @@ app.post('/api/projects/:projectId/internal-links/confirm', async (req, res) => 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Verify Now — the dashboard fetches each source page (cache-busted) and checks whether the internal
+// link to the target is actually present, then flips status to 'live' or 'failed'. Independent of the
+// plugin's hourly WP-cron, so the user doesn't have to wait.
+app.post('/api/projects/:projectId/internal-links/verify', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const rows = (await pool.query(
+      `SELECT id, source_url, target_url FROM internal_link_suggestions
+        WHERE project_id=$1 AND status IN ('approved','applied','live')`, [projectId]
+    )).rows;
+    if (!rows.length) return res.json({ ok: true, live: 0, failed: 0, checked: 0, message: 'No applied links to verify.' });
+
+    // Purge Cloudflare first so the fetch sees the freshly-injected version
+    try {
+      const proj = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+      const srcUrls = [...new Set(rows.map(r => (r.source_url || '').replace(/\/+$/, '')))].filter(Boolean);
+      if (proj && srcUrls.length) await purgeCloudflareCache(proj, srcUrls.slice(0, 30));
+    } catch (e) {}
+
+    // Group by source page
+    const byPage = {};
+    for (const r of rows) {
+      const src = (r.source_url || '').replace(/\/+$/, '');
+      if (!src) continue;
+      (byPage[src] = byPage[src] || []).push(r);
+    }
+
+    let live = 0, failed = 0, checked = 0;
+    const pages = Object.keys(byPage);
+    // Fetch pages in small parallel batches
+    for (let b = 0; b < pages.length; b += 5) {
+      const batch = pages.slice(b, b + 5);
+      await Promise.all(batch.map(async (src) => {
+        let html = '';
+        try {
+          const bust = (src.includes('?') ? '&' : '?') + 'seoroom_verify=' + Date.now();
+          const resp = await fetch(src + bust, {
+            headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store, max-age=0', 'Pragma': 'no-cache' },
+            signal: AbortSignal.timeout(20000)
+          });
+          if (resp.ok) html = await resp.text();
+        } catch (e) {}
+        // Collect all hrefs on the page → normalized path set
+        const hrefs = [...html.matchAll(/<a\s[^>]*href=["']([^"']+)["']/gi)].map(m => m[1]);
+        const paths = new Set(hrefs.map(h => { try { return new URL(h, src).pathname.replace(/\/+$/, ''); } catch { return (h || '').replace(/\/+$/, ''); } }));
+        for (const link of byPage[src]) {
+          checked++;
+          let tpath = '';
+          try { tpath = new URL(link.target_url).pathname.replace(/\/+$/, ''); } catch { tpath = (link.target_url || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, ''); }
+          const found = !!html && tpath && paths.has(tpath);
+          if (found) { await pool.query(`UPDATE internal_link_suggestions SET status='live' WHERE id=$1`, [link.id]); live++; }
+          else { await pool.query(`UPDATE internal_link_suggestions SET status='failed' WHERE id=$1`, [link.id]); failed++; }
+        }
+      }));
+    }
+    res.json({ ok: true, live, failed, checked, message: `${live} live, ${failed} not found, ${checked} checked.` });
+  } catch (e) {
+    console.error('[internal-links] verify error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Orphan rescue — give EVERY orphan page at least one contextual inbound link.
 // Heuristic (no AI cost): for each orphan, find a page whose rendered text already contains a phrase
 // matching the orphan's topic, and create a suggestion linking that phrase to the orphan. Anchor is

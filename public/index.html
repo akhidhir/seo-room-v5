@@ -11661,6 +11661,7 @@
       const [loading, setLoading] = useState(true);
       const [running, setRunning] = useState(false);
       const [applying, setApplying] = useState(false);
+      const [verifying, setVerifying] = useState(false);
       const [tab, setTab] = useState('overview'); // overview, suggestions
       const [pageFilter, setPageFilter] = useState('all'); // all, orphan, few_links, ok
       const [pageSort, setPageSort] = useState({ key: 'inbound_count', dir: 'asc' }); // sortable columns
@@ -11839,6 +11840,21 @@
               },
               style: { fontSize: 13, padding: '8px 20px', background: '#ef4444', color: '#fff', border: 'none', marginRight: 8 }
             }, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6 } }), 'Rescue Orphans'),
+            React.createElement('button', {
+              className: 'btn',
+              disabled: verifying || isRunning,
+              title: 'Check the live pages now and mark links Live (no need to wait for the plugin)',
+              onClick: async () => {
+                setVerifying(true);
+                try {
+                  const r = await api('/projects/' + project.id + '/internal-links/verify', { method: 'POST' });
+                  if (r.error) { alert(r.error); }
+                  else { alert('Verify complete — ' + (r.message || (r.live + ' live, ' + r.failed + ' not found'))); loadData(); }
+                } catch (e) { alert('Verify error: ' + e.message); }
+                setVerifying(false);
+              },
+              style: { fontSize: 13, padding: '8px 20px', background: '#22c55e', color: '#fff', border: 'none', marginRight: 8 }
+            }, React.createElement('i', { className: verifying ? 'fas fa-spinner fa-spin' : 'fas fa-circle-check', style: { marginRight: 6 } }), verifying ? 'Verifying...' : 'Verify Now'),
             React.createElement('button', {
               className: 'btn',
               disabled: isRunning,
