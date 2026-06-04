@@ -40191,6 +40191,47 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       });
     }
 
+    // ── Duplicate-page detection (does NOT need GSC) — catches near-duplicate pages such as /home and
+    //    /home-new-copy that have little/no search traffic, which the query-based pass above can't see. ──
+    try {
+      const urlSet = new Map(); // normU -> { url, title }
+      for (const [u, op] of onpage) urlSet.set(u, { url: op.url || `https://${u}`, title: op.metaTitle || op.title || '' });
+      for (const [u, pp] of pushed) if (!urlSet.has(u)) urlSet.set(u, { url: pp.url || `https://${u}`, title: pp.title || '' });
+      try {
+        const authHeaders = getWpAuthHeaders(project);
+        const discovered = await discoverPages(`https://${domain}`, project.wordpress_url, authHeaders);
+        for (const d of (discovered || [])) { const u = normU(d.url); if (u && !urlSet.has(u)) urlSet.set(u, { url: d.url, title: d.title || '' }); }
+      } catch (e) {}
+
+      const COPY_SUFFIX = /[-_](new[-_]copy|copy|new|old|draft|test|temp|backup|clone|duplicate|v\d+)$/i;
+      const baseSlug = (u) => pathOf(u).toLowerCase().replace(/\/+$/, '').replace(/^\/+/, '').replace(COPY_SUFFIX, '');
+      const normTitle = (t) => { let s = (t || '').toLowerCase(); for (const bt of brandTokens) s = s.split(bt).join(' '); return s.replace(/[^a-z0-9]+/g, ' ').replace(/\b(copy|new|old|draft|test)\b/g, ' ').replace(/\s+/g, ' ').trim(); };
+
+      const slugGroups = new Map(), titleGroups = new Map();
+      for (const [, info] of urlSet) {
+        const b = baseSlug(info.url); if (b) { (slugGroups.get(b) || slugGroups.set(b, []).get(b)).push(info); }
+        const nt = normTitle(info.title); if (nt && nt.length > 2) { (titleGroups.get(nt) || titleGroups.set(nt, []).get(nt)).push(info); }
+      }
+
+      const seen = new Set();
+      const addDup = (members, label) => {
+        const urls = [...new Set(members.map(m => m.url))];
+        if (urls.length < 2) return;
+        const key = urls.map(normU).sort().join('|'); if (seen.has(key)) return; seen.add(key);
+        const primary = urls.slice().sort((a, b) => (COPY_SUFFIX.test(pathOf(a)) ? 1 : 0) - (COPY_SUFFIX.test(pathOf(b)) ? 1 : 0) || pathOf(a).length - pathOf(b).length)[0];
+        const primaryPath = pathOf(primary);
+        competing.push({
+          keyword: label, type: 'duplicate_page', page_count: urls.length, total_impressions: 0, total_clicks: 0, best_position: 0,
+          severity: 'high', is_real_issue: true, primary_page: primary,
+          reasons: [{ type: 'duplicate', label: `${urls.length} near-duplicate pages found (${urls.map(pathOf).join(', ')}). Google treats them as competing copies even if they don't rank yet.`, fix: `Keep ${primaryPath}. 301-redirect the copy/copies to it, or delete them if they were staging duplicates. If you must keep one, set its canonical to ${primaryPath}.` }],
+          coverage: {},
+          pages: urls.map(u => ({ url: u, is_primary: u === primary, impressions: 0, clicks: 0, position: 0, ctr: 0, meta_title: (urlSet.get(normU(u)) || {}).title || '', why: u === primary ? 'Keep this page (primary)' : 'Near-duplicate — redirect to primary or delete', fix: u === primary ? '' : `301-redirect to ${primaryPath} (or delete if it was a copy)`, fix_type: 'redirect' }))
+        });
+      };
+      for (const [b, members] of slugGroups) if (members.length > 1) addDup(members, `Duplicate page: /${b}`);
+      for (const [nt, members] of titleGroups) if (members.length > 1) addDup(members, `Duplicate title: "${(members[0].title || nt)}"`);
+    } catch (e) { console.log('[competing-pages] duplicate pass skipped:', e.message); }
+
     const sevRank = { high: 0, medium: 1, low: 2 };
     competing.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (b.total_impressions - a.total_impressions));
     const summary = {
