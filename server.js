@@ -4974,6 +4974,16 @@ async function runSmartHumanize({ content_html, page_id, build_id, projectId, bu
         for (const kw of kws) { totalChecks++; if (phraseMatch(kw)) passed++; else gaps.push({ type: 'keyword', phrase: kw, message: `Missing keyword: "${kw}"` }); }
       }
 
+      // Check types/styles (mirror /brief-check so humanize re-inserts them too)
+      if (matchedService && matchedService.types_or_styles && matchedService.types_or_styles.length && !isHome) {
+        for (const style of matchedService.types_or_styles) { totalChecks++; if (phraseMatch(style)) passed++; else gaps.push({ type: 'style', phrase: style, message: `Missing type/style: "${style}"` }); }
+      }
+
+      // Check process steps (mirror /brief-check)
+      if (matchedService && matchedService.process_steps && matchedService.process_steps.length && !isHome) {
+        for (const step of matchedService.process_steps) { totalChecks++; if (phraseMatch(step)) passed++; else gaps.push({ type: 'process', phrase: step, message: `Process step not covered: "${step}"` }); }
+      }
+
       // Check differentiators
       if (brief.differentiators && brief.differentiators.length) {
         for (const diff of brief.differentiators) { totalChecks++; if (phraseMatch(diff)) passed++; else gaps.push({ type: 'differentiator', phrase: diff, message: `Missing differentiator: "${diff}"` }); }

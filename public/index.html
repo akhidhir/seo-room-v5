@@ -16618,7 +16618,7 @@
         try {
           var currentHtml = editContent;
           var currentMeta = { meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword };
-          var MAX = 2;
+          var MAX = 3;
           for (var iter = 1; iter <= MAX; iter++) {
             // Save latest draft so server-side checks see it
             setAutoFixStatus('Pass ' + iter + '/' + MAX + ' — saving draft…');
@@ -16657,7 +16657,8 @@
               }
             } catch(e) { /* ai detection optional */ }
 
-            if ((briefScore >= 90 || highGaps === 0) && humanScore >= 70) break;
+            // Stop only when there are NO high-severity gaps, brief is strong, and it reads human
+            if (highGaps === 0 && briefScore >= 90 && humanScore >= 70) break;
           }
           summary = 'Auto-Fix complete.\n\nBrief: ' + briefScore + '% (' + gapsLeft + ' gap' + (gapsLeft===1?'':'s') + ' left)\nHuman score: ' + (humanScore ? humanScore.toFixed(1) + '%' : 'n/a') + '\n\nReview the content, then Save or Send for Approval.';
         } catch (e) {
