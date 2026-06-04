@@ -7450,6 +7450,31 @@ async function dataForSeoBacklinksSummary(domain) {
   };
 }
 
+// Multi-signal backlink toxicity — uses DataForSEO's real backlink_spam_score plus hard signals.
+// Low domain authority ALONE is NOT toxic (many legit small sites have low DR).
+const SPAM_NICHE_RE = /casino|viagra|cialis|pharma|porn|\bsex\b|adult|gambling|betting|\bpoker\b|payday|\bloan\b|escort|replica|crypto.?pump/i;
+function computeBacklinkToxicity(i) {
+  const reasons = [];
+  let score = 0;
+  // DataForSEO's own spam score (0-100) is the primary, authoritative signal
+  const dfsSpam = (typeof i.backlink_spam_score === 'number') ? i.backlink_spam_score
+                : (typeof i.spam_score === 'number') ? i.spam_score : null;
+  if (dfsSpam != null) {
+    score += dfsSpam;
+    if (dfsSpam >= 50) reasons.push(`Spam score ${dfsSpam}`);
+  }
+  // Hard signals
+  if (i.domain_from_is_ip) { score += 35; reasons.push('IP-host domain'); }
+  if (SPAM_NICHE_RE.test(i.domain_from || '')) { score += 45; reasons.push('Spam-niche domain'); }
+  if (SPAM_NICHE_RE.test(i.anchor || '')) { score += 35; reasons.push('Spam-niche anchor'); }
+  if (i.is_broken) { score += 15; reasons.push('Broken link'); }
+  // Soft signal: very low authority + dofollow, only meaningful when we have no DFS spam score
+  if (dfsSpam == null && (i.domain_from_rank || 0) < 5 && i.dofollow) { score += 12; reasons.push('Very low authority'); }
+  score = Math.min(100, Math.round(score));
+  const level = score >= 60 ? 'high' : score >= 30 ? 'medium' : 'low';
+  return { toxic_score: score, toxic_level: level, toxic_reasons: reasons, dfs_spam_score: dfsSpam };
+}
+
 async function dataForSeoBacklinks(domain, limit = 500, offset = 0, orderBy) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
   const body = [{
@@ -7471,24 +7496,31 @@ async function dataForSeoBacklinks(domain, limit = 500, offset = 0, orderBy) {
   const items = result.items || [];
   return {
     total_count: result.total_count || 0,
-    backlinks: items.map(i => ({
-      url_from: i.url_from || '',
-      domain_from: i.domain_from || '',
-      url_to: i.url_to || '',
-      anchor: i.anchor || '',
-      dofollow: i.dofollow,
-      domain_from_rank: i.domain_from_rank || 0,
-      page_from_rank: i.page_from_rank || 0,
-      first_seen: i.first_seen,
-      last_seen: i.last_seen,
-      is_lost: i.is_lost || false,
-      item_type: i.item_type || 'anchor',
-      is_broken: i.is_broken || false,
-      url_from_https: i.url_from_https,
-      tld_from: i.tld_from || '',
-      domain_from_is_ip: i.domain_from_is_ip || false,
-      spam_score: i.domain_from_rank < 5 ? 'high' : i.domain_from_rank < 20 ? 'medium' : 'low'
-    })),
+    backlinks: items.map(i => {
+      const tox = computeBacklinkToxicity(i);
+      return {
+        url_from: i.url_from || '',
+        domain_from: i.domain_from || '',
+        url_to: i.url_to || '',
+        anchor: i.anchor || '',
+        dofollow: i.dofollow,
+        domain_from_rank: i.domain_from_rank || 0,
+        page_from_rank: i.page_from_rank || 0,
+        first_seen: i.first_seen,
+        last_seen: i.last_seen,
+        is_lost: i.is_lost || false,
+        item_type: i.item_type || 'anchor',
+        is_broken: i.is_broken || false,
+        url_from_https: i.url_from_https,
+        tld_from: i.tld_from || '',
+        domain_from_is_ip: i.domain_from_is_ip || false,
+        // Real DataForSEO spam score (0-100) + computed multi-signal toxicity
+        dfs_spam_score: tox.dfs_spam_score,
+        toxic_score: tox.toxic_score,
+        toxic_reasons: tox.toxic_reasons,
+        spam_score: tox.toxic_level // backward-compat: 'high'|'medium'|'low' for existing badge
+      };
+    }),
     cost: data.cost
   };
 }
@@ -9162,6 +9194,99 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
     })();
   } catch (e) {
     console.error('[indexing] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Resolve the GSC site URL for a project (uses gsc_property, else matches by domain)
+async function resolveGscSite(project, accessToken) {
+  const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  if (project.gsc_property) return project.gsc_property;
+  const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  }).then(r => r.json());
+  return (sites.siteEntry || []).map(s => s.siteUrl).find(s => s.includes(domain.replace(/^www\./, '')));
+}
+
+// List sitemaps submitted to GSC + their status (legitimate Search Console API)
+app.get('/api/projects/:projectId/indexing/sitemaps', async (req, res) => {
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const accessToken = await getGscAccessToken(req.auth?.userId);
+    if (!accessToken) return res.status(400).json({ error: 'GSC not connected. Connect in Agency Integrations.' });
+    const matchedSite = await resolveGscSite(project, accessToken);
+    if (!matchedSite) return res.status(400).json({ error: 'GSC property not found. Set it in Project Settings.' });
+
+    const smRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/sitemaps`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    }).then(r => r.json());
+    const sitemaps = (smRes.sitemap || []).map(s => ({
+      path: s.path,
+      lastSubmitted: s.lastSubmitted || null,
+      lastDownloaded: s.lastDownloaded || null,
+      isPending: s.isPending || false,
+      isSitemapsIndex: s.isSitemapsIndex || false,
+      warnings: parseInt(s.warnings || 0),
+      errors: parseInt(s.errors || 0),
+      // contents = per-type submitted/indexed counts
+      submitted: (s.contents || []).reduce((sum, c) => sum + parseInt(c.submitted || 0), 0),
+      indexed: (s.contents || []).reduce((sum, c) => sum + parseInt(c.indexed || 0), 0)
+    }));
+    res.json({ site: matchedSite, sitemaps });
+  } catch (e) {
+    console.error('[sitemaps] List error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Submit (or resubmit) a sitemap to Google Search Console — the legitimate way to push pages for indexing
+app.post('/api/projects/:projectId/indexing/submit-sitemap', async (req, res) => {
+  try {
+    const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
+    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    const project = proj.rows[0];
+    const accessToken = await getGscAccessToken(req.auth?.userId);
+    if (!accessToken) return res.status(400).json({ error: 'GSC not connected. Connect in Agency Integrations.' });
+    const matchedSite = await resolveGscSite(project, accessToken);
+    if (!matchedSite) return res.status(400).json({ error: 'GSC property not found. Set it in Project Settings.' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    // Use provided sitemap URL, else auto-detect the common WordPress/Yoast sitemap index
+    let feedpath = (req.body && req.body.sitemap_url || '').trim();
+    if (!feedpath) {
+      // Probe likely sitemap locations, pick the first that returns 200
+      const candidates = [`https://${domain}/sitemap_index.xml`, `https://${domain}/sitemap.xml`, `https://${domain}/wp-sitemap.xml`];
+      for (const c of candidates) {
+        try { const r = await fetch(c, { method: 'GET' }); if (r.ok) { feedpath = c; break; } } catch (e) {}
+      }
+      if (!feedpath) feedpath = candidates[0]; // fall back to sitemap_index.xml
+    }
+    if (!/^https?:\/\//.test(feedpath)) feedpath = `https://${domain}/${feedpath.replace(/^\/+/, '')}`;
+
+    // PUT submits the sitemap to Google (idempotent — also used to resubmit/refresh)
+    const submitRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/sitemaps/${encodeURIComponent(feedpath)}`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!submitRes.ok && submitRes.status !== 204) {
+      const t = await submitRes.text();
+      return res.status(400).json({ error: `Google rejected the sitemap (${submitRes.status}). Make sure ${feedpath} loads and the GSC property is verified.`, detail: t.substring(0, 200) });
+    }
+
+    // Read back status so the UI can confirm
+    let status = null;
+    try {
+      const smRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/sitemaps/${encodeURIComponent(feedpath)}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      }).then(r => r.json());
+      status = { path: smRes.path, lastSubmitted: smRes.lastSubmitted, isPending: smRes.isPending, errors: parseInt(smRes.errors || 0), warnings: parseInt(smRes.warnings || 0) };
+    } catch (e) {}
+
+    console.log(`[sitemaps] Submitted ${feedpath} to ${matchedSite}`);
+    res.json({ success: true, submitted: feedpath, site: matchedSite, status });
+  } catch (e) {
+    console.error('[sitemaps] Submit error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -12552,6 +12677,24 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
     if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = projRes.rows[0];
 
+    // ── Cannibalization map: what focus keyword every page on the site already owns ──
+    const normKw = (k) => (k || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    const fixIdSet = new Set(pages.map(p => String(p.id)));
+    const ownedByOthers = {}; // normalizedKeyword -> { url, title } of a DIFFERENT page that already targets it
+    try {
+      const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+      const allSitePages = cacheRes.rows[0] ? (typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results) : [];
+      for (const sp of (allSitePages || [])) {
+        const k = normKw(sp.focusKeyword || sp.focus_keyword);
+        if (!k) continue;
+        // A keyword is "reserved" if a page that is NOT in the current fix set already owns it
+        if (!fixIdSet.has(String(sp.id)) && !ownedByOthers[k]) {
+          ownedByOthers[k] = { url: sp.url || '', title: sp.metaTitle || sp.title || '' };
+        }
+      }
+    } catch (e) { console.log('[onpage-suggest] cannibalization map skipped:', e.message); }
+    const reservedKeywords = Object.keys(ownedByOthers);
+
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     const tkw = target_keywords || {}; // { pageId: "pre-researched keyword" }
     const pagesData = pages.map(p => {
@@ -12580,6 +12723,10 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
         ? `- Focus keyword: If a page has a "target_keyword" field, USE THAT EXACT KEYWORD — do NOT change it. Build the title and description around it. If no target_keyword, choose the most relevant keyword for the page.`
         : `- Focus keyword: choose the MOST RELEVANT keyword for each page BASED ON THE BUSINESS TYPE above. If the current focus keyword doesn't match the business (e.g. "seo agency" on a plumbing website), REPLACE it with a proper keyword matching the business industry and page content.`;
 
+      const cannibalRule = reservedKeywords.length
+        ? `\n- KEYWORD CANNIBALIZATION — CRITICAL: These focus keywords are ALREADY owned by OTHER pages on this site. Do NOT assign any of them (or a near-duplicate) as the suggested_keyword for the pages below — each page must target a DISTINCT keyword so pages don't compete with each other in Google. Pick a more specific / differentiated variant instead. Already-taken keywords: ${reservedKeywords.slice(0, 60).map(k => '"' + k + '"').join(', ')}.\n- Also ensure no two pages in THIS batch share the same suggested_keyword.`
+        : `\n- KEYWORD CANNIBALIZATION: Ensure no two pages in this batch share the same suggested_keyword — each page must target a DISTINCT keyword.`;
+
       const resp = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 2000,
@@ -12605,7 +12752,7 @@ Rules:
 - Meta description: 120-155 characters, include keyword naturally, add call-to-action
 ${keywordRule}
 - CRITICAL: The suggested_keyword MUST appear as an EXACT substring inside the suggested_title (case-insensitive). For example if keyword is "Perth SEO agency" then the title must contain those exact words in that order. Do NOT add filler words like "for", "in", "and" between keyword words in the title unless they are part of the keyword itself.
-- This is a managed SEO dashboard. The business info above is the CLIENT's business. Always optimize for THEIR industry, not for SEO/marketing keywords.
+- This is a managed SEO dashboard. The business info above is the CLIENT's business. Always optimize for THEIR industry, not for SEO/marketing keywords.${cannibalRule}
 - If current values are already good, return them unchanged
 - ONLY return valid JSON array, no explanation`
         }]
@@ -12642,6 +12789,29 @@ ${keywordRule}
       }
     }
 
+    // ── Cannibalization safety net: flag any suggested keyword that still clashes ──
+    const seenInBatch = {}; // normKw -> first page id that used it this run
+    for (const s of allSuggestions) {
+      const k = normKw(s.suggested_keyword);
+      if (!k) continue;
+      const conflicts = [];
+      // 1) Clash with a different page that already owns this keyword
+      if (ownedByOthers[k]) {
+        conflicts.push({ url: ownedByOthers[k].url, title: ownedByOthers[k].title, source: 'existing page' });
+      }
+      // 2) Clash with another page in this same suggestion run
+      if (seenInBatch[k] && String(seenInBatch[k]) !== String(s.id)) {
+        const other = allSuggestions.find(x => String(x.id) === String(seenInBatch[k]));
+        const op = pages.find(p => String(p.id) === String(seenInBatch[k]));
+        conflicts.push({ url: (op && op.url) || '', title: (other && other.suggested_title) || (op && op.title) || '', source: 'another page in this batch' });
+      } else if (!seenInBatch[k]) {
+        seenInBatch[k] = s.id;
+      }
+      if (conflicts.length) {
+        s.cannibalization = { keyword: s.suggested_keyword, conflicts_with: conflicts };
+      }
+    }
+
     res.json({ suggestions: allSuggestions });
   } catch (e) {
     console.error('[onpage-suggest] Error:', e.message);
@@ -12667,6 +12837,24 @@ app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
 
     console.log(`[bulk-fix] Starting bulk fix for ${pages.length} pages`);
 
+    // Reserved keywords already owned by OTHER pages — avoid cannibalization
+    const normKw = (k) => (k || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    const fixIdSet = new Set(pages.map(p => String(p.id)));
+    let reservedKeywords = [];
+    try {
+      const cacheRes = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+      const allSitePages = cacheRes.rows[0] ? (typeof cacheRes.rows[0].results === 'string' ? JSON.parse(cacheRes.rows[0].results) : cacheRes.rows[0].results) : [];
+      const set = new Set();
+      for (const sp of (allSitePages || [])) {
+        const k = normKw(sp.focusKeyword || sp.focus_keyword);
+        if (k && !fixIdSet.has(String(sp.id))) set.add(k);
+      }
+      reservedKeywords = [...set];
+    } catch (e) { console.log('[bulk-fix] reserved keywords skipped:', e.message); }
+    const cannibalRule = reservedKeywords.length
+      ? `\n\nKEYWORD CANNIBALIZATION (CRITICAL): These keywords are ALREADY used by other pages — do NOT reuse them or near-duplicates: ${reservedKeywords.slice(0, 60).map(k => '"' + k + '"').join(', ')}. Also no two pages here may share the same suggested_keyword. Each page must target a DISTINCT keyword.`
+      : `\n\nKEYWORD CANNIBALIZATION: No two pages here may share the same suggested_keyword — each must target a DISTINCT keyword.`;
+
     // Step 1: Get AI suggestions (reuse suggest logic)
     const pagesData = pages.map(p => `Page ID: ${p.id}\nURL: ${p.url}\nTitle: ${p.title}\nCurrent Meta Title: ${p.metaTitle || '(none)'}\nCurrent Meta Desc: ${p.metaDesc || '(none)'}\nCurrent Focus Keyword: ${p.focusKeyword || '(none)'}\nH1: ${p.h1 || '(none)'}\nWord Count: ${p.wordCount || 0}\nIssues: ${(p.issues || []).map(i => typeof i === 'string' ? i : i.text).join(', ')}`);
 
@@ -12678,7 +12866,7 @@ app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
       const resp = await anthropic.messages.create({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 2000,
-        messages: [{ role: 'user', content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.\n\nFor each page, suggest:\n- suggested_title (50-60 chars, include primary keyword)\n- suggested_desc (120-155 chars, compelling with CTA)\n- suggested_keyword (2-4 word focus keyword)\n\nReturn ONLY a JSON array: [{\"id\": ..., \"suggested_title\": \"...\", \"suggested_desc\": \"...\", \"suggested_keyword\": \"...\"}]\n\nPages:\n${batch.join('\n\n')}` }]
+        messages: [{ role: 'user', content: `You are an SEO expert. Generate optimized meta fixes for these WordPress pages.\n\nFor each page, suggest:\n- suggested_title (50-60 chars, include primary keyword)\n- suggested_desc (120-155 chars, compelling with CTA)\n- suggested_keyword (2-4 word focus keyword)${cannibalRule}\n\nReturn ONLY a JSON array: [{\"id\": ..., \"suggested_title\": \"...\", \"suggested_desc\": \"...\", \"suggested_keyword\": \"...\"}]\n\nPages:\n${batch.join('\n\n')}` }]
       });
       try {
         const text = resp.content[0].text;
@@ -39052,12 +39240,10 @@ app.post('/api/projects/:projectId/backlinks/scan', async (req, res) => {
     console.log(`[backlinks] Summary:`, JSON.stringify(summary));
     console.log(`[backlinks] Backlinks count: ${backlinksData.backlinks.length}, Anchors: ${anchorsData.anchors.length}, New: ${newData.count}, Lost: ${lostData.count}`);
 
-    // Flag toxic links (low domain rank + suspicious patterns)
-    const toxic = backlinksData.backlinks.filter(l =>
-      l.spam_score === 'high' || l.is_broken || l.domain_from_is_ip ||
-      /casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.domain_from) ||
-      /casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.anchor)
-    );
+    // Flag toxic links via real multi-signal score (>=40). Low authority alone is NOT toxic.
+    const toxic = backlinksData.backlinks
+      .filter(l => (l.toxic_score || 0) >= 40)
+      .sort((a, b) => (b.toxic_score || 0) - (a.toxic_score || 0));
 
     const totalCost = (summary.cost || 0) + (backlinksData.cost || 0) + (anchorsData.cost || 0) + (newData.cost || 0) + (lostData.cost || 0);
 

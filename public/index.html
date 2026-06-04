@@ -9043,6 +9043,31 @@
         } catch (err) { setError(err.message); setLoading(false); }
       };
 
+      const [submittingSitemap, setSubmittingSitemap] = useState(false);
+      const [sitemapMsg, setSitemapMsg] = useState(null);
+
+      const loadSitemaps = async () => {
+        try {
+          const d = await api(`/projects/${project.id}/indexing/sitemaps`);
+          if (d.sitemaps) setSitemaps(d.sitemaps);
+        } catch (e) { /* GSC may not be connected — stay quiet */ }
+      };
+
+      // Load submitted sitemaps from GSC on mount
+      useEffect(() => { if (project?.id) loadSitemaps(); }, [project?.id]);
+
+      const submitSitemap = async () => {
+        setSubmittingSitemap(true); setSitemapMsg(null); setError('');
+        try {
+          const r = await api(`/projects/${project.id}/indexing/submit-sitemap`, { method: 'POST', body: {} });
+          setSitemapMsg({ type: 'ok', text: `Submitted ${r.submitted} to Google. It can take a few days for Google to recrawl.` });
+          await loadSitemaps();
+        } catch (err) {
+          setSitemapMsg({ type: 'err', text: err.message });
+        }
+        setSubmittingSitemap(false);
+      };
+
       const [expandedRow, setExpandedRow] = useState(null);
       const [actionItems, setActionItems] = useState({});
       const [addingAction, setAddingAction] = useState(null);
@@ -9159,6 +9184,9 @@
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               {budget && <span style={{ fontSize: 11, color: budget.remaining < 100 ? '#ef4444' : 'var(--text3)', background: 'var(--bg2)', padding: '4px 8px', borderRadius: 4 }}>Budget: {budget.remaining.toLocaleString()}/{budget.limit.toLocaleString()} remaining today</span>}
               {lastChecked && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Last checked: {lastChecked.toLocaleDateString()} {lastChecked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+              <button onClick={submitSitemap} disabled={submittingSitemap} title="Submit your sitemap to Google Search Console to prompt recrawling/indexing" style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, border: '1px solid #a855f7', background: 'transparent', color: '#a855f7', cursor: submittingSitemap ? 'default' : 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                {submittingSitemap ? <><span className="spinner" style={{ width: 14, height: 14 }}></span>Submitting...</> : <><i className="fas fa-paper-plane" />Submit Sitemap to Google</>}
+              </button>
               <button className="btn btn-primary" onClick={runCheck} disabled={loading || (budget && budget.remaining <= 0)} style={{ fontSize: 13 }}>
                 {loading ? <><span className="spinner"></span>Checking...</> : <><i className="fas fa-sync" style={{ marginRight: 6 }} />{results.length > 0 ? 'Re-check' : 'Check Indexing'}</>}
               </button>
@@ -9176,6 +9204,9 @@
             </div>
           </div>
 
+          {/* Sitemap submit result message */}
+          {sitemapMsg && (<div style={{ padding: 12, background: sitemapMsg.type === 'ok' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', border: '1px solid ' + (sitemapMsg.type === 'ok' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'), borderRadius: 8, color: sitemapMsg.type === 'ok' ? '#22c55e' : '#ef4444', fontSize: 13, marginBottom: 16 }}><i className={'fas ' + (sitemapMsg.type === 'ok' ? 'fa-check-circle' : 'fa-exclamation-circle')} style={{ marginRight: 6 }} />{sitemapMsg.text}</div>)}
+
           {/* Sitemaps section */}
           {sitemaps && sitemaps.length > 0 && (<div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px', marginBottom: 20 }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text3)' }}>
@@ -9190,8 +9221,8 @@
                 <th style={{ textAlign: 'right', padding: '8px 0', color: 'var(--text3)', fontSize: 12, textTransform: 'uppercase' }}>Status</th>
               </tr></thead>
               <tbody>{sitemaps.map((sm, i) => {
-                const submitted = (sm.contents || []).reduce((s, c) => s + (c.submitted || 0), 0);
-                const indexed = (sm.contents || []).reduce((s, c) => s + (c.indexed || 0), 0);
+                const submitted = sm.submitted != null ? sm.submitted : (sm.contents || []).reduce((s, c) => s + (parseInt(c.submitted) || 0), 0);
+                const indexed = sm.indexed != null ? sm.indexed : (sm.contents || []).reduce((s, c) => s + (parseInt(c.indexed) || 0), 0);
                 const coverage = submitted > 0 ? (indexed / submitted * 100).toFixed(0) : '—';
                 const filename = (sm.path || '').split('/').pop();
                 return (<tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -12801,7 +12832,16 @@
 
       const updateSuggestion = (id, field, value) => {
         setFixModal(function(prev) {
-          var newSugg = prev.suggestions.map(function(s) { return s.id === id ? Object.assign({}, s, { [field]: value }) : s; });
+          var newSugg = prev.suggestions.map(function(s) {
+            if (s.id !== id) return s;
+            var upd = Object.assign({}, s, { [field]: value });
+            // Editing the keyword to differ from the flagged clash clears the warning
+            if (field === 'suggested_keyword' && s.cannibalization) {
+              var norm = function(k){ return (k||'').toLowerCase().replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim(); };
+              if (norm(value) !== norm(s.cannibalization.keyword)) delete upd.cannibalization;
+            }
+            return upd;
+          });
           var newHistory = prev.history.slice();
           if (prev.historyIdx >= 0 && prev.historyIdx < newHistory.length) {
             newHistory[prev.historyIdx] = newSugg.map(function(s) { return Object.assign({}, s); });
@@ -13436,8 +13476,17 @@
                   const pg = fixModal.pages.find(p => p.id === s.id);
                   if (!pg) return null;
                   return (
-                    <div key={s.id} style={{ background: 'var(--bg)', borderRadius: 10, border: '1px solid var(--border)', padding: 16, marginBottom: 12 }}>
+                    <div key={s.id} style={{ background: 'var(--bg)', borderRadius: 10, border: s.cannibalization ? '1px solid #f59e0b' : '1px solid var(--border)', padding: 16, marginBottom: 12 }}>
                       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: 'var(--text1)' }}>{pg.title} <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{pg.url}</span></div>
+
+                      {s.cannibalization && (
+                        <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b', borderRadius: 6, padding: '8px 10px', marginBottom: 12, fontSize: 11.5, color: 'var(--text1)' }}>
+                          <i className="fas fa-triangle-exclamation" style={{ color: '#f59e0b', marginRight: 6 }} />
+                          <strong style={{ color: '#f59e0b' }}>Keyword clash:</strong> "{s.cannibalization.keyword}" is already targeted by {s.cannibalization.conflicts_with.map((c, ci) => (
+                            <span key={ci}>{ci > 0 ? ', ' : ' '}{c.url ? <a href={c.url} target="_blank" rel="noopener" style={{ color: '#f59e0b' }}>{c.url.replace(/^https?:\/\/[^/]+/, '') || c.title || 'another page'}</a> : (c.title || 'another page')}<span style={{ color: 'var(--text3)' }}> ({c.source})</span></span>
+                          ))}. Two pages competing for the same keyword split your ranking — give this page a more specific keyword below before applying.
+                        </div>
+                      )}
 
                       {/* Meta Title */}
                       <div style={{ marginBottom: 12 }}>
@@ -31972,10 +32021,12 @@
 
       const [gapCompFilter, setGapCompFilter] = useState(null); // single competitor being viewed, or null = all
       const runGap = async (oneCompetitor) => {
+        // Guard: when called from onClick, React passes the event object — only accept a real domain string
+        const comp = (typeof oneCompetitor === 'string' && oneCompetitor) ? oneCompetitor : null;
         setGapLoading(true);
-        setGapCompFilter(oneCompetitor || null);
+        setGapCompFilter(comp);
         try {
-          const body = oneCompetitor ? { competitors: [oneCompetitor] } : {};
+          const body = comp ? { competitors: [comp] } : {};
           const r = await api(`/projects/${pid}/backlinks/gap`, { method: 'POST', body });
           setGapData(r);
         } catch (e) { alert('Gap analysis error: ' + e.message); }
@@ -32438,6 +32489,7 @@
               {tab === 'toxic' && <>
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 13, color: 'var(--text3)' }}>{toxicLinks.length} potentially toxic links found</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>Scored 0–100 from DataForSEO spam score + IP hosts, spam-niche domains/anchors, and broken links. Low authority alone is not counted as toxic. Re-run the scan to apply.</div>
                 </div>
                 <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
                   <div style={{ maxHeight: 600, overflowY: 'auto' }}>
@@ -32445,29 +32497,34 @@
                       <thead><tr>
                         <th style={thStyle}>From</th>
                         <th style={thStyle}>Anchor</th>
-                        <th style={thStyle}>Rank</th>
-                        <th style={thStyle}>Reason</th>
+                        <th style={thStyle}>Toxic Score</th>
+                        <th style={thStyle}>DR</th>
+                        <th style={thStyle}>Why Toxic</th>
                         <th style={thStyle}>First Seen</th>
                       </tr></thead>
                       <tbody>
                         {toxicLinks.map((l, i) => {
-                          const reasons = [];
-                          if (l.spam_score === 'high') reasons.push('Low DR');
-                          if (l.is_broken) reasons.push('Broken');
-                          if (l.domain_from_is_ip) reasons.push('IP-based');
-                          if (/casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.domain_from)) reasons.push('Suspicious domain');
-                          if (/casino|viagra|pharma|porn|adult|gambling|loan|payday/i.test(l.anchor)) reasons.push('Suspicious anchor');
+                          // Prefer server-computed reasons; fall back for older cached scans
+                          let reasons = Array.isArray(l.toxic_reasons) ? l.toxic_reasons : [];
+                          if (!reasons.length) {
+                            if (l.dfs_spam_score >= 50) reasons.push('Spam score ' + l.dfs_spam_score);
+                            if (l.is_broken) reasons.push('Broken link');
+                            if (l.domain_from_is_ip) reasons.push('IP-host domain');
+                          }
+                          const score = (typeof l.toxic_score === 'number') ? l.toxic_score : (l.spam_score === 'high' ? 70 : l.spam_score === 'medium' ? 40 : 15);
+                          const sc = score >= 60 ? '#ef4444' : score >= 30 ? '#f59e0b' : '#94a3b8';
                           return (
                             <tr key={i}>
                               <td style={{ ...tdStyle, fontSize: 12 }}><a href={l.url_from} target="_blank" rel="noopener" style={{ color: '#ef4444', textDecoration: 'none' }}>{l.domain_from}</a></td>
                               <td style={{ ...tdStyle, fontSize: 12 }}>{l.anchor || '(empty)'}</td>
-                              <td style={tdStyle}><span style={{ fontWeight: 700, color: '#ef4444' }}>{l.domain_from_rank}</span></td>
-                              <td style={tdStyle}>{reasons.map((r, j) => <span key={j} style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: '#ef444422', color: '#ef4444', marginRight: 4 }}>{r}</span>)}</td>
+                              <td style={tdStyle}><span style={{ fontWeight: 700, color: sc }}>{score}</span><span style={{ color: 'var(--text3)', fontSize: 10 }}>/100</span></td>
+                              <td style={tdStyle}><span style={{ color: 'var(--text3)' }}>{l.domain_from_rank}</span></td>
+                              <td style={tdStyle}>{reasons.map((r, j) => <span key={j} style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: '#ef444422', color: '#ef4444', marginRight: 4, marginBottom: 2 }}>{r}</span>)}</td>
                               <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{l.first_seen ? new Date(l.first_seen).toLocaleDateString() : '-'}</td>
                             </tr>
                           );
                         })}
-                        {toxicLinks.length === 0 && <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No toxic links found. Your backlink profile looks clean.</td></tr>}
+                        {toxicLinks.length === 0 && <tr><td colSpan={6} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No toxic links found. Your backlink profile looks clean.</td></tr>}
                       </tbody>
                     </table>
                   </div>
