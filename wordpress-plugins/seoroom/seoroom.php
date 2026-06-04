@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.26
+ * Version: 8.9.27
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.26');
+define('SEOROOM_VERSION', '8.9.27');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1128,6 +1128,7 @@ function sropt_insert_content_block($request) {
     $page_id = isset($body['page_id']) ? intval($body['page_id']) : 0;
     $html = isset($body['html']) ? $body['html'] : '';
     $dry  = !empty($body['dry']);
+    $marker = isset($body['marker']) && $body['marker'] ? preg_replace('/[^a-z0-9_-]/i', '', $body['marker']) : 'seoroom-hub';
     if (!$page_id && $url) $page_id = url_to_postid($url);
     if (!$page_id) return rest_ensure_response(['ok' => false, 'message' => 'Could not resolve page from URL', 'url' => $url]);
     if (!$html) return rest_ensure_response(['ok' => false, 'message' => 'No HTML block provided']);
@@ -1138,7 +1139,7 @@ function sropt_insert_content_block($request) {
 
     if ($isElementor) {
         $raw = get_post_meta($page_id, '_elementor_data', true);
-        if (strpos($raw, 'seoroom-hub') !== false) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'already' => true]);
+        if (strpos($raw, $marker) !== false) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'already' => true]);
         $data = json_decode($raw, true);
         if (!is_array($data)) return rest_ensure_response(['ok' => false, 'message' => 'Could not parse Elementor data']);
         $section = [
@@ -1156,7 +1157,7 @@ function sropt_insert_content_block($request) {
     } else {
         $post = get_post($page_id);
         if (!$post) return rest_ensure_response(['ok' => false, 'message' => 'Post not found']);
-        if (strpos($post->post_content, 'seoroom-hub') !== false) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'already' => true]);
+        if (strpos($post->post_content, $marker) !== false) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'already' => true]);
         if (!get_post_meta($page_id, '_seoroom_hub_backup_content', true)) update_post_meta($page_id, '_seoroom_hub_backup_content', $post->post_content);
         wp_update_post(['ID' => $page_id, 'post_content' => $post->post_content . "\n\n" . $html]);
     }

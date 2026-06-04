@@ -11864,6 +11864,21 @@
             React.createElement('button', {
               className: 'btn',
               disabled: verifying || isRunning,
+              title: 'Add a contextual link on each child page back to its hub and to your services page (completes the hub-and-spoke loop)',
+              onClick: async () => {
+                if (!confirm('Link spoke pages?\n\nAdds a small contextual block to each child page (model/suburb pages) linking back to its hub and to your services page, with clean descriptive anchors. Processes ~25 per click — run again to continue. Reversible.')) return;
+                setVerifying(true);
+                try {
+                  const r = await api('/projects/' + project.id + '/internal-links/link-spokes', { method: 'POST', body: {} });
+                  alert(r.error ? r.error : (r.message || (r.processed + ' linked')));
+                } catch (e) { alert('Error: ' + e.message); }
+                setVerifying(false);
+              },
+              style: { fontSize: 13, padding: '8px 20px', background: '#6366f1', color: '#fff', border: 'none', marginRight: 8 }
+            }, React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 6 } }), 'Link Spokes'),
+            React.createElement('button', {
+              className: 'btn',
+              disabled: verifying || isRunning,
               title: 'Re-anchor failed links to phrases that actually exist on the source page, so they can be placed',
               onClick: async () => {
                 if (!confirm('Fix failed links?\n\nFor every "Failed" link, this finds a relevant phrase that actually exists on the source page and uses it as the anchor, then sets them back to Approved. After it runs, open SEO Room → Settings on the site, then click Verify Now.')) return;
@@ -12108,6 +12123,17 @@
               }, f)
             ),
             React.createElement('div', { style: { flex: 1 } }),
+            React.createElement('button', {
+              onClick: async () => {
+                if (!confirm('Clean generic anchors?\n\nDismisses pending suggestions where the same anchor (e.g. "car key replacement") points at 3+ different pages — keeping the 2 best. This stops the weak "one anchor → many targets" pattern.')) return;
+                try {
+                  const r = await api('/projects/' + project.id + '/internal-links/clean-anchors', { method: 'POST' });
+                  alert(r.error ? r.error : (r.message || (r.dismissed + ' dismissed')));
+                  loadData();
+                } catch (e) { alert('Error: ' + e.message); }
+              },
+              style: { padding: '6px 14px', borderRadius: 6, fontSize: 12, cursor: 'pointer', background: '#f59e0b', color: '#fff', border: 'none', fontWeight: 600 }
+            }, React.createElement('i', { className: 'fas fa-broom', style: { marginRight: 5 } }), 'Clean Anchors'),
             filter === 'pending' && selectedIds.size > 0 && React.createElement(React.Fragment, null,
               React.createElement('button', { className: 'btn', onClick: () => bulkAction('approved'), style: { fontSize: 12, padding: '6px 14px', background: '#14b8a6' } },
                 React.createElement('i', { className: 'fas fa-check', style: { marginRight: 4 } }), `Approve (${selectedIds.size})`),

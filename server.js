@@ -39127,6 +39127,76 @@ app.post('/api/projects/:projectId/internal-links/build-hubs', async (req, res) 
   }
 });
 
+// Link Spokes — give each child page (model/suburb/service page) clean contextual links UP to its hub and
+// ACROSS to the services page, completing the hub-and-spoke loop with descriptive anchors. Reversible.
+app.post('/api/projects/:projectId/internal-links/link-spokes', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!getWpAuthHeaders(project)) return res.status(400).json({ error: 'WordPress Application Password not configured in Project Settings.' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const discovered = await discoverPages(`https://${domain}`, project.wordpress_url, getWpAuthHeaders(project));
+    const pathOf = (u) => { try { return new URL(u).pathname.replace(/\/+$/, ''); } catch { return (u || '').replace(/\/+$/, ''); } };
+    const slugTitle = (u) => { const seg = pathOf(u).split('/').pop() || ''; return seg.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); };
+    const pages = (discovered || []).map(d => ({ url: (d.url || '').replace(/\/+$/, ''), title: (d.title || '').trim() })).filter(p => p.url);
+    const byPath = new Map(pages.map(p => [pathOf(p.url), p]));
+
+    const servicesPage = byPath.get('/services') ? byPath.get('/services').url : `https://${domain}`;
+
+    const childrenByParent = {};
+    for (const p of pages) { const pa = pathOf(p.url); const parent = pa.replace(/\/[^/]+$/, ''); if (parent && parent !== pa) (childrenByParent[parent] = childrenByParent[parent] || []).push(p); }
+
+    const cap = parseInt(req.body && req.body.cap) || 25;
+    let processed = 0, already = 0, remaining = 0; const errors = []; const purgeUrls = [];
+    for (const [parentPath, children] of Object.entries(childrenByParent)) {
+      if (children.length < 3) continue;
+      const hub = byPath.get(parentPath);
+      for (const child of children) {
+        if (processed >= cap) { remaining++; continue; }
+        const hubName = hub ? ((hub.title || slugTitle(hub.url)).replace(/\s*[\|\-–—].*$/, '').trim()) : '';
+        const hubLink = hub ? `<a href="${hub.url}/">all ${hubName}</a>` : '';
+        const block = `<div class="seoroom-spoke"><p>Looking for something else? ${hubLink ? ('Browse ' + hubLink + ', or see') : 'See'} our full range of <a href="${servicesPage}/">car key services</a>.</p></div>`;
+        try {
+          const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: child.url, html: block, marker: 'seoroom-spoke' });
+          if (r && r.ok) { if (r.already) already++; else { processed++; purgeUrls.push(child.url); } }
+          else errors.push(child.url);
+        } catch (e) { errors.push(child.url); }
+      }
+    }
+    try { if (purgeUrls.length) await purgeCloudflareCache(project, purgeUrls.slice(0, 30)); } catch (e) {}
+    res.json({ ok: true, processed, already, remaining, errors: errors.length, message: `${processed} spoke page(s) linked to their hub + services${remaining ? `; ${remaining} remaining — click again to continue` : ''}.${already ? ` ${already} already done.` : ''}` });
+  } catch (e) {
+    console.error('[link-spokes] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Clean Anchors — dismiss pending suggestions where one anchor is reused across 3+ different target pages
+// (keeps the 2 best by priority). Stops the "same generic anchor to 15 pages" pattern.
+app.post('/api/projects/:projectId/internal-links/clean-anchors', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const rows = (await pool.query(`SELECT id, suggested_anchor, target_url, priority FROM internal_link_suggestions WHERE project_id=$1 AND status='pending'`, [projectId])).rows;
+    const norm = a => (a || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    const byAnchor = {};
+    for (const r of rows) { const a = norm(r.suggested_anchor); if (!a) continue; (byAnchor[a] = byAnchor[a] || []).push(r); }
+    const prio = { high: 0, medium: 1, low: 2 };
+    let dismissed = 0;
+    for (const a of Object.keys(byAnchor)) {
+      const group = byAnchor[a];
+      const distinct = new Set(group.map(g => (g.target_url || '').replace(/\/+$/, '')));
+      if (distinct.size >= 3) {
+        group.sort((x, y) => (prio[x.priority] ?? 1) - (prio[y.priority] ?? 1));
+        const keep = new Set(group.slice(0, 2).map(g => g.id));
+        for (const g of group) if (!keep.has(g.id)) { await pool.query(`UPDATE internal_link_suggestions SET status='dismissed' WHERE id=$1`, [g.id]); dismissed++; }
+      }
+    }
+    res.json({ ok: true, dismissed, message: `${dismissed} suggestion(s) dismissed — they reused one generic anchor across many different pages.` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Insert Permanently — write approved/applied links INTO the page content via the plugin (survives all
 // caching). Marks inserted links 'live', records rollback history, purges caches.
 app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req, res) => {
@@ -39371,6 +39441,7 @@ app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, r
 
     let created = 0;
     const usedPerSource = {};
+    const usedAnchor = {}; // anchor -> how many targets already use it (cap at 2 for diversity)
     for (const orphan of orphanList) {
       const ourl = norm(orphan.url);
       const cleanTitle = (orphan.title || '').replace(/\s*[\|\-–—].*$/, '').trim();
@@ -39387,6 +39458,7 @@ app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, r
 
       let best = null;
       for (const cand of uniq) {
+        if ((usedAnchor[cand] || 0) >= 2) continue; // diversity: don't reuse one anchor for 3+ targets
         for (const src of sources) {
           if (src.url === ourl) continue;
           if ((usedPerSource[src.url] || 0) >= 5) continue;
@@ -39395,6 +39467,7 @@ app.post('/api/projects/:projectId/internal-links/rescue-orphans', async (req, r
         if (best) break;
       }
       if (!best) continue;
+      usedAnchor[best.anchor] = (usedAnchor[best.anchor] || 0) + 1;
       await pool.query(`
         INSERT INTO internal_link_suggestions (project_id, source_url, source_title, target_url, target_title, suggested_anchor, context_sentence, reason, priority, status)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
