@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.27
+ * Version: 8.9.28
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.27');
+define('SEOROOM_VERSION', '8.9.28');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 
@@ -1047,7 +1047,7 @@ function sropt_insert_links($request) {
         if (!is_array($data)) return rest_ensure_response(['ok' => false, 'message' => 'Could not parse Elementor data']);
         sropt_walk_insert_links($data, $todo, $inserted);
         if (!$dry && $inserted) {
-            if (!get_post_meta($page_id, '_seoroom_links_backup_elem', true)) update_post_meta($page_id, '_seoroom_links_backup_elem', $raw);
+            if (!get_post_meta($page_id, '_seoroom_links_backup_elem', true)) update_post_meta($page_id, '_seoroom_links_backup_elem', wp_slash($raw));
             update_post_meta($page_id, '_elementor_data', wp_slash(wp_json_encode($data)));
             delete_post_meta($page_id, '_elementor_css');
             if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
@@ -1064,7 +1064,7 @@ function sropt_insert_links($request) {
         }
         unset($l);
         if (!$dry && $inserted) {
-            if (!get_post_meta($page_id, '_seoroom_links_backup_content', true)) update_post_meta($page_id, '_seoroom_links_backup_content', $orig);
+            if (!get_post_meta($page_id, '_seoroom_links_backup_content', true)) update_post_meta($page_id, '_seoroom_links_backup_content', wp_slash($orig));
             wp_update_post(['ID' => $page_id, 'post_content' => $content]);
         }
     }
@@ -1089,11 +1089,13 @@ function sropt_restore_links($request) {
     $restored = false;
     $elem = get_post_meta($page_id, '_seoroom_links_backup_elem', true);
     if (!empty($elem)) {
-        update_post_meta($page_id, '_elementor_data', wp_slash($elem));
-        delete_post_meta($page_id, '_seoroom_links_backup_elem');
-        delete_post_meta($page_id, '_elementor_css');
-        if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
-        $restored = true;
+        if (json_decode($elem) !== null) {   // only restore a VALID backup
+            update_post_meta($page_id, '_elementor_data', wp_slash($elem));
+            delete_post_meta($page_id, '_seoroom_links_backup_elem');
+            delete_post_meta($page_id, '_elementor_css');
+            if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
+            $restored = true;
+        }
     }
     $content = get_post_meta($page_id, '_seoroom_links_backup_content', true);
     if (!empty($content)) {
@@ -1150,7 +1152,7 @@ function sropt_insert_content_block($request) {
             ]]
         ];
         $data[] = $section;
-        if (!get_post_meta($page_id, '_seoroom_hub_backup_elem', true)) update_post_meta($page_id, '_seoroom_hub_backup_elem', $raw);
+        if (!get_post_meta($page_id, '_seoroom_hub_backup_elem', true)) update_post_meta($page_id, '_seoroom_hub_backup_elem', wp_slash($raw));
         update_post_meta($page_id, '_elementor_data', wp_slash(wp_json_encode($data)));
         delete_post_meta($page_id, '_elementor_css');
         if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
@@ -1158,7 +1160,7 @@ function sropt_insert_content_block($request) {
         $post = get_post($page_id);
         if (!$post) return rest_ensure_response(['ok' => false, 'message' => 'Post not found']);
         if (strpos($post->post_content, $marker) !== false) return rest_ensure_response(['ok' => true, 'page_id' => $page_id, 'already' => true]);
-        if (!get_post_meta($page_id, '_seoroom_hub_backup_content', true)) update_post_meta($page_id, '_seoroom_hub_backup_content', $post->post_content);
+        if (!get_post_meta($page_id, '_seoroom_hub_backup_content', true)) update_post_meta($page_id, '_seoroom_hub_backup_content', wp_slash($post->post_content));
         wp_update_post(['ID' => $page_id, 'post_content' => $post->post_content . "\n\n" . $html]);
     }
     do_action('berqwp_clear_all_cache'); do_action('berqwp_clear_cache');
@@ -1176,10 +1178,12 @@ function sropt_restore_content_block($request) {
     $restored = false;
     $elem = get_post_meta($page_id, '_seoroom_hub_backup_elem', true);
     if (!empty($elem)) {
-        update_post_meta($page_id, '_elementor_data', wp_slash($elem));
-        delete_post_meta($page_id, '_seoroom_hub_backup_elem'); delete_post_meta($page_id, '_elementor_css');
-        if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
-        $restored = true;
+        if (json_decode($elem) !== null) {   // only restore a VALID backup — never overwrite a live page with corrupt JSON
+            update_post_meta($page_id, '_elementor_data', wp_slash($elem));
+            delete_post_meta($page_id, '_seoroom_hub_backup_elem'); delete_post_meta($page_id, '_elementor_css');
+            if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
+            $restored = true;
+        }
     }
     $content = get_post_meta($page_id, '_seoroom_hub_backup_content', true);
     if (!empty($content)) {

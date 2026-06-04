@@ -11922,7 +11922,7 @@
                 if (!confirm('Build hub pages?\n\nFinds parent/index pages (like /a-f or /services) that have 3+ child pages, and inserts an in-content list linking to those children — fixing pages that are only linked from the nav menu. Reversible (the page is backed up).')) return;
                 setVerifying(true);
                 try {
-                  const r = await api('/projects/' + project.id + '/internal-links/build-hubs', { method: 'POST', body: { rebuild: true } });
+                  const r = await api('/projects/' + project.id + '/internal-links/build-hubs', { method: 'POST' });
                   if (r.error) { alert(r.error); }
                   else {
                     let msg = r.message || (r.built + ' hubs built');
