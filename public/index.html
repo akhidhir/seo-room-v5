@@ -10227,6 +10227,30 @@
         setSuggestLoading(false);
       };
 
+      // ONE-BUTTON: suggest matches for every 404, then create a 301 redirect for each confident match.
+      const fixAll404s = async () => {
+        if (!fourOhFours.length) { alert('No 404s to fix.'); return; }
+        if (!confirm('Fix all 404s automatically?\n\nFor each 404 it finds the best-matching live page and creates a 301 redirect to it. 404s with no confident match (usually bot/junk URLs or genuinely deleted pages) are left untouched.\n\nContinue?')) return;
+        setAutoRedirecting(true);
+        try {
+          const urls = fourOhFours.map(f => f.url || f.url_path || '');
+          const data = await api(`/projects/${project.id}/plugin/404s/suggest-redirects`, { method: 'POST', body: { urls } });
+          const sug = data.suggestions || {};
+          setSuggestions(sug);
+          const matched = fourOhFours.filter(f => { const k = f.url || f.url_path || ''; return sug[k] && sug[k].score >= 25; });
+          setAutoProgress({ done: 0, total: matched.length });
+          let done = 0;
+          for (const item of matched) {
+            const k = item.url || item.url_path || ''; const target = sug[k] && sug[k].url; if (!target) continue;
+            try { await api(`/projects/${project.id}/plugin/404s/${item.id}/redirect`, { method: 'POST', body: { target_url: target } }); done++; setAutoProgress({ done, total: matched.length }); } catch (e) {}
+          }
+          const unmatched = fourOhFours.length - matched.length;
+          alert(`Fixed ${done} of ${fourOhFours.length} 404s with 301 redirects to the best-matching page.` + (unmatched ? `\n\n${unmatched} had no confident match — left as-is (usually bot/junk URLs or pages that are genuinely gone).` : ''));
+          load404s();
+        } catch (e) { alert('Fix all error: ' + (e.message || e)); }
+        setAutoRedirecting(false); setAutoProgress(null);
+      };
+
       const autoRedirectAll = async () => {
         const matchedItems = fourOhFours.filter(f => {
           const key = f.url || f.url_path || '';
@@ -10547,6 +10571,14 @@
         // Action buttons
         filtered404s.length > 0 && e('div', { style: { marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
           e('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+            e('button', {
+              onClick: fixAll404s, disabled: autoRedirecting,
+              title: 'One click: match every 404 to its best page and create the 301 redirects',
+              style: { fontSize: 13, fontWeight: 800, padding: '8px 16px', border: 'none', borderRadius: 8, color: '#fff', cursor: autoRedirecting ? 'wait' : 'pointer', background: autoRedirecting ? 'var(--bg3)' : 'linear-gradient(135deg, #14b8a6, #6366f1)' }
+            },
+              autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-wand-magic-sparkles' }),
+              autoRedirecting ? (autoProgress ? ` Fixing ${autoProgress.done}/${autoProgress.total}…` : ' Fixing…') : ' Fix All 404s (Auto)'
+            ),
             e('button', { style: btnStyle('#8b5cf6'), onClick: suggestRedirects, disabled: suggestLoading },
               suggestLoading ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-magic' }),
               suggestLoading ? ' Matching pages...' : ' Suggest Redirects'
@@ -11849,6 +11881,11 @@
               title: 'Run everything: clean anchors → insert links → recover failed → build hubs → link spokes → re-audit',
               style: { fontSize: 13, fontWeight: 800, padding: '9px 18px', border: 'none', borderRadius: 8, color: '#fff', cursor: autoLinking ? 'wait' : 'pointer', background: autoLinking ? 'var(--bg3)' : 'linear-gradient(135deg, #14b8a6, #6366f1)', boxShadow: autoLinking ? 'none' : '0 2px 12px rgba(99,102,241,0.35)' }
             }, React.createElement('i', { className: autoLinking ? 'fas fa-spinner fa-spin' : 'fas fa-wand-magic-sparkles', style: { marginRight: 6 } }), autoLinking ? (autoStatus || 'Optimising…') : 'Optimise Links (Auto)'),
+            React.createElement('button', {
+              className: 'btn', onClick: () => { setLoading(true); loadData(); }, disabled: loading,
+              title: 'Reload the latest audit results (orphans, links, suggestions)',
+              style: { fontSize: 13, padding: '8px 14px' }
+            }, React.createElement('i', { className: loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate', style: { marginRight: 6 } }), (audit && audit.status === 'running') ? 'Auditing…' : 'Refresh'),
             audit?.audited_at && React.createElement('button', {
               className: 'btn',
               disabled: isRunning,
