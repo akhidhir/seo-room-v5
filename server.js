@@ -39148,23 +39148,30 @@ app.post('/api/projects/:projectId/internal-links/link-spokes', async (req, res)
     const childrenByParent = {};
     for (const p of pages) { const pa = pathOf(p.url); const parent = pa.replace(/\/[^/]+$/, ''); if (parent && parent !== pa) (childrenByParent[parent] = childrenByParent[parent] || []).push(p); }
 
+    // Persisted "done" set so re-runs skip finished pages instantly (no plugin round-trip each time).
+    const doneRow = await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='spoke_done'`, [projectId]);
+    const doneSet = new Set((doneRow.rows[0]?.config?.urls) || []);
+
     const cap = parseInt(req.body && req.body.cap) || 25;
     let processed = 0, already = 0, remaining = 0; const errors = []; const purgeUrls = [];
     for (const [parentPath, children] of Object.entries(childrenByParent)) {
       if (children.length < 3) continue;
       const hub = byPath.get(parentPath);
       for (const child of children) {
+        if (doneSet.has(child.url)) continue;                 // already handled in a previous run — skip, no call
         if (processed >= cap) { remaining++; continue; }
         const hubName = hub ? ((hub.title || slugTitle(hub.url)).replace(/\s*[\|\-–—].*$/, '').trim()) : '';
         const hubLink = hub ? `<a href="${hub.url}/">all ${hubName}</a>` : '';
         const block = `<div class="seoroom-spoke"><p>Looking for something else? ${hubLink ? ('Browse ' + hubLink + ', or see') : 'See'} our full range of <a href="${servicesPage}/">car key services</a>.</p></div>`;
         try {
           const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: child.url, html: block, marker: 'seoroom-spoke' });
-          if (r && r.ok) { if (r.already) already++; else { processed++; purgeUrls.push(child.url); } }
+          if (r && r.ok) { doneSet.add(child.url); if (r.already) already++; else { processed++; purgeUrls.push(child.url); } }
           else errors.push(child.url);
         } catch (e) { errors.push(child.url); }
       }
     }
+    // Save the done set
+    try { await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'spoke_done',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify({ urls: [...doneSet] })]); } catch (e) {}
     try { if (purgeUrls.length) await purgeCloudflareCache(project, purgeUrls.slice(0, 30)); } catch (e) {}
     res.json({ ok: true, processed, already, remaining, errors: errors.length, message: `${processed} spoke page(s) linked to their hub + services${remaining ? `; ${remaining} remaining — click again to continue` : ''}.${already ? ` ${already} already done.` : ''}` });
   } catch (e) {
@@ -39207,10 +39214,12 @@ app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req,
     if (!getWpAuthHeaders(project)) return res.status(400).json({ error: 'WordPress Application Password not configured in Project Settings.' });
 
     const ids = Array.isArray(req.body?.suggestion_ids) ? req.body.suggestion_ids : null;
+    const includePending = req.body?.include_pending === true;
+    const statusFilter = includePending ? `('pending','approved','applied','live')` : `('approved','applied','live')`;
     const rows = (await pool.query(
       ids && ids.length
         ? `SELECT id, source_url, target_url, target_title, suggested_anchor FROM internal_link_suggestions WHERE project_id=$1 AND id=ANY($2) AND status IN ('pending','approved','applied','live')`
-        : `SELECT id, source_url, target_url, target_title, suggested_anchor FROM internal_link_suggestions WHERE project_id=$1 AND status IN ('approved','applied','live')`,
+        : `SELECT id, source_url, target_url, target_title, suggested_anchor FROM internal_link_suggestions WHERE project_id=$1 AND status IN ${statusFilter}`,
       ids && ids.length ? [projectId, ids] : [projectId])).rows;
     if (!rows.length) return res.json({ ok: true, inserted: 0, failed: 0, message: 'No approved links to insert.' });
 

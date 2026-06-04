@@ -11662,6 +11662,8 @@
       const [running, setRunning] = useState(false);
       const [applying, setApplying] = useState(false);
       const [verifying, setVerifying] = useState(false);
+      const [autoLinking, setAutoLinking] = useState(false);
+      const [autoStatus, setAutoStatus] = useState('');
       const [tab, setTab] = useState('overview'); // overview, suggestions
       const [pageFilter, setPageFilter] = useState('all'); // all, orphan, few_links, ok
       const [pageSort, setPageSort] = useState({ key: 'inbound_count', dir: 'asc' }); // sortable columns
@@ -11768,6 +11770,34 @@
         setApplying(false);
       };
 
+      // One-button pipeline: clean → insert → recover → hubs → spokes → re-audit
+      const runAutoLinks = async () => {
+        if (autoLinking) return;
+        if (!confirm('Optimise all internal links automatically?\n\nIn order, this will:\n1. Clean weak/generic anchors\n2. Insert all good links into your pages\n3. Re-anchor + insert any that failed\n4. Build hub pages (link your model/area pages)\n5. Link spoke pages back to their hubs\n6. Re-run the audit\n\nLinks are written into your page content (reversible). Continue?')) return;
+        setAutoLinking(true);
+        const pid = project.id; const log = [];
+        const step = async (label, fn) => { setAutoStatus(label); try { return await fn(); } catch (e) { log.push(label + ' — skipped (' + (e.message || e) + ')'); return null; } };
+        try {
+          await step('1/6 Cleaning generic anchors…', async () => { const r = await api(`/projects/${pid}/internal-links/clean-anchors`, { method: 'POST' }); log.push('Cleaned ' + (r.dismissed || 0) + ' weak anchors'); });
+          await step('2/6 Inserting links into pages…', async () => { const r = await api(`/projects/${pid}/internal-links/insert-permanent`, { method: 'POST', body: { include_pending: true } }); log.push('Inserted ' + (r.inserted || 0) + ' links (' + (r.failed || 0) + ' failed)'); });
+          await step('3/6 Recovering failed anchors…', async () => { await api(`/projects/${pid}/internal-links/reanchor-failed`, { method: 'POST' }); const r = await api(`/projects/${pid}/internal-links/insert-permanent`, { method: 'POST', body: { include_pending: true } }); log.push('Recovered + inserted ' + (r.inserted || 0) + ' more'); });
+          await step('4/6 Building hub pages…', async () => { const r = await api(`/projects/${pid}/internal-links/build-hubs`, { method: 'POST' }); log.push('Built ' + (r.built || 0) + ' hub pages'); });
+          await step('5/6 Linking spoke pages…', async () => {
+            let guard = 0, total = 0;
+            while (guard++ < 12) {
+              setAutoStatus('5/6 Linking spoke pages… (' + total + ' done)');
+              const r = await api(`/projects/${pid}/internal-links/link-spokes`, { method: 'POST', body: {} });
+              total += (r && r.processed) || 0;
+              if (!r || (!r.remaining)) break;
+            }
+            log.push('Linked ' + total + ' spoke pages');
+          });
+          await step('6/6 Re-running audit…', async () => { await api(`/projects/${pid}/internal-links/audit`, { method: 'POST', body: { force: true } }); });
+          alert('Internal links optimised!\n\n' + log.join('\n') + '\n\nThe audit is re-running — give it a minute, then refresh to see the new orphan count.');
+        } catch (e) { alert('Auto-optimise stopped: ' + (e.message || e) + '\n\nDone so far:\n' + log.join('\n')); }
+        setAutoStatus(''); setAutoLinking(false); loadData();
+      };
+
       const toggleSelect = (id) => {
         const next = new Set(selectedIds);
         next.has(id) ? next.delete(id) : next.add(id);
@@ -11809,10 +11839,16 @@
             React.createElement('i', { className: 'fas fa-link', style: { marginRight: 10, color: 'var(--accent)' } }),
             'Internal Linking'
           ),
-          React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+          React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' } },
             isRunning && React.createElement('span', { style: { color: '#f59e0b', fontSize: 13 } },
               React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Auditing...'
             ),
+            // ONE-CLICK: run the whole internal-linking pipeline
+            React.createElement('button', {
+              onClick: runAutoLinks, disabled: autoLinking || isRunning,
+              title: 'Run everything: clean anchors → insert links → recover failed → build hubs → link spokes → re-audit',
+              style: { fontSize: 13, fontWeight: 800, padding: '9px 18px', border: 'none', borderRadius: 8, color: '#fff', cursor: autoLinking ? 'wait' : 'pointer', background: autoLinking ? 'var(--bg3)' : 'linear-gradient(135deg, #14b8a6, #6366f1)', boxShadow: autoLinking ? 'none' : '0 2px 12px rgba(99,102,241,0.35)' }
+            }, React.createElement('i', { className: autoLinking ? 'fas fa-spinner fa-spin' : 'fas fa-wand-magic-sparkles', style: { marginRight: 6 } }), autoLinking ? (autoStatus || 'Optimising…') : 'Optimise Links (Auto)'),
             audit?.audited_at && React.createElement('button', {
               className: 'btn',
               disabled: isRunning,
