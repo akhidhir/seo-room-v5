@@ -684,6 +684,17 @@ async function initDb() {
         UNIQUE (project_id, service, suburb)
       )
     `).catch(() => {});
+    // Background job store for long-running humanize (avoids proxy timeout). No FK so it works in build mode.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS humanize_jobs (
+        id SERIAL PRIMARY KEY,
+        status TEXT DEFAULT 'running',
+        result JSONB DEFAULT '{}',
+        error TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
     // Client draft — separate from agency draft so client edits don't overwrite agency work
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_content TEXT`).catch(() => {});
     await client.query(`ALTER TABLE content_queue ADD COLUMN IF NOT EXISTS client_draft_meta JSONB`).catch(() => {});
@@ -4826,15 +4837,13 @@ Example: ["rewrite1", "rewrite2", "rewrite3", "rewrite4"]`;
 // SMART HUMANIZE PIPELINE — Humanize → Brief Check → Surgical Repair → Re-humanize
 // Achieves 80%+ human score while preserving brief compliance
 // ============================================================================
-app.post(['/api/projects/:id/humanize-smart', '/api/builds/:id/humanize-smart'], async (req, res) => {
-  try {
-    const { content_html, page_id, build_id } = req.body;
+// Core smart-humanize pipeline — extracted so it can run sync OR as a background job.
+async function runSmartHumanize({ content_html, page_id, build_id, projectId, buildId }) {
+  {
     if (!content_html || content_html.trim().length < 100) {
-      return res.status(400).json({ error: 'Content too short to humanize' });
+      const e = new Error('Content too short to humanize'); e.statusCode = 400; throw e;
     }
 
-    const buildId = req.params.id.match(/^\d+$/) ? (req.path.includes('/builds/') ? parseInt(req.params.id) : null) : null;
-    const projectId = !buildId ? parseInt(req.params.id) : null;
     const pipeline = { steps: [], totalCredits: 0 };
 
     // ── STEP 1: GPTHuman API (per-paragraph) ──
@@ -5186,17 +5195,68 @@ Return ONLY the HTML content, no explanation.`;
 
     console.log('[smart-humanize] Pipeline complete. Steps: ' + pipeline.steps.map(s => s.step).join(' → '));
 
-    res.json({
+    return {
       content_html: finalContent,
       credits_used: pipeline.totalCredits,
       brief_score_before: briefScore,
       gaps_found: gaps.length,
       gaps_repaired: repairGaps.length,
       pipeline
-    });
+    };
+  }
+}
+
+// Sync endpoint (kept for short content / backward compatibility)
+app.post(['/api/projects/:id/humanize-smart', '/api/builds/:id/humanize-smart'], async (req, res) => {
+  try {
+    const { content_html, page_id, build_id } = req.body;
+    const buildId = req.params.id.match(/^\d+$/) ? (req.path.includes('/builds/') ? parseInt(req.params.id) : null) : null;
+    const projectId = !buildId ? parseInt(req.params.id) : null;
+    const result = await runSmartHumanize({ content_html, page_id, build_id, projectId, buildId });
+    res.json(result);
   } catch (err) {
     console.error('[smart-humanize] Error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Async endpoint — returns a jobId immediately and runs in background (no proxy timeout on long content)
+app.post(['/api/projects/:id/humanize-smart-async', '/api/builds/:id/humanize-smart-async'], async (req, res) => {
+  try {
+    const { content_html, page_id, build_id } = req.body;
+    if (!content_html || content_html.trim().length < 100) return res.status(400).json({ error: 'Content too short to humanize' });
+    const buildId = req.params.id.match(/^\d+$/) ? (req.path.includes('/builds/') ? parseInt(req.params.id) : null) : null;
+    const projectId = !buildId ? parseInt(req.params.id) : null;
+    const jobRes = await pool.query(`INSERT INTO humanize_jobs (status) VALUES ('running') RETURNING id`);
+    const jobId = jobRes.rows[0].id;
+    res.json({ jobId, status: 'running' });
+    // Run in background
+    (async () => {
+      try {
+        const result = await runSmartHumanize({ content_html, page_id, build_id, projectId, buildId });
+        await pool.query(`UPDATE humanize_jobs SET status='completed', result=$1, updated_at=NOW() WHERE id=$2`, [JSON.stringify(result), jobId]);
+        console.log('[smart-humanize] Async job ' + jobId + ' completed');
+      } catch (e) {
+        console.error('[smart-humanize] Async job ' + jobId + ' failed:', e.message);
+        await pool.query(`UPDATE humanize_jobs SET status='failed', error=$1, updated_at=NOW() WHERE id=$2`, [e.message, jobId]);
+      }
+    })();
+  } catch (e) {
+    console.error('[smart-humanize-async] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Poll a humanize job
+app.get('/api/humanize-job/:jobId', async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT status, result, error FROM humanize_jobs WHERE id=$1`, [parseInt(req.params.jobId)]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Job not found' });
+    const row = r.rows[0];
+    const result = typeof row.result === 'string' ? JSON.parse(row.result) : row.result;
+    res.json({ status: row.status, error: row.error, result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

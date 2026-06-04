@@ -16298,14 +16298,29 @@
         setSuggestedKws([]);
       };
 
+      // Run humanize as a background job + poll — avoids proxy timeout on long pages
+      var runHumanizeJob = async function(html) {
+        var body = { content_html: html, page_id: page.id, build_id: project?.build_id || null };
+        var start;
+        try { start = await api(apiPrefix + '/humanize-smart-async', { method: 'POST', body: body }); }
+        catch (e) { return await api(apiPrefix + '/humanize-smart', { method: 'POST', body: body }); } // old server fallback
+        if (!start || !start.jobId) return await api(apiPrefix + '/humanize-smart', { method: 'POST', body: body });
+        var jobId = start.jobId, maxMs = 6 * 60 * 1000, waited = 0, interval = 4000;
+        while (waited < maxMs) {
+          await new Promise(function(r){ setTimeout(r, interval); });
+          waited += interval;
+          var st = await api('/humanize-job/' + jobId);
+          if (st.status === 'completed') return st.result || {};
+          if (st.status === 'failed') throw new Error(st.error || 'Humanize failed');
+        }
+        throw new Error('Humanize timed out after 6 minutes');
+      };
+
       var handleHumanize = async function() {
         if (!editContent || humanizing) return;
         setHumanizing(true);
         try {
-          var result = await api(apiPrefix + '/humanize-smart', {
-            method: 'POST',
-            body: { content_html: editContent, page_id: page.id, build_id: project?.build_id || null }
-          });
+          var result = await runHumanizeJob(editContent);
           if (result.content_html) {
             setEditContent(result.content_html);
             var msg = 'Smart humanize complete!';
@@ -16622,9 +16637,9 @@
               if (opt) { currentHtml = opt.html; currentMeta = { meta_title: opt.meta_title, meta_desc: opt.meta_desc, focus_keyword: currentMeta.focus_keyword }; }
             }
 
-            // 3. Humanize (lowers AI score AND surgically re-inserts any missing brief keywords)
-            setAutoFixStatus('Pass ' + iter + ' — humanizing…');
-            var hz = await api(apiPrefix + '/humanize-smart', { method:'POST', body:{ content_html: currentHtml, page_id: page.id, build_id: project?.build_id || null } });
+            // 3. Humanize (background job + poll; lowers AI score AND surgically re-inserts any missing brief keywords)
+            setAutoFixStatus('Pass ' + iter + ' — humanizing (this can take a minute)…');
+            var hz = await runHumanizeJob(currentHtml);
             if (hz.content_html) { currentHtml = hz.content_html; setEditContent(currentHtml); }
 
             // 4. Verify brief + AI score
@@ -16646,7 +16661,9 @@
           }
           summary = 'Auto-Fix complete.\n\nBrief: ' + briefScore + '% (' + gapsLeft + ' gap' + (gapsLeft===1?'':'s') + ' left)\nHuman score: ' + (humanScore ? humanScore.toFixed(1) + '%' : 'n/a') + '\n\nReview the content, then Save or Send for Approval.';
         } catch (e) {
-          summary = 'Auto-Fix stopped: ' + (e.message || e);
+          var em = (e && e.message) || String(e);
+          if (em === 'Failed to fetch') em = 'Network dropped mid-run. Your optimised content was saved — click Auto-Fix again to finish humanizing.';
+          summary = 'Auto-Fix stopped: ' + em;
         }
         setAutoFixStatus('');
         setAutoFixing(false);
@@ -21751,14 +21768,29 @@
       };
 
       // Humanize handler — same as new website pipeline
+      // Background humanize job + poll — avoids proxy timeout on long content
+      const runHumanizeJob = async (html) => {
+        const body = { content_html: html, page_id: selectedItem.page_id || selectedItem.id };
+        let start;
+        try { start = await api(`/projects/${pid}/humanize-smart-async`, { method: 'POST', body }); }
+        catch (e) { return await api(`/projects/${pid}/humanize-smart`, { method: 'POST', body }); }
+        if (!start || !start.jobId) return await api(`/projects/${pid}/humanize-smart`, { method: 'POST', body });
+        const jobId = start.jobId; let waited = 0; const maxMs = 6 * 60 * 1000, interval = 4000;
+        while (waited < maxMs) {
+          await new Promise(r => setTimeout(r, interval));
+          waited += interval;
+          const st = await api('/humanize-job/' + jobId);
+          if (st.status === 'completed') return st.result || {};
+          if (st.status === 'failed') throw new Error(st.error || 'Humanize failed');
+        }
+        throw new Error('Humanize timed out after 6 minutes');
+      };
+
       const handleHumanize = async () => {
         if (!editContent || humanizing || !selectedItem) return;
         setHumanizing(true);
         try {
-          const result = await api(`/projects/${pid}/humanize-smart`, {
-            method: 'POST',
-            body: { content_html: editContent, page_id: selectedItem.page_id || selectedItem.id }
-          });
+          const result = await runHumanizeJob(editContent);
           if (result.content_html) {
             setEditContent(result.content_html);
             let msg = 'Humanize complete!';
