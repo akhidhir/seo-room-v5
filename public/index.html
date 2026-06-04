@@ -11824,7 +11824,8 @@
             }
             log.push('Linked ' + total + ' spoke pages');
           });
-          await step('6/6 Re-running audit…', async () => { await api(`/projects/${pid}/internal-links/audit`, { method: 'POST', body: { force: true } }); });
+          await step('6/7 Linking remaining orphans…', async () => { const r = await api(`/projects/${pid}/internal-links/link-remaining-orphans`, { method: 'POST' }); log.push('Linked ' + (r.linked || 0) + ' remaining orphans'); });
+          await step('7/7 Re-running audit…', async () => { await api(`/projects/${pid}/internal-links/audit`, { method: 'POST', body: { force: true } }); });
           alert('Internal links optimised!\n\n' + log.join('\n') + '\n\nThe audit is re-running — give it a minute, then refresh to see the new orphan count.');
         } catch (e) { alert('Auto-optimise stopped: ' + (e.message || e) + '\n\nDone so far:\n' + log.join('\n')); }
         setAutoStatus(''); setAutoLinking(false); loadData();

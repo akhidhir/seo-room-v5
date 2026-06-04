@@ -39196,6 +39196,70 @@ app.post('/api/projects/:projectId/internal-links/link-spokes', async (req, res)
   }
 });
 
+// Link Remaining Orphans — for each leftover orphan, find its most relevant existing (non-orphan) page by
+// distinctive keyword overlap (brand/model/suburb), and append a "Related pages" link block there. This
+// gives the hard-to-reach orphans (top-level model+suburb pages) a genuine inbound link. Reversible.
+app.post('/api/projects/:projectId/internal-links/link-remaining-orphans', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!getWpAuthHeaders(project)) return res.status(400).json({ error: 'WordPress Application Password not configured.' });
+
+    const cache = await pool.query(`SELECT orphan_pages FROM internal_link_audit_cache WHERE project_id=$1`, [projectId]);
+    const orphanList = (cache.rows[0]?.orphan_pages) || [];
+    if (!orphanList.length) return res.json({ ok: true, linked: 0, message: 'No orphans — run the audit first.' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const discovered = await discoverPages(`https://${domain}`, project.wordpress_url, getWpAuthHeaders(project));
+    const norm = u => (u || '').replace(/\/+$/, '');
+    const pathOf = (u) => { try { return new URL(u).pathname.replace(/\/+$/, ''); } catch { return (u || '').replace(/\/+$/, ''); } };
+    const slugTitle = (u) => { const seg = pathOf(u).split('/').pop() || ''; return seg.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); };
+    const cleanLabel = (t, u) => { const x = (t || '').split('/').pop().replace(/\s*[\|\-–—].*$/, '').trim(); return x || slugTitle(u); };
+    const pages = (discovered || []).map(d => ({ url: norm(d.url), title: (d.title || '').trim() })).filter(p => p.url);
+
+    const orphanSet = new Set(orphanList.map(o => norm(o.url)));
+    const STOP = new Set(['car','key','keys','replacement','replacements','perth','the','of','and','in','a','to','for','services','service','repair','repairs','programming','spares','from','lost','mobile','locksmith','rescue','your','our','professional','automotive','vehicle','best','need','how','what','guide','tips']);
+    const distinctive = (title) => new Set((title || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 3 && !STOP.has(w)));
+
+    // Candidate targets = pages that are NOT orphans (they already have authority to pass down)
+    const targets = pages.filter(p => !orphanSet.has(p.url)).map(p => ({ ...p, words: distinctive(p.title) }));
+
+    // Match each orphan to the best target by shared distinctive words
+    const byTarget = {};
+    let unmatched = 0;
+    for (const orphan of orphanList) {
+      const ow = distinctive(orphan.title);
+      if (!ow.size) { unmatched++; continue; }
+      let best = null, bestScore = 0;
+      for (const t of targets) {
+        if (t.url === norm(orphan.url)) continue;
+        let s = 0; for (const w of ow) if (t.words.has(w)) s++;
+        if (s > bestScore) { bestScore = s; best = t; }
+      }
+      if (best && bestScore >= 1) { (byTarget[best.url] = byTarget[best.url] || { target: best, orphans: [] }).orphans.push(orphan); }
+      else unmatched++;
+    }
+
+    let linked = 0; const purgeUrls = []; const results = [];
+    for (const key of Object.keys(byTarget)) {
+      const { target, orphans } = byTarget[key];
+      const items = orphans.slice(0, 10).map(o => `<li><a href="${norm(o.url)}/">${cleanLabel(o.title, o.url)}</a></li>`).join('');
+      const html = `<div class="seoroom-related"><h3>Related car key services</h3><ul>${items}</ul></div>`;
+      try {
+        const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: target.url, html, marker: 'seoroom-related' });
+        if (r && r.ok && (r.inserted || r.already)) { linked += orphans.length; purgeUrls.push(target.url); results.push({ target: target.url, orphans: orphans.length }); }
+        else results.push({ target: target.url, error: (r && r.message) || 'insert failed' });
+      } catch (e) { results.push({ target: target.url, error: e.message }); }
+    }
+    try { if (purgeUrls.length) await purgeCloudflareCache(project, purgeUrls.slice(0, 30)); } catch (e) {}
+    res.json({ ok: true, linked, unmatched, targets: results.length, message: `Linked ${linked} orphan(s) from ${results.length} relevant page(s).${unmatched ? ` ${unmatched} had no relevant page to link from.` : ''} Re-run the audit to confirm.` });
+  } catch (e) {
+    console.error('[link-remaining-orphans] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Clean Anchors — dismiss pending suggestions where one anchor is reused across 3+ different target pages
 // (keeps the 2 best by priority). Stops the "same generic anchor to 15 pages" pattern.
 app.post('/api/projects/:projectId/internal-links/clean-anchors', async (req, res) => {
