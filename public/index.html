@@ -16566,6 +16566,93 @@
         setApplyingOptimise(false);
       };
 
+      // ── ONE-BUTTON AUTO-FIX: runs Brief Check → Optimise → Humanize → re-verify, looping until it passes ──
+      var [autoFixing, setAutoFixing] = React.useState(false);
+      var [autoFixStatus, setAutoFixStatus] = React.useState('');
+
+      // Optimise + auto-apply (no preview modal). Returns { html, meta_title, meta_desc } or null.
+      var runOptimiseAuto = async function() {
+        var tips = scoreData ? scoreData.tips : [];
+        var allKwAnalysis = scoreData ? scoreData.keywordAnalysis || [] : [];
+        var missingKws = allKwAnalysis.filter(function(k){ return k.count === 0; });
+        var compAnalysis = page.competitor_analysis || {};
+        var topicGapsData = compAnalysis.topicGaps || {};
+        var acceptedTopics = (topicGapsData.missingTopics || topicGapsData.missing_topics || []).filter(function(t){ return (typeof t==='object'?t.status:'')==='accepted'; }).map(function(t){ return typeof t==='string'?t:t.text; });
+        var acceptedKeywords = (topicGapsData.missingKeywords || topicGapsData.missing_keywords || []).filter(function(k){ return (typeof k==='object'?k.status:'')==='accepted'; }).map(function(k){ return typeof k==='string'?k:k.text; });
+        var topicGaps = (acceptedTopics.length>0||acceptedKeywords.length>0) ? { missing_topics:acceptedTopics, missing_keywords:acceptedKeywords, content_strengths: topicGapsData.content_strengths||topicGapsData.contentStrengths||[], recommendation: topicGapsData.recommendation||'' } : null;
+        var data = await api(apiPrefix + '/site-pages/' + page.id + '/optimise', { method:'POST', body:{ tips:tips, missing_keywords: missingKws.map(function(k){return k.keyword;}), target_keywords: targetKeywords.map(function(k){return typeof k==='string'?{keyword:k}:k;}), content_score: scoreData?scoreData.score:0, stats: scoreData?scoreData.stats:{}, focus_keyword: editMeta.focus_keyword, current_meta:{ meta_title: editMeta.meta_title||'', meta_desc: editMeta.meta_desc||'', focus_keyword: editMeta.focus_keyword||'' }, topic_gaps: topicGaps } });
+        if (data.gpthuman_credits != null) setGpthumanCredits(data.gpthuman_credits);
+        if (data.error) throw new Error(data.error);
+        var html = data.content_html || (data.proposed && data.proposed.content_html);
+        if (!html) return null;
+        var mt = data.meta_title || (data.proposed && data.proposed.meta_title) || editMeta.meta_title;
+        var md = data.meta_description || (data.proposed && data.proposed.meta_description) || editMeta.meta_desc;
+        await api(apiPrefix + '/site-pages/' + page.id, { method:'PUT', body:{ draft_content: html, meta_title: mt, meta_description: md, focus_keyword: editMeta.focus_keyword } });
+        setEditContent(html);
+        setEditMeta({ meta_title: mt, meta_desc: md, focus_keyword: editMeta.focus_keyword });
+        onUpdate(Object.assign({}, page, { draft_content: html, meta_title: mt, meta_description: md, stage:'written' }));
+        return { html: html, meta_title: mt, meta_desc: md };
+      };
+
+      var handleAutoFix = async function() {
+        if (!editContent || autoFixing) return;
+        if (!confirm('Auto-Fix runs the whole pipeline for you:\n\n1. Brief Check\n2. Optimise (fixes the gaps)\n3. Humanize\n4. Re-check Brief + AI score\n\nIt repeats until it passes (max 2 passes) and applies changes automatically. Use Reset to undo. Continue?')) return;
+        setAutoFixing(true);
+        var summary = '';
+        var briefScore = 0, humanScore = 0, gapsLeft = 0;
+        try {
+          var currentHtml = editContent;
+          var currentMeta = { meta_title: editMeta.meta_title, meta_desc: editMeta.meta_desc, focus_keyword: editMeta.focus_keyword };
+          var MAX = 2;
+          for (var iter = 1; iter <= MAX; iter++) {
+            // Save latest draft so server-side checks see it
+            setAutoFixStatus('Pass ' + iter + '/' + MAX + ' — saving draft…');
+            await api(apiPrefix + '/site-pages/' + page.id, { method:'PUT', body:{ draft_content: currentHtml, meta_title: currentMeta.meta_title, meta_description: currentMeta.meta_desc, focus_keyword: currentMeta.focus_keyword } });
+
+            // 1. Brief check (saves gaps to DB so Optimise can target them)
+            setAutoFixStatus('Pass ' + iter + ' — checking brief compliance…');
+            var bc = await api(apiPrefix + '/site-pages/' + page.id + '/brief-check', { method:'POST' });
+            setBriefCheckResult(bc);
+            briefScore = bc.score || 0; gapsLeft = (bc.gaps || []).length;
+
+            // 2. Optimise to fix gaps
+            if (gapsLeft > 0 || briefScore < 95) {
+              setAutoFixStatus('Pass ' + iter + ' — optimising to fix ' + gapsLeft + ' gap(s)…');
+              var opt = await runOptimiseAuto();
+              if (opt) { currentHtml = opt.html; currentMeta = { meta_title: opt.meta_title, meta_desc: opt.meta_desc, focus_keyword: currentMeta.focus_keyword }; }
+            }
+
+            // 3. Humanize (lowers AI score AND surgically re-inserts any missing brief keywords)
+            setAutoFixStatus('Pass ' + iter + ' — humanizing…');
+            var hz = await api(apiPrefix + '/humanize-smart', { method:'POST', body:{ content_html: currentHtml, page_id: page.id, build_id: project?.build_id || null } });
+            if (hz.content_html) { currentHtml = hz.content_html; setEditContent(currentHtml); }
+
+            // 4. Verify brief + AI score
+            setAutoFixStatus('Pass ' + iter + ' — verifying brief + AI score…');
+            var bc2 = await api(apiPrefix + '/site-pages/' + page.id + '/brief-check', { method:'POST' });
+            setBriefCheckResult(bc2);
+            briefScore = bc2.score || 0; gapsLeft = (bc2.gaps || []).length;
+            var highGaps = (bc2.gaps || []).filter(function(g){ return g.severity === 'high'; }).length;
+
+            try {
+              var plain = currentHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (plain.length >= 300) {
+                var ai = await api('/projects/' + pid + '/ai-detection', { method:'POST', body:{ content: plain, page_id: page.id } });
+                if (!ai.error) { setAiResult(ai); humanScore = ai.humanScore != null ? ai.humanScore : humanScore; }
+              }
+            } catch(e) { /* ai detection optional */ }
+
+            if ((briefScore >= 90 || highGaps === 0) && humanScore >= 70) break;
+          }
+          summary = 'Auto-Fix complete.\n\nBrief: ' + briefScore + '% (' + gapsLeft + ' gap' + (gapsLeft===1?'':'s') + ' left)\nHuman score: ' + (humanScore ? humanScore.toFixed(1) + '%' : 'n/a') + '\n\nReview the content, then Save or Send for Approval.';
+        } catch (e) {
+          summary = 'Auto-Fix stopped: ' + (e.message || e);
+        }
+        setAutoFixStatus('');
+        setAutoFixing(false);
+        alert(summary);
+      };
+
       var handleSaveEdit = async function() {
         if (!pid && !project?.build_id) return;
         setSavingMeta(true);
@@ -16714,6 +16801,12 @@
 
         // Sticky action bar (matches content_queue copywriter)
         React.createElement('div', { style: { position: 'sticky', top: 0, zIndex: 50, background: 'var(--bg)', borderBottom: '1px solid var(--border)', padding: '10px 0', marginBottom: 16, display: 'flex', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'wrap', gap: 10 } },
+          // Auto-Fix All — one button that runs the whole pipeline
+          !isPublished && hasDraft && React.createElement('button', {
+            onClick: handleAutoFix, disabled: autoFixing,
+            title: 'One click: Brief Check → Optimise (fix gaps) → Humanize → re-verify, looping until it passes',
+            style: { background: autoFixing ? 'var(--bg3)' : 'linear-gradient(135deg, #14b8a6, #0ea5e9)', fontSize: 14, padding: '8px 22px', fontWeight: 800, border: 'none', color: '#fff', borderRadius: 8, cursor: autoFixing ? 'wait' : 'pointer', boxShadow: autoFixing ? 'none' : '0 2px 12px rgba(20,184,166,0.35)' }
+          }, React.createElement('i', { className: autoFixing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-bolt', style: { marginRight: 6 } }), autoFixing ? (autoFixStatus || 'Auto-Fixing…') : 'Auto-Fix All'),
           // AI Editor
           !isPublished && hasDraft && React.createElement('button', {
             onClick: function() {
