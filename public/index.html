@@ -11721,6 +11721,7 @@
       const [loading, setLoading] = useState(true);
       const [running, setRunning] = useState(false);
       const [applying, setApplying] = useState(false);
+      const [insertProgress, setInsertProgress] = useState(null);
       const [verifying, setVerifying] = useState(false);
       const [autoLinking, setAutoLinking] = useState(false);
       const [autoStatus, setAutoStatus] = useState('');
@@ -11821,12 +11822,35 @@
       const applySuggestions = async (ids) => {
         setApplying(true);
         try {
-          // Permanent insert: writes the links into the page content (survives all caching) and marks them Live.
-          const r = await api(`/projects/${project.id}/internal-links/insert-permanent`, { method: 'POST', body: { suggestion_ids: ids || [] } });
-          if (r.error) { alert(r.error); }
-          else { alert(r.message || `${r.inserted} inserted, ${r.failed} failed`); }
+          // Single row (ids passed) — one quick call, no counter needed.
+          if (ids && ids.length) {
+            const r = await api(`/projects/${project.id}/internal-links/insert-permanent`, { method: 'POST', body: { suggestion_ids: ids } });
+            if (r.error) alert(r.error); else alert(r.message || `${r.inserted} inserted, ${r.failed} failed`);
+            loadData(); setApplying(false); return;
+          }
+          // Bulk "Insert All Approved" — process in batches so we can show a live counter.
+          const allIds = suggestions.map(s => s.id).filter(Boolean);
+          if (!allIds.length) {
+            const r = await api(`/projects/${project.id}/internal-links/insert-permanent`, { method: 'POST', body: { suggestion_ids: [] } });
+            if (r.error) alert(r.error); else alert(r.message || `${r.inserted} inserted, ${r.failed} failed`);
+            loadData(); setApplying(false); return;
+          }
+          const BATCH = 8;
+          let inserted = 0, failed = 0, done = 0;
+          setInsertProgress({ done: 0, total: allIds.length });
+          for (let i = 0; i < allIds.length; i += BATCH) {
+            const batch = allIds.slice(i, i + BATCH);
+            try {
+              const r = await api(`/projects/${project.id}/internal-links/insert-permanent`, { method: 'POST', body: { suggestion_ids: batch } });
+              inserted += (r.inserted || 0); failed += (r.failed || 0);
+            } catch (e) { failed += batch.length; }
+            done += batch.length;
+            setInsertProgress({ done, total: allIds.length });
+          }
+          setInsertProgress(null);
+          alert(`${inserted} link(s) inserted into your pages (permanent), ${failed} could not be placed.`);
           loadData();
-        } catch (e) { alert(e.message); }
+        } catch (e) { alert(e.message); setInsertProgress(null); }
         setApplying(false);
       };
 
@@ -12248,7 +12272,7 @@
               disabled: applying,
               onClick: () => applySuggestions(),
               style: { fontSize: 12, padding: '6px 14px', background: '#22c55e', color: '#000' }
-            }, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 4 } }), applying ? 'Inserting…' : 'Insert All Approved (Permanent)')
+            }, React.createElement('i', { className: 'fas fa-magic', style: { marginRight: 4 } }), applying ? (insertProgress ? `Inserting ${insertProgress.done}/${insertProgress.total}…` : 'Inserting…') : 'Insert All Approved (Permanent)')
           ),
 
           // Suggestions table
