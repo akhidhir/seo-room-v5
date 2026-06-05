@@ -22088,6 +22088,75 @@ async function crawlSiteGraph(project) {
   return { nodes, edges, stats: { total: nodes.length, orphans: orphans.length, issues: issueCount } };
 }
 
+// Fix Center — one place that aggregates fixable issues from every audit (internal linking, on-page,
+// site graph, indexing) into prioritized categories, each routing to the tool that fixes it.
+app.get('/api/projects/:projectId/fix-center', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const categories = [];
+    const cap = (arr) => arr.slice(0, 150);
+
+    // 1) Orphan pages (internal-link audit) → Internal Linking
+    try {
+      const il = (await pool.query(`SELECT orphan_pages FROM internal_link_audit_cache WHERE project_id=$1`, [projectId])).rows[0];
+      const orphans = (il?.orphan_pages) || [];
+      if (orphans.length) categories.push({
+        id: 'orphans', label: 'Orphan pages', desc: 'No internal links point to these pages.',
+        severity: 'high', count: orphans.length, tab: 'internal-linking', action: 'Run Optimise Links (Auto)',
+        pages: cap(orphans.map(o => ({ url: o.url, title: o.title || '', issue: 'No inbound internal links' })))
+      });
+    } catch (e) {}
+
+    // 2) On-Page meta / heading issues → On-Page Audit & Fix
+    try {
+      const op = (await pool.query(`SELECT results FROM onpage_audit_cache WHERE project_id=$1`, [projectId])).rows[0];
+      const pages = op?.results || [];
+      const meta = [];
+      for (const p of pages) {
+        const probs = (p.issues || []).map(i => (typeof i === 'string' ? i : i.text || '')).filter(t => /meta title|meta description|focus keyword|missing h1|no focus/i.test(t));
+        if (probs.length) meta.push({ url: p.url, title: p.metaTitle || p.title || '', issue: probs[0] });
+      }
+      if (meta.length) categories.push({
+        id: 'onpage', label: 'On-page issues', desc: 'Meta title, description, focus keyword or H1 problems.',
+        severity: 'medium', count: meta.length, tab: 'onpage-audit', action: 'Fix in On-Page Audit',
+        pages: cap(meta)
+      });
+    } catch (e) {}
+
+    // 3) Thin content (site graph) → Copywriter
+    try {
+      const sg = (await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`, [projectId])).rows[0];
+      const nodes = sg?.audit_data?.nodes || [];
+      const thin = nodes.filter(n => (n.issues || []).some(i => i.startsWith('Thin content'))).map(n => ({ url: n.url, title: n.title || '', issue: 'Thin content (' + n.word_count + ' words)' }));
+      if (thin.length) categories.push({
+        id: 'thin', label: 'Thin content', desc: 'Pages with too little content to rank well.',
+        severity: 'medium', count: thin.length, tab: 'ow-queue', action: 'Send to Copywriter',
+        pages: cap(thin)
+      });
+    } catch (e) {}
+
+    // 4) Not indexed by Google (indexing audit) → Indexing
+    try {
+      const ix = (await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='indexing' AND status='completed' ORDER BY completed_at DESC LIMIT 1`, [projectId])).rows[0];
+      const results = ix?.audit_data?.results || [];
+      const notIdx = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL').map(r => ({ url: r.url, title: '', issue: r.coverageState || 'Not indexed' }));
+      if (notIdx.length) categories.push({
+        id: 'indexing', label: 'Not indexed by Google', desc: 'Pages Google has not indexed.',
+        severity: 'high', count: notIdx.length, tab: 'indexing', action: 'Open Indexing',
+        pages: cap(notIdx)
+      });
+    } catch (e) {}
+
+    const sevRank = { high: 0, medium: 1, low: 2 };
+    categories.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || (b.count - a.count));
+    const total = categories.reduce((s, c) => s + c.count, 0);
+    res.json({ total, categories });
+  } catch (e) {
+    console.error('[fix-center] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET — return cached site graph if exists
 app.get('/api/projects/:projectId/site-graph', async (req, res) => {
   try {
