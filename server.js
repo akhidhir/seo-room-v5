@@ -580,6 +580,17 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS difficulty TEXT DEFAULT 'medium'`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS how_to_html TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS audit_data JSONB`).catch(() => {});
+    // Control Centre — ticket identity fields
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS code TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS fix_type TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS root_cause_key TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_code TEXT`).catch(() => {});
+    // Seed the agreed 3-letter project codes (only where unset; new projects derive a code from their name)
+    await client.query(`UPDATE projects SET project_code='PRJ' WHERE project_code IS NULL AND name ILIKE '%projection%'`).catch(() => {});
+    await client.query(`UPDATE projects SET project_code='CKR' WHERE project_code IS NULL AND name ILIKE '%car key%'`).catch(() => {});
+    await client.query(`UPDATE projects SET project_code='GPC' WHERE project_code IS NULL AND name ILIKE '%gold%'`).catch(() => {});
+    await client.query(`UPDATE projects SET project_code='HWP' WHERE project_code IS NULL AND name ILIKE '%houseworks%'`).catch(() => {});
+    await client.query(`UPDATE projects SET project_code='SEO' WHERE project_code IS NULL AND name ILIKE '%seo room%'`).catch(() => {});
     // Control Centre — one-time cleanup of mixed-case severity + duplicate category labels (data rot from different code paths)
     await client.query(`UPDATE action_items SET severity = lower(severity) WHERE severity IS NOT NULL AND severity <> lower(severity)`).catch(() => {});
     await client.query(`UPDATE action_items SET category='Quick Wins' WHERE lower(category) IN ('quick win','quick wins') AND category <> 'Quick Wins'`).catch(() => {});
@@ -6057,7 +6068,55 @@ function normalizeActionRow(r) {
   if (!r) return r;
   if (r.severity !== undefined) r.severity = normSeverity(r.severity);
   if (r.category !== undefined) r.category = normCategory(r.category);
+  if (!r.fix_type) r.fix_type = deriveFixType(r);
   return r;
+}
+
+// ── Control Centre: ticket code scheme (PRJ-PILLAR-NN) + fix-type routing ──
+// Middle of the code = root-cause area. Order matters (first match wins).
+const PILLAR_CODE_RULES = [
+  [/core web vitals|pagespeed|\bspeed\b|\bcwv\b/i, 'CWV'],
+  [/index/i, 'INDX'],
+  [/cannibal/i, 'CANB'],
+  [/citation|director/i, 'CITE'],
+  [/backlink/i, 'BLNK'],
+  [/internal link|orphan|\blink\b/i, 'LINK'],
+  [/review|reputation/i, 'REVW'],
+  [/suburb|content|thin|\bcopy\b/i, 'CONT'],
+  [/on-?page|\bmeta\b|\btitle\b|ctr|underperform|zero|quick win/i, 'ONPG'],
+  [/schema|crawl|site health|technical|security|robots|sitemap/i, 'TECH'],
+  [/profile|\bnap\b|photo|hours|categor|\bgbp\b|competitor|proximity|relevance|prominence/i, 'GBP'],
+];
+function pillarCode(item) {
+  const hay = `${item.category || ''} ${item.pillar || ''} ${item.type || ''}`;
+  for (const [re, code] of PILLAR_CODE_RULES) if (re.test(hay)) return code;
+  return 'GEN';
+}
+// Which tool the ticket opens.
+function deriveFixType(item) {
+  const ex = (item.execution_type || '').toLowerCase();
+  const pil = (item.pillar || '').toLowerCase();
+  const cat = (item.category || '').toLowerCase();
+  if (/copywriter|content|copy/.test(ex) || /content|suburb|thin|low ctr|underperform|zero|quick win|cannibal/.test(cat)) return 'Copywriting';
+  if (pil.startsWith('gbp') || /citation|director|profile|\bnap\b|photo|review|hours|categor/.test(cat)) return 'GBP';
+  if (/automated|plugin/.test(ex) || /website|technical/.test(pil) || /schema|canonical|noindex|core web vitals|crawl|site health/.test(cat)) return 'Technical';
+  return 'Manual';
+}
+// Stable de-dupe key: one ticket per (project, root-cause area, normalized cause).
+function rootCauseKey(projectId, item) {
+  return `${projectId}:${pillarCode(item)}:${normCategory(item.category) || item.pillar || 'gen'}`
+    .toLowerCase().replace(/[^a-z0-9:]+/g, '-');
+}
+// 3-letter project code: stored project_code wins, else derived from the name.
+function deriveProjectCode(project) {
+  if (project && project.project_code) return project.project_code.toUpperCase();
+  const name = (project && (project.name || project.business_name) || '').replace(/[^a-zA-Z ]/g, '').trim();
+  if (!name) return 'PRJ';
+  const words = name.split(/\s+/).filter(Boolean);
+  const code = words.length >= 3 ? words.slice(0, 3).map(w => w[0]).join('')
+    : words.length === 2 ? (words[0].slice(0, 2) + words[1][0])
+    : words[0].slice(0, 3);
+  return code.toUpperCase().slice(0, 3);
 }
 
 app.get('/api/projects/:id/action-items', async (req, res) => {
