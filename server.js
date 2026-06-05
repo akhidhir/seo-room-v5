@@ -9347,13 +9347,41 @@ app.post('/api/projects/:projectId/indexing/submit-sitemap', async (req, res) =>
     }
     if (!/^https?:\/\//.test(feedpath)) feedpath = `https://${domain}/${feedpath.replace(/^\/+/, '')}`;
 
+    // Helper: is this sitemap already registered in GSC for this property?
+    const alreadySubmitted = async () => {
+      try {
+        const list = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/sitemaps`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        }).then(r => r.json());
+        const norm = u => (u || '').replace(/\/+$/, '');
+        const fp = norm(feedpath);
+        return (list.sitemap || []).find(s => norm(s.path) === fp || norm(s.path).endsWith(fp.split('/').pop()));
+      } catch (e) { return null; }
+    };
+
     // PUT submits the sitemap to Google (idempotent — also used to resubmit/refresh)
     const submitRes = await fetch(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(matchedSite)}/sitemaps/${encodeURIComponent(feedpath)}`, {
       method: 'PUT', headers: { Authorization: `Bearer ${accessToken}` }
     });
     if (!submitRes.ok && submitRes.status !== 204) {
       const t = await submitRes.text();
-      return res.status(400).json({ error: `Google rejected the sitemap (${submitRes.status}). Make sure ${feedpath} loads and the GSC property is verified.`, detail: t.substring(0, 200) });
+      // The sitemap may already be registered (the PUT can 403 for read-only/"restricted"
+      // GSC users even though Google already has the sitemap). Don't alarm the user in that case.
+      const existing = await alreadySubmitted();
+      if (existing) {
+        return res.json({
+          success: true,
+          alreadySubmitted: true,
+          submitted: feedpath,
+          site: matchedSite,
+          status: { path: existing.path, lastSubmitted: existing.lastSubmitted || null, isPending: existing.isPending || false, errors: parseInt(existing.errors || 0), warnings: parseInt(existing.warnings || 0) },
+          message: 'Google already has this sitemap (status OK). No resubmission needed — Google re-reads it automatically.',
+        });
+      }
+      const hint = submitRes.status === 403
+        ? `The connected Google account is read-only ("Restricted") on this property, so it can't submit via the API. In Search Console → Settings → Users and permissions, set this account to "Owner" or "Full", or submit the sitemap manually once in Search Console.`
+        : `Make sure ${feedpath} loads and the GSC property is verified.`;
+      return res.status(400).json({ error: `Google rejected the sitemap (${submitRes.status}). ${hint}`, detail: t.substring(0, 300) });
     }
 
     // Read back status so the UI can confirm

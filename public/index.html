@@ -9060,7 +9060,9 @@
         setSubmittingSitemap(true); setSitemapMsg(null); setError('');
         try {
           const r = await api(`/projects/${project.id}/indexing/submit-sitemap`, { method: 'POST', body: {} });
-          setSitemapMsg({ type: 'ok', text: `Submitted ${r.submitted} to Google. It can take a few days for Google to recrawl.` });
+          setSitemapMsg({ type: 'ok', text: r.alreadySubmitted
+            ? (r.message || 'Google already has this sitemap (status OK). No resubmission needed.')
+            : `Submitted ${r.submitted} to Google. It can take a few days for Google to recrawl.` });
           await loadSitemaps();
         } catch (err) {
           setSitemapMsg({ type: 'err', text: err.message });
