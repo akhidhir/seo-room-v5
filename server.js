@@ -22043,6 +22043,7 @@ async function crawlSiteGraph(project) {
             .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
             .replace(/<nav[\s\S]*?<\/nav>/gi, ' ').replace(/<header[\s\S]*?<\/header>/gi, ' ').replace(/<footer[\s\S]*?<\/footer>/gi, ' ');
           node.word_count = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(w => w.length > 0).length;
+          node._isHub = content.includes('seoroom-hub') || content.includes('seoroom-related'); // our link-list pages
           const linkRegex = /href=["'](https?:\/\/[^"']*|\/[^"']*)/gi;
           let lm;
           const seenLinks = new Set();
@@ -22074,12 +22075,16 @@ async function crawlSiteGraph(project) {
   edges.forEach(e => { inboundMap[e.target] = (inboundMap[e.target] || 0) + 1; });
   nodes.forEach(n => { n.inbound_count = inboundMap[n.id] || 0; });
 
+  // Utility/legal pages are meant to be short — never flag them for thin content or missing links.
+  const UTILITY_RE = /(thank|privacy|refund|return|terms|disclaimer|cart|checkout|contact|photo-gallery|gallery|cookie|policy|login|register|account|wishlist|sitemap|^\/?404)/i;
   nodes.forEach(n => {
-    // Meta title/desc + H1 checks removed — On-Page Audit handles those via Yoast REST API (accurate for
-    // Elementor headings). A naive <h1> scan here produced false "Missing H1" flags, so it's dropped.
-    if (n.word_count < 250) n.issues.push('Thin content (' + n.word_count + ' words)');
-    if (n.internal_links.length === 0) n.issues.push('No outbound internal links');
-    if (n.inbound_count === 0) n.issues.push('Orphan page — no inbound links');
+    const slugPath = (n.slug || '') + ' ' + (n.url || '');
+    const isUtility = UTILITY_RE.test(slugPath);
+    const isHub = !!(n._isHub); // index/hub pages (link lists) — short by design
+    // Meta title/desc + H1 checks removed — On-Page Audit handles those via Yoast (accurate for Elementor).
+    if (!isUtility && !isHub && n.word_count < 250) n.issues.push('Thin content (' + n.word_count + ' words)');
+    if (!isUtility && !isHub && n.internal_links.length === 0) n.issues.push('No outbound internal links');
+    if (n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '') n.issues.push('Orphan page — no inbound links');
   });
 
   const orphans = nodes.filter(n => n.inbound_count === 0 && n.slug !== 'home' && n.slug !== '');
@@ -39187,9 +39192,10 @@ app.post('/api/projects/:projectId/internal-links/build-hubs', async (req, res) 
         .slice()
         .sort((a, b) => label(a.title, a.url).localeCompare(label(b.title, b.url)))
         .map(c => `<li><a href="${c.url}/">${label(c.title, c.url)}</a></li>`).join('');
-      const html = `<div class="seoroom-hub"><h2>Explore ${cleanName}</h2><p>Browse all of our related pages below:</p><ul>${items}</ul></div>`;
+      const intro = `Car Key Rescue provides fast, mobile car key replacement, cutting and programming across ${cleanName} and the wider Perth metro area. Whether you've lost your keys, need a spare, have a broken key, or you're locked out, our qualified technicians come directly to you with dealer-level equipment — without the dealer price. Choose the page that fits your situation below to learn more and get a free quote.`;
+      const html = `<div class="seoroom-hub"><h2>Explore ${cleanName}</h2><p>${intro}</p><ul>${items}</ul></div>`;
       // Full clean page used only to RECOVER a page whose Elementor data is corrupt (replaces it).
-      const fullHtml = `<h2>${cleanName}</h2><p>We provide car key replacement, cutting and programming across all of the areas below — a fully mobile service, we come to you anywhere in Perth.</p><div class="seoroom-hub"><ul>${items}</ul></div>`;
+      const fullHtml = `<h2>${cleanName}</h2><p>${intro}</p><div class="seoroom-hub"><ul>${items}</ul></div>`;
       try {
         if (rebuild) { try { await callPluginApi(project, '/restore-content-block', 'POST', { url: hub.url }); } catch (e) {} } // remove the old block first
         const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: hub.url, html });

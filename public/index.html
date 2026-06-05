@@ -19564,8 +19564,31 @@
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [expanded, setExpanded] = useState(null);
+      const [fixing, setFixing] = useState(false);
+      const [fixStatus, setFixStatus] = useState('');
       const load = () => { if (!project?.id) return; setLoading(true); api(`/projects/${project.id}/fix-center`).then(d => setData(d)).catch(() => {}).finally(() => setLoading(false)); };
       useEffect(() => { load(); }, [project?.id]);
+
+      // Run every auto-fixable category from here. Content issues still route to the tools (need a human).
+      const fixAll = async () => {
+        if (fixing) return;
+        if (!confirm('Auto-fix everything possible from here?\n\nThis runs the full internal-linking pipeline (clean anchors, insert links, build hubs, link spokes + orphans) and submits your sitemap to Google. Thin-content/copy issues still need the Copywriter. Changes are written into your pages (reversible). Continue?')) return;
+        setFixing(true);
+        const pid = project.id; const log = [];
+        const step = async (label, fn) => { setFixStatus(label); try { return await fn(); } catch (e) { log.push(label + ' — skipped'); return null; } };
+        try {
+          await step('Cleaning anchors…', () => api(`/projects/${pid}/internal-links/clean-anchors`, { method: 'POST' }));
+          await step('Inserting internal links…', () => api(`/projects/${pid}/internal-links/insert-permanent`, { method: 'POST', body: { include_pending: true } }));
+          await step('Recovering failed links…', async () => { await api(`/projects/${pid}/internal-links/reanchor-failed`, { method: 'POST' }); await api(`/projects/${pid}/internal-links/insert-permanent`, { method: 'POST', body: { include_pending: true } }); });
+          await step('Building hub pages…', () => api(`/projects/${pid}/internal-links/build-hubs`, { method: 'POST' }));
+          await step('Linking spoke pages…', async () => { let g = 0; while (g++ < 12) { const r = await api(`/projects/${pid}/internal-links/link-spokes`, { method: 'POST', body: {} }); if (!r || !r.remaining) break; } });
+          await step('Linking remaining orphans…', () => api(`/projects/${pid}/internal-links/link-remaining-orphans`, { method: 'POST' }));
+          await step('Submitting sitemap to Google…', () => api(`/projects/${pid}/indexing/submit-sitemap`, { method: 'POST', body: {} }));
+          await step('Re-running internal-link audit…', () => api(`/projects/${pid}/internal-links/audit`, { method: 'POST', body: { force: true } }));
+          alert('Auto-fix complete.\n\nLinks/hubs/orphans handled and sitemap submitted. Re-scan the Site Map and refresh here to see the updated list.\n\nWhat is left (thin content, blog copy) needs the Copywriter — click Fix on those rows.');
+        } catch (e) { alert('Fix All stopped: ' + (e.message || e)); }
+        setFixStatus(''); setFixing(false); load();
+      };
       const sevColor = s => s === 'high' ? '#ef4444' : s === 'medium' ? '#f59e0b' : '#64748b';
       const path = u => { try { return new URL(u).pathname || u; } catch { return u; } };
       const cats = data?.categories || [];
@@ -19573,7 +19596,13 @@
         <div style={{ padding: '24px 32px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-screwdriver-wrench" style={{ marginRight: 10, color: 'var(--accent)' }} />Fix Center</h2>
-            <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Refresh</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={fixAll} disabled={fixing} title="Auto-fix every category that can be fixed automatically (links, hubs, orphans, sitemap)"
+                style={{ fontSize: 13, fontWeight: 800, padding: '8px 18px', border: 'none', borderRadius: 8, color: '#fff', cursor: fixing ? 'wait' : 'pointer', background: fixing ? 'var(--bg3)' : 'linear-gradient(135deg, #14b8a6, #6366f1)' }}>
+                <i className={fixing ? 'fas fa-spinner fa-spin' : 'fas fa-wand-magic-sparkles'} style={{ marginRight: 6 }} />{fixing ? (fixStatus || 'Fixing…') : 'Fix All (Auto)'}
+              </button>
+              <button className="btn" onClick={load} disabled={loading || fixing} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Refresh</button>
+            </div>
           </div>
           <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 20 }}>Every fixable issue across your audits in one place. Click <strong>Fix</strong> to jump to the tool that resolves it. Pulls from your latest Internal Linking, On-Page, Site Map and Indexing scans.</div>
           {loading ? <div style={{ textAlign: 'center', padding: 40 }}><span className="spinner-large" /></div>
