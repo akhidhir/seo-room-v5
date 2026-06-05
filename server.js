@@ -22036,15 +22036,17 @@ async function crawlSiteGraph(project) {
             const modMatch = html.match(/<meta[^>]*property=["']article:modified_time["'][^>]*content=["']([^"']*)["']/i);
             if (modMatch) node.last_modified = modMatch[1];
           }
+          // Strip nav/header/footer so links + word count reflect real CONTENT (matches the internal-link audit).
           const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-          if (bodyMatch) {
-            const text = bodyMatch[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');
-            node.word_count = text.split(/\s+/).filter(w => w.length > 0).length;
-          }
+          const bodyHtml = bodyMatch ? bodyMatch[1] : html;
+          const content = bodyHtml
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<nav[\s\S]*?<\/nav>/gi, ' ').replace(/<header[\s\S]*?<\/header>/gi, ' ').replace(/<footer[\s\S]*?<\/footer>/gi, ' ');
+          node.word_count = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(w => w.length > 0).length;
           const linkRegex = /href=["'](https?:\/\/[^"']*|\/[^"']*)/gi;
           let lm;
           const seenLinks = new Set();
-          while ((lm = linkRegex.exec(html)) !== null) {
+          while ((lm = linkRegex.exec(content)) !== null) {
             let href = lm[1];
             if (href.startsWith('/')) href = fullUrl + href;
             const clean = href.replace(/\/$/, '').replace(/#.*$/, '').replace(/\?.*$/, '');
@@ -22073,9 +22075,9 @@ async function crawlSiteGraph(project) {
   nodes.forEach(n => { n.inbound_count = inboundMap[n.id] || 0; });
 
   nodes.forEach(n => {
-    // Meta title/desc checks removed — On-Page Audit handles those via Yoast REST API (more accurate)
-    if (!n.h1) n.issues.push('Missing H1 tag');
-    if (n.word_count < 300) n.issues.push('Thin content (' + n.word_count + ' words)');
+    // Meta title/desc + H1 checks removed — On-Page Audit handles those via Yoast REST API (accurate for
+    // Elementor headings). A naive <h1> scan here produced false "Missing H1" flags, so it's dropped.
+    if (n.word_count < 250) n.issues.push('Thin content (' + n.word_count + ' words)');
     if (n.internal_links.length === 0) n.issues.push('No outbound internal links');
     if (n.inbound_count === 0) n.issues.push('Orphan page — no inbound links');
   });
