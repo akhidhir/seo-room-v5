@@ -13648,6 +13648,129 @@ ${contentForAI.slice(0, 12000)}` }],
   }
 });
 
+// Add outbound internal links PERMANENTLY for a single page (cache-proof).
+// Used by the Site Issues "Add Links" / "Fix All Orphans" for pages that have inbound
+// links but ZERO outbound. Unlike /add-links (which rewrites Elementor text widgets and
+// fails silently on some page builds), this wraps existing on-page phrases via the plugin's
+// marker-based /insert-links route — the SAME mechanism the Internal Linking page uses.
+// Returns the ACTUAL number of links inserted so the UI never shows a phantom "fixed".
+app.post('/api/projects/:projectId/onpage-audit/add-links-permanent', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const { page_id } = req.body || {};
+    let pageUrl = (req.body && req.body.page_url) || '';
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress Application Password not configured in Project Settings.' });
+
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const siteBase = `https://${domain}`;
+    const allPages = (await discoverPages(siteBase, project.wordpress_url, authHeaders)) || [];
+
+    // Resolve the source page URL (from page_url, or by matching WP id in discovered pages).
+    if (!pageUrl && page_id != null) {
+      const hit = allPages.find(p => String(p.id) === String(page_id) || String(p.page_id) === String(page_id));
+      if (hit) pageUrl = hit.url;
+    }
+    if (!pageUrl) return res.status(400).json({ error: 'Could not resolve page URL' });
+    const src = pageUrl.replace(/\/+$/, '');
+
+    // Fetch the live page body (cache-busted) — only the real CONTENT, no nav/header/footer/headings/existing links.
+    let html = '';
+    try {
+      const bust = (src.includes('?') ? '&' : '?') + 'seoroom_verify=' + Date.now();
+      const r = await fetch(src + bust, { headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache, no-store, max-age=0', 'Pragma': 'no-cache' }, signal: AbortSignal.timeout(20000) });
+      if (r.ok) html = await r.text();
+    } catch (e) {}
+    if (!html) return res.status(502).json({ error: 'Could not fetch the page to find link spots' });
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    let body = (bodyMatch ? bodyMatch[1] : html)
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ').replace(/<header[\s\S]*?<\/header>/gi, ' ').replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+      .replace(/<h[1-6][\s\S]*?<\/h[1-6]>/gi, ' ').replace(/<a\b[\s\S]*?<\/a>/gi, ' ');
+    const text = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+
+    // Build candidate targets: every OTHER page, with anchor phrases (focus keyword + title n-grams) that
+    // actually appear in this page's body. Prefer the most specific (longest) phrase that exists on-page.
+    const STOP = new Set(['the','and','for','with','your','you','our','are','was','will','how','does','what','when','from','this','that','into','out','can','perth','services','service','guide','tips','need','know','about','have','get','a','an','in','on','of','to','is','it','do','my','at','be','or','as','if','car','key','keys','replacement','areas','area','all','home','page','new']);
+    const phrasesFromTitle = (title) => {
+      const words = (title || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+      const out = [];
+      for (let n = 4; n >= 2; n--) for (let i = 0; i + n <= words.length; i++) {
+        const g = words.slice(i, i + n);
+        if (g.filter(w => !STOP.has(w) && w.length > 3).length >= 1) out.push(g.join(' '));
+      }
+      // single words ≥4 chars (so makes like "ford","audi","mazda","holden","toyota" match)
+      for (const w of words) if (!STOP.has(w) && w.length > 3) out.push(w);
+      return [...new Set(out)];
+    };
+
+    const srcPath = (() => { try { return new URL(src).pathname.replace(/\/+$/, ''); } catch { return src; } })();
+    const links = [];
+    const usedAnchors = new Set();
+    const usedTargets = new Set();
+    for (const p of allPages) {
+      const turl = (p.url || '').replace(/\/+$/, '');
+      if (!turl || turl === src) continue;
+      let tpath = ''; try { tpath = new URL(turl).pathname.replace(/\/+$/, ''); } catch { tpath = turl; }
+      if (tpath === srcPath) continue;
+      if (usedTargets.has(turl)) continue;
+      const cands = [ (p.focus_keyword || '').toLowerCase(), ...phrasesFromTitle(p.title) ].filter(Boolean);
+      let pick = null;
+      for (const c of cands) {
+        if (c.length < 4 || STOP.has(c)) continue;
+        if (text.includes(c) && !usedAnchors.has(c)) { pick = c; break; }
+      }
+      if (pick) {
+        links.push({ anchor: pick, target: turl + '/', target_title: p.title || '' });
+        usedAnchors.add(pick); usedTargets.add(turl);
+      }
+      if (links.length >= 6) break;
+    }
+
+    if (!links.length) {
+      return res.json({ success: false, inserted: 0, message: 'No existing on-page phrase matched another page — needs a manual/content link.' });
+    }
+
+    // Insert permanently via the plugin (cache-proof, marker-based, reversible).
+    let result = null;
+    try {
+      result = await callPluginApi(project, '/insert-links', 'POST', { url: src, links: links.map(l => ({ anchor: l.anchor, target: l.target })) });
+    } catch (e) {
+      return res.status(502).json({ success: false, inserted: 0, error: 'Plugin insert failed: ' + e.message });
+    }
+    const okSet = new Set((result && result.inserted || []).map(a => (a || '').toLowerCase().trim()));
+    let inserted = 0;
+    for (const l of links) {
+      if (okSet.has((l.anchor || '').toLowerCase().trim())) {
+        inserted++;
+        try {
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+             VALUES ($1,$2,$3,$4,'internal_link','post_content',$5,$6)`,
+            [projectId, result.page_id || 0, src, '', '[no link]', `<a href="${l.target}">${l.anchor}</a>`]);
+        } catch (e) {}
+      }
+    }
+    try { if (inserted) await purgeCloudflareCache(project, [src]); } catch (e) {}
+
+    console.log(`[add-links-permanent] ${src}: matched ${links.length}, inserted ${inserted}`);
+    return res.json({
+      success: inserted > 0,
+      inserted,
+      attempted: links.length,
+      links_added: links.slice(0, inserted).map(l => ({ anchor: l.anchor, url: l.target })),
+      message: inserted > 0
+        ? `${inserted} permanent internal link(s) added.`
+        : 'Plugin could not place links — open SEO Room → Settings on the site to refresh the plugin, then retry.',
+    });
+  } catch (e) {
+    console.error('[add-links-permanent] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Add external links — AI suggests relevant authoritative external links for a page
 app.post('/api/projects/:projectId/onpage-audit/add-external-links', async (req, res) => {
   try {

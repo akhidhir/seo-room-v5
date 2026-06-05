@@ -19768,11 +19768,18 @@
               setFixing(prev => ({ ...prev, [pageNode.id]: 'error' }));
             }
           } else {
-            await api(`/projects/${project.id}/onpage-audit/add-links`, {
+            // Permanent, cache-proof insertion (wraps existing on-page phrases via the plugin).
+            // Only mark "linked" if links were ACTUALLY inserted — never a phantom fix.
+            const data = await api(`/projects/${project.id}/onpage-audit/add-links-permanent`, {
               method: 'POST',
-              body: { page_id: pageNode.id }
+              body: { page_id: pageNode.id, page_url: pageNode.url }
             });
-            setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
+            if (data.success && (data.inserted || 0) > 0) {
+              setFixing(prev => ({ ...prev, [pageNode.id]: 'linked' }));
+              try { const fresh = await api(`/projects/${project.id}/site-graph`); if (fresh && fresh.nodes) setGraphData(fresh); } catch(_){}
+            } else {
+              setFixing(prev => ({ ...prev, [pageNode.id]: 'nospot' }));
+            }
           }
         } catch(e) {
           console.error('Link error:', e);
@@ -20007,10 +20014,14 @@
                           <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: n.internal_links.length === 0 ? '#ef4444' : 'var(--text2)' }}>{n.internal_links.length}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>
                             {meta.fix === 'links' && !isLinked && (
-                              <button onClick={() => handleAddLinks(n)} disabled={isLinking}
-                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: isLinking ? 'default' : 'pointer', background: isLinking ? 'var(--border)' : '#3b82f6', color: '#fff', opacity: isLinking ? 0.7 : 1 }}>
-                                {isLinking ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-link" style={{ marginRight: 4 }} />{(n.inbound_count || 0) === 0 ? 'Fix Orphan' : 'Add Links'}</>}
-                              </button>
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+                                <button onClick={() => handleAddLinks(n)} disabled={isLinking}
+                                  style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, borderRadius: 5, border: 'none', cursor: isLinking ? 'default' : 'pointer', background: isLinking ? 'var(--border)' : '#3b82f6', color: '#fff', opacity: isLinking ? 0.7 : 1 }}>
+                                  {isLinking ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-link" style={{ marginRight: 4 }} />{(n.inbound_count || 0) === 0 ? 'Fix Orphan' : fixing[n.id] === 'nospot' ? 'Retry' : 'Add Links'}</>}
+                                </button>
+                                {fixing[n.id] === 'nospot' && <span style={{ fontSize: 10, color: '#f59e0b' }}>No matching phrase — send to Copywriter</span>}
+                                {fixing[n.id] === 'error' && <span style={{ fontSize: 10, color: '#ef4444' }}>Failed — retry</span>}
+                              </div>
                             )}
                             {meta.fix === 'links' && isLinked && (
                               <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}><i className="fas fa-circle-check" style={{ marginRight: 4 }} />Links Added</span>
