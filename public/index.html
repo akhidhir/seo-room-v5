@@ -26799,7 +26799,17 @@
 
     // ============ SMART MAP RANKING — radius suburb survey + prioritized rollout plan ============
     function SmartMapRankingPage({ project }) {
-      const [center, setCenter] = useState(project.location || project.business_name || '');
+      const [center, setCenter] = useState(project.smart_center || project.location || project.business_name || '');
+      const [centerSaved, setCenterSaved] = useState(false);
+      const saveCenter = async () => {
+        const c = (center || '').trim();
+        if (!c || c === (project.smart_center || '')) return;
+        try {
+          await api(`/projects/${project.id}/smart-map-ranking/service`, { method: 'POST', body: { center: c } });
+          project.smart_center = c; // persist across re-mounts this session
+          setCenterSaved(true); setTimeout(() => setCenterSaved(false), 2000);
+        } catch (e) {}
+      };
       const [radius, setRadius] = useState(25);
       const [minPop, setMinPop] = useState(200);
       const [loading, setLoading] = useState(false);
@@ -26940,8 +26950,8 @@
           <div className="integration-card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <div style={{ flex: '1 1 260px' }}>
-                <label className="form-label" style={{ fontSize: 12 }}>Business location (suburb + state)</label>
-                <input className="form-input" value={center} onChange={e => setCenter(e.target.value)} placeholder="e.g. Applecross, WA" disabled={loading} />
+                <label className="form-label" style={{ fontSize: 12 }}>Business location (suburb + state){centerSaved && <span style={{ color: '#22c55e', marginLeft: 8, fontSize: 11 }}><i className="fas fa-check" style={{ marginRight: 3 }} />Saved</span>}</label>
+                <input className="form-input" value={center} onChange={e => setCenter(e.target.value)} onBlur={saveCenter} placeholder="e.g. Applecross, WA" disabled={loading} />
               </div>
               <div style={{ flex: '1 1 180px' }}>
                 <label className="form-label" style={{ fontSize: 12 }}>Radius: <strong>{radius} km</strong></label>

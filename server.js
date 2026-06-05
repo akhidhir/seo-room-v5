@@ -554,6 +554,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 50`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_service TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_center TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_color TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_api_token TEXT`).catch(() => {});
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cloudflare_api_token TEXT`).catch(() => {});
@@ -5466,7 +5467,7 @@ function geocodeSuburbText(t) {
 // Resolve the survey center from request + project (coords > explicit suburb > project location/name)
 function resolveSmartCenter({ center, lat, lng, project }) {
   if (lat != null && lng != null && !isNaN(+lat) && !isNaN(+lng)) return { lat: +lat, lng: +lng, label: center || 'Custom point', source: 'coords' };
-  const texts = [center, project && project.location, project && project.business_name].filter(Boolean);
+  const texts = [center, project && project.smart_center, project && project.location, project && project.business_name].filter(Boolean);
   for (const t of texts) {
     const f = geocodeSuburbText(t);
     if (f) return { lat: f.lat, lng: f.lng, label: f.suburb + ', ' + f.state, population: f.population, source: 'dataset' };
@@ -32470,6 +32471,11 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     const { center, lat, lng } = req.body || {};
     const radius = Math.min(Math.max(parseFloat(req.body && req.body.radiusKm) || 25, 5), 50);
 
+    // Persist the typed business location so it survives reloads/navigation.
+    if (center && center.trim()) {
+      await pool.query('UPDATE projects SET smart_center=$1 WHERE id=$2', [center.trim(), req.params.projectId]).catch(() => {});
+    }
+
     await loadAuSuburbs();
     if (!AU_SUBURBS || AU_SUBURBS.length === 0) return res.status(503).json({ error: 'Suburb dataset is still loading or unavailable. Please try again in a moment.' });
 
@@ -32583,9 +32589,11 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
 // Save the default "service to check competition for" per project
 app.post('/api/projects/:projectId/smart-map-ranking/service', async (req, res) => {
   try {
-    const service = (req.body && req.body.service || '').toString().trim();
-    await pool.query('UPDATE projects SET smart_service=$1 WHERE id=$2', [service, req.params.projectId]);
-    res.json({ ok: true, service });
+    const updates = [], vals = []; let i = 1;
+    if (req.body && req.body.service != null) { updates.push(`smart_service=$${i++}`); vals.push((req.body.service || '').toString().trim()); }
+    if (req.body && req.body.center != null) { updates.push(`smart_center=$${i++}`); vals.push((req.body.center || '').toString().trim()); }
+    if (updates.length) { vals.push(req.params.projectId); await pool.query(`UPDATE projects SET ${updates.join(', ')} WHERE id=$${i}`, vals); }
+    res.json({ ok: true, service: req.body?.service, center: req.body?.center });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
