@@ -19062,6 +19062,7 @@
       const [loading, setLoading] = useState(false);
       const [scannedAt, setScannedAt] = useState(null);
       const [viewMode, setViewMode] = useState('graph'); // graph | list
+      const [colorMode, setColorMode] = useState('health'); // health | type
       const [selectedNode, setSelectedNode] = useState(null);
       const [filter, setFilter] = useState('all'); // all | orphans | issues
       const [isFullscreen, setIsFullscreen] = useState(false);
@@ -19165,10 +19166,13 @@
             .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
             .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
 
-        // Colour by PAGE TYPE (section). Health is shown separately via the red outline/badge, purple POOR
-        // tag, and orange stale-date tag — so colour tells you what the page is, badges tell you its state.
         const TYPE_COLORS = { home: '#8b5cf6', service: '#14b8a6', blog: '#f59e0b', model: '#3b82f6', area: '#ec4899', utility: '#64748b', page: '#22c55e' };
-        const getColor = (n) => TYPE_COLORS[n.type] || (n.slug === 'home' || n.slug === '' ? '#8b5cf6' : '#22c55e');
+        const getColor = (n) => {
+          if (colorMode === 'type') return TYPE_COLORS[n.type] || '#22c55e';
+          // HEALTH mode (default): green = healthy, red = has a real issue, purple = home. Matches the Issues list.
+          if (n.slug === 'home' || n.slug === '') return '#8b5cf6';
+          return n.issues.filter(i => !i.startsWith('Orphan page')).length > 0 ? '#ef4444' : '#22c55e';
+        };
 
         node.append('circle')
           .attr('r', d => d.slug === 'home' || d.slug === '' ? RHome : R)
@@ -19204,10 +19208,10 @@
           const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
           return months[dt.getMonth()] + ' ' + dt.getFullYear().toString().slice(-2);
         };
-        const hasDate = d => fmtDate(d) !== null;
+        const isOld = d => { if (!d.last_modified) return false; const dt = new Date(d.last_modified); const ago = Date.now() - dt.getTime(); return ago > 365 * 24 * 60 * 60 * 1000; };
+        const hasDate = d => fmtDate(d) !== null && isOld(d); // only show the date flag on STALE pages, not every page
         const dateTagY = d => isPoorCopy(d) ? R + 18 : R + 3;
         const dateTag = node.filter(hasDate).append('g').attr('class', 'date-tag').attr('pointer-events', 'none');
-        const isOld = d => { const dt = new Date(d.last_modified); const ago = Date.now() - dt.getTime(); return ago > 365 * 24 * 60 * 60 * 1000; };
         dateTag.append('rect').attr('rx', 3).attr('fill', d => isOld(d) ? 'rgba(245,158,11,0.22)' : 'rgba(99,102,241,0.15)').attr('x', -20).attr('y', dateTagY).attr('width', 40).attr('height', 12);
         dateTag.append('text').text(fmtDate).attr('text-anchor', 'middle').attr('y', d => dateTagY(d) + 9).attr('font-size', 6.5).attr('fill', d => isOld(d) ? '#f59e0b' : 'var(--text3)').attr('font-weight', 600);
 
@@ -19246,7 +19250,7 @@
 
         svg.on('click', () => setSelectedNode(null));
         return () => sim.stop();
-      }, [graphData, viewMode, isFullscreen]);
+      }, [graphData, viewMode, isFullscreen, colorMode]);
 
       const filtered = graphData ? (filter === 'issues' ? graphData.nodes.filter(n => n.issues.filter(i => !i.startsWith('Orphan page')).length > 0) : filter === 'poor-copy' ? graphData.nodes.filter(n => n.issues.some(i => i.startsWith('Thin content') || i === 'Missing H1 tag')) : filter === 'stale' ? graphData.nodes.filter(n => n.last_modified && (Date.now() - new Date(n.last_modified).getTime()) > 365 * 24 * 60 * 60 * 1000) : graphData.nodes) : [];
 
@@ -19341,8 +19345,14 @@
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>{graphData.stats.total} pages · {graphData.nodes.reduce((sum, n) => sum + n.issues.filter(i => !i.startsWith('Orphan page')).length, 0)} issues</span>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  {[{ c: '#8b5cf6', l: 'Home' }, { c: '#14b8a6', l: 'Service' }, { c: '#f59e0b', l: 'Blog' }, { c: '#3b82f6', l: 'Model' }, { c: '#ec4899', l: 'Area' }, { c: '#22c55e', l: 'Other' }, { c: '#ef4444', l: 'Issue', dot: true }, { c: '#a855f7', l: 'Poor copy', tag: 'POOR' }, { c: '#f59e0b', l: 'Stale', tag: 'STALE' }].map((x, i) => (
-                    <span key={i} style={{ fontSize: 10, color: 'var(--text3)' }}>{x.tag ? <span style={{ fontSize: 7, fontWeight: 700, background: x.c, color: '#fff', borderRadius: 3, padding: '1px 4px', marginRight: 3, verticalAlign: 'middle' }}>{x.tag}</span> : <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3, border: x.dot ? '1px solid #fff' : 'none' }} />}{x.l}</span>
+                  <button onClick={() => setColorMode(colorMode === 'health' ? 'type' : 'health')} style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text2)', cursor: 'pointer' }}>
+                    <i className="fas fa-palette" style={{ marginRight: 4 }} />{colorMode === 'health' ? 'Colour: Health' : 'Colour: Type'}
+                  </button>
+                  {(colorMode === 'health'
+                    ? [{ c: '#22c55e', l: 'Healthy' }, { c: '#ef4444', l: 'Has issue' }, { c: '#8b5cf6', l: 'Home' }, { c: '#a855f7', l: 'Poor copy', tag: 'POOR' }, { c: '#f59e0b', l: 'Stale 1yr+', tag: 'STALE' }]
+                    : [{ c: '#8b5cf6', l: 'Home' }, { c: '#14b8a6', l: 'Service' }, { c: '#f59e0b', l: 'Blog' }, { c: '#3b82f6', l: 'Model' }, { c: '#ec4899', l: 'Area' }, { c: '#22c55e', l: 'Other' }, { c: '#a855f7', l: 'Poor copy', tag: 'POOR' }, { c: '#f59e0b', l: 'Stale', tag: 'STALE' }]
+                  ).map((x, i) => (
+                    <span key={i} style={{ fontSize: 10, color: 'var(--text3)' }}>{x.tag ? <span style={{ fontSize: 7, fontWeight: 700, background: x.c, color: '#fff', borderRadius: 3, padding: '1px 4px', marginRight: 3, verticalAlign: 'middle' }}>{x.tag}</span> : <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />}{x.l}</span>
                   ))}
                   <button onClick={() => { if (zoomRef.current && svgSelRef.current) svgSelRef.current.transition().duration(300).call(zoomRef.current.scaleBy, 1.4); }}
                     style={{ width: 30, height: 30, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text)', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }}>+</button>
@@ -19389,9 +19399,15 @@
               <div style={{ position: 'absolute', bottom: 8, right: 12, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none' }}>
                 Drag nodes · Click to inspect
               </div>
-              <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 10, fontSize: 10, color: 'var(--text3)', pointerEvents: 'none', flexWrap: 'wrap', maxWidth: '70%' }}>
-                {[{ c: '#8b5cf6', l: 'Home' }, { c: '#14b8a6', l: 'Service' }, { c: '#f59e0b', l: 'Blog' }, { c: '#3b82f6', l: 'Model' }, { c: '#ec4899', l: 'Area' }, { c: '#22c55e', l: 'Other' }, { c: '#ef4444', l: 'Issue', dot: true }, { c: '#a855f7', l: 'Poor copy', tag: 'POOR' }, { c: '#f59e0b', l: 'Stale 1yr+', tag: 'STALE' }].map((x, i) => (
-                  <span key={i}>{x.tag ? <span style={{ display: 'inline-block', fontSize: 7, fontWeight: 700, background: x.c, color: '#fff', borderRadius: 3, padding: '1px 4px', marginRight: 3, verticalAlign: 'middle' }}>{x.tag}</span> : <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3, border: x.dot ? '1px solid #fff' : 'none' }} />}{x.l}</span>
+              <div style={{ position: 'absolute', top: 8, left: 12, display: 'flex', gap: 10, fontSize: 10, color: 'var(--text3)', alignItems: 'center', flexWrap: 'wrap', maxWidth: '78%' }}>
+                <button onClick={() => setColorMode(colorMode === 'health' ? 'type' : 'health')} style={{ pointerEvents: 'auto', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text2)', cursor: 'pointer' }}>
+                  <i className="fas fa-palette" style={{ marginRight: 4 }} />{colorMode === 'health' ? 'Colour: Health' : 'Colour: Type'}
+                </button>
+                {(colorMode === 'health'
+                  ? [{ c: '#22c55e', l: 'Healthy' }, { c: '#ef4444', l: 'Has issue' }, { c: '#8b5cf6', l: 'Home' }, { c: '#a855f7', l: 'Poor copy', tag: 'POOR' }, { c: '#f59e0b', l: 'Stale 1yr+', tag: 'STALE' }]
+                  : [{ c: '#8b5cf6', l: 'Home' }, { c: '#14b8a6', l: 'Service' }, { c: '#f59e0b', l: 'Blog' }, { c: '#3b82f6', l: 'Model' }, { c: '#ec4899', l: 'Area' }, { c: '#22c55e', l: 'Other' }, { c: '#a855f7', l: 'Poor copy', tag: 'POOR' }, { c: '#f59e0b', l: 'Stale', tag: 'STALE' }]
+                ).map((x, i) => (
+                  <span key={i} style={{ pointerEvents: 'none' }}>{x.tag ? <span style={{ display: 'inline-block', fontSize: 7, fontWeight: 700, background: x.c, color: '#fff', borderRadius: 3, padding: '1px 4px', marginRight: 3, verticalAlign: 'middle' }}>{x.tag}</span> : <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: x.c, marginRight: 3 }} />}{x.l}</span>
                 ))}
               </div>
               <div style={{ position: 'absolute', top: 8, right: 12, display: 'flex', gap: 4, zIndex: 10 }}>
