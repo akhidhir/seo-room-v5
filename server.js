@@ -32548,11 +32548,19 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     const highCut = Math.max(1, Math.ceil(n * 0.25));
     const medCut = Math.max(highCut, Math.ceil(n * 0.6));
 
-    // Gather "what's already done" signals once: GBP service areas, live pages, review text, post text
-    const serviceAreaSet = new Set();
-    (Array.isArray(project.service_areas) ? project.service_areas : []).forEach(a => {
-      const nm = normSuburbKey(typeof a === 'string' ? a : (a.name || a.suburb || '')); if (nm) serviceAreaSet.add(nm);
-    });
+    // Gather "what's already done" signals once: GBP service areas, live pages, review text, post text.
+    // Service areas come from TWO sources: the project's own list AND the Google Business Profile
+    // service areas synced into project_integrations (the user maintains these in Google). Match by
+    // substring — service areas are full strings ("Kallangur, QLD, Australia"), so exact equality fails.
+    let serviceAreaItems = (Array.isArray(project.service_areas) ? project.service_areas : []).slice();
+    try {
+      const gp = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`, [req.params.projectId])).rows[0];
+      const gbpAreas = gp && gp.config && (gp.config.service_areas || gp.config.serviceAreas);
+      if (Array.isArray(gbpAreas)) serviceAreaItems = serviceAreaItems.concat(gbpAreas);
+    } catch (e) {}
+    const serviceAreaBlob = ' ' + serviceAreaItems
+      .map(a => normSuburbKey(typeof a === 'string' ? a : (a.name || a.suburb || a.placeName || '')))
+      .filter(Boolean).join(' ') + ' ';
     let pageBlob = '', reviewsBlob = '', postsBlob = '';
     let pagesScanned = 0;
     try {
@@ -32579,7 +32587,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       const sk = normSuburbKey(s.suburb);
       const tasks = [
         { label: 'Suburb landing page', done: hasWord(pageBlob, sk) },
-        { label: 'In GBP service areas', done: serviceAreaSet.has(sk) },
+        { label: 'In GBP service areas', done: hasWord(serviceAreaBlob, sk) },
         { label: 'Review mentions suburb', done: hasWord(reviewsBlob, sk) },
         { label: 'GBP post mentions suburb', done: hasWord(postsBlob, sk) },
       ];
