@@ -9204,22 +9204,22 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
     (async () => {
       try {
         const results = [];
-        for (const pageUrl of allPages) {
+        // Inspect one URL — ALWAYS resolves (never hangs the loop). 20s hard timeout per call.
+        const inspectOne = async (pageUrl) => {
+          let path; try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
           try {
             const inspRes = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
               method: 'POST',
               headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ inspectionUrl: pageUrl, siteUrl: matchedSite })
+              body: JSON.stringify({ inspectionUrl: pageUrl, siteUrl: matchedSite }),
+              signal: AbortSignal.timeout(20000)
             });
             if (inspRes.ok) {
               const inspData = await inspRes.json();
               const idx = inspData.inspectionResult?.indexStatusResult || {};
               const mobile = inspData.inspectionResult?.mobileUsabilityResult || {};
               const rich = inspData.inspectionResult?.richResultsResult || {};
-              let path;
-              try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
-
-              results.push({
+              return {
                 url: pageUrl, path,
                 verdict: idx.verdict || 'UNKNOWN',
                 coverageState: idx.coverageState || 'Unknown',
@@ -9234,25 +9234,24 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
                 mobileVerdict: mobile.verdict || null,
                 mobileIssues: (mobile.issues || []).map(i => i.issueType),
                 richVerdict: rich.verdict || null,
-              });
-            } else {
-              let path;
-              try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
-              const errText = await inspRes.text();
-              results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: `API error: ${inspRes.status}`, error: errText.substring(0, 100) });
+              };
             }
+            const errText = await inspRes.text();
+            return { url: pageUrl, path, verdict: 'ERROR', coverageState: `API error: ${inspRes.status}`, error: errText.substring(0, 100) };
           } catch (e) {
-            let path;
-            try { path = new URL(pageUrl).pathname; } catch { path = pageUrl; }
-            results.push({ url: pageUrl, path, verdict: 'ERROR', coverageState: e.message });
+            return { url: pageUrl, path, verdict: 'ERROR', coverageState: e.name === 'TimeoutError' ? 'Timed out (20s)' : e.message };
           }
+        };
 
-          // Update progress every 5 pages
-          if (results.length % 5 === 0 || results.length === allPages.length) {
-            await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
-              [JSON.stringify({ progress: results.length, total: allPages.length }), auditId]);
-            console.log(`[indexing] Progress: ${results.length}/${allPages.length} pages`);
-          }
+        // Run in concurrent batches of 5 — fast, and one slow/hung URL can't stall the rest.
+        const BATCH = 5;
+        for (let i = 0; i < allPages.length; i += BATCH) {
+          const slice = allPages.slice(i, i + BATCH);
+          const batchResults = await Promise.all(slice.map(inspectOne));
+          results.push(...batchResults);
+          await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
+            [JSON.stringify({ progress: results.length, total: allPages.length, progress_at: Date.now() }), auditId]);
+          console.log(`[indexing] Progress: ${results.length}/${allPages.length} pages`);
         }
 
         const indexed = results.filter(r => r.verdict === 'PASS').length;
@@ -9410,15 +9409,19 @@ app.get('/api/projects/:projectId/audits/indexing/latest', async (req, res) => {
     );
     if (result.rows.length === 0) return res.json({ status: 'none', results: [] });
     const audit = result.rows[0];
-    // Auto-fail stuck running audits
+    // Auto-fail stuck running audits — based on PROGRESS stalling, not just total time.
+    // A healthy run updates progress_at every batch (~2s); if it freezes for 4 min it's hung.
     if (audit.status === 'running' && audit.started_at) {
+      const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
       const elapsed = Date.now() - new Date(audit.started_at).getTime();
-      if (elapsed > 30 * 60 * 1000) {
-        await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
+      const sinceProgress = data.progress_at ? (Date.now() - data.progress_at) : elapsed;
+      const stalled = sinceProgress > 4 * 60 * 1000;      // no progress for 4 min
+      const overall = elapsed > 30 * 60 * 1000;            // absolute safety cap
+      if (stalled || overall) {
+        await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit stalled — please re-run"}'::jsonb WHERE id=$1`, [audit.id]);
         // Fall through to find last completed audit below
       } else {
         // Still running — return progress
-        const data = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data) : (audit.audit_data || {});
         return res.json({ status: 'running', ...data, completed_at: audit.completed_at });
       }
     }
