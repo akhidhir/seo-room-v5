@@ -79,12 +79,24 @@ Sandbox can't git push. The workflow is:
 - **On-Page Audit & Fix** ✅ WORKING — WordPress REST API + Yoast. Fetches all pages/posts, reads yoast_head_json for meta data. Analyzes word count, links, images. Shows table with SEO score dots, focus keyword, word count, links, issues. **AI Fix system**: select pages → AI suggests meta title/desc/focus keyword → preview modal with current (red) vs suggested (green) → apply to WordPress via Application Passwords. **Universal rollback** via `wp_change_history` table. Change History panel with per-change and per-page rollback.
 - **Indexing** ✅ WORKING — Dedicated page. Checks home + service + suburb pages via URL Inspection API. Table with status (color-coded badges), last crawl, mobile, robots. Expandable rows for not-indexed pages with "Why not indexed" explanation, fix steps, "Create Fix Action Item" button. **Results persist to DB** — loaded on mount, not lost on navigation.
 
-### ACTION PLAN
-- **Calendar view** ✅ WORKING — Month/Week/Day views with navigation arrows. Tasks color-coded by pillar. Auto-distribute endpoint assigns tasks across months based on monthly hours budget.
-- **List view** — Table with Finding, Severity, Details, Category, Status, Action columns. Filters by severity, status, search.
-- **Rankings-driven priority** (architectural decision): Maps Rankings + SERP Rankings are the PRIMARY source of action items for the Action Plan. Rankings determine severity (position-based, not AI-subjective). GBP, GSC, Website audits are read-only diagnostics — they inform but don't auto-push to Action Plan.
+### ACTION PLAN → CONTROL CENTRE (REDESIGN — planned)
+**Full spec: `ACTION_PLAN_CONTROL_CENTRE_SPEC.md`** (root of repo). Decision: the old Action Plan was a noisy 300–500-item audit dump (all `pending`, 0 scheduled, mixed-case severity, duplicate categories). Replacing it with a lean **Control Centre** — a team job board layered on top of in-place fixing (audit pages stay the place you diagnose + fix).
+- **Three labels per ticket:** `Code` (e.g. `PRJ-INDX-01`, permanent, never changes) · `Fix type` (Copywriting / Technical / GBP / Manual — auto-set from category, decides which tool opens) · `Assignee`.
+- **Auto-populated**, **one ticket per ROOT CAUSE not per symptom** (148 CWV warnings = 1 ticket w/ 148 affected pages — kills the noise).
+- **Status:** New → Assigned → In Progress → Ready for Review → Done. Auto "In Progress" when assignee opens the ticket; only manual action is the **Finish** button. Reopen loops back.
+- **Assignment:** default by PROJECT → member (all its tickets inherit); per-ticket exception; reassign anytime → updates that member's calendar.
+- **Daily distribution:** project monthly hours (Project Settings) ÷ working days = daily budget; fill each day in priority order until budget full. **Order = value-per-hour (impact ÷ effort)** → quick wins + high priority first, busywork last. Leftover rolls over; past-due = **Late** flag.
+- **Lead Control Centre:** views by member (load/overdue) / project / status / this-week; client export → Monthly Report.
+- **Reuse:** existing audits, fix tools, Team Members, `action_items.{assigned_to,scheduled_date,estimated_hours}`. **Build:** code registry, root-cause grouping+dedupe, fix-type routing, normalized status, assignment+reassign, member calendar, lead board.
+- **Phase 1 first:** normalize severity/category labels (kill `High`/`high`, `Quick Wins`/`Quick Win` dupes) → add code/fix_type/root_cause grouping → project assignment + lead board. Phase 2: hours field + daily distribution engine + calendar. Phase 3: notifications + client export + change history.
+- **Decisions pending:** 3-letter project codes; pillar code list (INDX/CWV/CONT/CITE/LINK/CANB/GBP/TECH…); confirm native-lean build.
+
+#### Old Action Plan (current, being replaced)
+- **Calendar view** — Month/Week/Day views. Tasks color-coded by pillar. Auto-distribute endpoint assigns tasks across months based on monthly hours budget.
+- **List view** — Table: Finding, Severity, Details, Category, Status, Action. Filters by severity, status, search.
+- **Rankings-driven priority** (architectural decision): Maps + SERP Rankings are the PRIMARY source; GBP/GSC/Website audits are read-only diagnostics (but currently STILL auto-push — to be stopped).
 - Pillar mapping: `gbp` → `['gbp', 'gbp_external']`, `gsc` → `['gsc', 'gsc_agent']`, `website` → `['website', 'technical']`
-- `action_items` table has scheduling columns: `scheduled_date`, `estimated_hours`, `assigned_to`
+- `action_items` table has scheduling columns: `scheduled_date`, `estimated_hours`, `assigned_to`. **Known data rot:** severity stored mixed-case (`high`/`High`); duplicate category labels (`Quick Wins`/`Quick Win`, `Low CTR Pages`/`Low CTR`, etc.).
 
 ### COPYWRITER
 - Content Queue, Drafts, Approved, Published — ALL FAKE DATA. Needs real implementation.
