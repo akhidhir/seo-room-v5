@@ -8189,6 +8189,36 @@ async function discoverPages(projectUrl, wpUrl, authHeaders = null) {
   return pages;
 }
 
+// Robustly collect ALL page URL paths from the XML sitemap (follows a Yoast/WP sitemap index).
+// Used as a reliable supplement to discoverPages for suburb-page detection. Returns slug paths
+// like "plumber-kallangur" (no leading/trailing slash).
+async function collectSitemapPaths(baseUrl) {
+  const out = []; const seen = new Set();
+  const ua = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
+  const base = (baseUrl || '').replace(/\/+$/, '');
+  const grabLocs = (xml) => (xml.match(/<loc>([^<]+)<\/loc>/g) || []).map(m => m.replace(/<\/?loc>/g, ''));
+  const addPath = (u) => { try { const p = new URL(u).pathname.replace(/^\/|\/$/g, ''); if (p && !seen.has(p)) { seen.add(p); out.push(p); } } catch {} };
+  const indexes = [`${base}/sitemap_index.xml`, `${base}/sitemap.xml`, `${base}/wp-sitemap.xml`, `${base}/page-sitemap.xml`];
+  for (const idx of indexes) {
+    try {
+      const r = await fetch(idx, { headers: ua, signal: AbortSignal.timeout(12000), redirect: 'follow' });
+      if (!r.ok) continue;
+      const xml = await r.text();
+      const locs = grabLocs(xml);
+      const subs = locs.filter(u => u.endsWith('.xml') && !/(category|tag|author)/i.test(u));
+      locs.filter(u => !u.endsWith('.xml')).forEach(addPath);
+      for (const sub of subs.slice(0, 15)) {
+        try {
+          const rs = await fetch(sub, { headers: ua, signal: AbortSignal.timeout(12000), redirect: 'follow' });
+          if (rs.ok) grabLocs(await rs.text()).filter(x => !x.endsWith('.xml')).forEach(addPath);
+        } catch {}
+      }
+      if (out.length) break; // got pages — stop trying other index URLs
+    } catch {}
+  }
+  return out;
+}
+
 // Helper: check if an audit was already completed this month for a project+pillar
 async function checkMonthlyAuditLimit(projectId, pillar, force = false) {
   if (force) return { limited: false };
@@ -32524,10 +32554,22 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       const nm = normSuburbKey(typeof a === 'string' ? a : (a.name || a.suburb || '')); if (nm) serviceAreaSet.add(nm);
     });
     let pageBlob = '', reviewsBlob = '', postsBlob = '';
+    let pagesScanned = 0;
     try {
-      const projUrl = (project.domain || '').startsWith('http') ? project.domain : 'https://' + (project.domain || '').replace(/^https?:\/\//, '');
-      const pages = await discoverPages(projUrl, project.wordpress_url || projUrl, getWpAuthHeaders(project));
-      pageBlob = ' ' + normSuburbKey(pages.map(p => `${p.slug || ''} ${p.title || ''}`).join(' ')) + ' ';
+      const projUrl = (project.domain || '').startsWith('http')
+        ? project.domain.replace(/\/+$/, '')
+        : 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      const parts = [];
+      try {
+        const pages = await discoverPages(projUrl, project.wordpress_url || projUrl, getWpAuthHeaders(project));
+        for (const p of (pages || [])) parts.push(`${p.slug || ''} ${p.title || ''}`);
+      } catch (e) {}
+      // Supplement with a direct sitemap crawl (catches suburb pages discoverPages may miss, e.g. plumber-kallangur).
+      try { const smPaths = await collectSitemapPaths(projUrl); for (const sp of smPaths) parts.push(sp); } catch (e) {}
+      const uniq = [...new Set(parts.map(x => normSuburbKey(x)).filter(Boolean))];
+      pagesScanned = uniq.length;
+      pageBlob = ' ' + uniq.join(' ') + ' ';
+      console.log(`[smart-map] Page detection: ${pagesScanned} page strings for project ${req.params.projectId}`);
     } catch (e) {}
     try { const rc = (await pool.query('SELECT reviews FROM reviews_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (rc) reviewsBlob = ' ' + normSuburbKey(JSON.stringify(rc.reviews || '')) + ' '; } catch (e) {}
     try { const pc = (await pool.query('SELECT posts FROM posts_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (pc) postsBlob = ' ' + normSuburbKey(JSON.stringify(pc.posts || '')) + ' '; } catch (e) {}
@@ -32582,7 +32624,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
 
     const plan = buildSmartPlan(ranked);
 
-    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
+    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, pagesScanned, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
