@@ -13729,41 +13729,80 @@ app.post('/api/projects/:projectId/onpage-audit/add-links-permanent', async (req
       if (links.length >= 6) break;
     }
 
-    if (!links.length) {
-      return res.json({ success: false, inserted: 0, message: 'No existing on-page phrase matched another page — needs a manual/content link.' });
+    // STEP 1 — try wrapping existing on-page phrases (nicest: contextual inline links).
+    let inserted = 0; let method = '';
+    const insertedList = [];
+    if (links.length) {
+      let result = null;
+      try {
+        result = await callPluginApi(project, '/insert-links', 'POST', { url: src, links: links.map(l => ({ anchor: l.anchor, target: l.target })) });
+      } catch (e) { result = null; }
+      const okSet = new Set((result && result.inserted || []).map(a => (a || '').toLowerCase().trim()));
+      for (const l of links) {
+        if (okSet.has((l.anchor || '').toLowerCase().trim())) {
+          inserted++; insertedList.push({ anchor: l.anchor, url: l.target });
+          try {
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+               VALUES ($1,$2,$3,$4,'internal_link','post_content',$5,$6)`,
+              [projectId, (result && result.page_id) || 0, src, '', '[no link]', `<a href="${l.target}">${l.anchor}</a>`]);
+          } catch (e) {}
+        }
+      }
+      if (inserted > 0) method = 'inline';
     }
 
-    // Insert permanently via the plugin (cache-proof, marker-based, reversible).
-    let result = null;
-    try {
-      result = await callPluginApi(project, '/insert-links', 'POST', { url: src, links: links.map(l => ({ anchor: l.anchor, target: l.target })) });
-    } catch (e) {
-      return res.status(502).json({ success: false, inserted: 0, error: 'Plugin insert failed: ' + e.message });
-    }
-    const okSet = new Set((result && result.inserted || []).map(a => (a || '').toLowerCase().trim()));
-    let inserted = 0;
-    for (const l of links) {
-      if (okSet.has((l.anchor || '').toLowerCase().trim())) {
-        inserted++;
+    // STEP 2 — fallback: if NOTHING could be wrapped inline (common on Elementor pages where the
+    // body is icon-list/heading widgets, not text-editor), append a reversible "Related services
+    // & areas" links block. This guarantees real outbound links regardless of page structure.
+    if (inserted === 0) {
+      const clean = (t, u) => { const s = (t || '').split('/').pop().replace(/\s*[\|\-–—].*$/, '').trim(); return s || (u || '').split('/').filter(Boolean).pop().replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); };
+      const isArea = u => /\/service-areas\//.test(u);
+      const SERVICE_RE = /(lost|broken|spare|keyless|stolen|fob|lockout|locksmith|programming|immobilis|transponder|cutting|car-key|key-replacement)/i;
+      const UTIL_RE = /(about|contact|privacy|refund|return|terms|disclaimer|gallery|photo|blog|category|tag|cart|checkout|thank|policy|cookie|sitemap)/i;
+      const servicePages = allPages.filter(p => { const u = (p.url || '').replace(/\/+$/, ''); return u && u !== src && !isArea(u) && SERVICE_RE.test(u) && !UTIL_RE.test(u); }).slice(0, 6);
+      const nearbyAreas = allPages.filter(p => { const u = (p.url || '').replace(/\/+$/, ''); return u && u !== src && isArea(u); }).slice(0, 6);
+
+      const suburb = (() => { const seg = (src.split('/').filter(Boolean).pop() || ''); return seg.replace(/^car-key-replacement-/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'your area'; })();
+      const svcItems = servicePages.map(p => `<li><a href="${(p.url || '').replace(/\/+$/, '')}/">${clean(p.title, p.url)}</a></li>`).join('');
+      const areaItems = nearbyAreas.map(p => `<a href="${(p.url || '').replace(/\/+$/, '')}/">${clean(p.title, p.url).replace(/^Car Key Replacement\s*/i, '')}</a>`).join(', ');
+      const blockLinks = servicePages.length + nearbyAreas.length;
+
+      if (blockLinks > 0) {
+        const html = `<div class="seoroom-related"><h3>Car Key Services in ${suburb}</h3>`
+          + (svcItems ? `<p>Explore our mobile car key services available in ${suburb} and surrounding suburbs:</p><ul>${svcItems}</ul>` : '')
+          + (areaItems ? `<p><strong>Nearby areas we also cover:</strong> ${areaItems}.</p>` : '')
+          + `</div>`;
+        let blockOk = false, blockPageId = 0;
         try {
-          await pool.query(
-            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
-             VALUES ($1,$2,$3,$4,'internal_link','post_content',$5,$6)`,
-            [projectId, result.page_id || 0, src, '', '[no link]', `<a href="${l.target}">${l.anchor}</a>`]);
-        } catch (e) {}
+          const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: src, html, marker: 'seoroom-related' });
+          blockOk = !!(r && r.ok && (r.inserted || r.already)); blockPageId = (r && r.page_id) || 0;
+        } catch (e) { blockOk = false; }
+        if (blockOk) {
+          inserted = blockLinks; method = 'block';
+          [...servicePages, ...nearbyAreas].forEach(p => insertedList.push({ anchor: clean(p.title, p.url), url: (p.url || '').replace(/\/+$/, '') + '/' }));
+          try {
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+               VALUES ($1,$2,$3,$4,'internal_link_block','post_content',$5,$6)`,
+              [projectId, blockPageId, src, suburb, '[no block]', html.slice(0, 5000)]);
+          } catch (e) {}
+        }
       }
     }
+
     try { if (inserted) await purgeCloudflareCache(project, [src]); } catch (e) {}
 
-    console.log(`[add-links-permanent] ${src}: matched ${links.length}, inserted ${inserted}`);
+    console.log(`[add-links-permanent] ${src}: matched ${links.length}, inserted ${inserted} (${method || 'none'})`);
     return res.json({
       success: inserted > 0,
       inserted,
+      method,
       attempted: links.length,
-      links_added: links.slice(0, inserted).map(l => ({ anchor: l.anchor, url: l.target })),
+      links_added: insertedList,
       message: inserted > 0
-        ? `${inserted} permanent internal link(s) added.`
-        : 'Plugin could not place links — open SEO Room → Settings on the site to refresh the plugin, then retry.',
+        ? `${inserted} permanent internal link(s) added${method === 'block' ? ' (Related services block)' : ''}.`
+        : 'Could not place links — open SEO Room → Settings on the site to refresh the plugin, then retry.',
     });
   } catch (e) {
     console.error('[add-links-permanent] Error:', e.message);
