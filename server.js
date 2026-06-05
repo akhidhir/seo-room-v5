@@ -580,6 +580,35 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS difficulty TEXT DEFAULT 'medium'`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS how_to_html TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS audit_data JSONB`).catch(() => {});
+    // Control Centre — one-time cleanup of mixed-case severity + duplicate category labels (data rot from different code paths)
+    await client.query(`UPDATE action_items SET severity = lower(severity) WHERE severity IS NOT NULL AND severity <> lower(severity)`).catch(() => {});
+    await client.query(`UPDATE action_items SET category='Quick Wins' WHERE lower(category) IN ('quick win','quick wins') AND category <> 'Quick Wins'`).catch(() => {});
+    await client.query(`UPDATE action_items SET category='Low CTR Pages' WHERE lower(category) IN ('low ctr','low ctr pages') AND category <> 'Low CTR Pages'`).catch(() => {});
+    await client.query(`UPDATE action_items SET category='Underperforming Pages' WHERE lower(category) IN ('underperforming page','underperforming pages') AND category <> 'Underperforming Pages'`).catch(() => {});
+    await client.query(`UPDATE action_items SET category='Zero-Click Pages' WHERE lower(category) IN ('zero clicks','zero click pages','zero-click pages') AND category <> 'Zero-Click Pages'`).catch(() => {});
+    // Trigger keeps severity lowercase + canonical categories on EVERY insert/update (covers all 10+ write paths in one place).
+    await client.query(`CREATE OR REPLACE FUNCTION normalize_action_item() RETURNS trigger AS $func$
+      BEGIN
+        IF NEW.severity IS NOT NULL THEN NEW.severity := lower(NEW.severity); END IF;
+        IF NEW.category IS NOT NULL THEN
+          CASE lower(NEW.category)
+            WHEN 'quick win' THEN NEW.category := 'Quick Wins';
+            WHEN 'quick wins' THEN NEW.category := 'Quick Wins';
+            WHEN 'low ctr' THEN NEW.category := 'Low CTR Pages';
+            WHEN 'low ctr pages' THEN NEW.category := 'Low CTR Pages';
+            WHEN 'underperforming page' THEN NEW.category := 'Underperforming Pages';
+            WHEN 'underperforming pages' THEN NEW.category := 'Underperforming Pages';
+            WHEN 'zero clicks' THEN NEW.category := 'Zero-Click Pages';
+            WHEN 'zero click pages' THEN NEW.category := 'Zero-Click Pages';
+            WHEN 'zero-click pages' THEN NEW.category := 'Zero-Click Pages';
+            ELSE NULL;
+          END CASE;
+        END IF;
+        RETURN NEW;
+      END;
+      $func$ LANGUAGE plpgsql`).catch((e) => { console.log('[migrate] normalize fn:', e.message); });
+    await client.query(`DROP TRIGGER IF EXISTS trg_normalize_action_item ON action_items`).catch(() => {});
+    await client.query(`CREATE TRIGGER trg_normalize_action_item BEFORE INSERT OR UPDATE ON action_items FOR EACH ROW EXECUTE FUNCTION normalize_action_item()`).catch((e) => { console.log('[migrate] normalize trigger:', e.message); });
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
     // Maps discovery columns on discovery_cache
@@ -6006,6 +6035,31 @@ app.put('/api/audit-findings/:id', async (req, res) => {
 // ==================== 7. ACTION PLAN ====================
 
 // Get action items for a project (optional ?pillar= filter)
+// ── Control Centre: canonical label normalization (kills mixed-case + duplicate categories) ──
+const SEVERITY_CANON = new Set(['critical', 'high', 'medium', 'low']);
+function normSeverity(s) {
+  const k = (s == null ? '' : s).toString().trim().toLowerCase();
+  return SEVERITY_CANON.has(k) ? k : (k ? k : 'medium');
+}
+// Merge duplicate category labels that different code paths produced into one canonical name.
+const CATEGORY_CANON = {
+  'quick win': 'Quick Wins', 'quick wins': 'Quick Wins',
+  'low ctr': 'Low CTR Pages', 'low ctr pages': 'Low CTR Pages',
+  'underperforming page': 'Underperforming Pages', 'underperforming pages': 'Underperforming Pages',
+  'zero clicks': 'Zero-Click Pages', 'zero click pages': 'Zero-Click Pages', 'zero-click pages': 'Zero-Click Pages',
+};
+function normCategory(c) {
+  if (c == null || c === '') return c;
+  const k = c.toString().trim().toLowerCase();
+  return CATEGORY_CANON[k] || c.toString().trim();
+}
+function normalizeActionRow(r) {
+  if (!r) return r;
+  if (r.severity !== undefined) r.severity = normSeverity(r.severity);
+  if (r.category !== undefined) r.category = normCategory(r.category);
+  return r;
+}
+
 app.get('/api/projects/:id/action-items', async (req, res) => {
   try {
     const { pillar } = req.query;
@@ -6017,7 +6071,7 @@ app.get('/api/projects/:id/action-items', async (req, res) => {
     }
     query += ' ORDER BY created_at DESC';
     const result = await pool.query(query, params);
-    res.json({ action_items: result.rows });
+    res.json({ action_items: result.rows.map(normalizeActionRow) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -6030,9 +6084,9 @@ app.post('/api/projects/:id/action-items', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, category, status, execution_type)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10) RETURNING *`,
-      [req.params.id, pillar || 'gbp_external', type || 'external_audit', title, description, severity || 'medium', current_value || null, new_value || null, category || type || 'general', execution_type || 'manual']
+      [req.params.id, pillar || 'gbp_external', type || 'external_audit', title, description, normSeverity(severity || 'medium'), current_value || null, new_value || null, normCategory(category || type || 'general'), execution_type || 'manual']
     );
-    res.json({ action_item: result.rows[0] });
+    res.json({ action_item: normalizeActionRow(result.rows[0]) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
