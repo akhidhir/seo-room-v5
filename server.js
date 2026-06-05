@@ -2565,28 +2565,37 @@ app.post('/api/projects/:id/plugin/404s/suggest-redirects', async (req, res) => 
     const authHeaders = getWpAuthHeaders(project);
     const baseUrl = `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
 
-    // Fetch all published pages + posts from WP REST API
+    // Fetch published pages + posts from WP REST API — IN PARALLEL with short timeouts so the
+    // whole request never exceeds the gateway limit (the old sequential 15s-per-call loop caused
+    // "Request failed" on larger sites). Cap at 3 pages × 100 per type = up to 600 items.
     let allPages = [];
-    for (const type of ['pages', 'posts']) {
-      let page = 1;
-      while (page <= 10) { // cap at 10 pages (100 per page = 1000 total)
-        try {
-          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=id,slug,title,link,type`, {
-            headers: authHeaders, signal: AbortSignal.timeout(15000)
-          });
-          if (!resp.ok) break;
-          const items = await resp.json();
-          if (!items.length) break;
-          allPages.push(...items.map(p => ({
-            slug: p.slug,
-            title: p.title?.rendered || '',
-            url: p.link || `${baseUrl}/${p.slug}/`,
-            path: `/${p.slug}/`,
-            type: p.type
-          })));
-          page++;
-        } catch { break; }
-      }
+    const fetchWpPage = async (type, page) => {
+      try {
+        const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=id,slug,title,link,type`, {
+          headers: authHeaders, signal: AbortSignal.timeout(8000)
+        });
+        if (!resp.ok) return [];
+        const items = await resp.json();
+        if (!Array.isArray(items)) return [];
+        return items.map(p => ({
+          slug: p.slug,
+          title: p.title?.rendered || '',
+          url: p.link || `${baseUrl}/${p.slug}/`,
+          path: `/${p.slug}/`,
+          type: p.type
+        }));
+      } catch { return []; }
+    };
+    const jobs = [];
+    for (const type of ['pages', 'posts']) for (let page = 1; page <= 3; page++) jobs.push(fetchWpPage(type, page));
+    for (const batch of await Promise.all(jobs)) allPages.push(...batch);
+
+    // Fallback: if WP REST returned nothing (auth/blocked), use sitemap discovery so matching still works.
+    if (!allPages.length) {
+      try {
+        const disc = await discoverPages(baseUrl, project.wordpress_url, authHeaders);
+        allPages = (disc || []).map(d => ({ slug: (d.slug || '').split('/').pop(), title: d.title || '', url: d.url, path: (() => { try { return new URL(d.url).pathname; } catch { return '/' + (d.slug || ''); } })(), type: d.wpType || 'page' }));
+      } catch (e) {}
     }
     console.log(`[suggest-redirects] Found ${allPages.length} published pages/posts`);
 
