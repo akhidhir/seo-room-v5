@@ -13793,6 +13793,34 @@ app.post('/api/projects/:projectId/onpage-audit/add-links-permanent', async (req
 
     try { if (inserted) await purgeCloudflareCache(project, [src]); } catch (e) {}
 
+    // Persist the fix into the cached site_graph so the Issues list / Site Map reflect it
+    // immediately — even before a full re-scan, and across navigations (don't re-show the page).
+    if (inserted > 0) {
+      try {
+        const gr = await pool.query(
+          `SELECT id, audit_data FROM audits WHERE project_id=$1 AND pillar='site_graph' AND status='completed' ORDER BY completed_at DESC LIMIT 1`,
+          [projectId]);
+        if (gr.rows.length && gr.rows[0].audit_data && gr.rows[0].audit_data.nodes) {
+          const gd = gr.rows[0].audit_data;
+          const auditId = gr.rows[0].id;
+          const srcN = src.replace(/\/+$/, '');
+          const node = gd.nodes.find(n =>
+            String(n.id) === String(page_id) ||
+            (n.url || '').replace(/\/+$/, '') === srcN);
+          if (node) {
+            const newTargets = insertedList.map(l => (l.url || '').replace(/\/+$/, '')).filter(Boolean);
+            node.internal_links = [...new Set([...(node.internal_links || []), ...newTargets])];
+            node.issues = (node.issues || []).filter(i => !/no outbound internal links/i.test(i));
+            if (!gd.fixed_nodes) gd.fixed_nodes = [];
+            if (!gd.fixed_nodes.includes(String(node.id))) gd.fixed_nodes.push(String(node.id));
+            if (gd.stats) gd.stats.issues = gd.nodes.reduce((s, n) => s + ((n.issues || []).length), 0);
+            await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`, [JSON.stringify(gd), auditId]);
+            console.log(`[add-links-permanent] site_graph node ${node.id} cleared "no outbound" (now ${node.internal_links.length} links)`);
+          }
+        }
+      } catch (e) { console.log('[add-links-permanent] graph cache update failed:', e.message); }
+    }
+
     console.log(`[add-links-permanent] ${src}: matched ${links.length}, inserted ${inserted} (${method || 'none'})`);
     return res.json({
       success: inserted > 0,
