@@ -22035,7 +22035,14 @@ async function crawlSiteGraph(project) {
     const results = await Promise.allSettled(batch.map(async (p) => {
       const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, type: classifyType(p), meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [], last_modified: slugToModified[p.slug] || null };
       try {
-        const resp = await fetch(p.url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
+        // Cache-bust so the crawl reflects the CURRENT page (BerqWP/Cloudflare/Elementor
+        // serve stale HTML otherwise — newly-added internal links wouldn't show up,
+        // making fixed orphans reappear as "No outbound internal links").
+        const bust = (p.url.includes('?') ? '&' : '?') + '_sr=' + Date.now();
+        const resp = await fetch(p.url + bust, {
+          headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+          signal: AbortSignal.timeout(10000)
+        });
         if (resp.ok) {
           const html = await resp.text();
           const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
