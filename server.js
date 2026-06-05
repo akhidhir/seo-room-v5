@@ -22017,11 +22017,23 @@ async function crawlSiteGraph(project) {
   const urlToIdx = {};
   pages.forEach((p, i) => { urlToIdx[p.url] = i; urlToIdx[p.url.replace(/\/$/, '')] = i; });
 
+  // Classify each page into a type so the Site Map can colour-code by section.
+  const classifyType = (p) => {
+    let path = ''; try { path = new URL(p.url).pathname.toLowerCase(); } catch { path = (p.url || '').toLowerCase(); }
+    if (p.slug === 'home' || p.slug === '' || path === '/' || path === '') return 'home';
+    if (/\/(a-f|g-j|k-o|p-z)(\/|$)/.test(path)) return 'model';
+    if (/\/service-areas(\/|$)/.test(path)) return 'area';
+    if (p.wpType === 'post' || /\/blog|\/category\/|\/articles|\/tag\//.test(path)) return 'blog';
+    if (/(thank|privacy|refund|return|terms|disclaimer|cart|checkout|contact|photo-gallery|gallery|cookie|policy|login|register|account)/.test(path)) return 'utility';
+    if (/service|repair|replac|lockout|keyless|fob|spare|programming|locksmith|immobilis|transponder/.test(path)) return 'service';
+    return 'page';
+  };
+
   const batchSize = 5;
   for (let b = 0; b < pages.length; b += batchSize) {
     const batch = pages.slice(b, b + batchSize);
     const results = await Promise.allSettled(batch.map(async (p) => {
-      const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [], last_modified: slugToModified[p.slug] || null };
+      const node = { id: p.page_id, title: p.title, slug: p.slug, url: p.url, type: classifyType(p), meta_title: '', meta_description: '', word_count: 0, h1: '', internal_links: [], external_links: 0, inbound_count: 0, issues: [], last_modified: slugToModified[p.slug] || null };
       try {
         const resp = await fetch(p.url, { headers: { 'User-Agent': 'SEORoomBot/1.0' }, signal: AbortSignal.timeout(10000) });
         if (resp.ok) {
