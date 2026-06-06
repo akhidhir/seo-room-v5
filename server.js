@@ -614,12 +614,12 @@ async function initDb() {
     // codes are wiped once and re-issued under the new scheme (all tickets were still 'New').
     await client.query(`CREATE TABLE IF NOT EXISTS app_flags (name TEXT PRIMARY KEY, set_at TIMESTAMPTZ DEFAULT NOW())`).catch(() => {});
     try {
-      const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_one_issue_remint'`);
+      const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_one_issue_remint_v2'`);
       if (!remint.rows.length) {
         await client.query(`DELETE FROM ticket_codes`);
         await client.query(`UPDATE action_items SET code=NULL, root_cause_key=NULL`);
-        await client.query(`INSERT INTO app_flags (name) VALUES ('ticket_one_issue_remint') ON CONFLICT DO NOTHING`);
-        console.log('[migrate] Re-minted ticket codes for one-issue-per-ticket scheme');
+        await client.query(`INSERT INTO app_flags (name) VALUES ('ticket_one_issue_remint_v2') ON CONFLICT DO NOTHING`);
+        console.log('[migrate] Re-minted ticket codes (one-issue scheme + anti-fragmentation)');
       }
     } catch (e) { console.log('[migrate] remint:', e.message); }
     // Member-role project access: which projects a 'member' user can see/work on
@@ -6347,6 +6347,27 @@ async function buildControlTickets(project) {
     (groups[key] = groups[key] || { items: [], pCode: pillarCode(it) }).items.push(it);
   }
 
+  // Anti-fragmentation: when finding titles are PAGE NAMES (not issue descriptions), the signature
+  // is unique per finding and grouping explodes into one-ticket-per-page (e.g. 330 CWV tickets).
+  // Detect that per pillar+category cohort and collapse back to ONE ticket for the whole cohort.
+  const cohorts = {};
+  for (const [key, g] of Object.entries(groups)) {
+    const cat = (normCategory(g.items[0].category) || g.items[0].pillar || 'gen').toString().toLowerCase();
+    const ck = g.pCode + '|' + cat;
+    (cohorts[ck] = cohorts[ck] || []).push(key);
+  }
+  for (const [ck, keys] of Object.entries(cohorts)) {
+    const totalItems = keys.reduce((s, k) => s + groups[k].items.length, 0);
+    // many groups ≈ as many groups as findings = titles are page names → collapse
+    if (keys.length >= 5 && keys.length / totalItems > 0.6) {
+      const [pCode, cat] = ck.split('|');
+      const merged = { items: [], pCode, collapsed: true };
+      for (const k of keys) { merged.items.push(...groups[k].items); delete groups[k]; }
+      const catKey = `${projectId}:${pCode}:${cat}`.toLowerCase().replace(/[^a-z0-9:]+/g, '-');
+      groups[catKey] = merged;
+    }
+  }
+
   // Stored ticket state (the registry row IS the ticket)
   const stateRows = (await pool.query('SELECT * FROM ticket_codes WHERE project_id=$1', [projectId])).rows;
   const stateByKey = {}; for (const r of stateRows) stateByKey[r.root_cause_key] = r;
@@ -6375,7 +6396,9 @@ async function buildControlTickets(project) {
       category: normCategory(items_g[0].category) || items_g[0].pillar,
       fix_type: deriveFixType(items_g[0]),
       severity: sevName,
-      title: items_g[0].title || items_g[0].category || 'Untitled',
+      title: g.collapsed
+        ? `${normCategory(items_g[0].category) || g.pCode} — ${items_g.length} pages with this issue`
+        : (items_g[0].title || items_g[0].category || 'Untitled'),
       status,
       late: !!isLate,
       assignee_id: effectiveAssignee,
