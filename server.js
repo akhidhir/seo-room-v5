@@ -6434,8 +6434,12 @@ async function buildControlTickets(project) {
       done_when: TICKET_DONE_WHEN[g.pCode] || TICKET_DONE_WHEN.MANUAL,
       auto_verified: AUTO_VERIFY_PILLARS.includes(g.pCode),
       verification: st.verification || null,
+      // Real progress: fixed findings ÷ total findings (machine-verified or human-ticked)
+      progress: Math.round((items_g.filter(i => ['done', 'completed', 'fixed', 'applied', 'executed'].includes((i.status || '').toLowerCase())).length / items_g.length) * 100),
       // Exact, actionable findings — page URL + what to change, not a generic instruction
       findings: items_g.slice(0, 60).map(i => ({
+        id: i.id,
+        done: ['done', 'completed', 'fixed', 'applied', 'executed'].includes((i.status || '').toLowerCase()),
         title: i.title || '',
         page: i.ranking_page || ((i.pages_affected || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || null),
         keyword: i.keyword || null,
@@ -6700,69 +6704,112 @@ function verifyPageRule(html, sig) {
   return null; // no machine rule for this issue → manual review
 }
 
+// First page URL for ONE finding (used to map a page-check result back to its finding)
+function itemPageUrl(project, item) {
+  const urls = ticketPageUrls(project, [item]);
+  return urls.length ? urls[0] : null;
+}
+
+// Run the machine checks for an auto-verifiable ticket. Marks each PASSING finding as done.
+// Returns { manual, note } or { checked, progress, total, doneCount }.
+async function runTicketVerification(tk, project, items, userId) {
+  const pillar = tk.pillar_code;
+  const sig = (tk.root_cause_key || '').split(':').pop() || '';
+  if (!AUTO_VERIFY_PILLARS.includes(pillar)) return { manual: true, note: 'This ticket type is closed by lead review, not machine check. Tick findings off as you complete them.' };
+
+  // Map each finding to its page; check each unique page once
+  const itemsByUrl = {};
+  for (const it of items) {
+    const u = itemPageUrl(project, it);
+    if (u) (itemsByUrl[u] = itemsByUrl[u] || []).push(it);
+  }
+  const pages = Object.keys(itemsByUrl).slice(0, 12);
+  if (!pages.length) return { manual: true, note: 'No page URLs recorded on this ticket to check — tick findings off manually / lead reviews.' };
+
+  const checked = [];
+  if (pillar === 'INDX') {
+    const accessToken = await getGscAccessToken(userId);
+    if (!accessToken) return { manual: true, note: 'GSC not connected — indexing can\'t be machine-checked.' };
+    const site = await resolveGscSite(project, accessToken);
+    if (!site) return { manual: true, note: 'GSC property not found — set it in Project Settings.' };
+    for (const url of pages.slice(0, 5)) {
+      try {
+        const r = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
+          method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ inspectionUrl: url, siteUrl: site }), signal: AbortSignal.timeout(20000),
+        });
+        const d = r.ok ? await r.json() : null;
+        const verdict = d && d.inspectionResult && d.inspectionResult.indexStatusResult && d.inspectionResult.indexStatusResult.verdict;
+        checked.push({ url, pass: verdict === 'PASS', reason: verdict || ('HTTP ' + r.status) });
+      } catch (e) { checked.push({ url, pass: false, reason: e.message }); }
+    }
+  } else {
+    for (const url of pages) {
+      try {
+        const bust = (url.includes('?') ? '&' : '?') + 'seoroom_verify=' + Date.now();
+        const r = await fetch(url + bust, { headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(15000) });
+        if (!r.ok) { checked.push({ url, pass: false, reason: 'HTTP ' + r.status }); continue; }
+        const html = await r.text();
+        const result = verifyPageRule(html, sig);
+        if (!result) return { manual: true, note: 'This issue has no machine check — tick findings off manually / lead reviews.' };
+        checked.push({ url, pass: result.pass, reason: `${result.rule}${result.value ? ' — ' + result.value : ''}` });
+      } catch (e) { checked.push({ url, pass: false, reason: e.message }); }
+    }
+  }
+
+  // Mark passing findings as done (this is what moves the progress bar)
+  for (const c of checked) {
+    if (!c.pass) continue;
+    const ids = (itemsByUrl[c.url] || []).map(i => i.id);
+    if (ids.length) await pool.query(`UPDATE action_items SET status='done' WHERE id = ANY($1::int[])`, [ids]).catch(() => {});
+  }
+  const fresh = (await pool.query(`SELECT status FROM action_items WHERE code=$1`, [tk.code])).rows;
+  const doneCount = fresh.filter(r => ['done', 'completed', 'fixed', 'applied', 'executed'].includes((r.status || '').toLowerCase())).length;
+  const progress = fresh.length ? Math.round((doneCount / fresh.length) * 100) : 0;
+  const v = { mode: 'auto', checked, passed: checked.filter(c => c.pass).length, failed: checked.filter(c => !c.pass).length, checked_at: new Date().toISOString() };
+  await pool.query(`UPDATE ticket_codes SET verification=$1 WHERE code=$2`, [JSON.stringify(v), tk.code]).catch(() => {});
+  return { checked, progress, total: fresh.length, doneCount, verification: v };
+}
+
+// Check progress WITHOUT closing — updates the bar, marks verified findings done
+app.post('/api/control-centre/tickets/:code/verify', async (req, res) => {
+  try {
+    const tk = (await pool.query('SELECT * FROM ticket_codes WHERE code=$1', [req.params.code])).rows[0];
+    if (!tk) return res.status(404).json({ error: 'Ticket not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [tk.project_id])).rows[0];
+    const items = (await pool.query('SELECT * FROM action_items WHERE code=$1', [req.params.code])).rows;
+    const r = await runTicketVerification(tk, project, items, req.auth?.userId);
+    if (r.manual) return res.json({ ok: true, result: 'manual', message: r.note });
+    res.json({ ok: true, result: 'checked', progress: r.progress, message: `Progress: ${r.progress}% (${r.doneCount}/${r.total} findings fixed).` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Finish: verify, then close ONLY at 100%. Manual types go to lead review.
 app.post('/api/control-centre/tickets/:code/finish', async (req, res) => {
   try {
     const tk = (await pool.query('SELECT * FROM ticket_codes WHERE code=$1', [req.params.code])).rows[0];
     if (!tk) return res.status(404).json({ error: 'Ticket not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [tk.project_id])).rows[0];
     const items = (await pool.query('SELECT * FROM action_items WHERE code=$1', [req.params.code])).rows;
-    const pillar = tk.pillar_code;
-    const sig = (tk.root_cause_key || '').split(':').pop() || '';
 
-    const manualClose = async (note) => {
-      const v = { mode: 'manual', note, checked_at: new Date().toISOString() };
+    if (!AUTO_VERIFY_PILLARS.includes(tk.pillar_code)) {
+      const v = { mode: 'manual', note: 'Sent to lead for review', checked_at: new Date().toISOString() };
       await pool.query(`UPDATE ticket_codes SET status='Ready for Review', finished_at=NOW(), verification=$1 WHERE code=$2`, [JSON.stringify(v), req.params.code]);
-      return res.json({ ok: true, result: 'review', message: note });
-    };
-
-    if (!AUTO_VERIFY_PILLARS.includes(pillar)) {
-      return manualClose(`This ticket type can't be machine-checked — sent to the lead for review. Closed when: ${TICKET_DONE_WHEN[pillar] || TICKET_DONE_WHEN.MANUAL}`);
+      return res.json({ ok: true, result: 'review', message: `Sent to the lead for review. Closed when: ${TICKET_DONE_WHEN[tk.pillar_code] || TICKET_DONE_WHEN.MANUAL}` });
     }
 
-    const pages = ticketPageUrls(project, items).slice(0, 8);
-    if (!pages.length) return manualClose('No page URLs recorded on this ticket to check — sent to the lead for review.');
-
-    const checked = [];
-    if (pillar === 'INDX') {
-      // Verify via Google URL Inspection (truth from Google, not the page)
-      const accessToken = await getGscAccessToken(req.auth?.userId);
-      if (!accessToken) return manualClose('GSC not connected — indexing can\'t be machine-checked. Sent to the lead.');
-      const site = await resolveGscSite(project, accessToken);
-      if (!site) return manualClose('GSC property not found — sent to the lead.');
-      for (const url of pages.slice(0, 5)) {
-        try {
-          const r = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
-            method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ inspectionUrl: url, siteUrl: site }), signal: AbortSignal.timeout(20000),
-          });
-          const d = r.ok ? await r.json() : null;
-          const verdict = d && d.inspectionResult && d.inspectionResult.indexStatusResult && d.inspectionResult.indexStatusResult.verdict;
-          checked.push({ url, pass: verdict === 'PASS', reason: verdict || ('HTTP ' + r.status) });
-        } catch (e) { checked.push({ url, pass: false, reason: e.message }); }
-      }
-    } else {
-      // ONPG / TECH / LINK — fetch each page live (cache-busted) and apply the rule for this issue
-      for (const url of pages) {
-        try {
-          const bust = (url.includes('?') ? '&' : '?') + 'seoroom_verify=' + Date.now();
-          const r = await fetch(url + bust, { headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(15000) });
-          if (!r.ok) { checked.push({ url, pass: false, reason: 'HTTP ' + r.status }); continue; }
-          const html = await r.text();
-          const result = verifyPageRule(html, sig);
-          if (!result) return manualClose('This issue has no machine check — sent to the lead for review.');
-          checked.push({ url, pass: result.pass, reason: `${result.rule}${result.value ? ' — ' + result.value : ''}` });
-        } catch (e) { checked.push({ url, pass: false, reason: e.message }); }
-      }
+    const r = await runTicketVerification(tk, project, items, req.auth?.userId);
+    if (r.manual) {
+      const v = { mode: 'manual', note: r.note, checked_at: new Date().toISOString() };
+      await pool.query(`UPDATE ticket_codes SET status='Ready for Review', finished_at=NOW(), verification=$1 WHERE code=$2`, [JSON.stringify(v), req.params.code]);
+      return res.json({ ok: true, result: 'review', message: r.note + ' Sent to the lead.' });
     }
-
-    const failed = checked.filter(c => !c.pass);
-    const v = { mode: 'auto', checked, passed: checked.length - failed.length, failed: failed.length, checked_at: new Date().toISOString() };
-    if (failed.length === 0) {
-      await pool.query(`UPDATE ticket_codes SET status='Done', finished_at=NOW(), verified_at=NOW(), verification=$1 WHERE code=$2`, [JSON.stringify(v), req.params.code]);
-      return res.json({ ok: true, result: 'closed', message: `Verified ✓ — all ${checked.length} checked page(s) pass. Ticket closed.`, verification: v });
+    if (r.progress === 100) {
+      await pool.query(`UPDATE ticket_codes SET status='Done', finished_at=NOW(), verified_at=NOW() WHERE code=$1`, [req.params.code]);
+      return res.json({ ok: true, result: 'closed', message: `Verified ✓ — 100% (${r.doneCount}/${r.total} findings fixed). Ticket closed.` });
     }
-    await pool.query(`UPDATE ticket_codes SET status='In Progress', verification=$1 WHERE code=$2`, [JSON.stringify(v), req.params.code]);
-    return res.json({ ok: true, result: 'failed', message: `${failed.length} of ${checked.length} checked page(s) still failing — ticket stays In Progress.`, verification: v });
+    await pool.query(`UPDATE ticket_codes SET status='In Progress' WHERE code=$1`, [req.params.code]);
+    return res.json({ ok: true, result: 'failed', message: `Progress: ${r.progress}% (${r.doneCount}/${r.total} fixed) — not done yet, ticket stays In Progress. The failing pages are listed on the ticket.` });
   } catch (e) {
     console.error('[finish] error:', e.message);
     res.status(500).json({ error: e.message });

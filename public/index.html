@@ -19749,6 +19749,13 @@
         const r = await api(`/control-centre/tickets/${t.code}/finish`, { method: 'POST', body: {} });
         alert(r.message || (r.error ? ('Error: ' + r.error) : 'Done'));
       });
+      // Re-check pages now and update the progress bar (no closing)
+      const checkProgress = (t) => act(async () => {
+        const r = await api(`/control-centre/tickets/${t.code}/verify`, { method: 'POST', body: {} });
+        alert(r.message || '');
+      });
+      // Manual tick/untick of one finding — moves the progress bar
+      const toggleFinding = (f) => act(() => api(`/action-items/${f.id}`, { method: 'PUT', body: { status: f.done ? 'pending' : 'done' } }));
       const setDue = (code, due) => act(() => api(`/control-centre/tickets/${code}/due`, { method: 'POST', body: { due_date: due || null } }));
       const openTicket = async (tk) => {
         setExpanded(expanded === tk.code ? null : tk.code);
@@ -19849,6 +19856,7 @@
                   <th style={{ padding: '10px 12px' }}>Fix</th>
                   <th style={{ padding: '10px 12px' }}>Sev</th>
                   <th style={{ padding: '10px 12px', textAlign: 'center' }}>Affected</th>
+                  <th style={{ padding: '10px 12px', width: 110 }}>Progress</th>
                   <th style={{ padding: '10px 12px' }}>Due</th>
                   <th style={{ padding: '10px 12px' }}>Assignee</th>
                   <th style={{ padding: '10px 12px' }}>Status</th>
@@ -19865,6 +19873,18 @@
                       <td style={{ padding: '9px 12px' }}><span style={{ fontSize: 11, fontWeight: 700, color: FIX_COLOR[t.fix_type] || 'var(--text2)' }}>{t.fix_type}</span></td>
                       <td style={{ padding: '9px 12px' }}><span style={{ fontSize: 11, fontWeight: 700, color: SEV_COLOR[t.severity] || 'var(--text2)', textTransform: 'uppercase' }}>{t.severity}</span></td>
                       <td style={{ padding: '9px 12px', textAlign: 'center', fontWeight: 600 }}>{t.affected_count}</td>
+                      <td style={{ padding: '9px 12px' }}>
+                        {typeof t.progress === 'number' ? (
+                          <div title={`${t.progress}% of findings fixed`}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden' }}>
+                                <div style={{ width: `${t.progress}%`, height: '100%', borderRadius: 3, background: t.progress === 100 ? '#22c55e' : t.progress >= 50 ? '#f59e0b' : '#6366f1', transition: 'width .3s' }} />
+                              </div>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: t.progress === 100 ? '#22c55e' : 'var(--text2)', minWidth: 32, textAlign: 'right' }}>{t.progress}%</span>
+                            </div>
+                          </div>
+                        ) : <span style={{ fontSize: 11, color: 'var(--text3)' }}>—</span>}
+                      </td>
                       <td style={{ padding: '9px 12px' }} onClick={e => e.stopPropagation()}>
                         <input type="date" value={t.due_date ? String(t.due_date).slice(0, 10) : ''} onChange={e => setDue(t.code, e.target.value)} style={{ ...sel, padding: '4px 6px', fontSize: 11, colorScheme: 'dark' }} disabled={busy} />
                       </td>
@@ -19892,7 +19912,7 @@
                     </tr>
                     {expanded === t.code && (
                       <tr style={{ background: 'rgba(34,197,94,0.04)' }}>
-                        <td colSpan={10} style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+                        <td colSpan={11} style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
                           <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}><strong>{t.title}</strong> · {t.affected_count} finding(s){t.estimated_hours ? ` · ~${t.estimated_hours}h` : ''}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                             <div style={{ background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px' }}>
@@ -19923,15 +19943,21 @@
                               )}
                             </div>
                             <div>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Exact findings ({t.affected_count})</div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Findings checklist ({(t.findings || []).filter(f => f.done).length}/{t.affected_count} done)</span>
+                                {t.auto_verified && <button onClick={(e) => { e.stopPropagation(); checkProgress(t); }} disabled={busy} style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 5, border: '1px solid #3b82f6', background: 'transparent', color: '#3b82f6', cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 4 }} />{busy ? 'Checking…' : 'Check progress'}</button>}
+                              </div>
                               {(t.findings || []).length > 0 ? (
                                 <div style={{ maxHeight: 180, overflowY: 'auto' }}>
                                   {(t.findings || []).map((f, i) => (
-                                    <div key={i} style={{ padding: '6px 8px', marginBottom: 4, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
-                                      <div style={{ fontSize: 12, fontWeight: 600 }}>{f.title}</div>
-                                      {f.page && <div style={{ fontSize: 11, marginTop: 2 }}><a href={f.page.startsWith('http') ? f.page : '#'} target="_blank" rel="noopener noreferrer" onClick={e => { if (!f.page.startsWith('http')) e.preventDefault(); }} style={{ color: '#3b82f6', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />{f.page}</a></div>}
-                                      {f.keyword && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Keyword: <span style={{ color: 'var(--text2)' }}>{f.keyword}</span></div>}
-                                      {(f.current || f.target) && <div style={{ fontSize: 11, marginTop: 2 }}>{f.current && <span style={{ color: '#ef4444' }}>{f.current}</span>}{f.current && f.target && <span style={{ color: 'var(--text3)' }}> → </span>}{f.target && <span style={{ color: '#22c55e' }}>{f.target}</span>}</div>}
+                                    <div key={i} style={{ display: 'flex', gap: 8, padding: '6px 8px', marginBottom: 4, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)', opacity: f.done ? 0.65 : 1 }}>
+                                      {f.id != null && <input type="checkbox" checked={!!f.done} onChange={() => toggleFinding(f)} disabled={busy} title={f.done ? 'Mark as not done' : 'Mark as done'} style={{ cursor: 'pointer', marginTop: 2 }} />}
+                                      <div style={{ flex: 1 }}>
+                                        <div style={{ fontSize: 12, fontWeight: 600, textDecoration: f.done ? 'line-through' : 'none' }}>{f.title}</div>
+                                        {f.page && <div style={{ fontSize: 11, marginTop: 2 }}><a href={f.page.startsWith('http') ? f.page : '#'} target="_blank" rel="noopener noreferrer" onClick={e => { if (!f.page.startsWith('http')) e.preventDefault(); }} style={{ color: '#3b82f6', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />{f.page}</a></div>}
+                                        {f.keyword && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Keyword: <span style={{ color: 'var(--text2)' }}>{f.keyword}</span></div>}
+                                        {(f.current || f.target) && <div style={{ fontSize: 11, marginTop: 2 }}>{f.current && <span style={{ color: '#ef4444' }}>{f.current}</span>}{f.current && f.target && <span style={{ color: 'var(--text3)' }}> → </span>}{f.target && <span style={{ color: '#22c55e' }}>{f.target}</span>}</div>}
+                                      </div>
                                     </div>
                                   ))}
                                   {t.affected_count > (t.findings || []).length && <div style={{ fontSize: 11, color: 'var(--text3)', padding: '4px 8px' }}>+{t.affected_count - t.findings.length} more — click Open to see all in the tool.</div>}
@@ -19946,7 +19972,7 @@
                     )}
                   </React.Fragment>
                 ))}
-                {tickets.length === 0 && <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No tickets match the filter.</td></tr>}
+                {tickets.length === 0 && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No tickets match the filter.</td></tr>}
               </tbody>
             </table>
           </div>
