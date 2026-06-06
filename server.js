@@ -6190,6 +6190,54 @@ async function ensureTicketCode(projectId, projCode, rcKey, pCode) {
 // CONTROL CENTRE — grouped tickets (one per root cause), the lean replacement for the raw Action Plan dump.
 const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 
+// Root-cause playbooks: WHAT to do for each pillar code and WHERE to do it.
+const TICKET_PLAYBOOK = {
+  CWV:  { where: 'Website Audit → PageSpeed Scores', steps: [
+    'Speed is handled by BerqWP — confirm it is active on the site and the cache is warmed.',
+    'Re-run PageSpeed Scores to get current numbers (old findings may already be fixed).',
+    'For pages still scoring red: compress/resize hero images, remove unused embeds/scripts, lazy-load below-the-fold media.',
+    'Re-test the fixed pages and Finish the ticket when scores are amber/green.' ] },
+  INDX: { where: 'Website Audit → Indexing Status', steps: [
+    'Open Indexing Status and find the not-indexed pages from this ticket.',
+    'Fix the blocker: thin content → send to Copywriter; noindex/canonical/robots → use the Fix button.',
+    'Use "Request Indexing in Search Console" per page once fixed.',
+    'Re-check in 1–2 weeks; Finish when pages show Indexed.' ] },
+  CONT: { where: 'Copywriter / Optimise Website Copy', steps: [
+    'Open the affected page in the Copywriter editor.',
+    'Expand to 800+ words targeting the page\'s focus keyword; keep it locally relevant (suburb, services).',
+    'Run the SEO + humanize checks, add 2-3 internal links, publish via preview.' ] },
+  ONPG: { where: 'Website Audit → On-Page Audit & Fix', steps: [
+    'Select the affected pages and run AI Suggest for meta title / description / focus keyword.',
+    'Review the suggestions (current vs suggested) and Apply.',
+    'For low-CTR pages: rewrite the title/description as a click-worthy promise of the page content.' ] },
+  CANB: { where: 'GSC Audit → Cannibalization', steps: [
+    'Two or more pages compete for the same keyword — pick the strongest as the primary.',
+    'Re-target the other page (new focus keyword + meta) or 301 it into the primary.',
+    'Update internal links so anchors for that keyword all point at the primary page.' ] },
+  CITE: { where: 'GBP Audit → Directory & Citations', steps: [
+    'Work down the directory list: create or claim each listing.',
+    'Use EXACTLY the same name, address, phone (NAP) as the Google profile.',
+    'Add the website link and business category; mark each directory done as you go.' ] },
+  GBP:  { where: 'GBP Audit', steps: [
+    'Open the GBP Audit findings for this ticket.',
+    'Complete missing profile fields (description, hours, categories, services, attributes).',
+    'Add fresh photos and keep service areas current.' ] },
+  REVW: { where: 'GBP Audit → Reviews / RatingCaptain', steps: [
+    'Reply to all unreplied reviews (oldest first).',
+    'Run a review-request push to close the count gap vs competitors.' ] },
+  LINK: { where: 'Website Audit → Internal Linking', steps: [
+    'Run "Optimise Links (Auto)" — it cleans anchors, inserts links, builds hubs and links spokes.',
+    'Re-run the audit and confirm orphans/no-outbound pages are cleared.' ] },
+  BLNK: { where: 'Backlinks', steps: [
+    'Review the Toxic Links tab; disavow/ignore genuinely spammy domains.',
+    'Work the prospects/gap list: outreach for links competitors have and you don\'t.' ] },
+  TECH: { where: 'Website Audit', steps: [
+    'Open the Website Audit findings for this ticket.',
+    'Auto-fixable items (schema, canonical, noindex, mixed content) → click the green Fix button.',
+    'Manual items → follow the steps inside the finding card.' ] },
+  GEN:  { where: 'Source audit page', steps: ['Open the source audit page for this category and work the findings there.'] },
+};
+
 // Build the grouped tickets for one project. Assigns/stamps stable codes, merges stored ticket
 // state (assignee/status/due date) from ticket_codes, and applies the project default assignee.
 async function buildControlTickets(project) {
@@ -6241,6 +6289,8 @@ async function buildControlTickets(project) {
       affected_pages: affectedPages.slice(0, 100),
       estimated_hours: Math.round(items_g.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0), 0) * 10) / 10,
       item_ids: ids,
+      how_to: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).steps,
+      where: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).where,
     });
   }
   tickets.sort((a, b) => (SEV_RANK[b.severity] - SEV_RANK[a.severity]) || (b.affected_count - a.affected_count));

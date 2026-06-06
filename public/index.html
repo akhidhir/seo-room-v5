@@ -19782,11 +19782,23 @@
                     </tr>
                     {expanded === t.code && (
                       <tr style={{ background: 'rgba(34,197,94,0.04)' }}>
-                        <td colSpan={10} style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
-                          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}><strong>{t.title}</strong> · {t.affected_count} finding(s){t.estimated_hours ? ` · ~${t.estimated_hours}h` : ''}</div>
-                          {(t.affected_pages || []).length > 0 && (
-                            <div style={{ fontSize: 11, color: 'var(--text3)', maxHeight: 90, overflowY: 'auto' }}>{t.affected_pages.slice(0, 30).join(' · ')}{t.affected_pages.length > 30 ? ` · +${t.affected_pages.length - 30} more` : ''}</div>
-                          )}
+                        <td colSpan={10} style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+                          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}><strong>{t.title}</strong> · {t.affected_count} finding(s){t.estimated_hours ? ` · ~${t.estimated_hours}h` : ''}</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                            <div style={{ background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px' }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6 }}><i className="fas fa-lightbulb" style={{ marginRight: 5 }} />What to do</div>
+                              <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text)', lineHeight: 1.7 }}>
+                                {(t.how_to || []).map((s, i) => <li key={i}>{s}</li>)}
+                              </ol>
+                              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}><i className="fas fa-location-arrow" style={{ marginRight: 5 }} />Do it in: <strong style={{ color: 'var(--text2)' }}>{t.where}</strong></div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Affected pages</div>
+                              {(t.affected_pages || []).length > 0
+                                ? <div style={{ fontSize: 11, color: 'var(--text3)', maxHeight: 120, overflowY: 'auto', lineHeight: 1.8 }}>{t.affected_pages.slice(0, 40).join(' · ')}{t.affected_pages.length > 40 ? ` · +${t.affected_pages.length - 40} more` : ''}</div>
+                                : <div style={{ fontSize: 11, color: 'var(--text3)' }}>No page list — see the source audit for details.</div>}
+                            </div>
+                          </div>
                         </td>
                       </tr>
                     )}
