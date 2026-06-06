@@ -26771,6 +26771,7 @@
       const [hasRun, setHasRun] = useState(false);
       const [hasMapsRun, setHasMapsRun] = useState(false);
       const [discoverMapsProvider, setDiscoverMapsProvider] = useState('serpapi');
+      const [discErr, setDiscErr] = useState('');
 
       // Load cached SERP results on mount + poll if running
       const serpUserTriggered = useRef(false);
@@ -26791,6 +26792,7 @@
             } else if (r.status === 'error') {
               setLoading(false);
               setHasRun(false);
+              setDiscErr(r.error_message || 'The last discovery run failed (no error detail recorded — re-run to capture it).');
             }
           }
         };
@@ -26836,10 +26838,12 @@
             if (r.status === 'done') {
               setKeywords(r.keywords || []);
               setLoading(false);
+              setDiscErr('');
             } else if (r.status === 'running') {
               setTimeout(poll, 3000);
             } else {
               setLoading(false);
+              if (r.status === 'error') { setHasRun(false); setDiscErr(r.error_message || 'Discovery run failed.'); }
             }
           };
           setTimeout(poll, 3000);
@@ -26995,6 +26999,14 @@
               {mapsKeywords.length > 0 && <span style={{ marginLeft: 8, fontSize: 12, background: 'rgba(34,197,94,0.15)', color: '#22c55e', padding: '2px 8px', borderRadius: 10 }}>{mapsKeywords.length}</span>}
             </button>
           </div>
+
+          {/* Error from the last run — don't hide failures behind the empty state */}
+          {tab === 'serp' && discErr && !activeLoading && (
+            <div style={{ margin: '16px auto 0', maxWidth: 700, padding: '12px 16px', borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444', fontSize: 13, textAlign: 'left' }}>
+              <i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />
+              <strong>Last discovery run failed:</strong> {discErr}
+            </div>
+          )}
 
           {/* Empty state */}
           {!activeHasRun && !activeLoading && (

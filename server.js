@@ -36,6 +36,8 @@ const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD;
 const DATAFORSEO_AUTH = DATAFORSEO_LOGIN && DATAFORSEO_PASSWORD ? 'Basic ' + Buffer.from(`${DATAFORSEO_LOGIN}:${DATAFORSEO_PASSWORD}`).toString('base64') : null;
 const LOCAL_FALCON_KEY = process.env.LOCAL_FALCON_KEY;
 const SERPAPI_KEY = process.env.SERPAPI_KEY;
+const SEODITY_API_KEY = process.env.SEODITY_API_KEY; // lifetime plan — free monthly SERP credits
+const SEODITY_MONTHLY_BUDGET = parseInt(process.env.SEODITY_MONTHLY_BUDGET || '1900'); // leave buffer under the 2k cap
 const LATE_API_KEY = process.env.LATE_API_KEY;
 const LATE_GBP_ACCOUNT_ID = process.env.LATE_GBP_ACCOUNT_ID;
 
@@ -616,6 +618,8 @@ async function initDb() {
     // One-time re-mint: grouping changed from category-level to ONE ISSUE PER TICKET, so old
     // codes are wiped once and re-issued under the new scheme (all tickets were still 'New').
     await client.query(`CREATE TABLE IF NOT EXISTS app_flags (name TEXT PRIMARY KEY, set_at TIMESTAMPTZ DEFAULT NOW())`).catch(() => {});
+    await client.query(`CREATE TABLE IF NOT EXISTS seodity_usage (month TEXT PRIMARY KEY, used INTEGER DEFAULT 0)`).catch(() => {});
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS error_message TEXT`).catch(() => {});
     try {
       const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_one_issue_remint_v2'`);
       if (!remint.rows.length) {
@@ -8261,6 +8265,58 @@ async function serpApiSearch(params) {
     throw new Error(`SerpAPI error ${resp.status}: ${text.substring(0, 200)}`);
   }
   return resp.json();
+}
+
+// ==================== SEODITY HELPERS (lifetime plan — free monthly SERP credits) ====================
+
+// Monthly credit accounting so we never blow past the plan cap; auto-fallback decisions use this.
+async function seodityUsedThisMonth() {
+  const month = new Date().toISOString().slice(0, 7);
+  const r = await pool.query('SELECT used FROM seodity_usage WHERE month=$1', [month]).catch(() => ({ rows: [] }));
+  return r.rows.length ? parseInt(r.rows[0].used) : 0;
+}
+async function seodityRecordUse(n) {
+  const month = new Date().toISOString().slice(0, 7);
+  await pool.query(
+    `INSERT INTO seodity_usage (month, used) VALUES ($1, $2)
+     ON CONFLICT (month) DO UPDATE SET used = seodity_usage.used + $2`, [month, n]).catch(() => {});
+}
+async function seodityCanSpend(n) {
+  if (!SEODITY_API_KEY) return false;
+  const used = await seodityUsedThisMonth();
+  return used + n <= SEODITY_MONTHLY_BUDGET;
+}
+
+// Google SERP via Seodity — returns a SerpAPI-SHAPED object so existing parsing code works as-is.
+async function seoditySerpSearch({ query, location, device }) {
+  if (!SEODITY_API_KEY) throw new Error('SEODITY_API_KEY not configured');
+  const params = new URLSearchParams({ query, location: location || 'Australia', language: 'English', device: device || 'desktop' });
+  const resp = await fetch(`https://api.seodity.com/v1/api/serp/google/search?${params}`, {
+    headers: { Authorization: `APIKey ${SEODITY_API_KEY}` },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Seodity error ${resp.status}: ${text.substring(0, 200)}`);
+  }
+  const d = await resp.json();
+  if (d.request_info && d.request_info.success === false) {
+    throw new Error(`Seodity request failed: ${(d.request_info.error || 'unknown').toString().slice(0, 200)}`);
+  }
+  // Record the REAL credit cost reported by the API (not an assumed 1 per search)
+  const creditsUsed = parseInt(d.request_info && d.request_info.credits_used) || 1;
+  await seodityRecordUse(creditsUsed);
+  const r = d.result || {};
+  return {
+    organic_results: (r.organic_results || []).map(o => ({
+      position: o.position, link: o.url, title: o.title, snippet: o.description,
+    })),
+    local_results: r.local_results || [],
+    related_questions: r.related_questions || [],
+    related_searches: r.related_searches || [],
+    answer_box: r.answer_box || null,
+    _provider: 'seodity',
+  };
 }
 
 // ==================== DATAFORSEO HELPERS ====================
@@ -32419,8 +32475,8 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
       } catch (e) {
         console.error(`[discovery] Background error:`, e.message);
         await pool.query(
-          `UPDATE discovery_cache SET status='error', updated_at=NOW() WHERE project_id=$1`,
-          [projectId]
+          `UPDATE discovery_cache SET status='error', error_message=$2, updated_at=NOW() WHERE project_id=$1`,
+          [projectId, (e.message || 'unknown error').slice(0, 500)]
         ).catch(() => {});
       }
     })();
@@ -34122,10 +34178,11 @@ app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
 
 // Sync ranks — calls DataForSEO or SerpAPI for all tracked keywords
 app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
-  const provider = (req.body?.provider || 'serpapi').toLowerCase(); // 'dataforseo' or 'serpapi'
+  let provider = (req.body?.provider || 'serpapi').toLowerCase(); // 'seodity', 'serpapi' or 'dataforseo'
   const force = req.body?.force === true;
   if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
   if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
+  if (provider === 'seodity' && !SEODITY_API_KEY) return res.status(503).json({ error: 'SEODITY_API_KEY not configured. Add it to Railway env vars.' });
   const { projectId } = req.params;
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -34154,6 +34211,12 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
 
     const kwRes = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1', [projectId]);
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No keywords to track. Add keywords first.' });
+
+    // Seodity free credits: if the monthly budget can't cover this sync, auto-fall back to SerpAPI
+    if (provider === 'seodity' && !(await seodityCanSpend(kwRes.rows.length))) {
+      if (SERPAPI_KEY) { console.log('[rank-sync] Seodity monthly budget exhausted — falling back to SerpAPI'); provider = 'serpapi'; }
+      else return res.status(429).json({ error: 'Seodity monthly credit budget exhausted and no SerpAPI fallback configured.' });
+    }
 
     const resolvedLoc = resolveDataForSeoLocation(project.location);
     console.log(`[rank-sync] Starting sync for ${kwRes.rows.length} keywords, provider="${provider}", domain="${domain}", businessName="${businessName}", project.location="${project.location}", resolved="${resolvedLoc}"`);
@@ -34216,27 +34279,39 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
           }
 
           let data;
-          if (provider === 'serpapi') {
-            // SerpAPI — use suburb-specific location for better accuracy
-            // SerpAPI location format: "Warner,Queensland,Australia" or "Brisbane,Queensland,Australia"
+          if (provider === 'serpapi' || provider === 'seodity') {
+            // Suburb-specific location text for better accuracy
+            // Format: "Warner, Queensland, Australia" or "Brisbane, Queensland, Australia"
             let serpLocation = resolvedLoc.replace(/,/g, ', ');
-            // If we detected a suburb with GPS, use suburb name as SerpAPI location for suburb-level targeting
+            // If we detected a suburb with GPS, use suburb name as the location for suburb-level targeting
             if (detectedSuburb && SUBURB_GPS[detectedSuburb.toLowerCase()]) {
               // Resolve suburb state from resolvedLoc (e.g. "Brisbane,Queensland,Australia" → "Queensland")
               const locParts = resolvedLoc.split(',');
               const state = locParts.length >= 2 ? locParts[1] : 'Queensland';
               serpLocation = `${detectedSuburb.charAt(0).toUpperCase() + detectedSuburb.slice(1)}, ${state}, Australia`;
             }
-            const serpParams = {
-              engine: 'google',
-              q: query,
-              gl: 'au',
-              google_domain: 'google.com.au',
-              location: serpLocation,
-              num: 30,
-            };
-            if (idx < 3) console.log(`[rank-sync] "${query}" using SerpAPI location="${serpLocation}"`);
-            data = await serpApiSearch(serpParams);
+            if (provider === 'seodity') {
+              if (idx < 3) console.log(`[rank-sync] "${query}" using Seodity location="${serpLocation}"`);
+              try {
+                data = await seoditySerpSearch({ query, location: serpLocation, device: 'desktop' });
+              } catch (se) {
+                // Per-keyword fallback so one Seodity hiccup never breaks a sync
+                if (!SERPAPI_KEY) throw se;
+                if (idx < 3) console.log(`[rank-sync] Seodity failed (${se.message.slice(0, 80)}) — SerpAPI fallback for "${query}"`);
+                data = await serpApiSearch({ engine: 'google', q: query, gl: 'au', google_domain: 'google.com.au', location: serpLocation, num: 30 });
+              }
+            } else {
+              const serpParams = {
+                engine: 'google',
+                q: query,
+                gl: 'au',
+                google_domain: 'google.com.au',
+                location: serpLocation,
+                num: 30,
+              };
+              if (idx < 3) console.log(`[rank-sync] "${query}" using SerpAPI location="${serpLocation}"`);
+              data = await serpApiSearch(serpParams);
+            }
           } else {
             // DataForSEO city-level
             const loc = resolvedLoc;
@@ -34309,7 +34384,8 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
           }
 
           // Fallback: if business not found in top 3 local pack, do a google_maps search for full listing
-          if (!maps.position && provider === 'serpapi' && SERPAPI_KEY) {
+          // (also for Seodity syncs — Seodity has no GPS Maps API, so the maps part stays on SerpAPI)
+          if (!maps.position && (provider === 'serpapi' || provider === 'seodity') && SERPAPI_KEY) {
             try {
               const mapsGps = gps || projectGps;
               const mapsParams = {
