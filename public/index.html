@@ -19626,6 +19626,180 @@
     }
 
     // ============ SITE ISSUES PAGE (triage view) ============
+    // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
+    function ControlCentrePage({ setPage }) {
+      const [board, setBoard] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [filter, setFilter] = useState({ member: 'all', project: 'all', status: 'all', fix: 'all' });
+      const [expanded, setExpanded] = useState(null);
+      const [busy, setBusy] = useState(false);
+
+      const load = async () => {
+        try { const d = await api('/control-centre/board'); setBoard(d); } catch (e) { console.error(e); }
+        setLoading(false);
+      };
+      useEffect(() => { load(); }, []);
+
+      const SEV_COLOR = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#6b7280' };
+      const FIX_COLOR = { Copywriting: '#eab308', Technical: '#3b82f6', GBP: '#4ade80', Manual: '#94a3b8' };
+      const ST_COLOR = { 'New': '#6b7280', 'Assigned': '#8b5cf6', 'In Progress': '#f59e0b', 'Ready for Review': '#3b82f6', 'Done': '#22c55e' };
+
+      const memberName = (id) => {
+        const m = (board?.members || []).find(x => String(x.id) === String(id));
+        return m ? (m.email || '').split('@')[0] : '—';
+      };
+      const act = async (fn) => { if (busy) return; setBusy(true); try { await fn(); await load(); } catch (e) { alert(e.message); } setBusy(false); };
+      const assignProject = (pid, mid) => act(() => api(`/projects/${pid}/control-centre/assign`, { method: 'POST', body: { member_id: mid || null } }));
+      const assignTicket = (code, mid) => act(() => api(`/control-centre/tickets/${code}/assign`, { method: 'POST', body: { member_id: mid || null } }));
+      const setStatus = (code, status) => act(() => api(`/control-centre/tickets/${code}/status`, { method: 'POST', body: { status } }));
+      const setDue = (code, due) => act(() => api(`/control-centre/tickets/${code}/due`, { method: 'POST', body: { due_date: due || null } }));
+      const openTicket = async (tk) => {
+        setExpanded(expanded === tk.code ? null : tk.code);
+        try { const r = await api(`/control-centre/tickets/${tk.code}/open`, { method: 'POST', body: {} }); if (r.changed) load(); } catch (_) {}
+      };
+
+      if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner-large" /></div>;
+      if (!board) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Could not load the board.</div>;
+
+      const tickets = (board.tickets || []).filter(t =>
+        (filter.member === 'all' || String(t.assignee_id) === filter.member) &&
+        (filter.project === 'all' || String(t.project_id) === filter.project) &&
+        (filter.status === 'all' || t.status === filter.status) &&
+        (filter.fix === 'all' || t.fix_type === filter.fix));
+      const counts = {};
+      (board.tickets || []).forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1; });
+      const lateCount = (board.tickets || []).filter(t => t.late).length;
+
+      const sel = { padding: '6px 10px', fontSize: 12, borderRadius: 6, background: 'var(--bg2)', color: 'var(--text)', border: '1px solid var(--border)' };
+
+      return (
+        <div>
+          <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div className="page-title"><i className="fas fa-table-columns" style={{ marginRight: 8, color: '#22c55e' }}></i> Control Centre</div>
+              <div className="page-subtitle">One ticket per root cause · assign by project or per ticket · the lead watches from here</div>
+            </div>
+            <button onClick={() => { setLoading(true); load(); }} style={{ padding: '8px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text2)', cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 5 }} />Refresh</button>
+          </div>
+
+          {/* Status chips */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+            {['New', 'Assigned', 'In Progress', 'Ready for Review', 'Done'].map(s => (
+              <div key={s} onClick={() => setFilter(f => ({ ...f, status: f.status === s ? 'all' : s }))} style={{ cursor: 'pointer', padding: '8px 14px', borderRadius: 8, background: filter.status === s ? ST_COLOR[s] + '30' : 'var(--bg2)', border: `1px solid ${filter.status === s ? ST_COLOR[s] : 'var(--border)'}` }}>
+                <span style={{ fontSize: 18, fontWeight: 700, color: ST_COLOR[s] }}>{counts[s] || 0}</span>
+                <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 6, textTransform: 'uppercase' }}>{s}</span>
+              </div>
+            ))}
+            {lateCount > 0 && <div style={{ padding: '8px 14px', borderRadius: 8, background: 'rgba(239,68,68,0.12)', border: '1px solid #ef4444' }}>
+              <span style={{ fontSize: 18, fontWeight: 700, color: '#ef4444' }}>{lateCount}</span>
+              <span style={{ fontSize: 11, color: '#ef4444', marginLeft: 6, textTransform: 'uppercase' }}>Late</span>
+            </div>}
+          </div>
+
+          {/* Project → member assignment */}
+          <div className="integration-card" style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10, textTransform: 'uppercase', color: 'var(--text3)' }}>Project assignments</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {(board.projects || []).map(p => (
+                <div key={p.project_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <span style={{ fontWeight: 700, fontSize: 12, color: '#22c55e' }}>{p.code}</span>
+                  <span style={{ fontSize: 13 }}>{p.name}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>{p.tickets} tickets</span>
+                  <select value={p.assigned_member || ''} onChange={e => assignProject(p.project_id, e.target.value || null)} style={sel} disabled={busy}>
+                    <option value="">Unassigned</option>
+                    {(board.members || []).map(m => <option key={m.id} value={m.id}>{(m.email || '').split('@')[0]}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+            <select value={filter.project} onChange={e => setFilter(f => ({ ...f, project: e.target.value }))} style={sel}>
+              <option value="all">All projects</option>
+              {(board.projects || []).map(p => <option key={p.project_id} value={String(p.project_id)}>{p.name}</option>)}
+            </select>
+            <select value={filter.member} onChange={e => setFilter(f => ({ ...f, member: e.target.value }))} style={sel}>
+              <option value="all">All members</option>
+              {(board.members || []).map(m => <option key={m.id} value={String(m.id)}>{(m.email || '').split('@')[0]}</option>)}
+            </select>
+            <select value={filter.fix} onChange={e => setFilter(f => ({ ...f, fix: e.target.value }))} style={sel}>
+              <option value="all">All fix types</option>
+              {['Copywriting', 'Technical', 'GBP', 'Manual'].map(x => <option key={x} value={x}>{x}</option>)}
+            </select>
+            <span style={{ alignSelf: 'center', fontSize: 12, color: 'var(--text3)' }}>{tickets.length} ticket(s)</span>
+          </div>
+
+          {/* Tickets */}
+          <div className="integration-card" style={{ padding: 0, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 11 }}>
+                  <th style={{ padding: '10px 12px' }}>Code</th>
+                  <th style={{ padding: '10px 12px' }}>Project</th>
+                  <th style={{ padding: '10px 12px' }}>Issue</th>
+                  <th style={{ padding: '10px 12px' }}>Fix</th>
+                  <th style={{ padding: '10px 12px' }}>Sev</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center' }}>Affected</th>
+                  <th style={{ padding: '10px 12px' }}>Due</th>
+                  <th style={{ padding: '10px 12px' }}>Assignee</th>
+                  <th style={{ padding: '10px 12px' }}>Status</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'right' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tickets.map(t => (
+                  <React.Fragment key={t.code}>
+                    <tr onClick={() => openTicket(t)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: expanded === t.code ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
+                      <td style={{ padding: '9px 12px', fontWeight: 700, color: '#22c55e', whiteSpace: 'nowrap' }}>{t.code}</td>
+                      <td style={{ padding: '9px 12px', fontSize: 12, color: 'var(--text2)' }}>{t.project_name}</td>
+                      <td style={{ padding: '9px 12px' }}>{t.category}</td>
+                      <td style={{ padding: '9px 12px' }}><span style={{ fontSize: 11, fontWeight: 700, color: FIX_COLOR[t.fix_type] || 'var(--text2)' }}>{t.fix_type}</span></td>
+                      <td style={{ padding: '9px 12px' }}><span style={{ fontSize: 11, fontWeight: 700, color: SEV_COLOR[t.severity] || 'var(--text2)', textTransform: 'uppercase' }}>{t.severity}</span></td>
+                      <td style={{ padding: '9px 12px', textAlign: 'center', fontWeight: 600 }}>{t.affected_count}</td>
+                      <td style={{ padding: '9px 12px' }} onClick={e => e.stopPropagation()}>
+                        <input type="date" value={t.due_date ? String(t.due_date).slice(0, 10) : ''} onChange={e => setDue(t.code, e.target.value)} style={{ ...sel, padding: '4px 6px', fontSize: 11, colorScheme: 'dark' }} disabled={busy} />
+                      </td>
+                      <td style={{ padding: '9px 12px' }} onClick={e => e.stopPropagation()}>
+                        <select value={t.assignee_id || ''} onChange={e => assignTicket(t.code, e.target.value || null)} style={{ ...sel, padding: '4px 6px', fontSize: 11 }} disabled={busy} title={t.assignee_source === 'project' ? 'Inherited from project — picking here overrides for this ticket only' : ''}>
+                          <option value="">Unassigned</option>
+                          {(board.members || []).map(m => <option key={m.id} value={m.id}>{(m.email || '').split('@')[0]}{t.assignee_source === 'project' && String(t.assignee_id) === String(m.id) ? ' (project)' : ''}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 5, background: (ST_COLOR[t.status] || '#6b7280') + '25', color: ST_COLOR[t.status] || 'var(--text2)' }}>{t.status}</span>
+                        {t.late && <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 5, color: '#ef4444' }}>LATE</span>}
+                      </td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                        {t.status === 'In Progress' && <button onClick={() => setStatus(t.code, 'Ready for Review')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>Finish</button>}
+                        {t.status === 'Ready for Review' && <>
+                          <button onClick={() => setStatus(t.code, 'Done')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', marginRight: 6 }}>Approve</button>
+                          <button onClick={() => setStatus(t.code, 'In Progress')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: '1px solid var(--border)', cursor: 'pointer', background: 'transparent', color: 'var(--text2)' }}>Reopen</button>
+                        </>}
+                        {t.status === 'Done' && <button onClick={() => setStatus(t.code, 'In Progress')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: '1px solid var(--border)', cursor: 'pointer', background: 'transparent', color: 'var(--text2)' }}>Reopen</button>}
+                      </td>
+                    </tr>
+                    {expanded === t.code && (
+                      <tr style={{ background: 'rgba(34,197,94,0.04)' }}>
+                        <td colSpan={10} style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
+                          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}><strong>{t.title}</strong> · {t.affected_count} finding(s){t.estimated_hours ? ` · ~${t.estimated_hours}h` : ''}</div>
+                          {(t.affected_pages || []).length > 0 && (
+                            <div style={{ fontSize: 11, color: 'var(--text3)', maxHeight: 90, overflowY: 'auto' }}>{t.affected_pages.slice(0, 30).join(' · ')}{t.affected_pages.length > 30 ? ` · +${t.affected_pages.length - 30} more` : ''}</div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+                {tickets.length === 0 && <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No tickets match the filter.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
     function FixCenterPage({ project, setPage }) {
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
@@ -34301,6 +34475,8 @@
             return <PlayersHandshakePage project={project} />;
 case 'action-plan':
             return <UnifiedActionPlanPage project={project} setActiveTab={setActiveTab} />;
+          case 'control-centre':
+            return <ControlCentrePage setPage={setActiveTab} />;
           case 'nw-project':
             return <NewWebsiteSetupPage project={buildMode ? buildProject : project} />;
           case 'nw-research':
@@ -34421,7 +34597,7 @@ case 'action-plan':
           { id: 'discover-local', label: 'Discover Local Keywords', icon: 'fas fa-magnifying-glass-chart' },
         ]},
         { section: 'ACTION PLAN', items: [
-          { id: 'action-plan', label: 'Action Plan', icon: 'fas fa-tasks' },
+          { id: 'control-centre', label: 'Control Centre', icon: 'fas fa-table-columns' },
         ]},
         { section: 'GBP', items: [
           { id: 'gbp-posts', label: 'GBP Posts', icon: 'fas fa-calendar-alt', localOnly: true },

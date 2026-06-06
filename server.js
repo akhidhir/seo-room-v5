@@ -602,6 +602,14 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(project_id, root_cause_key)
     )`).catch(() => {});
+    // Ticket state lives on the registry row (the registry row IS the ticket)
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS assignee_id INTEGER`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'New'`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS due_date DATE`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`).catch(() => {});
+    // Default member per project (whole-project assignment)
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS assigned_member INTEGER`).catch(() => {});
     // Control Centre — one-time cleanup of mixed-case severity + duplicate category labels (data rot from different code paths)
     await client.query(`UPDATE action_items SET severity = lower(severity) WHERE severity IS NOT NULL AND severity <> lower(severity)`).catch(() => {});
     await client.query(`UPDATE action_items SET category='Quick Wins' WHERE lower(category) IN ('quick win','quick wins') AND category <> 'Quick Wins'`).catch(() => {});
@@ -6181,63 +6189,155 @@ async function ensureTicketCode(projectId, projCode, rcKey, pCode) {
 
 // CONTROL CENTRE — grouped tickets (one per root cause), the lean replacement for the raw Action Plan dump.
 const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
+
+// Build the grouped tickets for one project. Assigns/stamps stable codes, merges stored ticket
+// state (assignee/status/due date) from ticket_codes, and applies the project default assignee.
+async function buildControlTickets(project) {
+  const projectId = project.id;
+  const projCode = deriveProjectCode(project);
+  const items = (await pool.query('SELECT * FROM action_items WHERE project_id=$1', [projectId])).rows.map(normalizeActionRow);
+
+  const groups = {};
+  for (const it of items) {
+    const key = rootCauseKey(projectId, it);
+    (groups[key] = groups[key] || { items: [], pCode: pillarCode(it) }).items.push(it);
+  }
+
+  // Stored ticket state (the registry row IS the ticket)
+  const stateRows = (await pool.query('SELECT * FROM ticket_codes WHERE project_id=$1', [projectId])).rows;
+  const stateByKey = {}; for (const r of stateRows) stateByKey[r.root_cause_key] = r;
+
+  const tickets = [];
+  for (const [rcKey, g] of Object.entries(groups)) {
+    const code = await ensureTicketCode(projectId, projCode, rcKey, g.pCode);
+    const ids = g.items.map(i => i.id);
+    await pool.query('UPDATE action_items SET code=$1, root_cause_key=$2 WHERE id = ANY($3::int[])', [code, rcKey, ids]).catch(() => {});
+
+    const items_g = g.items;
+    const st = stateByKey[rcKey] || {};
+    const maxSev = items_g.reduce((m, i) => Math.max(m, SEV_RANK[i.severity] || 2), 0);
+    const sevName = Object.keys(SEV_RANK).find(k => SEV_RANK[k] === maxSev) || 'medium';
+    const effectiveAssignee = st.assignee_id || project.assigned_member || null;
+    const status = st.status && st.status !== 'New' ? st.status : (effectiveAssignee ? 'Assigned' : 'New');
+    const affectedPages = [...new Set(items_g.flatMap(i => (i.pages_affected || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)))];
+    const isLate = st.due_date && !['Done'].includes(status) && new Date(st.due_date) < new Date(new Date().toDateString());
+
+    tickets.push({
+      ticket_id: st.id || null,
+      code,
+      project_id: Number(projectId),
+      project_name: project.name || project.business_name || '',
+      pillar_code: g.pCode,
+      category: normCategory(items_g[0].category) || items_g[0].pillar,
+      fix_type: deriveFixType(items_g[0]),
+      severity: sevName,
+      title: items_g[0].title || items_g[0].category || 'Untitled',
+      status,
+      late: !!isLate,
+      assignee_id: effectiveAssignee,
+      assignee_source: st.assignee_id ? 'ticket' : (project.assigned_member ? 'project' : null),
+      due_date: st.due_date || null,
+      affected_count: items_g.length,
+      affected_pages: affectedPages.slice(0, 100),
+      estimated_hours: Math.round(items_g.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0), 0) * 10) / 10,
+      item_ids: ids,
+    });
+  }
+  tickets.sort((a, b) => (SEV_RANK[b.severity] - SEV_RANK[a.severity]) || (b.affected_count - a.affected_count));
+  return { project_code: projCode, total_findings: items.length, tickets };
+}
+
 app.get('/api/projects/:id/control-centre/tickets', async (req, res) => {
   try {
-    const projectId = req.params.id;
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const projCode = deriveProjectCode(project);
-
-    const items = (await pool.query('SELECT * FROM action_items WHERE project_id=$1', [projectId])).rows.map(normalizeActionRow);
-
-    // Group by root cause
-    const groups = {};
-    for (const it of items) {
-      const key = rootCauseKey(projectId, it);
-      (groups[key] = groups[key] || { items: [], pCode: pillarCode(it) }).items.push(it);
-    }
-
-    const tickets = [];
-    for (const [rcKey, g] of Object.entries(groups)) {
-      const code = await ensureTicketCode(projectId, projCode, rcKey, g.pCode);
-      // stamp code + root_cause_key onto member rows (so every finding carries its ticket code)
-      const ids = g.items.map(i => i.id);
-      await pool.query('UPDATE action_items SET code=$1, root_cause_key=$2 WHERE id = ANY($3::int[])', [code, rcKey, ids]).catch(() => {});
-
-      const items_g = g.items;
-      const maxSev = items_g.reduce((m, i) => Math.max(m, SEV_RANK[i.severity] || 2), 0);
-      const sevName = Object.keys(SEV_RANK).find(k => SEV_RANK[k] === maxSev) || 'medium';
-      const statuses = new Set(items_g.map(i => i.status || 'pending'));
-      const rollupStatus = items_g.every(i => ['done', 'completed'].includes(i.status)) ? 'Done'
-        : statuses.has('in_progress') || statuses.has('in-progress') ? 'In Progress'
-        : items_g.some(i => i.assigned_to) ? 'Assigned' : 'New';
-      const affectedPages = [...new Set(items_g.flatMap(i => (i.pages_affected || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)))];
-      const totalHours = items_g.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0), 0);
-
-      tickets.push({
-        code,
-        project_id: Number(projectId),
-        pillar_code: g.pCode,
-        category: normCategory(items_g[0].category) || items_g[0].pillar,
-        fix_type: deriveFixType(items_g[0]),
-        severity: sevName,
-        title: items_g[0].title || items_g[0].category || 'Untitled',
-        status: rollupStatus,
-        assignee: items_g.find(i => i.assigned_to)?.assigned_to || null,
-        affected_count: items_g.length,
-        affected_pages: affectedPages.slice(0, 100),
-        estimated_hours: Math.round(totalHours * 10) / 10,
-        item_ids: ids,
-      });
-    }
-
-    // Order by severity, then size (biggest root causes first)
-    tickets.sort((a, b) => (SEV_RANK[b.severity] - SEV_RANK[a.severity]) || (b.affected_count - a.affected_count));
-    res.json({ project_code: projCode, total_tickets: tickets.length, total_findings: items.length, tickets });
+    const r = await buildControlTickets(project);
+    res.json({ ...r, total_tickets: r.tickets.length });
   } catch (e) {
     console.error('[control-centre] error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Lead board — tickets across ALL projects + team members for assignment dropdowns
+app.get('/api/control-centre/board', async (req, res) => {
+  try {
+    const projects = (await pool.query('SELECT * FROM projects ORDER BY name')).rows;
+    const members = (await pool.query('SELECT id, email FROM users ORDER BY id')).rows;
+    const all = [];
+    const perProject = [];
+    for (const p of projects) {
+      try {
+        const r = await buildControlTickets(p);
+        all.push(...r.tickets);
+        perProject.push({ project_id: p.id, name: p.name, code: r.project_code, assigned_member: p.assigned_member || null, tickets: r.tickets.length, findings: r.total_findings });
+      } catch (e) { console.log('[board] project', p.id, e.message); }
+    }
+    res.json({ members, projects: perProject, tickets: all });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Assign a WHOLE project to a member (all its tickets inherit)
+app.post('/api/projects/:id/control-centre/assign', async (req, res) => {
+  try {
+    const memberId = req.body && req.body.member_id != null ? parseInt(req.body.member_id) : null;
+    await pool.query('UPDATE projects SET assigned_member=$1 WHERE id=$2', [memberId, req.params.id]);
+    res.json({ ok: true, project_id: Number(req.params.id), member_id: memberId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Per-ticket assignment override / reassign (by code)
+app.post('/api/control-centre/tickets/:code/assign', async (req, res) => {
+  try {
+    const memberId = req.body && req.body.member_id != null ? parseInt(req.body.member_id) : null;
+    const r = await pool.query(`UPDATE ticket_codes SET assignee_id=$1, status = CASE WHEN status='New' AND $1 IS NOT NULL THEN 'Assigned' ELSE status END WHERE code=$2 RETURNING *`, [memberId, req.params.code]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Ticket not found' });
+    res.json({ ok: true, ticket: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Auto "In Progress" — fires ONLY when the ticket's assignee opens it. Only flips forward, never back.
+app.post('/api/control-centre/tickets/:code/open', async (req, res) => {
+  try {
+    const tk = (await pool.query(
+      'SELECT tc.*, p.assigned_member FROM ticket_codes tc JOIN projects p ON p.id=tc.project_id WHERE tc.code=$1',
+      [req.params.code])).rows[0];
+    if (!tk) return res.status(404).json({ error: 'Ticket not found' });
+    const effective = tk.assignee_id || tk.assigned_member;
+    if (!effective || String(effective) !== String(req.auth?.userId)) {
+      return res.json({ ok: true, changed: false, reason: 'opener is not the assignee' });
+    }
+    const r = await pool.query(
+      `UPDATE ticket_codes SET status='In Progress', started_at=COALESCE(started_at, NOW())
+        WHERE code=$1 AND status IN ('New','Assigned') RETURNING *`, [req.params.code]);
+    res.json({ ok: true, changed: r.rows.length > 0, ticket: r.rows[0] || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Status moves: Finish (→ Ready for Review), Done, Reopen (→ In Progress)
+app.post('/api/control-centre/tickets/:code/status', async (req, res) => {
+  try {
+    const allowed = ['New', 'Assigned', 'In Progress', 'Ready for Review', 'Done'];
+    const status = (req.body && req.body.status || '').trim();
+    if (!allowed.includes(status)) return res.status(400).json({ error: `Status must be one of: ${allowed.join(', ')}` });
+    const r = await pool.query(
+      `UPDATE ticket_codes SET status=$1, finished_at = CASE WHEN $1='Done' THEN NOW() ELSE finished_at END WHERE code=$2 RETURNING *`,
+      [status, req.params.code]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Ticket not found' });
+    res.json({ ok: true, ticket: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Set/change a ticket due date
+app.post('/api/control-centre/tickets/:code/due', async (req, res) => {
+  try {
+    const due = req.body && req.body.due_date ? req.body.due_date : null;
+    const r = await pool.query('UPDATE ticket_codes SET due_date=$1 WHERE code=$2 RETURNING *', [due, req.params.code]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Ticket not found' });
+    res.json({ ok: true, ticket: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Update action item (status, execution_type) — cascades to duplicates
