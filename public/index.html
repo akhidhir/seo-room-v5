@@ -19757,9 +19757,23 @@
       // Manual tick/untick of one finding — moves the progress bar
       const toggleFinding = (f) => act(() => api(`/action-items/${f.id}`, { method: 'PUT', body: { status: f.done ? 'pending' : 'done' } }));
       const setDue = (code, due) => act(() => api(`/control-centre/tickets/${code}/due`, { method: 'POST', body: { due_date: due || null } }));
+      const [genFor, setGenFor] = useState({});
       const openTicket = async (tk) => {
-        setExpanded(expanded === tk.code ? null : tk.code);
+        const opening = expanded !== tk.code;
+        setExpanded(opening ? tk.code : null);
+        if (!opening) return;
         try { const r = await api(`/control-centre/tickets/${tk.code}/open`, { method: 'POST', body: {} }); if (r.changed) load(); } catch (_) {}
+        // First expand: have the AI write this ticket's exact instructions from its real findings (cached after)
+        if (tk.how_to_source !== 'ai' && tk.item_ids && tk.item_ids.length && !genFor[tk.code]) {
+          setGenFor(p => ({ ...p, [tk.code]: true }));
+          try {
+            const r = await api(`/control-centre/tickets/${tk.code}/instructions`, { method: 'POST', body: {} });
+            if (r.steps && r.steps.length) {
+              setBoard(b => ({ ...b, tickets: (b.tickets || []).map(x => x.code === tk.code ? { ...x, how_to: r.steps, how_to_source: 'ai' } : x) }));
+            }
+          } catch (e) {}
+          setGenFor(p => ({ ...p, [tk.code]: false }));
+        }
       };
       // "Open" → switch to the ticket's project (if needed) and land on the right tool page.
       const openInTool = async (tk) => {
@@ -19916,7 +19930,11 @@
                           <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}><strong>{t.title}</strong> · {t.affected_count} finding(s){t.estimated_hours ? ` · ~${t.estimated_hours}h` : ''}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                             <div style={{ background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px' }}>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6 }}><i className="fas fa-lightbulb" style={{ marginRight: 5 }} />What to do</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6 }}>
+                                <i className="fas fa-lightbulb" style={{ marginRight: 5 }} />What to do
+                                {genFor[t.code] && <span style={{ marginLeft: 8, color: 'var(--text3)', fontWeight: 400, textTransform: 'none' }}><span className="spinner" style={{ width: 9, height: 9, marginRight: 4 }}></span>writing exact instructions from the findings…</span>}
+                                {t.how_to_source === 'ai' && !genFor[t.code] && <span style={{ marginLeft: 8, color: 'var(--text3)', fontWeight: 400, textTransform: 'none', fontSize: 10 }}>· written from this ticket's findings</span>}
+                              </div>
                               <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text)', lineHeight: 1.7 }}>
                                 {(t.how_to || []).map((s, i) => <li key={i}>{s}</li>)}
                               </ol>

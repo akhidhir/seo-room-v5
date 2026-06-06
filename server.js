@@ -610,6 +610,7 @@ async function initDb() {
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`).catch(() => {});
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS verification JSONB`).catch(() => {});
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS how_to JSONB`).catch(() => {});
     // Default member per project (whole-project assignment)
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS assigned_member INTEGER`).catch(() => {});
     // One-time re-mint: grouping changed from category-level to ONE ISSUE PER TICKET, so old
@@ -6517,7 +6518,10 @@ async function buildControlTickets(project) {
       affected_pages: affectedPages.slice(0, 100),
       estimated_hours: Math.round(items_g.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0), 0) * 10) / 10,
       item_ids: ids,
-      how_to: stepsForGroup(rcKey.split(':').pop(), items_g, g.pCode),
+      how_to: (st.how_to && st.how_to.hash === ticketItemsHash(items_g) && Array.isArray(st.how_to.steps) && st.how_to.steps.length)
+        ? st.how_to.steps
+        : stepsForGroup(rcKey.split(':').pop(), items_g, g.pCode),
+      how_to_source: (st.how_to && st.how_to.hash === ticketItemsHash(items_g) && Array.isArray(st.how_to.steps) && st.how_to.steps.length) ? 'ai' : 'rules',
       where: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).where,
       done_when: TICKET_DONE_WHEN[g.pCode] || TICKET_DONE_WHEN.MANUAL,
       auto_verified: AUTO_VERIFY_PILLARS.includes(g.pCode),
@@ -6858,6 +6862,62 @@ async function runTicketVerification(tk, project, items, userId) {
   await pool.query(`UPDATE ticket_codes SET verification=$1 WHERE code=$2`, [JSON.stringify(v), tk.code]).catch(() => {});
   return { checked, progress, total: fresh.length, doneCount, verification: v };
 }
+
+// AI-written, ticket-specific fix instructions — generated ONCE from the ticket's real findings
+// (actual pages, current/target values, recommendations) and cached on the ticket. No templates.
+function ticketItemsHash(items) {
+  const crypto = require('crypto');
+  return crypto.createHash('md5').update(items.map(i => `${i.id}:${(i.title || '').slice(0, 40)}`).sort().join('|')).digest('hex');
+}
+app.post('/api/control-centre/tickets/:code/instructions', async (req, res) => {
+  try {
+    const tk = (await pool.query('SELECT * FROM ticket_codes WHERE code=$1', [req.params.code])).rows[0];
+    if (!tk) return res.status(404).json({ error: 'Ticket not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [tk.project_id])).rows[0];
+    const items = (await pool.query('SELECT * FROM action_items WHERE code=$1 ORDER BY id', [req.params.code])).rows;
+    if (!items.length) return res.status(400).json({ error: 'No findings on this ticket' });
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured' });
+
+    const hash = ticketItemsHash(items);
+    if (tk.how_to && tk.how_to.hash === hash && Array.isArray(tk.how_to.steps) && tk.how_to.steps.length) {
+      return res.json({ ok: true, cached: true, steps: tk.how_to.steps });
+    }
+
+    const where = (TICKET_PLAYBOOK[tk.pillar_code] || TICKET_PLAYBOOK.GEN).where;
+    const findings = items.slice(0, 15).map(i => ({
+      title: (i.title || '').slice(0, 120),
+      page: i.ranking_page || ((i.pages_affected || '').split(/[\n,]+/)[0] || '').trim() || null,
+      problem: (i.description || '').slice(0, 250),
+      current: (i.current_value || '').toString().slice(0, 120) || null,
+      change_to: (i.new_value || '').toString().slice(0, 120) || null,
+      keyword: i.keyword || null,
+    }));
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 900,
+      system: `You write fix instructions for an SEO agency team member working on ONE ticket. Rules:
+- Be concrete and specific to the findings given: name the actual pages, values and changes. NEVER give generic advice ("run an audit", "review your SEO").
+- 3-6 short numbered steps a junior could follow without asking questions.
+- The work is done in: "${where}" (the dashboard tool) — mention it where relevant.
+- If the findings carry a "change_to" value, tell them to apply exactly that.
+- Return JSON ONLY: {"steps": ["...", "..."]}`,
+      messages: [{ role: 'user', content: `Project: ${project.name} (${project.domain})
+Ticket ${tk.code} — category: ${items[0].category || tk.pillar_code} — fix type tool: ${where}
+Findings:
+${JSON.stringify(findings, null, 1)}` }],
+    });
+    let steps = [];
+    try { steps = (JSON.parse(aiResp.content[0].text.match(/\{[\s\S]*\}/)[0]).steps || []).filter(x => typeof x === 'string'); } catch (e) {}
+    if (!steps.length) return res.status(500).json({ error: 'AI returned no usable steps' });
+
+    await pool.query('UPDATE ticket_codes SET how_to=$1 WHERE code=$2', [JSON.stringify({ steps, hash, generated_at: new Date().toISOString() }), req.params.code]);
+    res.json({ ok: true, cached: false, steps });
+  } catch (e) {
+    console.error('[instructions] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Check progress WITHOUT closing — updates the bar, marks verified findings done
 app.post('/api/control-centre/tickets/:code/verify', async (req, res) => {
