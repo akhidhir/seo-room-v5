@@ -610,6 +610,18 @@ async function initDb() {
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`).catch(() => {});
     // Default member per project (whole-project assignment)
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS assigned_member INTEGER`).catch(() => {});
+    // One-time re-mint: grouping changed from category-level to ONE ISSUE PER TICKET, so old
+    // codes are wiped once and re-issued under the new scheme (all tickets were still 'New').
+    await client.query(`CREATE TABLE IF NOT EXISTS app_flags (name TEXT PRIMARY KEY, set_at TIMESTAMPTZ DEFAULT NOW())`).catch(() => {});
+    try {
+      const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_one_issue_remint'`);
+      if (!remint.rows.length) {
+        await client.query(`DELETE FROM ticket_codes`);
+        await client.query(`UPDATE action_items SET code=NULL, root_cause_key=NULL`);
+        await client.query(`INSERT INTO app_flags (name) VALUES ('ticket_one_issue_remint') ON CONFLICT DO NOTHING`);
+        console.log('[migrate] Re-minted ticket codes for one-issue-per-ticket scheme');
+      }
+    } catch (e) { console.log('[migrate] remint:', e.message); }
     // Member-role project access: which projects a 'member' user can see/work on
     await client.query(`CREATE TABLE IF NOT EXISTS project_access (
       user_id INTEGER NOT NULL,
@@ -6187,9 +6199,23 @@ function deriveFixType(item) {
   if (/automated|plugin/.test(ex) || /website|technical/.test(pil) || /schema|canonical|noindex|core web vitals|crawl|site health/.test(cat)) return 'Technical';
   return 'Manual';
 }
-// Stable de-dupe key: one ticket per (project, root-cause area, normalized cause).
+// Issue signature: the finding title with page-specific parts (URLs, paths, numbers) stripped,
+// so the SAME issue on different pages groups into one ticket, but DIFFERENT issues never mix.
+function issueSignature(item) {
+  let t = (item.title || '').toString().toLowerCase();
+  t = t.replace(/https?:\/\/[^\s]+/g, ' ')      // full URLs
+    .replace(/`[^`]*`/g, ' ')                    // backticked paths/values
+    .replace(/\/[a-z0-9][a-z0-9\-_\/]*/g, ' ')   // bare paths
+    .replace(/["'""'']/g, ' ')
+    .replace(/\b\d+(\.\d+)?\s*(s|ms|kb|mb|px|chars?|words?|%)?\b/g, ' ') // numbers + units
+    .replace(/[^a-z\s]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  const words = t.split(' ').filter(w => w.length > 2).slice(0, 6);
+  return words.join('-') || normCategory(item.category) || 'general';
+}
+// Stable de-dupe key: ONE TICKET = ONE ISSUE (project + root-cause area + issue signature).
 function rootCauseKey(projectId, item) {
-  return `${projectId}:${pillarCode(item)}:${normCategory(item.category) || item.pillar || 'gen'}`
+  return `${projectId}:${pillarCode(item)}:${issueSignature(item)}`
     .toLowerCase().replace(/[^a-z0-9:]+/g, '-');
 }
 // 3-letter project code: stored project_code wins, else derived from the name.
