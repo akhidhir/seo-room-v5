@@ -19803,7 +19803,10 @@
                               <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text)', lineHeight: 1.7 }}>
                                 {(t.how_to || []).map((s, i) => <li key={i}>{s}</li>)}
                               </ol>
-                              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}><i className="fas fa-location-arrow" style={{ marginRight: 5 }} />Do it in: <strong style={{ color: 'var(--text2)' }}>{t.where}</strong></div>
+                              <button onClick={(e) => { e.stopPropagation(); openInTool(t); }} disabled={busy}
+                                style={{ marginTop: 10, padding: '8px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <i className="fas fa-up-right-from-square" />Go there now: {t.where}
+                              </button>
                             </div>
                             <div>
                               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Exact findings ({t.affected_count})</div>
