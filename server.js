@@ -610,6 +610,14 @@ async function initDb() {
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`).catch(() => {});
     // Default member per project (whole-project assignment)
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS assigned_member INTEGER`).catch(() => {});
+    // Member-role project access: which projects a 'member' user can see/work on
+    await client.query(`CREATE TABLE IF NOT EXISTS project_access (
+      user_id INTEGER NOT NULL,
+      project_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, project_id)
+    )`).catch(() => {});
+    await client.query(`ALTER TABLE team_invites ADD COLUMN IF NOT EXISTS project_ids JSONB DEFAULT '[]'`).catch(() => {});
     // Control Centre — one-time cleanup of mixed-case severity + duplicate category labels (data rot from different code paths)
     await client.query(`UPDATE action_items SET severity = lower(severity) WHERE severity IS NOT NULL AND severity <> lower(severity)`).catch(() => {});
     await client.query(`UPDATE action_items SET category='Quick Wins' WHERE lower(category) IN ('quick win','quick wins') AND category <> 'Quick Wins'`).catch(() => {});
@@ -1570,16 +1578,20 @@ function requireAgency(req, res) {
 app.post('/api/team/invite', authMiddleware, async (req, res) => {
   try {
     if (!requireAgency(req, res)) return;
-    const { email, name } = req.body;
+    const { email, name, role, project_ids } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
+    const inviteRole = role === 'member' ? 'member' : 'admin';
+    if (inviteRole === 'member' && (!Array.isArray(project_ids) || project_ids.length === 0)) {
+      return res.status(400).json({ error: 'Pick at least one project for a member invite' });
+    }
     const existing = (await pool.query('SELECT id FROM users WHERE email=$1', [email])).rows[0];
     if (existing) return res.status(409).json({ error: 'A user with this email already exists' });
 
     const crypto = require('crypto');
     const inviteToken = crypto.randomBytes(24).toString('hex');
     await pool.query(
-      'INSERT INTO team_invites (email, name, invite_token, role, created_by) VALUES ($1,$2,$3,$4,$5)',
-      [email, name || '', inviteToken, 'admin', req.auth.userId]
+      'INSERT INTO team_invites (email, name, invite_token, role, created_by, project_ids) VALUES ($1,$2,$3,$4,$5,$6)',
+      [email, name || '', inviteToken, inviteRole, req.auth.userId, JSON.stringify(inviteRole === 'member' ? (project_ids || []) : [])]
     );
 
     const baseUrl = `${req.protocol}://${req.get('host')}`;
@@ -1602,7 +1614,12 @@ app.get('/api/team', authMiddleware, async (req, res) => {
     if (!requireAgency(req, res)) return;
     const members = await pool.query("SELECT id, email, name, role, created_at FROM users WHERE role IS DISTINCT FROM 'client' ORDER BY created_at ASC");
     const invites = await pool.query('SELECT id, email, name, invite_token, created_at, expires_at, used_by, used_at FROM team_invites ORDER BY created_at DESC');
-    res.json({ members: members.rows, invites: invites.rows });
+    // Attach each member's project access (empty = admin who sees everything)
+    const access = await pool.query('SELECT user_id, project_id FROM project_access');
+    const byUser = {};
+    for (const r of access.rows) (byUser[r.user_id] = byUser[r.user_id] || []).push(Number(r.project_id));
+    const withAccess = members.rows.map(m => ({ ...m, project_ids: byUser[m.id] || [] }));
+    res.json({ members: withAccess, invites: invites.rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1611,6 +1628,26 @@ app.delete('/api/team/invite/:id', authMiddleware, async (req, res) => {
   try {
     if (!requireAgency(req, res)) return;
     await pool.query('DELETE FROM team_invites WHERE id=$1 AND used_by IS NULL', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Edit a member's role + project access (agency only)
+app.put('/api/team/member/:id/access', authMiddleware, async (req, res) => {
+  try {
+    if (!requireAgency(req, res)) return;
+    const memberId = parseInt(req.params.id);
+    if (memberId === req.auth.userId) return res.status(400).json({ error: "You can't change your own role" });
+    const { role, project_ids } = req.body || {};
+    if (role && ['admin', 'member'].includes(role)) {
+      await pool.query("UPDATE users SET role=$1 WHERE id=$2 AND role IS DISTINCT FROM 'client'", [role, memberId]);
+    }
+    if (Array.isArray(project_ids)) {
+      await pool.query('DELETE FROM project_access WHERE user_id=$1', [memberId]);
+      for (const pid of project_ids) {
+        await pool.query('INSERT INTO project_access (user_id, project_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [memberId, pid]).catch(() => {});
+      }
+    }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1653,6 +1690,12 @@ app.post('/api/team-invite/:token/register', async (req, res) => {
       'INSERT INTO users (email, password_hash, name, role) VALUES ($1,$2,$3,$4) RETURNING id, email, name, role',
       [finalEmail, hash, name || inv.name || '', inv.role || 'admin']
     )).rows[0];
+    // Member invites carry their project grants — apply them now
+    if (user.role === 'member' && Array.isArray(inv.project_ids)) {
+      for (const pid of inv.project_ids) {
+        await pool.query('INSERT INTO project_access (user_id, project_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [user.id, pid]).catch(() => {});
+      }
+    }
     await pool.query('UPDATE team_invites SET used_by=$1, used_at=NOW() WHERE id=$2', [user.id, inv.id]);
     const token = generateToken(user.id, user.email, user.role || 'admin', null);
     res.json({ ok: true, user, token });
@@ -1771,6 +1814,23 @@ app.get('/api/client/approval-items/:id', authMiddleware, async (req, res) => {
 
 // Apply optional auth to all routes
 app.use(optionalAuth);
+
+// Member-role project scoping — a 'member' can only touch projects they've been granted.
+// Admins and clients are untouched (clients have their own narrower guard).
+async function memberProjectIds(userId) {
+  const rows = (await pool.query('SELECT project_id FROM project_access WHERE user_id=$1', [userId])).rows;
+  return rows.map(r => Number(r.project_id));
+}
+app.use(async (req, res, next) => {
+  try {
+    if (!req.auth || req.auth.role !== 'member') return next();
+    const m = req.path.match(/^\/api\/projects\/(\d+)(\/|$)/);
+    if (!m) return next();
+    const allowed = await memberProjectIds(req.auth.userId);
+    if (!allowed.includes(Number(m[1]))) return res.status(403).json({ error: 'You do not have access to this project' });
+    next();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ==================== 4. PROJECTS ====================
 
@@ -2247,6 +2307,11 @@ app.get('/api/projects', async (req, res) => {
     if (req.auth.role === 'client' && req.auth.projectId) {
       // Clients only see their assigned project
       result = await pool.query('SELECT * FROM projects WHERE id=$1', [req.auth.projectId]);
+    } else if (req.auth.role === 'member') {
+      // Members only see projects they've been granted access to
+      result = await pool.query(
+        'SELECT p.* FROM projects p JOIN project_access pa ON pa.project_id=p.id AND pa.user_id=$1 ORDER BY p.created_at DESC',
+        [req.auth.userId]);
     } else {
       result = await pool.query('SELECT * FROM projects ORDER BY created_at DESC');
     }
@@ -6313,7 +6378,11 @@ app.get('/api/projects/:id/control-centre/tickets', async (req, res) => {
 app.get('/api/control-centre/board', async (req, res) => {
   try {
     const projects = (await pool.query('SELECT * FROM projects ORDER BY name')).rows;
-    const members = (await pool.query('SELECT id, email FROM users ORDER BY id')).rows;
+    const members = (await pool.query("SELECT id, email, name, role FROM users WHERE role IS DISTINCT FROM 'client' ORDER BY id")).rows;
+    const accessRows = (await pool.query('SELECT user_id, project_id FROM project_access')).rows;
+    const accessByUser = {};
+    for (const r of accessRows) (accessByUser[r.user_id] = accessByUser[r.user_id] || []).push(Number(r.project_id));
+    members.forEach(m => { m.project_ids = m.role === 'member' ? (accessByUser[m.id] || []) : null; }); // null = all (admin)
     const all = [];
     const perProject = [];
     for (const p of projects) {
@@ -6329,10 +6398,22 @@ app.get('/api/control-centre/board', async (req, res) => {
   }
 });
 
+// A member can only be handed work on projects they can access (admins can take anything).
+async function memberCanAccessProject(memberId, projectId) {
+  if (!memberId) return true;
+  const u = (await pool.query('SELECT role FROM users WHERE id=$1', [memberId])).rows[0];
+  if (!u || u.role !== 'member') return true;
+  const r = await pool.query('SELECT 1 FROM project_access WHERE user_id=$1 AND project_id=$2', [memberId, projectId]);
+  return r.rows.length > 0;
+}
+
 // Assign a WHOLE project to a member (all its tickets inherit)
 app.post('/api/projects/:id/control-centre/assign', async (req, res) => {
   try {
     const memberId = req.body && req.body.member_id != null ? parseInt(req.body.member_id) : null;
+    if (memberId && !(await memberCanAccessProject(memberId, req.params.id))) {
+      return res.status(400).json({ error: 'That member has no access to this project. Grant access in Team Members first.' });
+    }
     await pool.query('UPDATE projects SET assigned_member=$1 WHERE id=$2', [memberId, req.params.id]);
     res.json({ ok: true, project_id: Number(req.params.id), member_id: memberId });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -6342,6 +6423,12 @@ app.post('/api/projects/:id/control-centre/assign', async (req, res) => {
 app.post('/api/control-centre/tickets/:code/assign', async (req, res) => {
   try {
     const memberId = req.body && req.body.member_id != null ? parseInt(req.body.member_id) : null;
+    if (memberId) {
+      const tk = (await pool.query('SELECT project_id FROM ticket_codes WHERE code=$1', [req.params.code])).rows[0];
+      if (tk && !(await memberCanAccessProject(memberId, tk.project_id))) {
+        return res.status(400).json({ error: 'That member has no access to this project. Grant access in Team Members first.' });
+      }
+    }
     const r = await pool.query(`UPDATE ticket_codes SET assignee_id=$1, status = CASE WHEN status='New' AND $1 IS NOT NULL THEN 'Assigned' ELSE status END WHERE code=$2 RETURNING *`, [memberId, req.params.code]);
     if (!r.rows.length) return res.status(404).json({ error: 'Ticket not found' });
     res.json({ ok: true, ticket: r.rows[0] });
