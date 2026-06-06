@@ -6439,6 +6439,16 @@ app.get('/api/projects/:id/control-centre/tickets', async (req, res) => {
   }
 });
 
+// Ticket codes per pillar for a project — used to tag audit pages with their Control Centre ticket
+app.get('/api/projects/:id/control-centre/codes', async (req, res) => {
+  try {
+    const rows = (await pool.query('SELECT pillar_code, code FROM ticket_codes WHERE project_id=$1 ORDER BY code', [req.params.id])).rows;
+    const codes = {};
+    for (const r of rows) (codes[r.pillar_code] = codes[r.pillar_code] || []).push(r.code);
+    res.json({ codes });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Lead board — tickets across ALL projects + team members for assignment dropdowns
 app.get('/api/control-centre/board', async (req, res) => {
   try {

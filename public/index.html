@@ -8122,7 +8122,8 @@
           e('div', null,
             e('h2', { style: { margin: 0, fontSize: 22 } },
               e('i', { className: 'fas fa-shield-halved', style: { marginRight: 10, color: '#ef4444' } }),
-              'Website Security Audit'
+              'Website Security Audit',
+              e(TicketTag, { project: project, pillars: ['SEC'] })
             ),
             e('div', { style: { fontSize: 14, color: 'var(--text3)', marginTop: 4 } }, 'Check your WordPress site for vulnerabilities, exposed files, and security misconfigurations')
           ),
@@ -8642,6 +8643,7 @@
             <div>
               <h2 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>
                 <i className="fas fa-tachometer-alt" style={{ marginRight: 10, color: '#ef4444' }} />Core Web Vitals
+                <TicketTag project={project} pillars={['CWV']} />
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 14, marginTop: 6 }}>Google PageSpeed performance scores per page (mobile + desktop)</p>
             </div>
@@ -9188,6 +9190,7 @@
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
                 <i className="fas fa-file-import" style={{ marginRight: 10, color: 'var(--accent)' }} />Indexing Status
+                <TicketTag project={project} pillars={['INDX']} />
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Check which pages are indexed by Google — home, services, and suburb pages</p>
             </div>
@@ -11095,7 +11098,7 @@
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
             e('i', { className: 'fas fa-directions', style: { fontSize: 24, color: '#6366f1' } }),
             e('div', null,
-              e('h2', { style: { margin: 0, fontSize: 22, fontWeight: 600 } }, '404s & Redirects'),
+              e('h2', { style: { margin: 0, fontSize: 22, fontWeight: 600 } }, '404s & Redirects', e(TicketTag, { project: project, pillars: ['TECH'] })),
               e('p', { style: { margin: 0, fontSize: 13, color: 'var(--text3)', marginTop: 2 } }, 'Monitor 404 errors, manage redirects, and find broken links across your site.')
             )
           )
@@ -11922,7 +11925,8 @@
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
           React.createElement('h2', { style: { margin: 0, fontSize: 22 } },
             React.createElement('i', { className: 'fas fa-link', style: { marginRight: 10, color: 'var(--accent)' } }),
-            'Internal Linking'
+            'Internal Linking',
+            React.createElement(TicketTag, { project: project, pillars: ['LINK'] })
           ),
           React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' } },
             isRunning && React.createElement('span', { style: { color: '#f59e0b', fontSize: 13 } },
@@ -13127,6 +13131,7 @@
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
                 <i className="fas fa-file-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />On-Page Audit & Fix
+                <TicketTag project={project} pillars={['ONPG']} />
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Yoast SEO scores, meta tags, keyword optimization — fix directly from here</p>
             </div>
@@ -19629,6 +19634,29 @@
     // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
     // Where each ticket type opens when clicked "Open" (fix-in-place routing)
     const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit', REVW: 'gbp-audit', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', GEN: 'fix-center' };
+
+    // Ticket code chip — shows the Control Centre ticket code(s) on the audit page where the work happens.
+    const __ticketCodesCache = {};
+    function TicketTag({ project, pillars }) {
+      const [codes, setCodes] = useState(__ticketCodesCache[project && project.id] || null);
+      useEffect(() => {
+        if (!project || !project.id) return;
+        if (__ticketCodesCache[project.id]) { setCodes(__ticketCodesCache[project.id]); return; }
+        (async () => {
+          try { const r = await api(`/projects/${project.id}/control-centre/codes`); __ticketCodesCache[project.id] = r.codes || {}; setCodes(r.codes || {}); } catch (e) {}
+        })();
+      }, [project && project.id]);
+      if (!codes) return null;
+      const list = (Array.isArray(pillars) ? pillars : [pillars]).flatMap(p => codes[p] || []);
+      if (!list.length) return null;
+      return (
+        <span style={{ marginLeft: 10, display: 'inline-flex', gap: 6, verticalAlign: 'middle' }}>
+          {list.slice(0, 4).map(c => (
+            <span key={c} title="Control Centre ticket — track this work by this code" style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 5, background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e', letterSpacing: 0.5 }}>{c}</span>
+          ))}
+        </span>
+      );
+    }
     function ControlCentrePage({ setPage, allProjects, onSwitchProject, currentProject }) {
       const [board, setBoard] = useState(null);
       const [loading, setLoading] = useState(true);
@@ -32284,7 +32312,7 @@
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-clone" style={{ marginRight: 10, color: accent }} />Competing Pages</h2>
+            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-clone" style={{ marginRight: 10, color: accent }} />Competing Pages<TicketTag project={project} pillars={['CANB']} /></h2>
             <button className="btn" onClick={runScan} disabled={scanning} style={{ background: accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, opacity: scanning ? 0.6 : 1 }}>
               {scanning ? <><span className="spinner" style={{ marginRight: 6 }}></span>Scanning Search Console...</> : <><i className="fas fa-clone" style={{ marginRight: 6 }}></i>{data ? 'Re-scan' : 'Run Scan'}</>}
             </button>
@@ -32812,7 +32840,7 @@
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div>
-              <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-external-link-alt" style={{ marginRight: 10, color: accent }}></i>Backlinks</h2>
+              <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-external-link-alt" style={{ marginRight: 10, color: accent }}></i>Backlinks<TicketTag project={project} pillars={['BLNK']} /></h2>
               <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>Monitor, audit, and grow your backlink profile</div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
