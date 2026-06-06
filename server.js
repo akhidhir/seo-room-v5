@@ -32584,9 +32584,26 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         const domainBase = domainLower.replace(/\.com\.au$|\.com$|\.net\.au$|\.au$/, '');
         const location = resolveDataForSeoLocation(project.location);
         const locLower = location.toLowerCase().split(',')[0].trim().replace(/[^a-z\s]/g, '').trim();
-        const locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
+        // Center on the BUSINESS, not the city: use the centroid of the project's GBP service
+        // areas when available (a local pack only shows the business near its real service core —
+        // checking at the city CBD finds nothing for a suburban business).
+        let locGps = null; let centerLabel = locLower;
+        const areaPts = [];
+        for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) {
+          const nm = (typeof a === 'string' ? a : (a.name || a.placeName || '')).toLowerCase().split(',')[0]
+            .replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
+          if (SUBURB_GPS[nm]) areaPts.push(SUBURB_GPS[nm]);
+        }
+        if (areaPts.length >= 2) {
+          locGps = {
+            lat: areaPts.reduce((s, p) => s + p.lat, 0) / areaPts.length,
+            lng: areaPts.reduce((s, p) => s + p.lng, 0) / areaPts.length,
+          };
+          centerLabel = `service-area centroid of ${areaPts.length} suburbs`;
+        }
+        if (!locGps) locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
 
-        console.log(`[maps-discovery] Starting for "${businessName}" (${domain}), center=${locLower} (${locGps.lat},${locGps.lng})`);
+        console.log(`[maps-discovery] Starting for "${businessName}" (${domain}), center=${centerLabel} (${locGps.lat.toFixed(4)},${locGps.lng.toFixed(4)})`);
 
         // Step 1: Build service keywords to scan
         // Sources: industry, existing grid scan keywords, rank_keywords with location, website pages
