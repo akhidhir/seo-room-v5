@@ -591,6 +591,17 @@ async function initDb() {
     await client.query(`UPDATE projects SET project_code='GPC' WHERE project_code IS NULL AND name ILIKE '%gold%'`).catch(() => {});
     await client.query(`UPDATE projects SET project_code='HWP' WHERE project_code IS NULL AND name ILIKE '%houseworks%'`).catch(() => {});
     await client.query(`UPDATE projects SET project_code='SEO' WHERE project_code IS NULL AND name ILIKE '%seo room%'`).catch(() => {});
+    // Stable ticket-code registry: each root cause keeps the same code for life.
+    await client.query(`CREATE TABLE IF NOT EXISTS ticket_codes (
+      id SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL,
+      root_cause_key TEXT NOT NULL,
+      pillar_code TEXT,
+      seq INTEGER,
+      code TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(project_id, root_cause_key)
+    )`).catch(() => {});
     // Control Centre — one-time cleanup of mixed-case severity + duplicate category labels (data rot from different code paths)
     await client.query(`UPDATE action_items SET severity = lower(severity) WHERE severity IS NOT NULL AND severity <> lower(severity)`).catch(() => {});
     await client.query(`UPDATE action_items SET category='Quick Wins' WHERE lower(category) IN ('quick win','quick wins') AND category <> 'Quick Wins'`).catch(() => {});
@@ -6147,6 +6158,84 @@ app.post('/api/projects/:id/action-items', async (req, res) => {
     );
     res.json({ action_item: normalizeActionRow(result.rows[0]) });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get or assign the permanent ticket code for a root cause (stable across re-runs).
+async function ensureTicketCode(projectId, projCode, rcKey, pCode) {
+  const existing = await pool.query('SELECT code FROM ticket_codes WHERE project_id=$1 AND root_cause_key=$2', [projectId, rcKey]);
+  if (existing.rows.length) return existing.rows[0].code;
+  const seqRow = await pool.query('SELECT COALESCE(MAX(seq),0)+1 AS next FROM ticket_codes WHERE project_id=$1 AND pillar_code=$2', [projectId, pCode]);
+  const seq = seqRow.rows[0].next;
+  const code = `${projCode}-${pCode}-${String(seq).padStart(2, '0')}`;
+  try {
+    await pool.query('INSERT INTO ticket_codes (project_id, root_cause_key, pillar_code, seq, code) VALUES ($1,$2,$3,$4,$5)', [projectId, rcKey, pCode, seq, code]);
+    return code;
+  } catch (e) {
+    // race: another insert won — read it back
+    const r = await pool.query('SELECT code FROM ticket_codes WHERE project_id=$1 AND root_cause_key=$2', [projectId, rcKey]);
+    return r.rows.length ? r.rows[0].code : code;
+  }
+}
+
+// CONTROL CENTRE — grouped tickets (one per root cause), the lean replacement for the raw Action Plan dump.
+const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
+app.get('/api/projects/:id/control-centre/tickets', async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const projCode = deriveProjectCode(project);
+
+    const items = (await pool.query('SELECT * FROM action_items WHERE project_id=$1', [projectId])).rows.map(normalizeActionRow);
+
+    // Group by root cause
+    const groups = {};
+    for (const it of items) {
+      const key = rootCauseKey(projectId, it);
+      (groups[key] = groups[key] || { items: [], pCode: pillarCode(it) }).items.push(it);
+    }
+
+    const tickets = [];
+    for (const [rcKey, g] of Object.entries(groups)) {
+      const code = await ensureTicketCode(projectId, projCode, rcKey, g.pCode);
+      // stamp code + root_cause_key onto member rows (so every finding carries its ticket code)
+      const ids = g.items.map(i => i.id);
+      await pool.query('UPDATE action_items SET code=$1, root_cause_key=$2 WHERE id = ANY($3::int[])', [code, rcKey, ids]).catch(() => {});
+
+      const items_g = g.items;
+      const maxSev = items_g.reduce((m, i) => Math.max(m, SEV_RANK[i.severity] || 2), 0);
+      const sevName = Object.keys(SEV_RANK).find(k => SEV_RANK[k] === maxSev) || 'medium';
+      const statuses = new Set(items_g.map(i => i.status || 'pending'));
+      const rollupStatus = items_g.every(i => ['done', 'completed'].includes(i.status)) ? 'Done'
+        : statuses.has('in_progress') || statuses.has('in-progress') ? 'In Progress'
+        : items_g.some(i => i.assigned_to) ? 'Assigned' : 'New';
+      const affectedPages = [...new Set(items_g.flatMap(i => (i.pages_affected || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)))];
+      const totalHours = items_g.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0), 0);
+
+      tickets.push({
+        code,
+        project_id: Number(projectId),
+        pillar_code: g.pCode,
+        category: normCategory(items_g[0].category) || items_g[0].pillar,
+        fix_type: deriveFixType(items_g[0]),
+        severity: sevName,
+        title: items_g[0].title || items_g[0].category || 'Untitled',
+        status: rollupStatus,
+        assignee: items_g.find(i => i.assigned_to)?.assigned_to || null,
+        affected_count: items_g.length,
+        affected_pages: affectedPages.slice(0, 100),
+        estimated_hours: Math.round(totalHours * 10) / 10,
+        item_ids: ids,
+      });
+    }
+
+    // Order by severity, then size (biggest root causes first)
+    tickets.sort((a, b) => (SEV_RANK[b.severity] - SEV_RANK[a.severity]) || (b.affected_count - a.affected_count));
+    res.json({ project_code: projCode, total_tickets: tickets.length, total_findings: items.length, tickets });
+  } catch (e) {
+    console.error('[control-centre] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
