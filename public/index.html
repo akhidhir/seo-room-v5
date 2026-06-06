@@ -12723,6 +12723,17 @@
         });
       }, [pages, sortBy, sortDir]);
 
+      // Ticket codes per page URL (Control Centre) — for the Ticket column + click-to-filter
+      const ticketData = useTicketCodes(project);
+      const [ticketFilter, setTicketFilter] = useState(null);
+      const codesForUrl = (url) => {
+        if (!ticketData || !url) return [];
+        let k = url.toString().trim();
+        try { if (k.startsWith('http')) k = new URL(k).pathname; } catch (e) {}
+        k = k.replace(/\/+$/, '').toLowerCase() || '/';
+        return (ticketData.by_url || {})[k] || [];
+      };
+
       const filteredPages = useMemo(() => {
         let list = sortedPages;
         // Apply stat card filter
@@ -12731,6 +12742,8 @@
         else if (statFilter === 'red') list = list.filter(p => p.yoastScore === 'red');
         else if (statFilter === 'missingMeta') list = list.filter(p => !p.metaDesc || p.metaDescLen < 50);
         else if (statFilter === 'noFocus') list = list.filter(p => !p.focusKeyword);
+        // Apply ticket filter (click a ticket chip to see only that ticket's pages)
+        if (ticketFilter) list = list.filter(p => codesForUrl(p.url).includes(ticketFilter));
         // Apply search
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
@@ -12742,7 +12755,7 @@
           );
         }
         return list;
-      }, [sortedPages, searchQuery, statFilter]);
+      }, [sortedPages, searchQuery, statFilter, ticketFilter, ticketData]);
 
       const toggleSelect = (id, e) => {
         e.stopPropagation();
@@ -13229,6 +13242,11 @@
                   <i className="fas fa-times" style={{ fontSize: 10 }} /> Clear filter
                 </button>
               )}
+              {ticketFilter && (
+                <button onClick={() => setTicketFilter(null)} style={{ fontSize: 12, fontWeight: 700, padding: '4px 10px', background: 'rgba(34,197,94,0.15)', border: '1px solid #22c55e', borderRadius: 6, color: '#22c55e', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                  {ticketFilter} <i className="fas fa-times" style={{ fontSize: 10 }} />
+                </button>
+              )}
             </div>
           )}
 
@@ -13247,6 +13265,7 @@
                       { key: 'words', label: 'Words', align: 'center', width: 65 },
                       { key: 'links', label: 'Out / In', align: 'center', width: 70 },
                       { key: 'issues', label: 'Issues', align: 'center', width: 75 },
+                      { key: 'ticket', label: 'Ticket', align: 'left', width: 120 },
                       { key: 'status', label: 'Status', align: 'center', width: 65 },
                     ].map(col => (
                       <th key={col.key} onClick={() => toggleSort(col.key)} style={{ padding: '10px 10px', textAlign: col.align, fontWeight: 600, color: sortBy === col.key ? 'var(--accent)' : 'var(--text2)', width: col.width, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
@@ -13317,6 +13336,13 @@
                             {problems > 0 && <span style={{ color: '#ef4444', fontWeight: 600, marginRight: 4 }}>{problems}<i className="fas fa-times-circle" style={{ marginLeft: 2, fontSize: 10 }} /></span>}
                             {warnings > 0 && <span style={{ color: '#f59e0b', fontWeight: 600 }}>{warnings}<i className="fas fa-exclamation-circle" style={{ marginLeft: 2, fontSize: 10 }} /></span>}
                             {problems === 0 && warnings === 0 && <span style={{ color: '#22c55e' }}><i className="fas fa-check-circle" /></span>}
+                          </td>
+                          <td style={{ padding: '10px 10px' }} onClick={e => e.stopPropagation()}>
+                            {codesForUrl(page.url).slice(0, 3).map(c => (
+                              <button key={c} onClick={() => setTicketFilter(ticketFilter === c ? null : c)}
+                                title={ticketFilter === c ? 'Click to clear filter' : 'Click to show only this ticket\'s pages'}
+                                style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', marginRight: 4, marginBottom: 2, borderRadius: 5, cursor: 'pointer', letterSpacing: 0.4, background: ticketFilter === c ? '#22c55e' : 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)', color: ticketFilter === c ? '#000' : '#22c55e' }}>{c}</button>
+                            ))}
                           </td>
                           <td style={{ padding: '10px 10px', textAlign: 'center' }}>
                             {verifiedPages[page.id] === 'verified' ? (

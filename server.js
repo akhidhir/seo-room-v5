@@ -6455,11 +6455,24 @@ app.get('/api/projects/:id/control-centre/codes', async (req, res) => {
       return s || '/';
     };
     const items = (await pool.query(
-      'SELECT code, ranking_page, pages_affected FROM action_items WHERE project_id=$1 AND code IS NOT NULL',
+      'SELECT code, ranking_page, pages_affected, title, description FROM action_items WHERE project_id=$1 AND code IS NOT NULL',
       [req.params.id])).rows;
+    // Findings often carry the page only inside the title/description (e.g. `/imac-repairs/`) —
+    // extract full URLs and backticked/standalone paths from the text too.
+    const extractPaths = (txt) => {
+      const out = []; const s = (txt || '').toString();
+      const re = /(https?:\/\/[^\s"'`)\]]+)|(?:^|[\s`("'\[])(\/[a-z0-9][a-z0-9\-_\/]*\/?)(?=[\s`)"'\].,:;]|$)/gi;
+      let m; while ((m = re.exec(s)) !== null) { const v = m[1] || m[2]; if (v) out.push(v); }
+      return out;
+    };
     const byUrl = {};
     for (const it of items) {
-      const urls = [it.ranking_page, ...((it.pages_affected || '').split(/[\n,]+/))].map(s => s && s.trim()).filter(Boolean);
+      const urls = [
+        it.ranking_page,
+        ...((it.pages_affected || '').split(/[\n,]+/)),
+        ...extractPaths(it.title),
+        ...extractPaths(it.description),
+      ].map(s => s && s.trim()).filter(Boolean);
       for (const u of urls) {
         const k = normPath(u);
         if (!k) continue;
