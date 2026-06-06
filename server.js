@@ -4187,8 +4187,8 @@ app.post('/api/projects/:id/migrations/:migrationId/snapshot', async (req, res) 
       `SELECT rk.keyword, rk.location, rt.position, rt.maps_position, rt.url, rt.checked_at
        FROM rank_keywords rk
        LEFT JOIN LATERAL (
-         SELECT position, maps_position, url, checked_at FROM rank_tracking
-         WHERE keyword_id = rk.id ORDER BY checked_at DESC LIMIT 1
+         SELECT serp_position AS position, maps_position, serp_url AS url, checked_at FROM rank_tracking
+         WHERE project_id = rk.project_id AND keyword = rk.keyword ORDER BY checked_at DESC LIMIT 1
        ) rt ON true
        WHERE rk.project_id = $1`,
       [req.params.id]
@@ -32401,11 +32401,14 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
 
         // 2. Rank tracking: keywords with location (Maps keywords) that have been checked
         const rtRes = await pool.query(
-          `SELECT rk.keyword, rk.location, rt.position, rt.checked_at
+          `SELECT rk.keyword, rk.location, rt.maps_position AS position, rt.checked_at
            FROM rank_keywords rk
-           LEFT JOIN rank_tracking rt ON rk.id = rt.keyword_id
-           WHERE rk.project_id=$1 AND rk.location IS NOT NULL AND rk.location != ''
-           ORDER BY rt.checked_at DESC NULLS LAST`,
+           LEFT JOIN LATERAL (
+             SELECT maps_position, checked_at FROM rank_tracking
+              WHERE project_id = rk.project_id AND keyword = rk.keyword
+              ORDER BY checked_at DESC NULLS LAST LIMIT 1
+           ) rt ON true
+           WHERE rk.project_id=$1 AND rk.location IS NOT NULL AND rk.location != ''`,
           [projectId]
         );
         const rtMap = {};
