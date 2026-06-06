@@ -13337,11 +13337,14 @@
                             {problems === 0 && warnings === 0 && <span style={{ color: '#22c55e' }}><i className="fas fa-check-circle" /></span>}
                           </td>
                           <td style={{ padding: '10px 10px' }} onClick={e => e.stopPropagation()}>
-                            {codesForUrl(page.url).slice(0, 3).map(c => (
-                              <button key={c} onClick={() => setTicketFilter(ticketFilter === c ? null : c)}
-                                title={ticketFilter === c ? 'Click to clear filter' : 'Click to show only this ticket\'s pages'}
-                                style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', marginRight: 4, marginBottom: 2, borderRadius: 5, cursor: 'pointer', letterSpacing: 0.4, background: ticketFilter === c ? '#22c55e' : 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)', color: ticketFilter === c ? '#000' : '#22c55e' }}>{c}</button>
-                            ))}
+                            {codesForUrl(page.url).slice(0, 3).map(c => {
+                              const tm = (ticketData && ticketData.meta && ticketData.meta[c]) || {};
+                              return (
+                                <button key={c} onClick={() => setTicketFilter(ticketFilter === c ? null : c)}
+                                  title={`${c} — ${tm.category || 'ticket'}${tm.count ? ` (${tm.count} findings)` : ''}. ${ticketFilter === c ? 'Click to clear filter.' : 'Click to show only this ticket\'s pages.'}`}
+                                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', marginRight: 4, marginBottom: 2, borderRadius: 5, cursor: 'pointer', letterSpacing: 0.4, background: ticketFilter === c ? '#22c55e' : 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)', color: ticketFilter === c ? '#000' : '#22c55e' }}>{c}</button>
+                              );
+                            })}
                           </td>
                           <td style={{ padding: '10px 10px', textAlign: 'center' }}>
                             {verifiedPages[page.id] === 'verified' ? (
@@ -13372,8 +13375,20 @@
                           <tr style={{ borderBottom: '1px solid var(--border)' }}>
                             <td colSpan={9} style={{ padding: 0 }}>
                               <div style={{ padding: '16px 20px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
-                                {/* View Page link + Research Keywords */}
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginBottom: 8 }}>
+                                {/* Ticket legend + View Page link + Research Keywords */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                                    {codesForUrl(page.url).slice(0, 4).map(c => {
+                                      const tm = (ticketData && ticketData.meta && ticketData.meta[c]) || {};
+                                      return (
+                                        <span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '3px 9px', borderRadius: 6, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)' }}>
+                                          <span style={{ fontWeight: 700, color: '#22c55e', letterSpacing: 0.4 }}>{c}</span>
+                                          <span style={{ color: 'var(--text2)' }}>{tm.category || ''}{tm.count ? ` · ${tm.count} findings` : ''}</span>
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 12 }}>
                                   <button onClick={async (e) => {
                                     e.stopPropagation();
                                     setKwResearch({ pageId: page.id, loading: true, keywords: [], selected: null });
@@ -13396,6 +13411,7 @@
                                     style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
                                     <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} />View Page
                                   </a>
+                                  </div>
                                 </div>
                                 {/* Keyword Research Results */}
                                 {kwResearch?.pageId === page.id && !kwResearch.loading && kwResearch.keywords.length > 0 && (
@@ -19669,7 +19685,7 @@
         if (!project || !project.id) return;
         if (__ticketCodesCache[project.id]) { setData(__ticketCodesCache[project.id]); return; }
         (async () => {
-          try { const r = await api(`/projects/${project.id}/control-centre/codes`); const d = { codes: r.codes || {}, by_url: r.by_url || {} }; __ticketCodesCache[project.id] = d; setData(d); } catch (e) {}
+          try { const r = await api(`/projects/${project.id}/control-centre/codes`); const d = { codes: r.codes || {}, by_url: r.by_url || {}, meta: r.meta || {} }; __ticketCodesCache[project.id] = d; setData(d); } catch (e) {}
         })();
       }, [project && project.id]);
       return data;

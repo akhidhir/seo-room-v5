@@ -6480,7 +6480,21 @@ app.get('/api/projects/:id/control-centre/codes', async (req, res) => {
         if (!byUrl[k].includes(it.code)) byUrl[k].push(it.code);
       }
     }
-    res.json({ codes, by_url: byUrl });
+    // Meta per code (category + finding count) so the UI can say WHICH ticket is which
+    const metaRows = (await pool.query(
+      `SELECT code, MIN(category) AS category, COUNT(*)::int AS n FROM action_items
+        WHERE project_id=$1 AND code IS NOT NULL GROUP BY code`, [req.params.id])).rows;
+    const meta = {};
+    for (const r of metaRows) meta[r.code] = { category: r.category || '', count: r.n };
+    // SEC tickets have no action_items — derive their label from the registry key
+    for (const r of rows) {
+      if (!meta[r.code]) {
+        const reg = (await pool.query('SELECT root_cause_key FROM ticket_codes WHERE code=$1 AND project_id=$2', [r.code, req.params.id])).rows[0];
+        const tail = reg && (reg.root_cause_key || '').split(':').pop() || '';
+        meta[r.code] = { category: tail.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), count: null };
+      }
+    }
+    res.json({ codes, by_url: byUrl, meta });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
