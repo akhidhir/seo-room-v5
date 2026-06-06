@@ -6336,6 +6336,72 @@ const TICKET_PLAYBOOK = {
   GEN:  { where: 'Source audit page', steps: ['Open the source audit page for this category and work the findings there.'] },
 };
 
+// Issue-specific "what to do" steps — generated from the ticket's actual issue, not a generic
+// pillar blurb. Falls back to the pillar playbook only when no specific rule matches.
+function issueSteps(sig, items) {
+  const s = (sig || '').replace(/-/g, ' ');
+  const n = items.length;
+  const pages = n > 1 ? `each of the ${n} pages in the checklist below` : 'the page in the checklist below';
+  const firstTarget = (items.find(i => i.new_value) || {}).new_value;
+  const hint = firstTarget ? ' The suggested value is shown in green on each finding.' : '';
+
+  if (/title/.test(s) && /long/.test(s)) return [
+    `Shorten the meta title on ${pages} to 50–60 characters.`,
+    `Keep the focus keyword near the front; cut taglines and filler.${hint}`,
+    `Fastest: click the page's Fix button → AI Suggest → review → Apply.`];
+  if (/title/.test(s) && /short/.test(s)) return [
+    `Lengthen the meta title on ${pages} to at least 30 characters — say what the page offers and where.`,
+    `Fastest: Fix button → AI Suggest → Apply.${hint}`];
+  if (/title/.test(s) && /missing|no\b/.test(s)) return [
+    `Write a meta title (50–60 chars, keyword first) for ${pages}.`,
+    `Fastest: Fix button → AI Suggest → Apply.${hint}`];
+  if (/description/.test(s) && /long/.test(s)) return [
+    `Trim the meta description on ${pages} to 120–160 characters.${hint}`,
+    `Fastest: Fix button → AI Suggest → Apply.`];
+  if (/description/.test(s) && /short|missing|no\b/.test(s)) return [
+    `Write a 120–160 character meta description for ${pages} — include the keyword and a reason to click.${hint}`,
+    `Fastest: Fix button → AI Suggest → Apply.`];
+  if (/canonical/.test(s)) return [
+    `Fix the canonical tag on ${pages} — it should point to the page's own correct URL (or the primary version).`,
+    `Use the green Fix button on the Website Audit finding (it sets the canonical via Yoast), then re-check.`];
+  if (/noindex/.test(s)) return [
+    `Remove the noindex tag from ${pages} so Google can index it.`,
+    `Use the green Fix button on the Website Audit finding, then Request Indexing on the Indexing page.`];
+  if (/schema|structured data/.test(s)) return [
+    `Add JSON-LD schema to ${pages}.`,
+    `Use the green Fix button — it generates LocalBusiness/FAQ schema from your profile data automatically.`];
+  if (/mixed content|insecure/.test(s)) return [
+    `Replace http:// resource URLs with https:// on ${pages}.`,
+    `Use the green Fix button (it search-replaces in content), then reload the page to confirm the padlock.`];
+  if (/\bh1\b|heading/.test(s)) return [
+    `Add one H1 heading to ${pages} — usually the page title with the focus keyword.`,
+    `Use the green Fix button, or edit the page header in WordPress.`];
+  if (/thin|too short|word count|content could be longer/.test(s)) return [
+    `Expand the content on ${pages} to 800+ words — add suburb/service detail, FAQs, real specifics.`,
+    `Send the page to the Copywriter (it loads pre-briefed), write, run checks, publish.`];
+  if (/low ctr/.test(s)) return [
+    `These pages get impressions but few clicks. Rewrite the meta title + description on ${pages} as a click-worthy promise (number, benefit, locality).`,
+    `Fix button → AI Suggest gives a starting point — punch it up before Applying.`];
+  if (/quick win|position/.test(s)) return [
+    `These keywords sit just off page 1. For ${pages}: strengthen the page for its keyword — add it to the H1/intro, expand the section that answers it, add 2–3 internal links pointing at the page with that anchor.`,
+    `Re-check position in SERP Rankings after the next crawl.`];
+  if (/cannibal/.test(s)) return [
+    `Two+ pages target the same keyword. Decide the PRIMARY page (the one already ranking best).`,
+    `Re-target the other page: new focus keyword + meta, or 301 it into the primary.`,
+    `Point internal links using that keyword's anchor at the primary only. The Competing Pages tool walks you through it.`];
+  if (/orphan|no outbound|internal link/.test(s)) return [
+    `Add internal links for ${pages} — Internal Linking → "Optimise Links (Auto)" does it in one click.`,
+    `Re-run the audit there to confirm the pages are linked.`];
+  if (/not indexed|index/.test(s)) return [
+    `Fix what blocks indexing on ${pages} (thin content → Copywriter; noindex/canonical → Fix button).`,
+    `Then "Request Indexing in Search Console" per page on the Indexing page. Re-check in 1–2 weeks.`];
+  if (/slow|lcp|cls|speed|performance|core web vitals/.test(s)) return [
+    `Confirm BerqWP is active and warmed, then re-run PageSpeed Scores — many of these may already be fixed.`,
+    `For pages still red: compress/resize the hero image, remove unused embeds, lazy-load below-the-fold media.`,
+    `Re-test and use Check Progress here to tick off fixed pages.`];
+  return null; // no specific rule — fall back to the pillar playbook
+}
+
 // "Closed when" — the explicit finish line shown on every ticket. AUTO types are machine-checked
 // when the assignee clicks Finish; MANUAL types go to the lead for approval.
 const AUTO_VERIFY_PILLARS = ['ONPG', 'TECH', 'LINK', 'INDX'];
@@ -6429,7 +6495,7 @@ async function buildControlTickets(project) {
       affected_pages: affectedPages.slice(0, 100),
       estimated_hours: Math.round(items_g.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0), 0) * 10) / 10,
       item_ids: ids,
-      how_to: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).steps,
+      how_to: issueSteps(rcKey.split(':').pop(), items_g) || (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).steps,
       where: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).where,
       done_when: TICKET_DONE_WHEN[g.pCode] || TICKET_DONE_WHEN.MANUAL,
       auto_verified: AUTO_VERIFY_PILLARS.includes(g.pCode),
