@@ -6402,6 +6402,26 @@ function issueSteps(sig, items) {
   return null; // no specific rule — fall back to the pillar playbook
 }
 
+// Steps for a ticket group: issue rule → findings-text rule → checklist-driven → pillar playbook.
+function stepsForGroup(sig, items, pCode) {
+  const direct = issueSteps(sig, items);
+  if (direct) return direct;
+  // Single finding: try matching the finding's own text (covers tickets titled by page name)
+  if (items.length === 1) {
+    const fromText = issueSteps(`${items[0].title} ${items[0].description || ''}`.toLowerCase(), items);
+    if (fromText) return fromText;
+  }
+  // Several different fixes bundled on one page: the checklist IS the instruction list
+  if (items.length > 1) {
+    return [
+      `This ticket is ${items.length} specific fixes — each finding in the checklist below states the exact change (current in red → suggested in green).`,
+      'Open the page (link on each finding), make the change described, and tick the finding off.',
+      'Click "Check progress" to machine-verify what\'s done, or Finish when everything is ticked.',
+    ];
+  }
+  return (TICKET_PLAYBOOK[pCode] || TICKET_PLAYBOOK.GEN).steps;
+}
+
 // "Closed when" — the explicit finish line shown on every ticket. AUTO types are machine-checked
 // when the assignee clicks Finish; MANUAL types go to the lead for approval.
 const AUTO_VERIFY_PILLARS = ['ONPG', 'TECH', 'LINK', 'INDX'];
@@ -6495,7 +6515,7 @@ async function buildControlTickets(project) {
       affected_pages: affectedPages.slice(0, 100),
       estimated_hours: Math.round(items_g.reduce((s, i) => s + (parseFloat(i.estimated_hours) || 0), 0) * 10) / 10,
       item_ids: ids,
-      how_to: issueSteps(rcKey.split(':').pop(), items_g) || (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).steps,
+      how_to: stepsForGroup(rcKey.split(':').pop(), items_g, g.pCode),
       where: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).where,
       done_when: TICKET_DONE_WHEN[g.pCode] || TICKET_DONE_WHEN.MANUAL,
       auto_verified: AUTO_VERIFY_PILLARS.includes(g.pCode),
