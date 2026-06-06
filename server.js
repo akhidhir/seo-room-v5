@@ -6168,7 +6168,8 @@ const PILLAR_CODE_RULES = [
   [/review|reputation/i, 'REVW'],
   [/suburb|content|thin|\bcopy\b/i, 'CONT'],
   [/on-?page|\bmeta\b|\btitle\b|ctr|underperform|zero|quick win/i, 'ONPG'],
-  [/schema|crawl|site health|technical|security|robots|sitemap/i, 'TECH'],
+  [/security|malware|\bssl\b|hsts|xml-?rpc|firewall/i, 'SEC'],
+  [/schema|crawl|site health|technical|robots|sitemap/i, 'TECH'],
   [/profile|\bnap\b|photo|hours|categor|\bgbp\b|competitor|proximity|relevance|prominence/i, 'GBP'],
 ];
 function pillarCode(item) {
@@ -6300,6 +6301,10 @@ const TICKET_PLAYBOOK = {
     'Open the Website Audit findings for this ticket.',
     'Auto-fixable items (schema, canonical, noindex, mixed content) → click the green Fix button.',
     'Manual items → follow the steps inside the finding card.' ] },
+  SEC:  { where: 'Security Audit', steps: [
+    'Open the Security Audit page — each failing check below has its own fix instructions there.',
+    'Fix in order of severity (critical first: malware/spam, exposed logins, SSL).',
+    'Re-run the Security Audit to confirm each check goes green, then Finish.' ] },
   GEN:  { where: 'Source audit page', steps: ['Open the source audit page for this category and work the findings there.'] },
 };
 
@@ -6356,8 +6361,68 @@ async function buildControlTickets(project) {
       item_ids: ids,
       how_to: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).steps,
       where: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).where,
+      // Exact, actionable findings — page URL + what to change, not a generic instruction
+      findings: items_g.slice(0, 60).map(i => ({
+        title: i.title || '',
+        page: i.ranking_page || ((i.pages_affected || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || null),
+        keyword: i.keyword || null,
+        current: (i.current_value || '').toString().slice(0, 160) || null,
+        target: (i.new_value || '').toString().slice(0, 160) || null,
+        severity: i.severity,
+      })),
     });
   }
+
+  // Ingest the latest SECURITY AUDIT (it stores checks in audits, not action_items) — one ticket per failing category.
+  try {
+    const sec = (await pool.query(
+      `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='security' AND status='completed' ORDER BY created_at DESC LIMIT 1`,
+      [projectId])).rows[0];
+    const checks = sec && sec.audit_data && (sec.audit_data.checks || sec.audit_data.results) || [];
+    const failing = checks.filter(c => c && c.status && c.status !== 'pass');
+    const byCat = {};
+    for (const c of failing) (byCat[c.category || 'Security'] = byCat[c.category || 'Security'] || []).push(c);
+    for (const [cat, list] of Object.entries(byCat)) {
+      const rcKey = `${projectId}:SEC:${cat}`.toLowerCase().replace(/[^a-z0-9:]+/g, '-');
+      const code = await ensureTicketCode(projectId, projCode, rcKey, 'SEC');
+      const st = stateByKey[rcKey] || (await pool.query('SELECT * FROM ticket_codes WHERE project_id=$1 AND root_cause_key=$2', [projectId, rcKey])).rows[0] || {};
+      const sevs = list.map(c => normSeverity(c.severity)).map(s => SEV_RANK[s] || 2);
+      const sevName = Object.keys(SEV_RANK).find(k => SEV_RANK[k] === Math.max(...sevs)) || 'medium';
+      const effectiveAssignee = st.assignee_id || project.assigned_member || null;
+      const status = st.status && st.status !== 'New' ? st.status : (effectiveAssignee ? 'Assigned' : 'New');
+      tickets.push({
+        ticket_id: st.id || null,
+        code,
+        project_id: Number(projectId),
+        project_name: project.name || project.business_name || '',
+        pillar_code: 'SEC',
+        category: `Security: ${cat}`,
+        fix_type: 'Technical',
+        severity: sevName,
+        title: `${list.length} failing security check(s) — ${cat}`,
+        status,
+        late: !!(st.due_date && status !== 'Done' && new Date(st.due_date) < new Date(new Date().toDateString())),
+        assignee_id: effectiveAssignee,
+        assignee_source: st.assignee_id ? 'ticket' : (project.assigned_member ? 'project' : null),
+        due_date: st.due_date || null,
+        affected_count: list.length,
+        affected_pages: [],
+        estimated_hours: Math.round(list.length * 0.5 * 10) / 10,
+        item_ids: [],
+        how_to: TICKET_PLAYBOOK.SEC.steps,
+        where: TICKET_PLAYBOOK.SEC.where,
+        findings: list.slice(0, 60).map(c => ({
+          title: c.name || c.id || 'Security check',
+          page: null,
+          keyword: null,
+          current: (c.details || '').toString().slice(0, 160) || null,
+          target: (c.fix || '').toString().slice(0, 160) || null,
+          severity: normSeverity(c.severity),
+        })),
+      });
+    }
+  } catch (e) { console.log('[control-centre] security ingest:', e.message); }
+
   tickets.sort((a, b) => (SEV_RANK[b.severity] - SEV_RANK[a.severity]) || (b.affected_count - a.affected_count));
   return { project_code: projCode, total_findings: items.length, tickets };
 }

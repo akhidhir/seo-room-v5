@@ -19627,7 +19627,9 @@
 
     // ============ SITE ISSUES PAGE (triage view) ============
     // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
-    function ControlCentrePage({ setPage }) {
+    // Where each ticket type opens when clicked "Open" (fix-in-place routing)
+    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit', REVW: 'gbp-audit', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', GEN: 'fix-center' };
+    function ControlCentrePage({ setPage, allProjects, onSwitchProject, currentProject }) {
       const [board, setBoard] = useState(null);
       const [loading, setLoading] = useState(true);
       const [filter, setFilter] = useState({ member: 'all', project: 'all', status: 'all', fix: 'all' });
@@ -19656,6 +19658,16 @@
       const openTicket = async (tk) => {
         setExpanded(expanded === tk.code ? null : tk.code);
         try { const r = await api(`/control-centre/tickets/${tk.code}/open`, { method: 'POST', body: {} }); if (r.changed) load(); } catch (_) {}
+      };
+      // "Open" → switch to the ticket's project (if needed) and land on the right tool page.
+      const openInTool = async (tk) => {
+        try { await api(`/control-centre/tickets/${tk.code}/open`, { method: 'POST', body: {} }); } catch (_) {}
+        const route = TICKET_ROUTE[tk.pillar_code] || 'fix-center';
+        if (currentProject && Number(currentProject.id) !== Number(tk.project_id)) {
+          const target = (allProjects || []).find(p => Number(p.id) === Number(tk.project_id));
+          if (target && onSwitchProject) onSwitchProject(target);
+        }
+        setPage(route);
       };
 
       if (loading) return <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner-large" /></div>;
@@ -19772,6 +19784,7 @@
                         {t.late && <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 5, color: '#ef4444' }}>LATE</span>}
                       </td>
                       <td style={{ padding: '9px 12px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                        <button onClick={() => openInTool(t)} disabled={busy} title={`Opens ${TICKET_ROUTE[t.pillar_code] ? 'the right tool' : 'Fix Center'} in this ticket's project`} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', marginRight: 6 }}><i className="fas fa-up-right-from-square" style={{ marginRight: 4 }} />Open</button>
                         {t.status === 'In Progress' && <button onClick={() => setStatus(t.code, 'Ready for Review')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>Finish</button>}
                         {t.status === 'Ready for Review' && <>
                           <button onClick={() => setStatus(t.code, 'Done')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', marginRight: 6 }}>Approve</button>
@@ -19793,10 +19806,22 @@
                               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}><i className="fas fa-location-arrow" style={{ marginRight: 5 }} />Do it in: <strong style={{ color: 'var(--text2)' }}>{t.where}</strong></div>
                             </div>
                             <div>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Affected pages</div>
-                              {(t.affected_pages || []).length > 0
+                              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Exact findings ({t.affected_count})</div>
+                              {(t.findings || []).length > 0 ? (
+                                <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                                  {(t.findings || []).map((f, i) => (
+                                    <div key={i} style={{ padding: '6px 8px', marginBottom: 4, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                                      <div style={{ fontSize: 12, fontWeight: 600 }}>{f.title}</div>
+                                      {f.page && <div style={{ fontSize: 11, marginTop: 2 }}><a href={f.page.startsWith('http') ? f.page : '#'} target="_blank" rel="noopener noreferrer" onClick={e => { if (!f.page.startsWith('http')) e.preventDefault(); }} style={{ color: '#3b82f6', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />{f.page}</a></div>}
+                                      {f.keyword && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>Keyword: <span style={{ color: 'var(--text2)' }}>{f.keyword}</span></div>}
+                                      {(f.current || f.target) && <div style={{ fontSize: 11, marginTop: 2 }}>{f.current && <span style={{ color: '#ef4444' }}>{f.current}</span>}{f.current && f.target && <span style={{ color: 'var(--text3)' }}> → </span>}{f.target && <span style={{ color: '#22c55e' }}>{f.target}</span>}</div>}
+                                    </div>
+                                  ))}
+                                  {t.affected_count > (t.findings || []).length && <div style={{ fontSize: 11, color: 'var(--text3)', padding: '4px 8px' }}>+{t.affected_count - t.findings.length} more — click Open to see all in the tool.</div>}
+                                </div>
+                              ) : (t.affected_pages || []).length > 0
                                 ? <div style={{ fontSize: 11, color: 'var(--text3)', maxHeight: 120, overflowY: 'auto', lineHeight: 1.8 }}>{t.affected_pages.slice(0, 40).join(' · ')}{t.affected_pages.length > 40 ? ` · +${t.affected_pages.length - 40} more` : ''}</div>
-                                : <div style={{ fontSize: 11, color: 'var(--text3)' }}>No page list — see the source audit for details.</div>}
+                                : <div style={{ fontSize: 11, color: 'var(--text3)' }}>No detail list — click Open to see the findings in the tool.</div>}
                             </div>
                           </div>
                         </td>
@@ -34558,7 +34583,7 @@
 case 'action-plan':
             return <UnifiedActionPlanPage project={project} setActiveTab={setActiveTab} />;
           case 'control-centre':
-            return <ControlCentrePage setPage={setActiveTab} />;
+            return <ControlCentrePage setPage={setActiveTab} allProjects={allProjects} onSwitchProject={handleProjectSwitch} currentProject={project} />;
           case 'nw-project':
             return <NewWebsiteSetupPage project={buildMode ? buildProject : project} />;
           case 'nw-research':
