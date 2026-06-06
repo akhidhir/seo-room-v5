@@ -6439,13 +6439,35 @@ app.get('/api/projects/:id/control-centre/tickets', async (req, res) => {
   }
 });
 
-// Ticket codes per pillar for a project — used to tag audit pages with their Control Centre ticket
+// Ticket codes per pillar for a project — used to tag audit pages with their Control Centre ticket.
+// Also returns a URL → codes map so individual page ROWS can show exactly which ticket covers them.
 app.get('/api/projects/:id/control-centre/codes', async (req, res) => {
   try {
     const rows = (await pool.query('SELECT pillar_code, code FROM ticket_codes WHERE project_id=$1 ORDER BY code', [req.params.id])).rows;
     const codes = {};
     for (const r of rows) (codes[r.pillar_code] = codes[r.pillar_code] || []).push(r.code);
-    res.json({ codes });
+
+    const normPath = (u) => {
+      if (!u) return null;
+      let s = u.toString().trim();
+      try { if (s.startsWith('http')) s = new URL(s).pathname; } catch (e) {}
+      s = s.replace(/\/+$/, '').toLowerCase();
+      return s || '/';
+    };
+    const items = (await pool.query(
+      'SELECT code, ranking_page, pages_affected FROM action_items WHERE project_id=$1 AND code IS NOT NULL',
+      [req.params.id])).rows;
+    const byUrl = {};
+    for (const it of items) {
+      const urls = [it.ranking_page, ...((it.pages_affected || '').split(/[\n,]+/))].map(s => s && s.trim()).filter(Boolean);
+      for (const u of urls) {
+        const k = normPath(u);
+        if (!k) continue;
+        if (!byUrl[k]) byUrl[k] = [];
+        if (!byUrl[k].includes(it.code)) byUrl[k].push(it.code);
+      }
+    }
+    res.json({ codes, by_url: byUrl });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

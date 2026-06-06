@@ -13274,6 +13274,7 @@
                           <td style={{ padding: '10px 10px' }}>
                             <div style={{ fontWeight: 600 }}>
                               {page.title}
+                              <TicketTagForUrl project={project} url={page.url} />
                             </div>
                             <a href={page.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', opacity: 0.7, textDecoration: 'none' }} onMouseEnter={e => e.target.style.opacity='1'} onMouseLeave={e => e.target.style.opacity='0.7'}>{page.url}</a>
                           </td>
@@ -19637,25 +19638,45 @@
 
     // Ticket code chip — shows the Control Centre ticket code(s) on the audit page where the work happens.
     const __ticketCodesCache = {};
-    function TicketTag({ project, pillars }) {
-      const [codes, setCodes] = useState(__ticketCodesCache[project && project.id] || null);
+    function useTicketCodes(project) {
+      const [data, setData] = useState(__ticketCodesCache[project && project.id] || null);
       useEffect(() => {
         if (!project || !project.id) return;
-        if (__ticketCodesCache[project.id]) { setCodes(__ticketCodesCache[project.id]); return; }
+        if (__ticketCodesCache[project.id]) { setData(__ticketCodesCache[project.id]); return; }
         (async () => {
-          try { const r = await api(`/projects/${project.id}/control-centre/codes`); __ticketCodesCache[project.id] = r.codes || {}; setCodes(r.codes || {}); } catch (e) {}
+          try { const r = await api(`/projects/${project.id}/control-centre/codes`); const d = { codes: r.codes || {}, by_url: r.by_url || {} }; __ticketCodesCache[project.id] = d; setData(d); } catch (e) {}
         })();
       }, [project && project.id]);
-      if (!codes) return null;
-      const list = (Array.isArray(pillars) ? pillars : [pillars]).flatMap(p => codes[p] || []);
-      if (!list.length) return null;
+      return data;
+    }
+    function TicketChips({ list, small }) {
+      if (!list || !list.length) return null;
       return (
-        <span style={{ marginLeft: 10, display: 'inline-flex', gap: 6, verticalAlign: 'middle' }}>
+        <span style={{ marginLeft: small ? 6 : 10, display: 'inline-flex', gap: 5, verticalAlign: 'middle' }}>
           {list.slice(0, 4).map(c => (
-            <span key={c} title="Control Centre ticket — track this work by this code" style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 5, background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e', letterSpacing: 0.5 }}>{c}</span>
+            <span key={c} title="Control Centre ticket — track this work by this code" style={{ fontSize: small ? 10 : 11, fontWeight: 700, padding: small ? '1px 6px' : '2px 8px', borderRadius: 5, background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e', letterSpacing: 0.5, whiteSpace: 'nowrap' }}>{c}</span>
           ))}
         </span>
       );
+    }
+    // Header tag: ticket codes for a pillar (only shown when there's a single ticket — a pile of codes is noise)
+    function TicketTag({ project, pillars }) {
+      const data = useTicketCodes(project);
+      if (!data) return null;
+      const list = (Array.isArray(pillars) ? pillars : [pillars]).flatMap(p => (data.codes || {})[p] || []);
+      if (!list.length || list.length > 2) return null; // many codes = tag the rows instead
+      return <TicketChips list={list} />;
+    }
+    // Row tag: the exact ticket(s) covering ONE page URL — this is the actionable one.
+    function TicketTagForUrl({ project, url }) {
+      const data = useTicketCodes(project);
+      if (!data || !url) return null;
+      let k = url.toString().trim();
+      try { if (k.startsWith('http')) k = new URL(k).pathname; } catch (e) {}
+      k = k.replace(/\/+$/, '').toLowerCase() || '/';
+      const list = (data.by_url || {})[k];
+      if (!list || !list.length) return null;
+      return <TicketChips list={list} small={true} />;
     }
     function ControlCentrePage({ setPage, allProjects, onSwitchProject, currentProject }) {
       const [board, setBoard] = useState(null);
