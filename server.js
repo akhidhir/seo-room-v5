@@ -6376,9 +6376,10 @@ function issueSteps(sig, items) {
   if (/\bh1\b|heading/.test(s)) return [
     `Add one H1 heading to ${pages} — usually the page title with the focus keyword.`,
     `Use the green Fix button, or edit the page header in WordPress.`];
-  if (/thin|too short|word count|content could be longer/.test(s)) return [
-    `Expand the content on ${pages} to 800+ words — add suburb/service detail, FAQs, real specifics.`,
-    `Send the page to the Copywriter (it loads pre-briefed), write, run checks, publish.`];
+  if (/thin|too short|word count|\bwords\b|expand content|content could be longer/.test(s)) return [
+    `Expand the content on ${pages} to its target word count — the target is shown in green on each finding (current count in red).`,
+    `Click "Go there now" — the Copywriter opens with the page loaded. Add real specifics: services, suburbs, FAQs, internal links.`,
+    `Run the SEO + humanize checks, publish via preview, then tick the finding off here.`];
   if (/low ctr/.test(s)) return [
     `These pages get impressions but few clicks. Rewrite the meta title + description on ${pages} as a click-worthy promise (number, benefit, locality).`,
     `Fix button → AI Suggest gives a starting point — punch it up before Applying.`];
@@ -6406,12 +6407,13 @@ function issueSteps(sig, items) {
 function stepsForGroup(sig, items, pCode) {
   const direct = issueSteps(sig, items);
   if (direct) return direct;
-  // Single finding: try matching the finding's own text (covers tickets titled by page name)
-  if (items.length === 1) {
-    const fromText = issueSteps(`${items[0].title} ${items[0].description || ''}`.toLowerCase(), items);
-    if (fromText) return fromText;
-  }
-  // Several different fixes bundled on one page: the checklist IS the instruction list
+  // No rule on the signature (e.g. tickets titled by page name): try the findings' own text —
+  // their titles/descriptions/values usually name the real issue ("350 words", "missing schema").
+  const joined = items.map(i => `${i.title || ''} ${i.description || ''} ${i.current_value || ''} ${i.new_value || ''}`)
+    .join(' ').toLowerCase();
+  const fromText = issueSteps(joined, items);
+  if (fromText) return fromText;
+  // Several different fixes bundled together: the checklist IS the instruction list
   if (items.length > 1) {
     return [
       `This ticket is ${items.length} specific fixes — each finding in the checklist below states the exact change (current in red → suggested in green).`,
