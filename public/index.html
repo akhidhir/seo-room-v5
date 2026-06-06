@@ -19744,6 +19744,11 @@
       const assignProject = (pid, mid) => act(() => api(`/projects/${pid}/control-centre/assign`, { method: 'POST', body: { member_id: mid || null } }));
       const assignTicket = (code, mid) => act(() => api(`/control-centre/tickets/${code}/assign`, { method: 'POST', body: { member_id: mid || null } }));
       const setStatus = (code, status) => act(() => api(`/control-centre/tickets/${code}/status`, { method: 'POST', body: { status } }));
+      // Finish = run the machine check; the ticket only closes if it passes.
+      const finishTicket = (t) => act(async () => {
+        const r = await api(`/control-centre/tickets/${t.code}/finish`, { method: 'POST', body: {} });
+        alert(r.message || (r.error ? ('Error: ' + r.error) : 'Done'));
+      });
       const setDue = (code, due) => act(() => api(`/control-centre/tickets/${code}/due`, { method: 'POST', body: { due_date: due || null } }));
       const openTicket = async (tk) => {
         setExpanded(expanded === tk.code ? null : tk.code);
@@ -19870,12 +19875,14 @@
                         </select>
                       </td>
                       <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 5, background: (ST_COLOR[t.status] || '#6b7280') + '25', color: ST_COLOR[t.status] || 'var(--text2)' }}>{t.status}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 5, background: (ST_COLOR[t.status] || '#6b7280') + '25', color: ST_COLOR[t.status] || 'var(--text2)' }}>
+                          {t.status}{t.status === 'Done' && t.verification && t.verification.mode === 'auto' ? ' ✓ verified' : ''}
+                        </span>
                         {t.late && <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 5, color: '#ef4444' }}>LATE</span>}
                       </td>
                       <td style={{ padding: '9px 12px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                         <button onClick={() => openInTool(t)} disabled={busy} title={`Opens ${TICKET_ROUTE[t.pillar_code] ? 'the right tool' : 'Fix Center'} in this ticket's project`} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', marginRight: 6 }}><i className="fas fa-up-right-from-square" style={{ marginRight: 4 }} />Open</button>
-                        {t.status === 'In Progress' && <button onClick={() => setStatus(t.code, 'Ready for Review')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>Finish</button>}
+                        {t.status === 'In Progress' && <button onClick={() => finishTicket(t)} disabled={busy} title={t.auto_verified ? 'The system will check the pages and close the ticket only if they pass' : 'Sends to the lead for review'} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>{busy ? 'Checking…' : 'Finish'}</button>}
                         {t.status === 'Ready for Review' && <>
                           <button onClick={() => setStatus(t.code, 'Done')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', marginRight: 6 }}>Approve</button>
                           <button onClick={() => setStatus(t.code, 'In Progress')} disabled={busy} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: '1px solid var(--border)', cursor: 'pointer', background: 'transparent', color: 'var(--text2)' }}>Reopen</button>
@@ -19897,6 +19904,23 @@
                                 style={{ marginTop: 10, padding: '8px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                                 <i className="fas fa-up-right-from-square" />Go there now: {t.where}
                               </button>
+                              {t.done_when && (
+                                <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)' }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', marginRight: 6 }}><i className="fas fa-flag-checkered" style={{ marginRight: 4 }} />Closed when</span>
+                                  <span style={{ fontSize: 12, color: 'var(--text)' }}>{t.done_when}</span>
+                                </div>
+                              )}
+                              {t.verification && t.verification.mode === 'auto' && (
+                                <div style={{ marginTop: 8, fontSize: 11 }}>
+                                  <span style={{ fontWeight: 700, color: t.verification.failed ? '#ef4444' : '#22c55e' }}>
+                                    <i className={`fas fa-${t.verification.failed ? 'circle-xmark' : 'circle-check'}`} style={{ marginRight: 4 }} />
+                                    Last check: {t.verification.passed}/{(t.verification.checked || []).length} pages pass
+                                  </span>
+                                  {(t.verification.checked || []).filter(c => !c.pass).slice(0, 5).map((c, i) => (
+                                    <div key={i} style={{ color: '#ef4444', marginTop: 2 }}>✗ {c.url.replace(/^https?:\/\/[^/]+/, '')} — {c.reason}</div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             <div>
                               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>Exact findings ({t.affected_count})</div>

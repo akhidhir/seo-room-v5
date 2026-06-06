@@ -608,6 +608,8 @@ async function initDb() {
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS due_date DATE`).catch(() => {});
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ`).catch(() => {});
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS verification JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ`).catch(() => {});
     // Default member per project (whole-project assignment)
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS assigned_member INTEGER`).catch(() => {});
     // One-time re-mint: grouping changed from category-level to ONE ISSUE PER TICKET, so old
@@ -6334,6 +6336,25 @@ const TICKET_PLAYBOOK = {
   GEN:  { where: 'Source audit page', steps: ['Open the source audit page for this category and work the findings there.'] },
 };
 
+// "Closed when" — the explicit finish line shown on every ticket. AUTO types are machine-checked
+// when the assignee clicks Finish; MANUAL types go to the lead for approval.
+const AUTO_VERIFY_PILLARS = ['ONPG', 'TECH', 'LINK', 'INDX'];
+const TICKET_DONE_WHEN = {
+  ONPG: 'The system re-reads each affected page and its meta passes the checks. Verified automatically when you click Finish.',
+  TECH: 'The required tag/fix is live on each affected page. Verified automatically when you click Finish.',
+  LINK: 'Each affected page has internal links in its content. Verified automatically when you click Finish.',
+  INDX: 'Each affected page shows as Indexed in Google. Verified automatically when you click Finish (allow Google a few days after fixing).',
+  CWV:  'Affected pages score 50+ on PageSpeed. Re-run PageSpeed Scores after fixing, then Finish — the lead approves.',
+  SEC:  'The failing security checks pass on a fresh Security Audit run. Re-run it, then Finish — the lead approves.',
+  CITE: 'The listings are created/corrected with exact NAP. The lead reviews and approves.',
+  GBP:  'The profile changes are live on Google. The lead reviews and approves.',
+  REVW: 'Reviews are replied to / the campaign is running. The lead reviews and approves.',
+  CONT: 'The new/updated content is published. The lead reviews and approves.',
+  CANB: 'Only one page targets the keyword (other page re-targeted or redirected). The lead reviews and approves.',
+  BLNK: 'The toxic/outreach work is done. The lead reviews and approves.',
+  MANUAL: 'The lead reviews and approves.',
+};
+
 // Build the grouped tickets for one project. Assigns/stamps stable codes, merges stored ticket
 // state (assignee/status/due date) from ticket_codes, and applies the project default assignee.
 async function buildControlTickets(project) {
@@ -6410,6 +6431,9 @@ async function buildControlTickets(project) {
       item_ids: ids,
       how_to: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).steps,
       where: (TICKET_PLAYBOOK[g.pCode] || TICKET_PLAYBOOK.GEN).where,
+      done_when: TICKET_DONE_WHEN[g.pCode] || TICKET_DONE_WHEN.MANUAL,
+      auto_verified: AUTO_VERIFY_PILLARS.includes(g.pCode),
+      verification: st.verification || null,
       // Exact, actionable findings — page URL + what to change, not a generic instruction
       findings: items_g.slice(0, 60).map(i => ({
         title: i.title || '',
@@ -6624,6 +6648,125 @@ app.post('/api/control-centre/tickets/:code/open', async (req, res) => {
         WHERE code=$1 AND status IN ('New','Assigned') RETURNING *`, [req.params.code]);
     res.json({ ok: true, changed: r.rows.length > 0, ticket: r.rows[0] || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── FINISH GATE: clicking Finish runs a real machine check; the ticket only closes if it passes ──
+// Collect the affected page URLs for a ticket from its findings (same extraction as the codes map).
+function ticketPageUrls(project, items) {
+  const base = 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const found = new Set();
+  const extract = (txt) => {
+    const out = []; const s = (txt || '').toString();
+    const re = /(https?:\/\/[^\s"'`)\]]+)|(?:^|[\s`("'\[])(\/[a-z0-9][a-z0-9\-_\/]*\/?)(?=[\s`)"'\].,:;]|$)/gi;
+    let m; while ((m = re.exec(s)) !== null) { const v = m[1] || m[2]; if (v) out.push(v); }
+    return out;
+  };
+  for (const it of items) {
+    const urls = [it.ranking_page, ...((it.pages_affected || '').split(/[\n,]+/)), ...extract(it.title), ...extract(it.description)]
+      .map(s => s && s.trim()).filter(Boolean);
+    for (let u of urls) {
+      if (!u.startsWith('http')) u = base + (u.startsWith('/') ? u : '/' + u);
+      try { const x = new URL(u); if (x.hostname.replace(/^www\./, '') === base.replace('https://', '').replace(/^www\./, '')) found.add(x.origin + x.pathname.replace(/\/+$/, '') + '/'); } catch (e) {}
+    }
+  }
+  return [...found];
+}
+
+// Rule check for one page's HTML against the ticket's issue signature.
+function verifyPageRule(html, sig) {
+  const titleM = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleM ? titleM[1].trim() : '';
+  const descM = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i);
+  const desc = descM ? descM[1].trim() : '';
+  const s = sig || '';
+  if (/title/.test(s) && /missing|no\b/.test(s)) return { pass: !!title, rule: 'title present', value: title.slice(0, 60) };
+  if (/title/.test(s) && /long/.test(s)) return { pass: title.length > 0 && title.length <= 65, rule: 'title ≤65 chars', value: `${title.length} chars` };
+  if (/title/.test(s) && /short/.test(s)) return { pass: title.length >= 30, rule: 'title ≥30 chars', value: `${title.length} chars` };
+  if (/description/.test(s) && /missing|no\b/.test(s)) return { pass: !!desc, rule: 'description present', value: desc.slice(0, 60) };
+  if (/description/.test(s) && /long/.test(s)) return { pass: desc.length > 0 && desc.length <= 170, rule: 'description ≤170 chars', value: `${desc.length} chars` };
+  if (/description/.test(s) && /short/.test(s)) return { pass: desc.length >= 50, rule: 'description ≥50 chars', value: `${desc.length} chars` };
+  if (/canonical/.test(s)) return { pass: /<link[^>]*rel=["']canonical["']/i.test(html), rule: 'canonical tag present', value: '' };
+  if (/noindex/.test(s)) return { pass: !/<meta[^>]*content=["'][^"']*noindex/i.test(html), rule: 'no noindex tag', value: '' };
+  if (/schema|structured/.test(s)) return { pass: /application\/ld\+json/i.test(html), rule: 'JSON-LD schema present', value: '' };
+  if (/mixed content|insecure/.test(s)) return { pass: !/src=["']http:\/\//i.test(html), rule: 'no http:// resources', value: '' };
+  if (/\bh1\b|heading/.test(s)) return { pass: /<h1[\s>]/i.test(html), rule: 'H1 present', value: '' };
+  if (/orphan|outbound|internal link|no links/.test(s)) {
+    const body = (html.match(/<body[^>]*>([\s\S]*)<\/body>/i) || [, html])[1]
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+      .replace(/<header[\s\S]*?<\/header>/gi, ' ').replace(/<footer[\s\S]*?<\/footer>/gi, ' ');
+    const n = (body.match(/href=["'](\/|https?:\/\/)/gi) || []).length;
+    return { pass: n > 0, rule: 'content links present', value: `${n} links` };
+  }
+  return null; // no machine rule for this issue → manual review
+}
+
+app.post('/api/control-centre/tickets/:code/finish', async (req, res) => {
+  try {
+    const tk = (await pool.query('SELECT * FROM ticket_codes WHERE code=$1', [req.params.code])).rows[0];
+    if (!tk) return res.status(404).json({ error: 'Ticket not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [tk.project_id])).rows[0];
+    const items = (await pool.query('SELECT * FROM action_items WHERE code=$1', [req.params.code])).rows;
+    const pillar = tk.pillar_code;
+    const sig = (tk.root_cause_key || '').split(':').pop() || '';
+
+    const manualClose = async (note) => {
+      const v = { mode: 'manual', note, checked_at: new Date().toISOString() };
+      await pool.query(`UPDATE ticket_codes SET status='Ready for Review', finished_at=NOW(), verification=$1 WHERE code=$2`, [JSON.stringify(v), req.params.code]);
+      return res.json({ ok: true, result: 'review', message: note });
+    };
+
+    if (!AUTO_VERIFY_PILLARS.includes(pillar)) {
+      return manualClose(`This ticket type can't be machine-checked — sent to the lead for review. Closed when: ${TICKET_DONE_WHEN[pillar] || TICKET_DONE_WHEN.MANUAL}`);
+    }
+
+    const pages = ticketPageUrls(project, items).slice(0, 8);
+    if (!pages.length) return manualClose('No page URLs recorded on this ticket to check — sent to the lead for review.');
+
+    const checked = [];
+    if (pillar === 'INDX') {
+      // Verify via Google URL Inspection (truth from Google, not the page)
+      const accessToken = await getGscAccessToken(req.auth?.userId);
+      if (!accessToken) return manualClose('GSC not connected — indexing can\'t be machine-checked. Sent to the lead.');
+      const site = await resolveGscSite(project, accessToken);
+      if (!site) return manualClose('GSC property not found — sent to the lead.');
+      for (const url of pages.slice(0, 5)) {
+        try {
+          const r = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
+            method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ inspectionUrl: url, siteUrl: site }), signal: AbortSignal.timeout(20000),
+          });
+          const d = r.ok ? await r.json() : null;
+          const verdict = d && d.inspectionResult && d.inspectionResult.indexStatusResult && d.inspectionResult.indexStatusResult.verdict;
+          checked.push({ url, pass: verdict === 'PASS', reason: verdict || ('HTTP ' + r.status) });
+        } catch (e) { checked.push({ url, pass: false, reason: e.message }); }
+      }
+    } else {
+      // ONPG / TECH / LINK — fetch each page live (cache-busted) and apply the rule for this issue
+      for (const url of pages) {
+        try {
+          const bust = (url.includes('?') ? '&' : '?') + 'seoroom_verify=' + Date.now();
+          const r = await fetch(url + bust, { headers: { 'User-Agent': 'SEORoomBot/1.0', 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(15000) });
+          if (!r.ok) { checked.push({ url, pass: false, reason: 'HTTP ' + r.status }); continue; }
+          const html = await r.text();
+          const result = verifyPageRule(html, sig);
+          if (!result) return manualClose('This issue has no machine check — sent to the lead for review.');
+          checked.push({ url, pass: result.pass, reason: `${result.rule}${result.value ? ' — ' + result.value : ''}` });
+        } catch (e) { checked.push({ url, pass: false, reason: e.message }); }
+      }
+    }
+
+    const failed = checked.filter(c => !c.pass);
+    const v = { mode: 'auto', checked, passed: checked.length - failed.length, failed: failed.length, checked_at: new Date().toISOString() };
+    if (failed.length === 0) {
+      await pool.query(`UPDATE ticket_codes SET status='Done', finished_at=NOW(), verified_at=NOW(), verification=$1 WHERE code=$2`, [JSON.stringify(v), req.params.code]);
+      return res.json({ ok: true, result: 'closed', message: `Verified ✓ — all ${checked.length} checked page(s) pass. Ticket closed.`, verification: v });
+    }
+    await pool.query(`UPDATE ticket_codes SET status='In Progress', verification=$1 WHERE code=$2`, [JSON.stringify(v), req.params.code]);
+    return res.json({ ok: true, result: 'failed', message: `${failed.length} of ${checked.length} checked page(s) still failing — ticket stays In Progress.`, verification: v });
+  } catch (e) {
+    console.error('[finish] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Status moves: Finish (→ Ready for Review), Done, Reopen (→ In Progress)
