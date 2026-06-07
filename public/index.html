@@ -25722,11 +25722,25 @@
         });
       }, [serpOnly, sortCol, sortDir]);
 
-      // Mint ONE ticket per keyword that is NOT RANKING (checked, but no position in top 100)
-      const notRankingKey = serpOnly.filter(kw => kw.checked_at && !kw.serp_position).map(kw => kw.keyword).sort().join('|');
+      // Mint ONE ticket per keyword that needs work — not ranking, OR ranked outside the top 10 (same model as Maps)
+      const serpIssueRows = serpOnly.filter(kw => kw.checked_at && (!kw.serp_position || kw.serp_position > 10));
+      const serpIssueKey = serpIssueRows.map(kw => `${kw.keyword}:${kw.serp_position || 0}`).sort().join('|');
       useEffect(() => {
-        if (!project || !project.id || !notRankingKey) return;
-        const issues = serpOnly.filter(kw => kw.checked_at && !kw.serp_position).map(kw => ({
+        if (!project || !project.id || !serpIssueKey) return;
+        const issues = serpIssueRows.map(kw => kw.serp_position ? ({
+          title: `Improve ranking: "${kw.keyword}"`,
+          description: [
+            `Currently #${kw.serp_position} — target: top 10${kw.search_volume ? ` (volume: ${kw.search_volume})` : ''}`,
+            `Ranking page: ${kw.serp_url || 'not identified'}`,
+            '1. Strengthen the ranking page: keyword in meta title, H1 and opening paragraph',
+            '2. Expand the section that answers the query; add FAQs',
+            '3. Add 2-3 internal links to the page using the keyword as anchor',
+            '4. Run Check Rankings to confirm it moves into the top 10',
+          ].join('\n'),
+          severity: kw.serp_position > 20 ? 'high' : 'medium',
+          category: 'SERP Visibility',
+          pillar: 'serp',
+        }) : ({
           title: `Not ranking: "${kw.keyword}"`,
           description: [
             `1. Create or pick ONE page to target "${kw.keyword}"${kw.search_volume ? ` (volume: ${kw.search_volume})` : ''}`,
@@ -25739,7 +25753,7 @@
           pillar: 'serp',
         }));
         if (issues.length) syncSourceTickets(project, 'serp', issues);
-      }, [notRankingKey, project && project.id]);
+      }, [serpIssueKey, project && project.id]);
 
       const allChecked = sorted.length > 0 && analysisCheckedCount === sorted.length;
       const toggleAnalysisCheck = (id) => setAnalysisChecked(prev => ({ ...prev, [id]: !prev[id] }));
@@ -26360,7 +26374,7 @@
                     <input type="checkbox" checked={!!analysisChecked[kw.id]} onChange={() => toggleAnalysisCheck(kw.id)} onClick={e => e.stopPropagation()} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)', flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</span>
-                      {kw.checked_at && !kw.serp_position && <TicketTagForTitle project={project} title={`Not ranking: "${kw.keyword}"`} pillar="SERP" />}
+                      {kw.checked_at && (!kw.serp_position || kw.serp_position > 10) && <TicketTagForTitle project={project} title={kw.serp_position ? `Improve ranking: "${kw.keyword}"` : `Not ranking: "${kw.keyword}"`} pillar="SERP" />}
                       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : kw.checked_at ? <span style={{ color: '#ef4444', fontSize: 12 }}>No ranking page found</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>Click "Check Rankings" to scan</span>}
                       </div>
