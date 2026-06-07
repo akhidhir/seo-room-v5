@@ -20020,6 +20020,8 @@
       const openInTool = async (tk) => {
         try { await api(`/control-centre/tickets/${tk.code}/open`, { method: 'POST', body: {} }); } catch (_) {}
         const route = TICKET_ROUTE[tk.pillar_code] || 'fix-center';
+        // tell the destination page WHICH issue this ticket is about (filter + auto-expand)
+        window.__ticketFocus = { pillar: tk.pillar_code, title: tk.title || '', code: tk.code };
         if (currentProject && Number(currentProject.id) !== Number(tk.project_id)) {
           const target = (allProjects || []).find(p => Number(p.id) === Number(tk.project_id));
           if (target && onSwitchProject) onSwitchProject(target);
@@ -33100,6 +33102,16 @@
       const [filter, setFilter] = useState('all'); // all | overview | cited | opportunity
       const [aioAnalysis, setAioAnalysis] = useState({}); // keyword -> {loading, data, error}
       const [aioSent, setAioSent] = useState({}); // keyword -> 'sending' | 'sent' | 'exists' | 'error'
+
+      // Arriving from a Control Centre ticket: jump straight to Opportunities and expand the ticket's keyword
+      useEffect(() => {
+        const tf = window.__ticketFocus;
+        if (!tf || tf.pillar !== 'AISR') return;
+        window.__ticketFocus = null;
+        setFilter('opportunity');
+        const m = (tf.title || '').match(/"([^"]+)"/);
+        if (m) setExpanded(m[1]);
+      }, []);
       const analyzeAio = async (r) => {
         setAioAnalysis(p => ({ ...p, [r.keyword]: { loading: true } }));
         try {
