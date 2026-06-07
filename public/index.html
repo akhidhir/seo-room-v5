@@ -32716,6 +32716,7 @@
       const [sev, setSev] = useState('real');
       const [cpPlan, setCpPlan] = useState({}); // keyword -> {loading, data, error}
       const [showDetail, setShowDetail] = useState({}); // keyword -> bool (technical details collapsed by default)
+      const [cpFix, setCpFix] = useState({}); // keyword -> {loading, result} for one-click duplicate fix
       const getPlan = async (c) => {
         setCpPlan(p => ({ ...p, [c.keyword]: { loading: true } }));
         try {
@@ -32739,7 +32740,7 @@
         canibSyncRef.current = pid;
         const cpath = (u) => { try { return new URL(u).pathname || u; } catch { return u; } };
         syncSourceTickets(project, 'canib', real.slice(0, 100).map(c => {
-          const others = (c.pages || []).filter(p => !p.is_primary);
+          const others = (c.pages || []).filter(p => !(p.is_primary || (c.primary_page && cpath(p.url).replace(/\/$/, '') === cpath(c.primary_page).replace(/\/$/, ''))));
           const dupe = (c.reasons || []).some(r => /duplicate/i.test(r.type || ''));
           const noTraffic = others.length > 0 && others.every(p => (p.impressions || 0) === 0 && (p.clicks || 0) === 0);
           const prim = cpath(c.primary_page || ((c.pages || []).find(p => p.is_primary) || {}).url || '');
@@ -32833,11 +32834,12 @@
                               </div>
                             )}
                             {c.is_real_issue && (() => {
-                              const others = (c.pages || []).filter(p => !p.is_primary);
+                              const isPrim = (p) => p.is_primary || (c.primary_page && path(p.url).replace(/\/$/, '') === path(c.primary_page).replace(/\/$/, ''));
+                              const others = (c.pages || []).filter(p => !isPrim(p));
                               const dupeReason = (c.reasons || []).some(r => /duplicate/i.test(r.type || ''));
                               const noTraffic = others.length > 0 && others.every(p => (p.impressions || 0) === 0 && (p.clicks || 0) === 0);
                               const action = dupeReason && noTraffic ? 'remove' : 'retarget';
-                              const primPath = path(c.primary_page || ((c.pages || []).find(p => p.is_primary) || {}).url || '');
+                              const primPath = path(c.primary_page || ((c.pages || []).find(p => isPrim(p)) || {}).url || '');
                               const loserList = others.map((p, i) => <React.Fragment key={i}>{i > 0 ? ' and ' : ''}<b>{path(p.url)}</b></React.Fragment>);
                               const secBox = (color) => ({ margin: '10px 0', padding: '11px 14px', borderRadius: 8, background: color + '12', border: '1px solid ' + color + '40', fontSize: 13.5, lineHeight: 1.65 });
                               const pl = cpPlan[c.keyword];
@@ -32861,11 +32863,30 @@
                                   <div style={secBox('#3b82f6')}>
                                     <b style={{ color: '#3b82f6' }}>HOW:</b>
                                     {action === 'remove' ? (
-                                      <ol style={{ margin: '6px 0 0', paddingLeft: 20 }}>
-                                        <li>In WordPress → Pages, find <b>{others[0] ? path(others[0].url) : ''}</b> and move it to Trash.</li>
-                                        <li>Add a 301 redirect from that address to <b>{primPath}</b> (your SEO plugin → Redirects).</li>
-                                        <li>Hit Re-scan up top — this ticket closes itself once the duplicate is gone.</li>
-                                      </ol>
+                                      <div>
+                                        {(() => {
+                                          const fx = cpFix[c.keyword];
+                                          if (fx && fx.result) return <div style={{ margin: '8px 0', fontSize: 13, fontWeight: 600, color: fx.result.success ? '#22c55e' : '#ef4444' }}><i className={`fas fa-${fx.result.success ? 'circle-check' : 'circle-xmark'}`} style={{ marginRight: 6 }}></i>{fx.result.message || fx.result.error}</div>;
+                                          return (
+                                            <button disabled={fx && fx.loading} onClick={async () => {
+                                              if (!window.confirm(`This moves ${others[0] ? path(others[0].url) : ''} to the WordPress Trash (recoverable) and adds a 301 redirect to ${primPath}. Continue?`)) return;
+                                              setCpFix(p => ({ ...p, [c.keyword]: { loading: true } }));
+                                              try {
+                                                const r = await api(`/projects/${pid}/competing-pages/fix-duplicate`, { method: 'POST', body: { url: others[0].url, redirect_to: c.primary_page || primPath } });
+                                                setCpFix(p => ({ ...p, [c.keyword]: { result: r } }));
+                                              } catch (e) { setCpFix(p => ({ ...p, [c.keyword]: { result: { success: false, message: e.message } } })); }
+                                            }} style={{ margin: '8px 0', background: '#22c55e', color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: fx && fx.loading ? 0.7 : 1 }}>
+                                              {fx && fx.loading ? <><span className="spinner" style={{ marginRight: 6 }}></span>Fixing...</> : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }}></i>Fix it for me — trash the copy + add the redirect</>}
+                                            </button>
+                                          );
+                                        })()}
+                                        <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 4 }}>Or manually:</div>
+                                        <ol style={{ margin: 0, paddingLeft: 20 }}>
+                                          <li>In WordPress → Pages, find <b>{others[0] ? path(others[0].url) : ''}</b> and move it to Trash.</li>
+                                          <li>Add a 301 redirect from that address to <b>{primPath}</b> (404s & Redirects → Redirects).</li>
+                                          <li>Hit Re-scan up top — this ticket closes itself once the duplicate is gone.</li>
+                                        </ol>
+                                      </div>
                                     ) : (
                                       <div style={{ marginTop: 6 }}>
                                         {!pl && (
@@ -32942,10 +32963,11 @@
                                 </div>
                                 );
                               };
-                              const cardOthers = (c.pages || []).filter(p => !p.is_primary);
+                              const cardIsPrim = (p) => p.is_primary || (c.primary_page && path(p.url).replace(/\/$/, '') === path(c.primary_page).replace(/\/$/, ''));
+                              const cardOthers = (c.pages || []).filter(p => !cardIsPrim(p));
                               const cardAction = (c.reasons || []).some(r => /duplicate/i.test(r.type || '')) && cardOthers.length > 0 && cardOthers.every(p => (p.impressions || 0) === 0 && (p.clicks || 0) === 0) ? 'remove' : 'retarget';
                               return c.pages.map((p, pi) => {
-                                const ft = p.fix_type || (p.is_primary ? 'keep' : 'fix');
+                                const ft = cardIsPrim(p) ? 'keep' : (p.fix_type === 'ok' ? 'ok' : 'fix');
                                 const ftColor = ft === 'keep' ? '#22c55e' : ft === 'ok' ? '#3b82f6' : '#ef4444';
                                 const ftBadge = ft === 'keep' ? 'KEEP — main page' : ft === 'ok' ? 'LINK ONLY' : (cardAction === 'remove' ? 'REMOVE' : 'RE-TARGET');
                                 return (
@@ -32955,9 +32977,9 @@
                                     <span style={{ padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: ftColor + '22', color: ftColor }}>{ftBadge}</span>
                                     <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>pos <b style={{ color: p.position <= 10 ? '#22c55e' : p.position <= 20 ? '#f59e0b' : 'var(--text2)' }}>#{p.position}</b> · {p.impressions.toLocaleString()} impr · {p.clicks} clicks</span>
                                   </div>
-                                  {fieldRow('Title', p.meta_title, p.kw_in_title, p.is_primary)}
-                                  {fieldRow('H1', p.h1, p.kw_in_h1, p.is_primary)}
-                                  {fieldRow('Focus KW', p.focus_keyword, p.kw_in_focus, p.is_primary)}
+                                  {fieldRow('Title', p.meta_title, p.kw_in_title, cardIsPrim(p))}
+                                  {fieldRow('H1', p.h1, p.kw_in_h1, cardIsPrim(p))}
+                                  {fieldRow('Focus KW', p.focus_keyword, p.kw_in_focus, cardIsPrim(p))}
                                   {p.kw_in_slug && <div style={{ fontSize: 11, color: '#8b5cf6', marginTop: 2 }}><i className="fas fa-link" style={{ marginRight: 4 }}></i>URL also contains the keyword</div>}
                                   <div style={{ display: 'flex', gap: 8, fontSize: 11, marginTop: 4, flexWrap: 'wrap' }}>
                                     {p.noindex && <span style={{ padding: '1px 6px', borderRadius: 4, fontWeight: 700, background: '#ef444422', color: '#ef4444' }}>NOINDEX</span>}

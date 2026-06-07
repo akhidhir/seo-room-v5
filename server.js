@@ -41988,6 +41988,73 @@ app.get('/api/projects/:projectId/competing-pages', async (req, res) => {
 
 // Beginner-friendly, step-by-step fix plan for one competing-pages keyword: exact replacement titles/H1/
 // focus keywords and the precise internal links to add. Cached per keyword.
+// POST /api/projects/:projectId/competing-pages/fix-duplicate — one click: trash the duplicate page + 301 it to the primary
+app.post('/api/projects/:projectId/competing-pages/fix-duplicate', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { url, redirect_to } = req.body || {};
+  try {
+    if (!url || !redirect_to) return res.status(400).json({ error: 'url and redirect_to required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured (Project Settings).' });
+
+    const pathOf = (u) => { try { return new URL(u, 'https://x.invalid').pathname; } catch { return u; } };
+    const srcPath = pathOf(url);
+    const dstPath = pathOf(redirect_to);
+    const slug = srcPath.replace(/\/$/, '').split('/').pop();
+
+    // 1. Resolve the WP page/post by slug (exact link match preferred)
+    let wpPage = null;
+    for (const type of ['pages', 'posts']) {
+      try {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,link&per_page=5`, { headers: authHeaders });
+        if (r.ok) {
+          const list = await r.json();
+          const hit = list.find(p => pathOf(p.link || '').replace(/\/$/, '') === srcPath.replace(/\/$/, '')) || (list.length === 1 ? list[0] : null);
+          if (hit) { wpPage = { ...hit, type }; break; }
+        }
+      } catch (e) { /* try next type */ }
+    }
+
+    // 2. Move to Trash (recoverable in WordPress) + record history
+    let trashed = false;
+    if (wpPage) {
+      try {
+        const del = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPage.type}/${wpPage.id}`, { method: 'DELETE', headers: authHeaders });
+        trashed = del.ok;
+      } catch (e) { /* report below */ }
+      if (trashed) {
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+           VALUES ($1,$2,$3,$4,'trash_page','status','publish','trash')`,
+          [projectId, wpPage.id, url, (wpPage.title && wpPage.title.rendered) || slug]).catch(() => {});
+      }
+    }
+
+    // 3. 301 redirect via the SEO Room plugin (same engine as 404s & Redirects)
+    let redirected = false; let redirectError = null;
+    try {
+      const r = await callPluginApi(project, '/redirects', 'POST', { source_url: srcPath, target_url: dstPath, redirect_type: 301, notes: 'Competing Pages duplicate fix' });
+      redirected = !(r && r.error);
+      if (r && r.error) redirectError = r.error;
+    } catch (e) { redirectError = e.message; }
+
+    res.json({
+      success: trashed && redirected,
+      trashed, redirected,
+      message: [
+        trashed ? 'Page moved to Trash (recoverable in WordPress)' : (wpPage ? 'Could not trash the page — do it manually in WordPress' : 'Page not found in WordPress — trash it manually'),
+        redirected ? `301 redirect live: ${srcPath} → ${dstPath}` : `Redirect not added${redirectError ? ` (${redirectError})` : ''} — add it in 404s & Redirects → Redirects`,
+      ].join('. '),
+    });
+  } catch (e) {
+    console.error('[fix-duplicate] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/projects/:projectId/competing-pages/plan', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const { keyword } = req.body || {};
