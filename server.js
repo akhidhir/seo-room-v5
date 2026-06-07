@@ -613,6 +613,7 @@ async function initDb() {
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS verification JSONB`).catch(() => {});
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ`).catch(() => {});
     await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS how_to JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE ticket_codes ADD COLUMN IF NOT EXISTS closed_by INTEGER`).catch(() => {});
     // Default member per project (whole-project assignment)
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS assigned_member INTEGER`).catch(() => {});
     // One-time re-mint: grouping changed from category-level to ONE ISSUE PER TICKET, so old
@@ -6528,6 +6529,10 @@ async function buildControlTickets(project) {
       done_when: TICKET_DONE_WHEN[pCode] || TICKET_DONE_WHEN.MANUAL,
       auto_verified: AUTO_VERIFY_PILLARS.includes(pCode),
       verification: st.verification || null,
+      started_at: st.started_at || null,
+      finished_at: st.finished_at || null,
+      verified_at: st.verified_at || null,
+      closed_by: st.closed_by || null,
       progress: done ? 100 : 0,
       findings: [{
         id: it.id,
@@ -6659,12 +6664,12 @@ app.get('/api/projects/:id/control-centre/codes', async (req, res) => {
         if (!byUrl[k].includes(it.code)) byUrl[k].push(it.code);
       }
     }
-    // Meta per code (category + finding count) so the UI can say WHICH ticket is which
+    // Meta per code (issue title + category) so the UI can say WHICH ticket is which
     const metaRows = (await pool.query(
-      `SELECT code, MIN(category) AS category, COUNT(*)::int AS n FROM action_items
+      `SELECT code, MIN(category) AS category, MIN(title) AS title, COUNT(*)::int AS n FROM action_items
         WHERE project_id=$1 AND code IS NOT NULL GROUP BY code`, [req.params.id])).rows;
     const meta = {};
-    for (const r of metaRows) meta[r.code] = { category: r.category || '', count: r.n };
+    for (const r of metaRows) meta[r.code] = { category: r.category || '', title: (r.title || '').slice(0, 80), count: r.n };
     // SEC tickets have no action_items — derive their label from the registry key
     for (const r of rows) {
       if (!meta[r.code]) {
@@ -6963,7 +6968,7 @@ app.post('/api/control-centre/tickets/:code/finish', async (req, res) => {
       return res.json({ ok: true, result: 'review', message: r.note + ' Sent to the lead.' });
     }
     if (r.progress === 100 && (!r.verification || r.verification.failed === 0)) {
-      await pool.query(`UPDATE ticket_codes SET status='Done', finished_at=NOW(), verified_at=NOW() WHERE code=$1`, [req.params.code]);
+      await pool.query(`UPDATE ticket_codes SET status='Done', finished_at=NOW(), verified_at=NOW(), closed_by=$2 WHERE code=$1`, [req.params.code, req.auth?.userId || null]);
       return res.json({ ok: true, result: 'closed', message: `Verified ✓ — the live check passes. Ticket closed.` });
     }
     await pool.query(`UPDATE ticket_codes SET status='In Progress' WHERE code=$1`, [req.params.code]);
@@ -6981,8 +6986,11 @@ app.post('/api/control-centre/tickets/:code/status', async (req, res) => {
     const status = (req.body && req.body.status || '').trim();
     if (!allowed.includes(status)) return res.status(400).json({ error: `Status must be one of: ${allowed.join(', ')}` });
     const r = await pool.query(
-      `UPDATE ticket_codes SET status=$1, finished_at = CASE WHEN $1='Done' THEN NOW() ELSE finished_at END WHERE code=$2 RETURNING *`,
-      [status, req.params.code]);
+      `UPDATE ticket_codes SET status=$1,
+              finished_at = CASE WHEN $1='Done' THEN NOW() ELSE finished_at END,
+              closed_by   = CASE WHEN $1='Done' THEN $3 ELSE closed_by END
+        WHERE code=$2 RETURNING *`,
+      [status, req.params.code, req.auth?.userId || null]);
     if (!r.rows.length) return res.status(404).json({ error: 'Ticket not found' });
     res.json({ ok: true, ticket: r.rows[0] });
   } catch (e) { res.status(500).json({ error: e.message }); }

@@ -13339,10 +13339,14 @@
                           <td style={{ padding: '10px 10px' }} onClick={e => e.stopPropagation()}>
                             {codesForUrl(page.url).slice(0, 3).map(c => {
                               const tm = (ticketData && ticketData.meta && ticketData.meta[c]) || {};
+                              const label = (tm.title || tm.category || '').slice(0, 26);
                               return (
-                                <button key={c} onClick={() => setTicketFilter(ticketFilter === c ? null : c)}
-                                  title={`${c} — ${tm.category || 'ticket'}${tm.count ? ` (${tm.count} findings)` : ''}. ${ticketFilter === c ? 'Click to clear filter.' : 'Click to show only this ticket\'s pages.'}`}
-                                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', marginRight: 4, marginBottom: 2, borderRadius: 5, cursor: 'pointer', letterSpacing: 0.4, background: ticketFilter === c ? '#22c55e' : 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)', color: ticketFilter === c ? '#000' : '#22c55e' }}>{c}</button>
+                                <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                                  <button onClick={() => setTicketFilter(ticketFilter === c ? null : c)}
+                                    title={`${c} — ${tm.title || tm.category || 'ticket'}. One ticket = one issue. ${ticketFilter === c ? 'Click to clear filter.' : 'Click to filter to this ticket.'}`}
+                                    style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5, cursor: 'pointer', letterSpacing: 0.4, whiteSpace: 'nowrap', background: ticketFilter === c ? '#22c55e' : 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)', color: ticketFilter === c ? '#000' : '#22c55e' }}>{c}</button>
+                                  <span style={{ fontSize: 10, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110 }}>{label}</span>
+                                </div>
                               );
                             })}
                           </td>
@@ -19923,6 +19927,11 @@
                         <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 5, background: (ST_COLOR[t.status] || '#6b7280') + '25', color: ST_COLOR[t.status] || 'var(--text2)' }}>
                           {t.status}{t.status === 'Done' && t.verification && t.verification.mode === 'auto' ? ' ✓ verified' : ''}
                         </span>
+                        {t.status === 'Done' && (t.closed_by || t.finished_at) && (
+                          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+                            {t.closed_by ? `by ${memberName(t.closed_by)}` : ''}{t.finished_at ? ` · ${new Date(t.finished_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}` : ''}
+                          </div>
+                        )}
                         {t.late && <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 5, color: '#ef4444' }}>LATE</span>}
                       </td>
                       <td style={{ padding: '9px 12px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
@@ -19938,7 +19947,14 @@
                     {expanded === t.code && (
                       <tr style={{ background: 'rgba(34,197,94,0.04)' }}>
                         <td colSpan={11} style={{ padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
-                          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}><strong>{t.title}</strong> · {t.affected_count} finding(s){t.estimated_hours ? ` · ~${t.estimated_hours}h` : ''}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}><strong>{t.title}</strong> · {t.affected_count} finding(s){t.estimated_hours ? ` · ~${t.estimated_hours}h` : ''}</div>
+                          {(t.started_at || t.finished_at) && (
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>
+                              <i className="fas fa-clock" style={{ marginRight: 5 }} />
+                              {t.started_at && <span>Started {new Date(t.started_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}{t.assignee_id ? ` by ${memberName(t.assignee_id)}` : ''}</span>}
+                              {t.finished_at && <span>{t.started_at ? ' · ' : ''}Closed {new Date(t.finished_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}{t.closed_by ? ` by ${memberName(t.closed_by)}` : ''}{t.verified_at ? ' · machine-verified ✓' : ''}</span>}
+                            </div>
+                          )}
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                             <div style={{ background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 8, padding: '10px 14px' }}>
                               <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6 }}>
