@@ -19749,7 +19749,7 @@
     // ============ SITE ISSUES PAGE (triage view) ============
     // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
     // Where each ticket type opens when clicked "Open" (fix-in-place routing)
-    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', GEN: 'fix-center' };
+    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', MAPS: 'maps-rankings', GEN: 'fix-center' };
 
     // Ticket code chip — shows the Control Centre ticket code(s) on the audit page where the work happens.
     const __ticketCodesCache = {};
@@ -28054,6 +28054,41 @@
         });
       }, [mapsKeywordsRaw, mSortCol, mSortDir, gridScans]);
 
+      // Mint ONE ticket per SUBURB that needs work — the ticket carries every to-do for that suburb
+      useEffect(() => {
+        if (!project || !project.id || !mapsKeywordsRaw.length || !Object.keys(gridScans).length) return;
+        const byLoc = {};
+        for (const kw of mapsKeywordsRaw) {
+          if (!kw.location) continue;
+          const g = getGridData(kw);
+          if (g.solv === undefined && g.arp === undefined) continue; // not scanned
+          const solv = g.solv, foundIn = g.found_in;
+          const status = solv >= 50 ? 'ok' : solv >= 20 ? 'Competitive' : solv > 0 ? 'Needs Work' : foundIn > 0 ? 'Weak' : 'Not Visible';
+          if (status === 'ok') continue;
+          (byLoc[kw.location] = byLoc[kw.location] || []).push({ keyword: kw.keyword, status, solv: solv ?? 0 });
+        }
+        const svcAreas = (auditInsights.serviceAreas || []).map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase().trim());
+        const issues = Object.entries(byLoc).map(([loc, kws]) => {
+          const l = loc.toLowerCase().trim();
+          const inArea = svcAreas.some(a => a && (a.includes(l) || l.includes(a)));
+          const hasPage = (auditInsights.sitePages || []).some(p => ((p.page_name || '').toLowerCase().includes(l) || (p.slug || '').toLowerCase().includes(l)));
+          const todos = [];
+          if (!inArea) todos.push(`Add ${loc} to GBP service areas (Settings)`);
+          if (!hasPage) todos.push(`Create a suburb landing page for ${loc}`);
+          todos.push(`Ask customers in ${loc} to leave reviews mentioning the suburb`);
+          todos.push(`Post GBP updates targeting ${loc}`);
+          const kwLines = kws.map(k => `- "${k.keyword}": ${k.status} (${k.solv}% visibility)`).join('\n');
+          return {
+            title: `Maps visibility — ${loc}`,
+            description: todos.map((t, i) => `${i + 1}. ${t}`).join('\n') + '\n\nKeywords affected:\n' + kwLines,
+            severity: kws.some(k => k.status === 'Not Visible' || k.status === 'Weak') ? 'high' : 'medium',
+            category: 'Maps Visibility',
+            pillar: 'gbp',
+          };
+        });
+        if (issues.length) syncSourceTickets(project, 'maps', issues);
+      }, [mapsKeywordsRaw.length, Object.keys(gridScans).length, auditInsights, project && project.id]);
+
       // Maps analysis helpers (uses mapsSelected checkboxes)
       const runMapsAnalysis = async () => {
         setShowMapsCostConfirm(false);
@@ -28809,6 +28844,7 @@
                       <td style={{ padding: '10px 14px', fontWeight: 500 }}>{kw.keyword}</td>
                       <td style={{ padding: '10px 14px', color: 'var(--text2)' }}>
                         <i className="fa-solid fa-location-dot" style={{ marginRight: 4, fontSize: 10, color: '#22c55e' }} />{kw.location}
+                        <TicketTagForTitle project={project} title={`Maps visibility — ${kw.location}`} pillar="MAPS" />
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                         {hasData && arp ? (

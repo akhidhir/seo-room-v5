@@ -6180,6 +6180,7 @@ function normalizeActionRow(r) {
 // ── Control Centre: ticket code scheme (PRJ-PILLAR-NN) + fix-type routing ──
 // Middle of the code = root-cause area. Order matters (first match wins).
 const PILLAR_CODE_RULES = [
+  [/maps visibility|local pack|grid scan/i, 'MAPS'],
   [/core web vitals|pagespeed|\bspeed\b|\bcwv\b/i, 'CWV'],
   [/index/i, 'INDX'],
   [/cannibal/i, 'CANB'],
@@ -6352,6 +6353,10 @@ const TICKET_PLAYBOOK = {
     'Open the Security Audit page — each failing check below has its own fix instructions there.',
     'Fix in order of severity (critical first: malware/spam, exposed logins, SSL).',
     'Re-run the Security Audit to confirm each check goes green, then Finish.' ] },
+  MAPS: { where: 'Rankings → Maps Rankings', steps: [
+    'Open the keyword row for this suburb — the expanded view lists exactly what is missing (service area, suburb page, directories, reviews, posts).',
+    'Work the to-dos in the ticket description, in order.',
+    'Re-run the Grid Scan after fixing to confirm visibility improves.' ] },
   GEN:  { where: 'Source audit page', steps: ['Open the source audit page for this category and work the findings there.'] },
 };
 
@@ -6459,6 +6464,7 @@ const TICKET_DONE_WHEN = {
   CONT: 'The new/updated content is published. The lead reviews and approves.',
   CANB: 'Only one page targets the keyword (other page re-targeted or redirected). The lead reviews and approves.',
   BLNK: 'The toxic/outreach work is done. The lead reviews and approves.',
+  MAPS: 'The to-dos for this suburb are done and a fresh Grid Scan shows improved visibility. The lead reviews and approves.',
   MANUAL: 'The lead reviews and approves.',
 };
 
