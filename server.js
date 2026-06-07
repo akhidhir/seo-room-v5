@@ -6183,6 +6183,7 @@ function normalizeActionRow(r) {
 const PILLAR_CODE_RULES = [
   [/maps visibility|local pack|grid scan/i, 'MAPS'],
   [/serp visibility|not ranking/i, 'SERP'],
+  [/ai search|ai overview/i, 'AISR'],
   [/core web vitals|pagespeed|\bspeed\b|\bcwv\b/i, 'CWV'],
   [/index/i, 'INDX'],
   [/cannibal/i, 'CANB'],
@@ -6355,6 +6356,10 @@ const TICKET_PLAYBOOK = {
     'Open the Security Audit page — each failing check below has its own fix instructions there.',
     'Fix in order of severity (critical first: malware/spam, exposed logins, SSL).',
     'Re-run the Security Audit to confirm each check goes green, then Finish.' ] },
+  AISR: { where: 'Rankings → AI Search', steps: [
+    'Expand the keyword on the AI Search page and click "Build a plan to get cited" — it writes the answer paragraph, headings and FAQ for you.',
+    'Publish that answer at the top of the target page (add the FAQ schema).',
+    'Re-scan AI Search to confirm your site appears as a source.' ] },
   SERP: { where: 'Rankings → SERP Rankings', steps: [
     'Work the to-dos in the ticket description — pick/create ONE page for the keyword, optimize meta + H1, add internal links.',
     'Run "Check Rankings" after the next crawl to confirm the keyword enters the top 100.' ] },
@@ -6471,6 +6476,7 @@ const TICKET_DONE_WHEN = {
   BLNK: 'The toxic/outreach work is done. The lead reviews and approves.',
   MAPS: 'The to-dos for this suburb are done and a fresh Grid Scan shows improved visibility. The lead reviews and approves.',
   SERP: 'A page targets the keyword and a fresh Check Rankings finds it in the top 100. The lead reviews and approves.',
+  AISR: 'A fresh AI Search scan shows your site cited as a source in the AI Overview. Closes automatically on re-scan.',
   MANUAL: 'The lead reviews and approves.',
 };
 

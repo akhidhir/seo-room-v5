@@ -19826,7 +19826,7 @@
     // ============ SITE ISSUES PAGE (triage view) ============
     // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
     // Where each ticket type opens when clicked "Open" (fix-in-place routing)
-    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', MAPS: 'maps-rankings', SERP: 'serp-rankings', GEN: 'fix-center' };
+    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', MAPS: 'maps-rankings', SERP: 'serp-rankings', AISR: 'ai-search', GEN: 'fix-center' };
 
     // Ticket code chip — shows the Control Centre ticket code(s) on the audit page where the work happens.
     const __ticketCodesCache = {};
@@ -33052,6 +33052,24 @@
         api(`/projects/${pid}/aio`).then(r => { if (r && (r.keywords || []).length) setData(r); }).catch(() => {}).finally(() => setLoading(false));
       }, [pid]);
 
+      // Mint ONE ticket per citation opportunity (AI answer shows, you're not a source). Cited keywords auto-close.
+      useEffect(() => {
+        if (!pid || !data || !(data.keywords || []).length) return;
+        const issues = (data.keywords || []).filter(r => r.ai_overview && !r.you_cited).map(r => ({
+          title: `AI Overview: not cited for "${r.keyword}"`,
+          description: [
+            `Google shows an AI answer for "${r.keyword}" and your site is NOT one of the sources it names${(r.competitors_cited || []).length ? ` — competitors cited: ${r.competitors_cited.join(', ')}` : ''}.`,
+            '1. Open AI Search and expand this keyword',
+            '2. Click "Build a plan to get cited" — it writes the answer paragraph, headings and FAQ for you',
+            '3. Publish that answer at the top of the target page (add FAQ schema)',
+            '4. Re-scan AI Search — this ticket closes itself once you are cited',
+          ].join('\n'),
+          severity: 'medium',
+          category: 'AI Search',
+        }));
+        syncSourceTickets(project, 'aio', issues, true);
+      }, [data, pid]);
+
       const runScan = async () => {
         setScanning(true);
         try {
@@ -33089,7 +33107,7 @@
               {scanning ? <><span className="spinner" style={{ marginRight: 6 }}></span>Scanning AI Overviews...</> : <><i className="fas fa-robot" style={{ marginRight: 6 }}></i>{data ? 'Re-scan' : 'Run AI Scan'}</>}
             </button>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 20 }}>Checks Google's AI Overview for your tracked keywords — whether an AI answer appears and which sites it cites (you vs competitors). Citations are the new "position #1" for AI search.</div>
+          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 20 }}>For many searches, Google now answers with AI at the top of the page and names a few websites as its sources. If your site is named, you get the customer. This page checks each of your keywords: does an AI answer show, and is YOUR site named in it? "Not cited" = a competitor is getting that click instead of you.</div>
 
           {loading ? (
             <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Loading...</div>
@@ -33131,7 +33149,7 @@
                         return (
                         <React.Fragment key={i}>
                         <tr onClick={() => r.ai_overview && setExpanded(open ? null : r.keyword)} style={{ cursor: r.ai_overview ? 'pointer' : 'default' }}>
-                          <td style={{ ...td, fontWeight: 600 }}>{r.ai_overview && <i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>}{r.keyword}</td>
+                          <td style={{ ...td, fontWeight: 600 }}>{r.ai_overview && <i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>}{r.keyword}{r.ai_overview && !r.you_cited && <TicketTagForTitle project={project} title={`AI Overview: not cited for "${r.keyword}"`} pillar="AISR" />}</td>
                           <td style={td}>{r.ai_overview
                             ? <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: accent + '22', color: accent }}>YES</span>
                             : <span style={{ fontSize: 12, color: 'var(--text3)' }}>—</span>}</td>
@@ -33143,6 +33161,30 @@
                         </tr>
                         {open && (
                           <tr><td colSpan={5} style={{ padding: '4px 16px 14px 38px', background: 'var(--bg)', borderBottom: '1px solid var(--border)' }}>
+                            {(() => {
+                              const secBox = (color) => ({ margin: '10px 0', padding: '11px 14px', borderRadius: 8, background: color + '12', border: '1px solid ' + color + '40', fontSize: 13.5, lineHeight: 1.65 });
+                              if (r.you_cited) return (
+                                <div style={secBox('#22c55e')}>
+                                  <b style={{ color: '#22c55e' }}><i className="fas fa-circle-check" style={{ marginRight: 6 }}></i>You're in. </b>
+                                  Google's AI answer for "<b>{r.keyword}</b>" names your site as a source{r.your_position != null ? <> (source #{r.your_position})</> : null}. Nothing to do — keep that page's answer up to date.
+                                </div>
+                              );
+                              return (
+                                <div>
+                                  <div style={secBox('#ef4444')}>
+                                    <b style={{ color: '#ef4444' }}>THE PROBLEM: </b>
+                                    When people Google "<b>{r.keyword}</b>", Google answers with AI at the top of the page and names {(r.sources || []).length || 'several'} websites as its sources. Your site is <b>not one of them</b>{(r.competitors_cited || []).length ? <> — but <b>{r.competitors_cited.join(', ')}</b> is</> : null}. Those sites get the customer.
+                                  </div>
+                                  <div style={secBox('#22c55e')}>
+                                    <b style={{ color: '#22c55e' }}>THE FIX (one action): </b>
+                                    Publish a short, direct answer to "<b>{r.keyword}</b>" on your page, written the way Google's AI likes to quote. You don't have to write it — the button below writes the answer, the headings and the FAQ for you.
+                                  </div>
+                                  <div style={secBox('#3b82f6')}>
+                                    <b style={{ color: '#3b82f6' }}>HOW: </b>click the button, copy what it gives you onto the page it names, publish, then Re-scan. The ticket closes itself once you're cited.
+                                  </div>
+                                </div>
+                              );
+                            })()}
                             <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, margin: '8px 0' }}>Sites cited in the AI Overview for "{r.keyword}"</div>
                             {(r.sources || []).map((src, si) => (
                               <div key={si} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 13 }}>
