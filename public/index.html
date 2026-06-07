@@ -6859,6 +6859,42 @@
 
       useEffect(() => { if (project?.id) loadFindings(); }, [project?.id]);
 
+      // ONE ticket per ROOT CAUSE — "Missing Service schema" on 45 pages = 1 ticket carrying all pages, not 45 tickets
+      const rootCauseTitle = (f) => {
+        let t = (f.title || '').toString()
+          .replace(/https?:\/\/\S+/g, ' ')
+          .replace(/\([^)]*\d[^)]*\)/g, ' ')                       // "(297 words)"
+          .replace(/^\s*[a-z0-9\-_/]+\s*—\s*/i, '')                // "vbnvb — thin content" → "thin content"
+          .replace(/\bon\s+[a-z0-9\-_]+(\/[a-z0-9\-_]+)*\/?/gi, ' ') // "on service-areas/vincent"
+          .replace(/\/[a-z0-9][a-z0-9\-_/]*/gi, ' ')               // bare paths
+          .replace(/\s+/g, ' ').trim();
+        // page-name-only titles ("Homepage") carry no issue — group them under the category
+        if (!t || t.length < 4 || (!t.includes(' ') && !/(schema|content|h1|meta|canonical|https|noindex|link|thin|duplicate)/i.test(t))) {
+          t = (f.category || 'Website') + ' issues';
+        }
+        return t.charAt(0).toUpperCase() + t.slice(1);
+      };
+      const websiteTicketKey = findings.map(f => `${f.id}:${f.status}`).join(',');
+      useEffect(() => {
+        if (!project?.id || !findings.length) return;
+        const groups = {};
+        for (const f of findings) {
+          if (f.status === 'fixed' || f.status === 'dismissed' || f.status === 'rejected') continue;
+          const key = rootCauseTitle(f);
+          (groups[key] = groups[key] || []).push(f);
+        }
+        const issues = Object.entries(groups).map(([t, fs]) => ({
+          title: t,
+          description: `${fs.length} finding${fs.length > 1 ? 's' : ''} — fix on the Website Audit page (Fix buttons for auto-fixable, Send to Copywriter for content):\n`
+            + fs.slice(0, 10).map((x, i) => `${i + 1}. ${(x.title || '').slice(0, 90)}`).join('\n')
+            + (fs.length > 10 ? `\n…and ${fs.length - 10} more` : ''),
+          severity: fs.some(x => /critical|high/i.test(x.severity || '')) ? 'high' : 'medium',
+          category: fs[0].category || 'Website',
+          pillar: 'website',
+        }));
+        if (issues.length) syncSourceTickets(project, 'website', issues);
+      }, [websiteTicketKey, project?.id]);
+
       const runAudit = async () => {
         setLoading(true); setError('');
         try {
@@ -7330,6 +7366,7 @@
                         <td style={{ padding: '14px 6px', color: 'var(--text3)', fontSize: 14 }}>{num}</td>
                         <td style={{ padding: '14px', fontWeight: 600, fontSize: 15 }}>
                           <span style={{ display: 'inline-block', width: 4, height: 20, borderRadius: 2, background: cc, marginRight: 10, verticalAlign: 'middle' }} />{f.title}
+                          <TicketTagForTitle project={project} title={rootCauseTitle(f)} />
                           {(() => {
                             // Extract page URL from title slug or description
                             const desc = (f.description || '');
