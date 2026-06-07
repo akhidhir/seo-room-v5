@@ -6879,20 +6879,26 @@
         if (!project?.id || !findings.length) return;
         const groups = {};
         for (const f of findings) {
-          if (f.status === 'fixed' || f.status === 'dismissed' || f.status === 'rejected') continue;
+          if (f.status === 'dismissed' || f.status === 'rejected') continue;
           const key = rootCauseTitle(f);
           (groups[key] = groups[key] || []).push(f);
         }
-        const issues = Object.entries(groups).map(([t, fs]) => ({
-          title: t,
-          description: `${fs.length} finding${fs.length > 1 ? 's' : ''} — fix on the Website Audit page (Fix buttons for auto-fixable, Send to Copywriter for content):\n`
-            + fs.slice(0, 10).map((x, i) => `${i + 1}. ${(x.title || '').slice(0, 90)}`).join('\n')
-            + (fs.length > 10 ? `\n…and ${fs.length - 10} more` : ''),
-          severity: fs.some(x => /critical|high/i.test(x.severity || '')) ? 'high' : 'medium',
-          category: fs[0].category || 'Website',
-          pillar: 'website',
-        }));
-        if (issues.length) syncSourceTickets(project, 'website', issues);
+        const issues = [];
+        for (const [t, fs] of Object.entries(groups)) {
+          const open = fs.filter(x => x.status !== 'fixed');
+          if (!open.length) continue; // fully fixed → omitted → reconcile closes the ticket
+          issues.push({
+            title: t,
+            description: `${fs.length - open.length}/${fs.length} fixed — work the rest on the Website Audit page (Fix buttons for auto-fixable, Send to Copywriter for content):\n`
+              + open.slice(0, 10).map((x, i) => `${i + 1}. ${(x.title || '').slice(0, 90)}`).join('\n')
+              + (open.length > 10 ? `\n…and ${open.length - 10} more` : ''),
+            severity: open.some(x => /critical|high/i.test(x.severity || '')) ? 'high' : 'medium',
+            category: fs[0].category || 'Website',
+            pillar: 'website',
+            progress: Math.round((fs.length - open.length) / fs.length * 100),
+          });
+        }
+        syncSourceTickets(project, 'website', issues, true);
       }, [websiteTicketKey, project?.id]);
 
       const runAudit = async () => {
@@ -19840,13 +19846,21 @@
       return data;
     }
     // Create/refresh tickets for a source page's current issues. Idempotent — safe to call on every load.
-    async function syncSourceTickets(project, source, issues) {
-      if (!project || !project.id || !issues || !issues.length) return null;
+    // Sends the COMPLETE current issue list, so the server can auto-close tickets whose issue is gone (fixed).
+    // allowEmpty: pass true when the source definitely loaded but found zero issues → closes all its open tickets.
+    async function syncSourceTickets(project, source, issues, allowEmpty) {
+      if (!project || !project.id || !Array.isArray(issues) || (!issues.length && !allowEmpty)) return null;
       try {
         const all = [];
-        for (let i = 0; i < issues.length; i += 300) {
-          const r = await api(`/projects/${project.id}/tickets/source-sync`, { method: 'POST', body: { source, issues: issues.slice(i, i + 300) } });
-          if (r && r.tickets) all.push(...r.tickets);
+        const keys = issues.map(iss => `${(iss.title || '').toLowerCase().trim()}|${(iss.page || '').toLowerCase().trim()}`);
+        if (!issues.length) {
+          await api(`/projects/${project.id}/tickets/source-sync`, { method: 'POST', body: { source, issues: [], reconcile: [] } });
+        } else {
+          for (let i = 0; i < issues.length; i += 300) {
+            const last = i + 300 >= issues.length;
+            const r = await api(`/projects/${project.id}/tickets/source-sync`, { method: 'POST', body: { source, issues: issues.slice(i, i + 300), ...(last ? { reconcile: keys } : {}) } });
+            if (r && r.tickets) all.push(...r.tickets);
+          }
         }
         delete __ticketCodesCache[project.id];
         window.dispatchEvent(new Event('tickets-updated'));

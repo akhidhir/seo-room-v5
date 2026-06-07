@@ -586,6 +586,7 @@ async function initDb() {
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS code TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS fix_type TEXT`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS root_cause_key TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS source_progress INTEGER`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_code TEXT`).catch(() => {});
     // Seed the agreed 3-letter project codes (only where unset; new projects derive a code from their name)
     await client.query(`UPDATE projects SET project_code='PRJ' WHERE project_code IS NULL AND name ILIKE '%projection%'`).catch(() => {});
@@ -6543,7 +6544,7 @@ async function buildControlTickets(project) {
       finished_at: st.finished_at || null,
       verified_at: st.verified_at || null,
       closed_by: st.closed_by || null,
-      progress: done ? 100 : 0,
+      progress: done ? 100 : (it.source_progress != null && Number.isFinite(+it.source_progress) ? +it.source_progress : 0),
       findings: [{
         id: it.id,
         done,
@@ -6575,7 +6576,7 @@ app.post('/api/projects/:id/tickets/source-sync', async (req, res) => {
 
     const projCode = deriveProjectCode(project);
     const existing = (await pool.query(
-      `SELECT id, title, ranking_page, code FROM action_items WHERE project_id=$1 AND type LIKE 'src_%'`,
+      `SELECT id, title, ranking_page, code, status, type FROM action_items WHERE project_id=$1 AND type LIKE 'src_%'`,
       [req.params.id])).rows;
     const idKey = (t, p) => `${(t || '').toLowerCase().trim()}|${(p || '').toLowerCase().trim()}`;
     const byKey = new Map(existing.map(r => [idKey(r.title, r.ranking_page), r]));
@@ -6589,6 +6590,15 @@ app.post('/api/projects/:id/tickets/source-sync', async (req, res) => {
         // keep the ticket's to-do list current (e.g. a page's on-page issues changed since last sync)
         await pool.query('UPDATE action_items SET description=$1, severity=$2 WHERE id=$3 AND description IS DISTINCT FROM $1',
           [iss.description.toString().slice(0, 1000), normSeverity(iss.severity || 'high'), row.id]).catch(() => {});
+      }
+      if (row && Number.isFinite(+iss.progress)) {
+        await pool.query('UPDATE action_items SET source_progress=$1 WHERE id=$2', [Math.max(0, Math.min(100, Math.round(+iss.progress))), row.id]).catch(() => {});
+      }
+      if (row && row.status === 'done') {
+        // the issue is BACK at the source — reopen the ticket
+        await pool.query(`UPDATE action_items SET status='pending' WHERE id=$1`, [row.id]).catch(() => {});
+        if (row.code) await pool.query(`UPDATE ticket_codes SET status='New', finished_at=NULL, verified_at=NULL, closed_by=NULL WHERE project_id=$1 AND code=$2 AND status='Done'`, [req.params.id, row.code]).catch(() => {});
+        row.status = 'pending';
       }
       if (!row) {
         row = (await pool.query(
@@ -6608,6 +6618,21 @@ app.post('/api/projects/:id/tickets/source-sync', async (req, res) => {
         row.code = code;
       }
       out.push({ title: row.title, page: row.ranking_page, code: row.code });
+    }
+
+    // RECONCILE — the source sent its COMPLETE current issue list: any ticket from this source
+    // whose issue is no longer reported has been fixed → close it (machine-verified by the source).
+    if (Array.isArray(req.body.reconcile)) {
+      const keep = new Set(req.body.reconcile.map(x => (x || '').toString().toLowerCase()));
+      for (const r of existing) {
+        if (r.type !== 'src_' + source) continue;
+        if (keep.has(idKey(r.title, r.ranking_page))) continue;
+        if (r.status === 'done') continue;
+        await pool.query(`UPDATE action_items SET status='done', source_progress=100 WHERE id=$1`, [r.id]).catch(() => {});
+        if (r.code) await pool.query(
+          `UPDATE ticket_codes SET status='Done', finished_at=COALESCE(finished_at, NOW()), verified_at=NOW() WHERE project_id=$1 AND code=$2 AND status IS DISTINCT FROM 'Done'`,
+          [req.params.id, r.code]).catch(() => {});
+      }
     }
     res.json({ ok: true, tickets: out });
   } catch (e) {
