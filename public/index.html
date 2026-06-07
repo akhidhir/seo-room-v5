@@ -19725,6 +19725,7 @@
       const [filter, setFilter] = useState({ member: 'all', project: 'all', status: 'all', fix: 'all' });
       const [expanded, setExpanded] = useState(null);
       const [busy, setBusy] = useState(false);
+      const [openCats, setOpenCats] = useState({});
 
       const load = async () => {
         try { const d = await api('/control-centre/board'); setBoard(d); } catch (e) { console.error(e); }
@@ -19762,18 +19763,8 @@
         const opening = expanded !== tk.code;
         setExpanded(opening ? tk.code : null);
         if (!opening) return;
+        // V3: instructions come straight from the source finding — nothing to generate.
         try { const r = await api(`/control-centre/tickets/${tk.code}/open`, { method: 'POST', body: {} }); if (r.changed) load(); } catch (_) {}
-        // First expand: have the AI write this ticket's exact instructions from its real findings (cached after)
-        if (tk.how_to_source !== 'ai' && tk.item_ids && tk.item_ids.length && !genFor[tk.code]) {
-          setGenFor(p => ({ ...p, [tk.code]: true }));
-          try {
-            const r = await api(`/control-centre/tickets/${tk.code}/instructions`, { method: 'POST', body: {} });
-            if (r.steps && r.steps.length) {
-              setBoard(b => ({ ...b, tickets: (b.tickets || []).map(x => x.code === tk.code ? { ...x, how_to: r.steps, how_to_source: 'ai' } : x) }));
-            }
-          } catch (e) {}
-          setGenFor(p => ({ ...p, [tk.code]: false }));
-        }
       };
       // "Open" → switch to the ticket's project (if needed) and land on the right tool page.
       const openInTool = async (tk) => {
@@ -19878,7 +19869,27 @@
                 </tr>
               </thead>
               <tbody>
-                {tickets.map(t => (
+                {(() => {
+                  // Group rows under collapsible category headers — 1:1 tickets stay readable at volume
+                  const byCat = {};
+                  tickets.forEach(t => { const k = `${t.project_name}|${t.category || 'Other'}`; (byCat[k] = byCat[k] || []).push(t); });
+                  const sections = Object.entries(byCat).sort((a, b) => a[0].localeCompare(b[0]));
+                  return sections.map(([key, list]) => {
+                    const [projName, catName] = key.split('|');
+                    const isOpen = openCats[key] !== undefined ? openCats[key] : list.length <= 6;
+                    const doneN = list.filter(x => x.status === 'Done').length;
+                    const maxSev = list.reduce((m, x) => (SEV_COLOR[x.severity] && (m === null || ['critical','high','medium','low'].indexOf(x.severity) < ['critical','high','medium','low'].indexOf(m)) ? x.severity : m), null) || 'medium';
+                    return (
+                      <React.Fragment key={key}>
+                        <tr onClick={() => setOpenCats(p => ({ ...p, [key]: !isOpen }))} style={{ cursor: 'pointer', background: 'var(--bg)', borderTop: '2px solid var(--border)' }}>
+                          <td colSpan={11} style={{ padding: '8px 12px' }}>
+                            <i className={`fas fa-chevron-${isOpen ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }} />
+                            <span style={{ fontWeight: 700, fontSize: 13 }}>{catName}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 8 }}>{projName} · {list.length} ticket(s){doneN ? ` · ${doneN} done` : ''}</span>
+                            <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 8, color: SEV_COLOR[maxSev], textTransform: 'uppercase' }}>{maxSev}</span>
+                          </td>
+                        </tr>
+                        {isOpen && list.map(t => (
                   <React.Fragment key={t.code}>
                     <tr onClick={() => openTicket(t)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: expanded === t.code ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
                       <td style={{ padding: '9px 12px', fontWeight: 700, color: '#22c55e', whiteSpace: 'nowrap' }}>{t.code}</td>
@@ -19933,7 +19944,7 @@
                               <div style={{ fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', marginBottom: 6 }}>
                                 <i className="fas fa-lightbulb" style={{ marginRight: 5 }} />What to do
                                 {genFor[t.code] && <span style={{ marginLeft: 8, color: 'var(--text3)', fontWeight: 400, textTransform: 'none' }}><span className="spinner" style={{ width: 9, height: 9, marginRight: 4 }}></span>writing exact instructions from the findings…</span>}
-                                {t.how_to_source === 'ai' && !genFor[t.code] && <span style={{ marginLeft: 8, color: 'var(--text3)', fontWeight: 400, textTransform: 'none', fontSize: 10 }}>· written from this ticket's findings</span>}
+                                {t.how_to_source === 'source' && <span style={{ marginLeft: 8, color: 'var(--text3)', fontWeight: 400, textTransform: 'none', fontSize: 10 }}>· from the audit finding itself</span>}
                               </div>
                               <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text)', lineHeight: 1.7 }}>
                                 {(t.how_to || []).map((s, i) => <li key={i}>{s}</li>)}
@@ -19989,7 +20000,11 @@
                       </tr>
                     )}
                   </React.Fragment>
-                ))}
+                        ))}
+                      </React.Fragment>
+                    );
+                  });
+                })()}
                 {tickets.length === 0 && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No tickets match the filter.</td></tr>}
               </tbody>
             </table>
