@@ -12784,8 +12784,9 @@
         ticketSyncRef.current = project.id;
         const issues = [];
         for (const p of pages) {
-          for (const i of (p.issues || []).filter(x => x.type === 'problem')) {
-            issues.push({ title: i.text, page: p.url, description: `${i.text} — ${p.url}`, severity: 'high', category: 'On-Page Issues' });
+          for (const i of (p.issues || [])) {
+            if (i.type !== 'problem' && i.type !== 'warning') continue; // passes aren't issues
+            issues.push({ title: i.text, page: p.url, description: `${i.text} — ${p.url}`, severity: i.type === 'problem' ? 'high' : 'medium', category: 'On-Page Issues' });
           }
         }
         if (issues.length) syncSourceTickets(project, 'onpage', issues);
@@ -19766,10 +19767,14 @@
     async function syncSourceTickets(project, source, issues) {
       if (!project || !project.id || !issues || !issues.length) return null;
       try {
-        const r = await api(`/projects/${project.id}/tickets/source-sync`, { method: 'POST', body: { source, issues } });
+        const all = [];
+        for (let i = 0; i < issues.length; i += 300) {
+          const r = await api(`/projects/${project.id}/tickets/source-sync`, { method: 'POST', body: { source, issues: issues.slice(i, i + 300) } });
+          if (r && r.tickets) all.push(...r.tickets);
+        }
         delete __ticketCodesCache[project.id];
         window.dispatchEvent(new Event('tickets-updated'));
-        return r;
+        return { ok: true, tickets: all };
       } catch (e) { return null; }
     }
     // Row tag for sources without a page URL (security checks, cannibalization) — match by issue title.
