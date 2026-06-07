@@ -30351,8 +30351,17 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       try {
         const imgResp = await fetch(img.src, { signal: AbortSignal.timeout(10000), redirect: 'follow' });
         if (!imgResp.ok) { console.log(`[alt-text-fix] Skipped ${img.src}: HTTP ${imgResp.status}`); continue; }
-        const contentType = (imgResp.headers.get('content-type') || 'image/jpeg').split(';')[0];
-        if (!contentType.startsWith('image/')) { console.log(`[alt-text-fix] Skipped ${img.src}: not an image (${contentType})`); continue; }
+        let contentType = (imgResp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim().toLowerCase();
+        if (contentType === 'image/jpg') contentType = 'image/jpeg'; // non-standard but common
+        // Claude Vision only accepts these four — SVG/AVIF/ICO etc. must be skipped, not sent
+        const VISION_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!VISION_TYPES.includes(contentType)) {
+          // fall back to the file extension when the server lies about content-type
+          const ext = (img.src.split('?')[0].split('.').pop() || '').toLowerCase();
+          const extMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+          if (extMap[ext]) contentType = extMap[ext];
+          else { console.log(`[alt-text-fix] Skipped ${img.src}: unsupported type for AI vision (${contentType})`); continue; }
+        }
         const buf = await imgResp.arrayBuffer();
         if (buf.byteLength > 3 * 1024 * 1024) { console.log(`[alt-text-fix] Skipped ${img.src}: too large (${(buf.byteLength/1024/1024).toFixed(1)}MB)`); continue; }
         if (buf.byteLength < 100) { console.log(`[alt-text-fix] Skipped ${img.src}: too small`); continue; }
