@@ -9357,9 +9357,11 @@
                   <div onClick={() => isNotIndexed && setExpandedRow(isExpanded ? null : idx)}
                     style={{ display: 'grid', gridTemplateColumns: '2fr 1.5fr 1fr 1fr 0.8fr 0.3fr', padding: '10px 16px', borderBottom: isExpanded ? 'none' : '1px solid var(--border)', fontSize: 13, alignItems: 'center', cursor: isNotIndexed ? 'pointer' : 'default',
                     background: r.verdict === 'FAIL' ? 'rgba(239,68,68,0.05)' : r.verdict === 'NEUTRAL' ? 'rgba(245,158,11,0.05)' : 'transparent' }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <span style={{ fontWeight: 600 }}>{r.path}</span>
-                      {isNotIndexed && <TicketTagForUrl project={project} url={r.url} />}
+                    <div>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontWeight: 600 }}>{r.path}</span>
+                      </div>
+                      {isNotIndexed && <div style={{ marginTop: 2 }}><TicketTagForUrl project={project} url={r.url} /></div>}
                       {r.googleCanonical && r.googleCanonical !== r.url && (
                         <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>Canonical: {r.googleCanonical}</div>
                       )}
@@ -10763,7 +10765,7 @@
                   ),
                   e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.url) },
                     e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url)),
-                    item._category === 'real' && e(TicketTagForUrl, { project: project, url: fullUrl(item.url) })
+                    item._category === 'real' && e('div', { style: { marginTop: 2 } }, e(TicketTagForUrl, { project: project, url: fullUrl(item.url) }))
                   ),
                   // Type column
                   e('td', { style: { ...tdStyle, verticalAlign: 'middle' } },
@@ -12231,7 +12233,8 @@
                     return React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
                       React.createElement('td', { style: { padding: '10px 16px' } },
                         React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
-                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', marginTop: 2, wordBreak: 'break-all' } }, p.url)
+                        React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', marginTop: 2, wordBreak: 'break-all' } }, p.url),
+                        p.is_orphan && React.createElement('div', { style: { marginTop: 2 } }, React.createElement(TicketTagForUrl, { project: project, url: p.url }))
                       ),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
@@ -12782,12 +12785,19 @@
       useEffect(() => {
         if (!pages.length || ticketSyncRef.current === project.id) return;
         ticketSyncRef.current = project.id;
+        // ONE ticket per PAGE — the ticket carries every to-do for that page
         const issues = [];
         for (const p of pages) {
-          for (const i of (p.issues || [])) {
-            if (i.type !== 'problem' && i.type !== 'warning') continue; // passes aren't issues
-            issues.push({ title: i.text, page: p.url, description: `${i.text} — ${p.url}`, severity: i.type === 'problem' ? 'high' : 'medium', category: 'On-Page Issues' });
-          }
+          const todos = (p.issues || []).filter(x => x.type === 'problem' || x.type === 'warning');
+          if (!todos.length) continue;
+          let path = p.url; try { path = new URL(p.url).pathname; } catch (e) {}
+          issues.push({
+            title: `On-page fixes — ${path}`,
+            page: p.url,
+            description: todos.map((x, i) => `${i + 1}. ${x.text}`).join('\n'),
+            severity: todos.some(x => x.type === 'problem') ? 'high' : 'medium',
+            category: 'On-Page Issues',
+          });
         }
         if (issues.length) syncSourceTickets(project, 'onpage', issues);
       }, [pages.length, project.id]);
@@ -32634,7 +32644,7 @@
                         return (
                         <React.Fragment key={i}>
                         <tr onClick={() => setExpanded(open ? null : c.keyword)} style={{ cursor: 'pointer', background: open ? 'var(--bg)' : 'transparent' }}>
-                          <td style={{ ...td, fontWeight: 600 }}><i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>{c.keyword}</td>
+                          <td style={{ ...td, fontWeight: 600 }}><i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>{c.keyword}<TicketTagForTitle project={project} title={c.keyword} /></td>
                           <td style={td}><span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: sevColor(c.severity) + '22', color: sevColor(c.severity) }}>{c.severity}</span></td>
                           <td style={td}>{c.page_count}</td>
                           <td style={td}>{c.total_impressions.toLocaleString()}</td>

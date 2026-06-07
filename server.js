@@ -622,12 +622,13 @@ async function initDb() {
     await client.query(`CREATE TABLE IF NOT EXISTS seodity_usage (month TEXT PRIMARY KEY, used INTEGER DEFAULT 0)`).catch(() => {});
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS error_message TEXT`).catch(() => {});
     try {
-      const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_source_reset_v4'`);
+      const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_source_reset_v5'`);
       if (!remint.rows.length) {
         await client.query(`DELETE FROM ticket_codes`);
         await client.query(`UPDATE action_items SET code=NULL, root_cause_key=NULL`);
-        await client.query(`INSERT INTO app_flags (name) VALUES ('ticket_source_reset_v4') ON CONFLICT DO NOTHING`);
-        console.log('[migrate] v4 reset: all old tickets deleted — tickets are now created ONLY at their source');
+        await client.query(`DELETE FROM action_items WHERE type LIKE 'src_%'`); // re-minted fresh by the source pages
+        await client.query(`INSERT INTO app_flags (name) VALUES ('ticket_source_reset_v5') ON CONFLICT DO NOTHING`);
+        console.log('[migrate] v5 reset: tickets re-mint at source (on-page = one ticket per page)');
       }
     } catch (e) { console.log('[migrate] remint:', e.message); }
     // Member-role project access: which projects a 'member' user can see/work on
@@ -6572,6 +6573,11 @@ app.post('/api/projects/:id/tickets/source-sync', async (req, res) => {
       if (!iss || !iss.title) continue;
       const k = idKey(iss.title, iss.page);
       let row = byKey.get(k);
+      if (row && iss.description) {
+        // keep the ticket's to-do list current (e.g. a page's on-page issues changed since last sync)
+        await pool.query('UPDATE action_items SET description=$1, severity=$2 WHERE id=$3 AND description IS DISTINCT FROM $1',
+          [iss.description.toString().slice(0, 1000), normSeverity(iss.severity || 'high'), row.id]).catch(() => {});
+      }
       if (!row) {
         row = (await pool.query(
           `INSERT INTO action_items (project_id, pillar, type, title, description, severity, category, status, execution_type, ranking_page)
