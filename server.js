@@ -30347,6 +30347,17 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     const MAX_IMAGES = 20;
     const imagesToFix = missingAlt.slice(0, MAX_IMAGES);
     const imageData = [];
+    const nameBasedAlts = []; // SVG/unsupported types: AI vision can't read them, but the filename usually says what they are (logos)
+    const bizName = project.business_name || project.name || '';
+    const altFromFilename = (src) => {
+      const base = (src.split('?')[0].split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '');
+      let words = base.replace(/[-_]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s+/g, ' ').trim();
+      const isLogo = /logo/i.test(words);
+      words = words.replace(/\blogo\b/gi, '').replace(/\b(header|footer|site|main)\b/gi, '').trim();
+      if (!words && isLogo) return `${bizName} logo`.trim();
+      const label = words.charAt(0).toUpperCase() + words.slice(1);
+      return isLogo ? `${label} logo` : label;
+    };
     for (const img of imagesToFix) {
       try {
         const imgResp = await fetch(img.src, { signal: AbortSignal.timeout(10000), redirect: 'follow' });
@@ -30360,7 +30371,12 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
           const ext = (img.src.split('?')[0].split('.').pop() || '').toLowerCase();
           const extMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
           if (extMap[ext]) contentType = extMap[ext];
-          else { console.log(`[alt-text-fix] Skipped ${img.src}: unsupported type for AI vision (${contentType})`); continue; }
+          else {
+            const fnAlt = altFromFilename(img.src);
+            if (fnAlt) { nameBasedAlts.push({ src: img.src, alt: fnAlt }); console.log(`[alt-text-fix] ${img.src}: unsupported for AI vision (${contentType}) — alt from filename: "${fnAlt}"`); }
+            else console.log(`[alt-text-fix] Skipped ${img.src}: unsupported type for AI vision (${contentType})`);
+            continue;
+          }
         }
         const buf = await imgResp.arrayBuffer();
         if (buf.byteLength > 3 * 1024 * 1024) { console.log(`[alt-text-fix] Skipped ${img.src}: too large (${(buf.byteLength/1024/1024).toFixed(1)}MB)`); continue; }
@@ -30375,9 +30391,10 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       }
     }
 
-    if (imageData.length === 0) {
+    if (imageData.length === 0 && nameBasedAlts.length === 0) {
       return res.json({ success: false, message: 'Could not fetch any of the images (blocked or too large). Alt text must be added manually.' });
     }
+    allGenerated.push(...nameBasedAlts);
 
     // 4. Send to Claude Vision in batches of 5
     const BATCH_SIZE = 5;
