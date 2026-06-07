@@ -33037,6 +33037,7 @@
       const [expanded, setExpanded] = useState(null);
       const [filter, setFilter] = useState('all'); // all | overview | cited | opportunity
       const [aioAnalysis, setAioAnalysis] = useState({}); // keyword -> {loading, data, error}
+      const [aioSent, setAioSent] = useState({}); // keyword -> 'sending' | 'sent' | 'exists' | 'error'
       const analyzeAio = async (r) => {
         setAioAnalysis(p => ({ ...p, [r.keyword]: { loading: true } }));
         try {
@@ -33234,6 +33235,46 @@
                                     </div>
                                     {hc.format_tips?.length > 0 && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}><b>Format:</b> {hc.format_tips.join(' · ')}</div>}
                                     {hc.quick_win && <div style={{ fontSize: 13, padding: '8px 12px', background: '#22c55e18', borderRadius: 8 }}><b style={{ color: '#22c55e' }}><i className="fas fa-bolt" style={{ marginRight: 5 }}></i>Quick win:</b> {hc.quick_win}</div>}
+                                    {(() => {
+                                      const sent = aioSent[r.keyword];
+                                      const brief = [
+                                        `GOAL: get cited in Google's AI Overview for "${r.keyword}".`,
+                                        hc.page_to_use ? `WHERE: ${hc.page_to_use}` : '',
+                                        hc.answer_snippet ? `OPENING ANSWER (publish as the first paragraph):\n${hc.answer_snippet}` : '',
+                                        hc.headings?.length ? `HEADINGS:\n${hc.headings.map(h => `- ${h}`).join('\n')}` : '',
+                                        hc.faqs?.length ? `FAQ SECTION:\n${hc.faqs.map(f => `Q: ${f.q}\nA: ${f.a}`).join('\n')}` : '',
+                                        hc.schema?.length ? `SCHEMA: ${hc.schema.join(', ')}` : '',
+                                        hc.entities_to_mention?.length ? `MENTION: ${hc.entities_to_mention.join(', ')}` : '',
+                                        hc.format_tips?.length ? `FORMAT: ${hc.format_tips.join(' · ')}` : '',
+                                        hc.quick_win ? `QUICK WIN: ${hc.quick_win}` : '',
+                                      ].filter(Boolean).join('\n\n');
+                                      if (sent === 'sent') return <div style={{ marginTop: 10, fontSize: 13, color: '#22c55e', fontWeight: 700 }}><i className="fas fa-circle-check" style={{ marginRight: 6 }}></i>Sent to Copywriter — find it in Optimise Website Copy → Queue</div>;
+                                      if (sent === 'exists') return <div style={{ marginTop: 10, fontSize: 13, color: '#6366f1', fontWeight: 700 }}><i className="fas fa-circle-check" style={{ marginRight: 6 }}></i>Already in the Copywriter queue</div>;
+                                      return (
+                                        <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                          <button disabled={sent === 'sending'} onClick={async () => {
+                                            setAioSent(p => ({ ...p, [r.keyword]: 'sending' }));
+                                            const slugM = (hc.page_to_use || '').match(/\/[a-z0-9\-\/]+\//i);
+                                            try {
+                                              await api(`/projects/${pid}/content-queue`, { method: 'POST', body: {
+                                                page_url: slugM ? slugM[0] : null,
+                                                page_title: (hc.headings && hc.headings[0] ? hc.headings[0].replace(/^H1:\s*/i, '') : `AI citation page for "${r.keyword}"`),
+                                                content_type: /new dedicated page|new page/i.test(hc.page_to_use || '') ? 'new_page' : 'optimise',
+                                                source: 'ai-search', priority: 'high', brief,
+                                              } });
+                                              setAioSent(p => ({ ...p, [r.keyword]: 'sent' }));
+                                            } catch (e) { setAioSent(p => ({ ...p, [r.keyword]: (e.message || '').includes('409') ? 'exists' : 'error' })); }
+                                          }} style={{ background: '#8b5cf6', color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: sent === 'sending' ? 0.7 : 1 }}>
+                                            {sent === 'sending' ? <><span className="spinner" style={{ marginRight: 6 }}></span>Sending...</> : <><i className="fas fa-pen" style={{ marginRight: 6 }}></i>Send to Copywriter</>}
+                                          </button>
+                                          <span style={{ fontSize: 12, color: 'var(--text3)' }}>or</span>
+                                          <button onClick={() => { navigator.clipboard.writeText(brief); setAioSent(p => ({ ...p, [r.keyword]: undefined })); alert('Brief copied — paste it wherever you write (Word, WordPress, email to your writer).'); }}
+                                            style={{ background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                                            <i className="fas fa-copy" style={{ marginRight: 6 }}></i>Manual — copy the full brief
+                                          </button>
+                                        </div>
+                                      );
+                                    })()}
                                   </>}
                                 </div>
                               );
