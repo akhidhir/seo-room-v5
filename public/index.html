@@ -7977,7 +7977,21 @@
         if (!project?.id) return;
         const data = await api(`/projects/${project.id}/security-audit/latest`);
         if (data && data.status === 'completed' && data.data) {
-          setAudit(typeof data.data === 'string' ? JSON.parse(data.data) : data.data);
+          const parsed = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
+          setAudit(parsed);
+          // SOURCE → TICKET: each failing security check mints its own ticket (idempotent)
+          try {
+            const failing = (parsed.checks || []).filter(c => c && c.status && c.status !== 'pass').slice(0, 60);
+            if (failing.length) {
+              syncSourceTickets(project, 'security', failing.map(c => ({
+                title: c.name || c.id || 'Security check',
+                page: null,
+                description: [c.details, c.fix ? `Fix: ${c.fix}` : ''].filter(Boolean).join(' — '),
+                severity: c.severity || 'medium',
+                category: 'Security',
+              })));
+            }
+          } catch (e) {}
           setLoading(false);
           setPolling(false);
         } else if (data && data.status === 'running') {
@@ -9086,6 +9100,21 @@
       const [aiAnalysis, setAiAnalysis] = useState({});
       const [analyzingAI, setAnalyzingAI] = useState(false);
 
+      // SOURCE → TICKET: each not-indexed page mints its own ticket (idempotent)
+      const idxTicketSyncRef = React.useRef(null);
+      useEffect(() => {
+        const notIdx = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL');
+        if (!notIdx.length || idxTicketSyncRef.current === project.id) return;
+        idxTicketSyncRef.current = project.id;
+        syncSourceTickets(project, 'indexing', notIdx.map(r => ({
+          title: `Not indexed: ${r.path}`,
+          page: r.url,
+          description: `${r.coverageState || 'Not indexed'} — fix the blocker, then Request Indexing in Search Console.`,
+          severity: 'high',
+          category: 'Indexing',
+        })));
+      }, [results.length, project.id]);
+
       const runAIAnalysis = async () => {
         const notIndexed = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL');
         if (!notIndexed.length) return;
@@ -9330,6 +9359,7 @@
                     background: r.verdict === 'FAIL' ? 'rgba(239,68,68,0.05)' : r.verdict === 'NEUTRAL' ? 'rgba(245,158,11,0.05)' : 'transparent' }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       <span style={{ fontWeight: 600 }}>{r.path}</span>
+                      {isNotIndexed && <TicketTagForUrl project={project} url={r.url} />}
                       {r.googleCanonical && r.googleCanonical !== r.url && (
                         <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>Canonical: {r.googleCanonical}</div>
                       )}
@@ -10178,6 +10208,15 @@
           setBotFiltered(classified.filter(x => x._category === 'bot').length);
           setFourOhFours(classified);
           setFourTotal(classified.length);
+          // SOURCE → TICKET: each real-page 404 mints its own ticket (idempotent)
+          const real = classified.filter(x => x._category === 'real').slice(0, 100);
+          if (real.length) {
+            syncSourceTickets(project, '404s', real.map(f => {
+              const u = f.url || f.url_path || '';
+              let path = u; try { path = new URL(u).pathname; } catch (e) {}
+              return { title: `404: ${path}`, page: u, description: `Returns 404 (${f.hit_count || 1} hit(s)). 301-redirect it if the page moved, or 410 it if it's gone for good.`, severity: 'high', category: '404 Error' };
+            }));
+          }
         } catch (err) { console.error('Load 404s error:', err); }
         setFourLoading(false);
       };
@@ -10723,7 +10762,8 @@
                     item.id && e('input', { type: 'checkbox', checked: selected404s.has(item.id), onChange: () => toggle404Select(item.id), style: { cursor: 'pointer', accentColor: '#6366f1' } })
                   ),
                   e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.url) },
-                    e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url))
+                    e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url)),
+                    item._category === 'real' && e(TicketTagForUrl, { project: project, url: fullUrl(item.url) })
                   ),
                   // Type column
                   e('td', { style: { ...tdStyle, verticalAlign: 'middle' } },
@@ -11747,6 +11787,16 @@
           ]);
           setAudit(auditData);
           setSuggestions(sugData.suggestions || []);
+          // SOURCE → TICKET: orphan pages mint their own tickets (idempotent)
+          try {
+            const orphans = ((auditData && auditData.stats && auditData.stats.page_details) || []).filter(p => p.is_orphan).slice(0, 100);
+            if (orphans.length) {
+              syncSourceTickets(project, 'links', orphans.map(p => {
+                let path = p.url; try { path = new URL(p.url).pathname; } catch (e) {}
+                return { title: `Orphan page: ${path}`, page: p.url, description: 'No internal links point to this page — add inbound links via Internal Linking → Rescue Orphans / Optimise Links (Auto).', severity: 'high', category: 'Internal Linking' };
+              }));
+            }
+          } catch (e) {}
           if (auditData.status === 'running') setTimeout(loadData, 3000);
         } catch (e) { console.error(e); }
         setLoading(false);
@@ -12726,6 +12776,20 @@
       // Ticket codes per page URL (Control Centre) — for the Ticket column + click-to-filter
       const ticketData = useTicketCodes(project);
       const [ticketFilter, setTicketFilter] = useState(null);
+
+      // SOURCE → TICKET: every red problem on this audit mints its own ticket (idempotent)
+      const ticketSyncRef = React.useRef(null);
+      useEffect(() => {
+        if (!pages.length || ticketSyncRef.current === project.id) return;
+        ticketSyncRef.current = project.id;
+        const issues = [];
+        for (const p of pages) {
+          for (const i of (p.issues || []).filter(x => x.type === 'problem')) {
+            issues.push({ title: i.text, page: p.url, description: `${i.text} — ${p.url}`, severity: 'high', category: 'On-Page Issues' });
+          }
+        }
+        if (issues.length) syncSourceTickets(project, 'onpage', issues);
+      }, [pages.length, project.id]);
       const codesForUrl = (url) => {
         if (!ticketData || !url) return [];
         let k = url.toString().trim();
@@ -19687,12 +19751,35 @@
       const [data, setData] = useState(__ticketCodesCache[project && project.id] || null);
       useEffect(() => {
         if (!project || !project.id) return;
-        if (__ticketCodesCache[project.id]) { setData(__ticketCodesCache[project.id]); return; }
-        (async () => {
+        const fetchCodes = async () => {
           try { const r = await api(`/projects/${project.id}/control-centre/codes`); const d = { codes: r.codes || {}, by_url: r.by_url || {}, meta: r.meta || {} }; __ticketCodesCache[project.id] = d; setData(d); } catch (e) {}
-        })();
+        };
+        if (__ticketCodesCache[project.id]) setData(__ticketCodesCache[project.id]); else fetchCodes();
+        // refresh all chips whenever any page creates tickets at the source
+        const onUpdate = () => fetchCodes();
+        window.addEventListener('tickets-updated', onUpdate);
+        return () => window.removeEventListener('tickets-updated', onUpdate);
       }, [project && project.id]);
       return data;
+    }
+    // Create/refresh tickets for a source page's current issues. Idempotent — safe to call on every load.
+    async function syncSourceTickets(project, source, issues) {
+      if (!project || !project.id || !issues || !issues.length) return null;
+      try {
+        const r = await api(`/projects/${project.id}/tickets/source-sync`, { method: 'POST', body: { source, issues } });
+        delete __ticketCodesCache[project.id];
+        window.dispatchEvent(new Event('tickets-updated'));
+        return r;
+      } catch (e) { return null; }
+    }
+    // Row tag for sources without a page URL (security checks, cannibalization) — match by issue title.
+    function TicketTagForTitle({ project, title }) {
+      const data = useTicketCodes(project);
+      if (!data || !title) return null;
+      const t = title.toString().slice(0, 80).toLowerCase().trim();
+      const hit = Object.entries(data.meta || {}).find(([, m]) => (m.title || '').toLowerCase().trim() === t);
+      if (!hit) return null;
+      return <TicketChips list={[hit[0]]} small={true} />;
     }
     function TicketChips({ list, small }) {
       if (!list || !list.length) return null;
@@ -32464,6 +32551,21 @@
         setLoading(true);
         api(`/projects/${pid}/competing-pages`).then(r => { if (r && (r.scanned_at || (r.competing || []).length)) setData(r); }).catch(() => {}).finally(() => setLoading(false));
       }, [pid]);
+
+      // SOURCE → TICKET: each real cannibalization conflict mints its own ticket (idempotent)
+      const canibSyncRef = React.useRef(null);
+      useEffect(() => {
+        const real = ((data && data.competing) || []).filter(c => (c.classification || c.severity_class || 'real') === 'real' || c.real === true || !c.classification);
+        if (!real.length || canibSyncRef.current === pid) return;
+        canibSyncRef.current = pid;
+        syncSourceTickets(project, 'canib', real.slice(0, 100).map(c => ({
+          title: (c.keyword || c.title || 'Cannibalization issue').toString().slice(0, 200),
+          page: (c.pages && c.pages[0] && (c.pages[0].url || c.pages[0])) || null,
+          description: `${(c.pages || []).length || 2} pages compete for the same target. Pick the primary, re-target or 301 the other, point internal links at the primary.`,
+          severity: c.severity || 'high',
+          category: 'Cannibalization',
+        })));
+      }, [data, pid]);
 
       const runScan = async () => {
         setScanning(true);

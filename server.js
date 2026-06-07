@@ -622,12 +622,12 @@ async function initDb() {
     await client.query(`CREATE TABLE IF NOT EXISTS seodity_usage (month TEXT PRIMARY KEY, used INTEGER DEFAULT 0)`).catch(() => {});
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS error_message TEXT`).catch(() => {});
     try {
-      const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_one_issue_remint_v3'`);
+      const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_source_reset_v4'`);
       if (!remint.rows.length) {
         await client.query(`DELETE FROM ticket_codes`);
         await client.query(`UPDATE action_items SET code=NULL, root_cause_key=NULL`);
-        await client.query(`INSERT INTO app_flags (name) VALUES ('ticket_one_issue_remint_v3') ON CONFLICT DO NOTHING`);
-        console.log('[migrate] Re-minted ticket codes (v3: one ticket per finding, source-anchored)');
+        await client.query(`INSERT INTO app_flags (name) VALUES ('ticket_source_reset_v4') ON CONFLICT DO NOTHING`);
+        console.log('[migrate] v4 reset: all old tickets deleted — tickets are now created ONLY at their source');
       }
     } catch (e) { console.log('[migrate] remint:', e.message); }
     // Member-role project access: which projects a 'member' user can see/work on
@@ -6189,10 +6189,12 @@ const PILLAR_CODE_RULES = [
   [/suburb|content|thin|\bcopy\b/i, 'CONT'],
   [/on-?page|\bmeta\b|\btitle\b|ctr|underperform|zero|quick win/i, 'ONPG'],
   [/security|malware|\bssl\b|hsts|xml-?rpc|firewall/i, 'SEC'],
-  [/schema|crawl|site health|technical|robots|sitemap/i, 'TECH'],
+  [/schema|crawl|site health|technical|robots|sitemap|404|broken/i, 'TECH'],
   [/profile|\bnap\b|photo|hours|categor|\bgbp\b|competitor|proximity|relevance|prominence|strategy|30.?day/i, 'GBP'],
 ];
 function pillarCode(item) {
+  // Citations work is recognisable from the TITLE (e.g. "Claim True Local / Yellow Pages listing")
+  if (/citation|directory|true local|yellow pages|claim.*listing|listings? with.*nap/i.test(item.title || '')) return 'CITE';
   const hay = `${item.category || ''} ${item.pillar || ''} ${item.type || ''}`;
   for (const [re, code] of PILLAR_CODE_RULES) if (re.test(hay)) return code;
   return 'GEN';
@@ -6463,36 +6465,28 @@ const TICKET_DONE_WHEN = {
 async function buildControlTickets(project) {
   const projectId = project.id;
   const projCode = deriveProjectCode(project);
-  const items = (await pool.query('SELECT * FROM action_items WHERE project_id=$1', [projectId])).rows.map(normalizeActionRow);
+  // V4 — tickets are created ONLY at their source. The board indexes existing tickets;
+  // it never invents them: only findings that already carry a code appear here.
+  const items = (await pool.query('SELECT * FROM action_items WHERE project_id=$1 AND code IS NOT NULL', [projectId])).rows.map(normalizeActionRow);
 
-  // V3 — ONE TICKET = ONE ISSUE. No grouping heuristics: every finding is its own ticket,
-  // code anchored to a stable identity so audit re-runs keep the same code. Duplicate findings
-  // (same title + page from a re-run) share one ticket instead of minting another.
   const stateRows = (await pool.query('SELECT * FROM ticket_codes WHERE project_id=$1', [projectId])).rows;
   const stateByKey = {}; for (const r of stateRows) stateByKey[r.root_cause_key] = r;
 
   const DONE_STATES = ['done', 'completed', 'fixed', 'applied', 'executed'];
   const tickets = [];
   const ticketByKey = {};
-  const stampByCode = {}; // code -> { rcKey, ids } — batched, only when changed (zero writes steady-state)
 
   for (const it of items) {
     const pCode = pillarCode(it);
-    const rcKey = findingIdentity(projectId, pCode, it);
+    const rcKey = it.root_cause_key;
     const done = DONE_STATES.includes((it.status || '').toLowerCase());
     const page = it.ranking_page || ((it.pages_affected || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || null);
 
-    // Duplicate of an existing ticket (audit re-run): attach, don't mint
-    if (ticketByKey[rcKey]) {
-      const t = ticketByKey[rcKey];
-      t.item_ids.push(it.id);
-      if (it.code !== t.code || it.root_cause_key !== rcKey) (stampByCode[t.code] = stampByCode[t.code] || { rcKey, ids: [] }).ids.push(it.id);
-      continue;
-    }
+    // Duplicate finding rows for the same ticket: attach, don't list twice
+    if (ticketByKey[rcKey]) { ticketByKey[rcKey].item_ids.push(it.id); continue; }
 
     const st = stateByKey[rcKey] || {};
-    const code = st.code || await ensureTicketCode(projectId, projCode, rcKey, pCode);
-    if (it.code !== code || it.root_cause_key !== rcKey) (stampByCode[code] = stampByCode[code] || { rcKey, ids: [] }).ids.push(it.id);
+    const code = it.code;
 
     const effectiveAssignee = st.assignee_id || project.assigned_member || null;
     const status = st.status && st.status !== 'New' ? st.status : (effectiveAssignee ? 'Assigned' : 'New');
@@ -6552,67 +6546,57 @@ async function buildControlTickets(project) {
     ticketByKey[rcKey] = t;
   }
 
-  // Batched code stamping — only rows whose stored code actually changed
-  for (const [code, s] of Object.entries(stampByCode)) {
-    await pool.query('UPDATE action_items SET code=$1, root_cause_key=$2 WHERE id = ANY($3::int[])', [code, s.rcKey, s.ids]).catch(() => {});
-  }
-
-  // Ingest the latest SECURITY AUDIT (it stores checks in audits, not action_items) — one ticket per failing category.
-  try {
-    const sec = (await pool.query(
-      `SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='security' AND status='completed' ORDER BY created_at DESC LIMIT 1`,
-      [projectId])).rows[0];
-    const checks = sec && sec.audit_data && (sec.audit_data.checks || sec.audit_data.results) || [];
-    const failing = checks.filter(c => c && c.status && c.status !== 'pass');
-    // V3: one ticket per FAILING CHECK (one issue), anchored to the check's id
-    for (const c of failing) {
-      const cat = c.category || 'Security';
-      const rcKey = `${projectId}:SEC:${(c.id || c.name || cat)}`.toLowerCase().replace(/[^a-z0-9:]+/g, '-');
-      const st = stateByKey[rcKey] || {};
-      const code = st.code || await ensureTicketCode(projectId, projCode, rcKey, 'SEC');
-      const effectiveAssignee = st.assignee_id || project.assigned_member || null;
-      const status = st.status && st.status !== 'New' ? st.status : (effectiveAssignee ? 'Assigned' : 'New');
-      tickets.push({
-        ticket_id: st.id || null,
-        code,
-        project_id: Number(projectId),
-        project_name: project.name || project.business_name || '',
-        pillar_code: 'SEC',
-        category: `Security: ${cat}`,
-        fix_type: 'Technical',
-        severity: normSeverity(c.severity),
-        title: c.name || c.id || 'Security check',
-        status,
-        late: !!(st.due_date && status !== 'Done' && new Date(st.due_date) < new Date(new Date().toDateString())),
-        assignee_id: effectiveAssignee,
-        assignee_source: st.assignee_id ? 'ticket' : (project.assigned_member ? 'project' : null),
-        due_date: st.due_date || null,
-        affected_count: 1,
-        affected_pages: [],
-        estimated_hours: 0.5,
-        item_ids: [],
-        how_to: [c.details, c.fix].filter(Boolean).concat(TICKET_PLAYBOOK.SEC.steps.slice(2)),
-        how_to_source: 'source',
-        where: TICKET_PLAYBOOK.SEC.where,
-        done_when: TICKET_DONE_WHEN.SEC,
-        auto_verified: false,
-        verification: st.verification || null,
-        progress: 0,
-        findings: [{
-          title: c.name || c.id || 'Security check',
-          page: null,
-          keyword: null,
-          current: (c.details || '').toString().slice(0, 160) || null,
-          target: (c.fix || '').toString().slice(0, 160) || null,
-          severity: normSeverity(c.severity),
-        }],
-      });
-    }
-  } catch (e) { console.log('[control-centre] security ingest:', e.message); }
-
   tickets.sort((a, b) => (SEV_RANK[b.severity] - SEV_RANK[a.severity]) || (b.affected_count - a.affected_count));
   return { project_code: projCode, total_findings: items.length, tickets };
 }
+
+// SOURCE → TICKET: pages call this with their current issues; each issue gets (or reuses) its
+// own permanent code. Idempotent by (title + page), so re-syncs never duplicate.
+app.post('/api/projects/:id/tickets/source-sync', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const source = (req.body && req.body.source || 'source').toString().slice(0, 30);
+    const issues = Array.isArray(req.body && req.body.issues) ? req.body.issues.slice(0, 300) : [];
+    if (!issues.length) return res.json({ ok: true, tickets: [] });
+
+    const projCode = deriveProjectCode(project);
+    const existing = (await pool.query(
+      `SELECT id, title, ranking_page, code FROM action_items WHERE project_id=$1 AND type LIKE 'src_%'`,
+      [req.params.id])).rows;
+    const idKey = (t, p) => `${(t || '').toLowerCase().trim()}|${(p || '').toLowerCase().trim()}`;
+    const byKey = new Map(existing.map(r => [idKey(r.title, r.ranking_page), r]));
+
+    const out = [];
+    for (const iss of issues) {
+      if (!iss || !iss.title) continue;
+      const k = idKey(iss.title, iss.page);
+      let row = byKey.get(k);
+      if (!row) {
+        row = (await pool.query(
+          `INSERT INTO action_items (project_id, pillar, type, title, description, severity, category, status, execution_type, ranking_page)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'pending','manual',$8) RETURNING id, title, ranking_page, code`,
+          [req.params.id, iss.pillar || 'website', 'src_' + source, iss.title.toString().slice(0, 250),
+           (iss.description || '').toString().slice(0, 1000), normSeverity(iss.severity || 'high'),
+           iss.category || source, iss.page || null])).rows[0];
+        byKey.set(k, row);
+      }
+      if (!row.code) {
+        const itemForClass = { title: row.title, category: iss.category || source, pillar: iss.pillar || '', type: 'src_' + source, ranking_page: row.ranking_page, pages_affected: '' };
+        const pCode = pillarCode(itemForClass);
+        const rcKey = findingIdentity(req.params.id, pCode, itemForClass);
+        const code = await ensureTicketCode(req.params.id, projCode, rcKey, pCode);
+        await pool.query('UPDATE action_items SET code=$1, root_cause_key=$2 WHERE id=$3', [code, rcKey, row.id]);
+        row.code = code;
+      }
+      out.push({ title: row.title, page: row.ranking_page, code: row.code });
+    }
+    res.json({ ok: true, tickets: out });
+  } catch (e) {
+    console.error('[source-sync] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get('/api/projects/:id/control-centre/tickets', async (req, res) => {
   try {
