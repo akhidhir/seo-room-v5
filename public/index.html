@@ -25722,36 +25722,47 @@
         });
       }, [serpOnly, sortCol, sortDir]);
 
-      // Mint ONE ticket per keyword that needs work — not ranking, OR ranked outside the top 10 (same model as Maps)
-      const serpIssueRows = serpOnly.filter(kw => kw.checked_at && (!kw.serp_position || kw.serp_position > 10));
-      const serpIssueKey = serpIssueRows.map(kw => `${kw.keyword}:${kw.serp_position || 0}`).sort().join('|');
+      // Mint ONE ticket per keyword — every checked keyword except #1 has work ("we can always push it to #1").
+      // The ticket's to-do list prefers the AI analysis quick wins when one was run.
+      const serpIssueRows = serpOnly.filter(kw => kw.checked_at && (!kw.serp_position || kw.serp_position > 1));
+      const serpIssueKey = serpIssueRows.map(kw => `${kw.keyword}:${kw.serp_position || 0}:${analysisResults[kw.keyword] && !analysisResults[kw.keyword].error ? 1 : 0}`).sort().join('|');
       useEffect(() => {
         if (!project || !project.id || !serpIssueKey) return;
-        const issues = serpIssueRows.map(kw => kw.serp_position ? ({
-          title: `Improve ranking: "${kw.keyword}"`,
-          description: [
-            `Currently #${kw.serp_position} — target: top 10${kw.search_volume ? ` (volume: ${kw.search_volume})` : ''}`,
-            `Ranking page: ${kw.serp_url || 'not identified'}`,
-            '1. Strengthen the ranking page: keyword in meta title, H1 and opening paragraph',
-            '2. Expand the section that answers the query; add FAQs',
-            '3. Add 2-3 internal links to the page using the keyword as anchor',
-            '4. Run Check Rankings to confirm it moves into the top 10',
-          ].join('\n'),
-          severity: kw.serp_position > 20 ? 'high' : 'medium',
-          category: 'SERP Visibility',
-          pillar: 'serp',
-        }) : ({
-          title: `Not ranking: "${kw.keyword}"`,
-          description: [
-            `1. Create or pick ONE page to target "${kw.keyword}"${kw.search_volume ? ` (volume: ${kw.search_volume})` : ''}`,
-            '2. Put the keyword in the meta title, H1 and opening paragraph',
-            '3. Add 2-3 internal links to that page using the keyword as anchor',
-            '4. Run Check Rankings after the next crawl to confirm it enters the top 100',
-          ].join('\n'),
-          severity: 'high',
-          category: 'SERP Visibility',
-          pillar: 'serp',
-        }));
+        const issues = serpIssueRows.map(kw => {
+          const ar = analysisResults[kw.keyword];
+          const a = ar && !ar.error ? ar.analysis : null;
+          const aiSteps = a && Array.isArray(a.quick_wins) && a.quick_wins.length
+            ? [`AI analysis score: ${a.score ?? '—'}/100. Quick wins:`].concat(a.quick_wins.slice(0, 3).map((q, i) => `${i + 1}. ${String(q).slice(0, 220)}`))
+            : null;
+          if (!kw.serp_position) return {
+            title: `Not ranking: "${kw.keyword}"`,
+            description: (aiSteps || [
+              `1. Create or pick ONE page to target "${kw.keyword}"${kw.search_volume ? ` (volume: ${kw.search_volume})` : ''}`,
+              '2. Put the keyword in the meta title, H1 and opening paragraph',
+              '3. Add 2-3 internal links to that page using the keyword as anchor',
+              '4. Run Check Rankings after the next crawl to confirm it enters the top 100',
+            ]).join('\n'),
+            severity: 'high',
+            category: 'SERP Visibility',
+            pillar: 'serp',
+          };
+          const target = kw.serp_position > 10 ? 'top 10' : kw.serp_position > 3 ? 'top 3' : '#1';
+          return {
+            title: `Improve ranking: "${kw.keyword}"`,
+            description: [
+              `Currently #${kw.serp_position} — target: ${target}${kw.search_volume ? ` (volume: ${kw.search_volume})` : ''}`,
+              `Ranking page: ${kw.serp_url || 'not identified'}`,
+            ].concat(aiSteps || [
+              '1. Strengthen the ranking page: keyword in meta title, H1 and opening paragraph',
+              '2. Expand the section that answers the query; add FAQs',
+              '3. Add 2-3 internal links to the page using the keyword as anchor',
+              `4. Run Check Rankings to confirm it reaches ${target}`,
+            ]).join('\n'),
+            severity: kw.serp_position > 20 ? 'high' : kw.serp_position > 10 ? 'medium' : 'low',
+            category: 'SERP Visibility',
+            pillar: 'serp',
+          };
+        });
         if (issues.length) syncSourceTickets(project, 'serp', issues);
       }, [serpIssueKey, project && project.id]);
 
@@ -26374,7 +26385,7 @@
                     <input type="checkbox" checked={!!analysisChecked[kw.id]} onChange={() => toggleAnalysisCheck(kw.id)} onClick={e => e.stopPropagation()} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)', flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</span>
-                      {kw.checked_at && (!kw.serp_position || kw.serp_position > 10) && <TicketTagForTitle project={project} title={kw.serp_position ? `Improve ranking: "${kw.keyword}"` : `Not ranking: "${kw.keyword}"`} pillar="SERP" />}
+                      {kw.checked_at && (!kw.serp_position || kw.serp_position > 1) && <TicketTagForTitle project={project} title={kw.serp_position ? `Improve ranking: "${kw.keyword}"` : `Not ranking: "${kw.keyword}"`} pillar="SERP" />}
                       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : kw.checked_at ? <span style={{ color: '#ef4444', fontSize: 12 }}>No ranking page found</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>Click "Check Rankings" to scan</span>}
                       </div>
