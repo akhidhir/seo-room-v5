@@ -19328,6 +19328,34 @@
 
       useEffect(() => { loadCached(); }, [project.id]);
 
+      // Mint ROOT-CAUSE tickets from the site map: stale content / poor copy / other issues — one ticket each, listing pages
+      const isStaleNode = n => n.last_modified && (Date.now() - new Date(n.last_modified).getTime()) > 365 * 24 * 60 * 60 * 1000;
+      const isPoorCopyNode = n => (n.issues || []).some(i => i.startsWith('Thin content') || i === 'Missing H1 tag');
+      useEffect(() => {
+        if (!project?.id || !graphData || !graphData.nodes || !graphData.nodes.length) return;
+        const stale = graphData.nodes.filter(isStaleNode);
+        const poor = graphData.nodes.filter(isPoorCopyNode);
+        const other = graphData.nodes.filter(n => !isPoorCopyNode(n) && (n.issues || []).filter(i => !i.startsWith('Orphan page')).length > 0);
+        const listPages = arr => arr.slice(0, 10).map((n, i) => `${i + 1}. /${n.slug}`).join('\n') + (arr.length > 10 ? `\n…and ${arr.length - 10} more` : '');
+        const issues = [];
+        if (poor.length) issues.push({
+          title: 'Poor copy — thin content / missing H1',
+          description: `${poor.length} page(s) — open Optimise Website Copy and use "Send to Copywriter" on each:\n` + listPages(poor),
+          severity: 'high', category: 'Content Quality', pillar: 'website',
+        });
+        if (stale.length) issues.push({
+          title: 'Stale content — not updated in 1+ year',
+          description: `${stale.length} page(s) — refresh the copy (update facts, add a section, republish):\n` + listPages(stale),
+          severity: 'medium', category: 'Content Quality', pillar: 'website',
+        });
+        if (other.length) issues.push({
+          title: 'Content issues — other',
+          description: `${other.length} page(s) with issues flagged on the site map:\n` + other.slice(0, 10).map((n, i) => `${i + 1}. /${n.slug}: ${(n.issues || []).filter(x => !x.startsWith('Orphan page')).join('; ').slice(0, 80)}`).join('\n') + (other.length > 10 ? `\n…and ${other.length - 10} more` : ''),
+          severity: 'medium', category: 'Content Quality', pillar: 'website',
+        });
+        if (issues.length) syncSourceTickets(project, 'sitemap', issues);
+      }, [graphData, project?.id]);
+
       // Escape key exits fullscreen
       useEffect(() => {
         const handleKey = (e) => { if (e.key === 'Escape' && isFullscreen) setIsFullscreen(false); };
@@ -19727,6 +19755,12 @@
                         <td style={{ padding: '10px 14px' }}>
                           <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title}</div>
                           <div style={{ fontSize: 10, color: 'var(--text3)' }}>/{n.slug}</div>
+                          {(isPoorCopyNode(n) || isStaleNode(n)) && (
+                            <div style={{ marginTop: 2 }}>
+                              {isPoorCopyNode(n) && <TicketTagForTitle project={project} title="Poor copy — thin content / missing H1" />}
+                              {isStaleNode(n) && <TicketTagForTitle project={project} title="Stale content — not updated in 1+ year" />}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', color: n.word_count < 300 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.word_count}</td>
                         <td style={{ padding: '10px 14px', textAlign: 'center', color: n.inbound_count === 0 ? '#ef4444' : 'var(--text2)', fontWeight: 600 }}>{n.inbound_count}</td>
