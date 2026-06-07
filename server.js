@@ -30201,17 +30201,22 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     if (!finding.rows.length) return res.status(404).json({ error: 'Finding not found' });
     const f = finding.rows[0];
 
-    // Extract page slug from title — supports two formats:
-    // Per-image: "slug — missing alt: filename.jpg"
-    // Per-page (fallback): "slug — 6 missing alt"
-    const perImageMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*missing\s*alt:\s*(.+)/i);
-    const perPageMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*\d+\s*missing\s*alt/i);
-    const titleMatch = perImageMatch || perPageMatch;
-    if (!titleMatch) return res.status(400).json({ error: 'Cannot parse page slug from finding title' });
-    const pageSlug = titleMatch[1].trim();
-    const singleImageFile = perImageMatch ? perImageMatch[2].trim() : null;
+    // Page slug: explicit page_slug in body (aggregate findings fix page-by-page) OR parsed from title:
+    // Per-image: "slug — missing alt: filename.jpg" · Per-page: "slug — 6 missing alt"
+    const bodySlug = ((req.body && req.body.page_slug) || '').toString().trim().replace(/^\/+|\/+$/g, '');
+    let pageSlug, singleImageFile = null;
+    if (bodySlug) {
+      pageSlug = bodySlug;
+    } else {
+      const perImageMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*missing\s*alt:\s*(.+)/i);
+      const perPageMatch = (f.title || '').match(/^(.+?)\s*[—–-]\s*\d+\s*missing\s*alt/i);
+      const titleMatch = perImageMatch || perPageMatch;
+      if (!titleMatch) return res.status(400).json({ error: 'Cannot parse page slug from finding title' });
+      pageSlug = titleMatch[1].trim();
+      singleImageFile = perImageMatch ? perImageMatch[2].trim() : null;
+    }
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const pageUrl = pageSlug === 'homepage' ? `https://${domain}/` : `https://${domain}/${pageSlug}/`;
+    const pageUrl = (pageSlug === 'homepage' || pageSlug === 'home') ? `https://${domain}/` : `https://${domain}/${pageSlug}/`;
     // For per-image findings, current_value stores the full image URL
     const singleImageUrl = singleImageFile ? (f.current_value || '') : null;
 
