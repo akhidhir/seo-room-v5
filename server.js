@@ -6190,7 +6190,7 @@ const PILLAR_CODE_RULES = [
   [/on-?page|\bmeta\b|\btitle\b|ctr|underperform|zero|quick win/i, 'ONPG'],
   [/security|malware|\bssl\b|hsts|xml-?rpc|firewall/i, 'SEC'],
   [/schema|crawl|site health|technical|robots|sitemap/i, 'TECH'],
-  [/profile|\bnap\b|photo|hours|categor|\bgbp\b|competitor|proximity|relevance|prominence/i, 'GBP'],
+  [/profile|\bnap\b|photo|hours|categor|\bgbp\b|competitor|proximity|relevance|prominence|strategy|30.?day/i, 'GBP'],
 ];
 function pillarCode(item) {
   const hay = `${item.category || ''} ${item.pillar || ''} ${item.type || ''}`;
@@ -6513,7 +6513,10 @@ async function buildControlTickets(project) {
       category: normCategory(it.category) || it.pillar,
       fix_type: deriveFixType(it),
       severity: it.severity || 'medium',
-      title: it.title || it.category || 'Untitled',
+      // Some old extractions saved the severity word as the title — use the real text instead
+      title: /^(critical|high|medium|low)$/i.test((it.title || '').trim())
+        ? ((it.description || '').slice(0, 90) || it.category || 'Untitled')
+        : (it.title || it.category || 'Untitled'),
       status,
       late: !!isLate,
       assignee_id: effectiveAssignee,
