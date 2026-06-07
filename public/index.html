@@ -8136,8 +8136,7 @@
           e('div', null,
             e('h2', { style: { margin: 0, fontSize: 22 } },
               e('i', { className: 'fas fa-shield-halved', style: { marginRight: 10, color: '#ef4444' } }),
-              'Website Security Audit',
-              e(TicketTag, { project: project, pillars: ['SEC'] })
+              'Website Security Audit'
             ),
             e('div', { style: { fontSize: 14, color: 'var(--text3)', marginTop: 4 } }, 'Check your WordPress site for vulnerabilities, exposed files, and security misconfigurations')
           ),
@@ -8219,7 +8218,7 @@
                 return e('div', { key: check.id || ci, style: { padding: '12px 20px', borderBottom: ci < catChecks.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', flexDirection: 'column', gap: 6 } },
                   e('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
                     e('i', { className: sc.icon, style: { color: sc.fg, fontSize: 16, width: 20, textAlign: 'center' } }),
-                    e('span', { style: { fontWeight: 600, fontSize: 14, flex: 1 } }, check.name),
+                    e('span', { style: { fontWeight: 600, fontSize: 14, flex: 1 } }, check.name, check.status !== 'pass' && e(TicketTagForTitle, { project: project, title: check.name, pillar: 'SEC' })),
                     // Fix button
                     hasFix && !fr?.ok && e('button', {
                       onClick: () => runFix(check.id),
@@ -8657,7 +8656,6 @@
             <div>
               <h2 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>
                 <i className="fas fa-tachometer-alt" style={{ marginRight: 10, color: '#ef4444' }} />Core Web Vitals
-                <TicketTag project={project} pillars={['CWV']} />
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 14, marginTop: 6 }}>Google PageSpeed performance scores per page (mobile + desktop)</p>
             </div>
@@ -9219,7 +9217,6 @@
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
                 <i className="fas fa-file-import" style={{ marginRight: 10, color: 'var(--accent)' }} />Indexing Status
-                <TicketTag project={project} pillars={['INDX']} />
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Check which pages are indexed by Google — home, services, and suburb pages</p>
             </div>
@@ -9361,7 +9358,7 @@
                       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         <span style={{ fontWeight: 600 }}>{r.path}</span>
                       </div>
-                      {isNotIndexed && <div style={{ marginTop: 2 }}><TicketTagForUrl project={project} url={r.url} /></div>}
+                      {isNotIndexed && <div style={{ marginTop: 2 }}><TicketTagForUrl project={project} url={r.url} pillar="INDX" /></div>}
                       {r.googleCanonical && r.googleCanonical !== r.url && (
                         <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>Canonical: {r.googleCanonical}</div>
                       )}
@@ -10765,7 +10762,7 @@
                   ),
                   e('td', { style: { ...tdStyle, ...urlCell }, title: fullUrl(item.url) },
                     e('a', { href: fullUrl(item.url), target: '_blank', rel: 'noopener', style: { color: 'var(--text)', textDecoration: 'none' }, onMouseOver: (ev) => ev.target.style.textDecoration = 'underline', onMouseOut: (ev) => ev.target.style.textDecoration = 'none' }, fullUrl(item.url)),
-                    item._category === 'real' && e('div', { style: { marginTop: 2 } }, e(TicketTagForUrl, { project: project, url: fullUrl(item.url) }))
+                    item._category === 'real' && e('div', { style: { marginTop: 2 } }, e(TicketTagForUrl, { project: project, url: fullUrl(item.url), pillar: 'TECH' }))
                   ),
                   // Type column
                   e('td', { style: { ...tdStyle, verticalAlign: 'middle' } },
@@ -11140,7 +11137,7 @@
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
             e('i', { className: 'fas fa-directions', style: { fontSize: 24, color: '#6366f1' } }),
             e('div', null,
-              e('h2', { style: { margin: 0, fontSize: 22, fontWeight: 600 } }, '404s & Redirects', e(TicketTag, { project: project, pillars: ['TECH'] })),
+              e('h2', { style: { margin: 0, fontSize: 22, fontWeight: 600 } }, '404s & Redirects'),
               e('p', { style: { margin: 0, fontSize: 13, color: 'var(--text3)', marginTop: 2 } }, 'Monitor 404 errors, manage redirects, and find broken links across your site.')
             )
           )
@@ -11977,8 +11974,7 @@
         React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 } },
           React.createElement('h2', { style: { margin: 0, fontSize: 22 } },
             React.createElement('i', { className: 'fas fa-link', style: { marginRight: 10, color: 'var(--accent)' } }),
-            'Internal Linking',
-            React.createElement(TicketTag, { project: project, pillars: ['LINK'] })
+            'Internal Linking'
           ),
           React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' } },
             isRunning && React.createElement('span', { style: { color: '#f59e0b', fontSize: 13 } },
@@ -12234,7 +12230,7 @@
                       React.createElement('td', { style: { padding: '10px 16px' } },
                         React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
                         React.createElement('div', { style: { fontSize: 12, color: 'var(--text2)', marginTop: 2, wordBreak: 'break-all' } }, p.url),
-                        p.is_orphan && React.createElement('div', { style: { marginTop: 2 } }, React.createElement(TicketTagForUrl, { project: project, url: p.url }))
+                        p.is_orphan && React.createElement('div', { style: { marginTop: 2 } }, React.createElement(TicketTagForUrl, { project: project, url: p.url, pillar: 'LINK' }))
                       ),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
@@ -13219,7 +13215,6 @@
             <div>
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
                 <i className="fas fa-file-alt" style={{ marginRight: 10, color: 'var(--accent)' }} />On-Page Audit & Fix
-                <TicketTag project={project} pillars={['ONPG']} />
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Yoast SEO scores, meta tags, keyword optimization — fix directly from here</p>
             </div>
@@ -19754,7 +19749,7 @@
     // ============ SITE ISSUES PAGE (triage view) ============
     // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
     // Where each ticket type opens when clicked "Open" (fix-in-place routing)
-    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit', REVW: 'gbp-audit', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', GEN: 'fix-center' };
+    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', GEN: 'fix-center' };
 
     // Ticket code chip — shows the Control Centre ticket code(s) on the audit page where the work happens.
     const __ticketCodesCache = {};
@@ -19788,11 +19783,11 @@
       } catch (e) { return null; }
     }
     // Row tag for sources without a page URL (security checks, cannibalization) — match by issue title.
-    function TicketTagForTitle({ project, title }) {
+    function TicketTagForTitle({ project, title, pillar }) {
       const data = useTicketCodes(project);
       if (!data || !title) return null;
       const t = title.toString().slice(0, 80).toLowerCase().trim();
-      const hit = Object.entries(data.meta || {}).find(([, m]) => (m.title || '').toLowerCase().trim() === t);
+      const hit = Object.entries(data.meta || {}).find(([c, m]) => (m.title || '').toLowerCase().trim() === t && (!pillar || c.includes(`-${pillar}-`)));
       if (!hit) return null;
       return <TicketChips list={[hit[0]]} small={true} />;
     }
@@ -19814,14 +19809,16 @@
       if (!list.length || list.length > 2) return null; // many codes = tag the rows instead
       return <TicketChips list={list} />;
     }
-    // Row tag: the exact ticket(s) covering ONE page URL — this is the actionable one.
-    function TicketTagForUrl({ project, url }) {
+    // Row tag: the exact ticket covering ONE page URL on ONE source page.
+    // pillar filter = each source page shows only ITS OWN ticket (one issue, one number).
+    function TicketTagForUrl({ project, url, pillar }) {
       const data = useTicketCodes(project);
       if (!data || !url) return null;
       let k = url.toString().trim();
       try { if (k.startsWith('http')) k = new URL(k).pathname; } catch (e) {}
       k = k.replace(/\/+$/, '').toLowerCase() || '/';
-      const list = (data.by_url || {})[k];
+      let list = (data.by_url || {})[k];
+      if (list && pillar) list = list.filter(c => c.includes(`-${pillar}-`));
       if (!list || !list.length) return null;
       return <TicketChips list={list} small={true} />;
     }
@@ -32602,7 +32599,7 @@
       return (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-clone" style={{ marginRight: 10, color: accent }} />Competing Pages<TicketTag project={project} pillars={['CANB']} /></h2>
+            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-clone" style={{ marginRight: 10, color: accent }} />Competing Pages</h2>
             <button className="btn" onClick={runScan} disabled={scanning} style={{ background: accent, color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, opacity: scanning ? 0.6 : 1 }}>
               {scanning ? <><span className="spinner" style={{ marginRight: 6 }}></span>Scanning Search Console...</> : <><i className="fas fa-clone" style={{ marginRight: 6 }}></i>{data ? 'Re-scan' : 'Run Scan'}</>}
             </button>
@@ -32644,7 +32641,7 @@
                         return (
                         <React.Fragment key={i}>
                         <tr onClick={() => setExpanded(open ? null : c.keyword)} style={{ cursor: 'pointer', background: open ? 'var(--bg)' : 'transparent' }}>
-                          <td style={{ ...td, fontWeight: 600 }}><i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>{c.keyword}<TicketTagForTitle project={project} title={c.keyword} /></td>
+                          <td style={{ ...td, fontWeight: 600 }}><i className={`fas fa-chevron-${open ? 'down' : 'right'}`} style={{ marginRight: 8, fontSize: 10, color: 'var(--text3)' }}></i>{c.keyword}<TicketTagForTitle project={project} title={c.keyword} pillar="CANB" /></td>
                           <td style={td}><span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: sevColor(c.severity) + '22', color: sevColor(c.severity) }}>{c.severity}</span></td>
                           <td style={td}>{c.page_count}</td>
                           <td style={td}>{c.total_impressions.toLocaleString()}</td>
@@ -33130,7 +33127,7 @@
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div>
-              <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-external-link-alt" style={{ marginRight: 10, color: accent }}></i>Backlinks<TicketTag project={project} pillars={['BLNK']} /></h2>
+              <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-external-link-alt" style={{ marginRight: 10, color: accent }}></i>Backlinks</h2>
               <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4 }}>Monitor, audit, and grow your backlink profile</div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>

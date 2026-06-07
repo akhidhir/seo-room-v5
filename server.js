@@ -6194,9 +6194,10 @@ const PILLAR_CODE_RULES = [
   [/profile|\bnap\b|photo|hours|categor|\bgbp\b|competitor|proximity|relevance|prominence|strategy|30.?day/i, 'GBP'],
 ];
 function pillarCode(item) {
-  // Citations work is recognisable from the TITLE (e.g. "Claim True Local / Yellow Pages listing")
-  if (/citation|directory|true local|yellow pages|claim.*listing|listings? with.*nap/i.test(item.title || '')) return 'CITE';
   const hay = `${item.category || ''} ${item.pillar || ''} ${item.type || ''}`;
+  // Citations work is recognisable from the TITLE (e.g. "Claim True Local / Yellow Pages listing")
+  // — but never override security checks (e.g. the "Directory Listing" check is SEC, not CITE)
+  if (!/security/i.test(hay) && /citation|directory|true local|yellow pages|claim.*listing|listings? with.*nap/i.test(item.title || '')) return 'CITE';
   for (const [re, code] of PILLAR_CODE_RULES) if (re.test(hay)) return code;
   return 'GEN';
 }
