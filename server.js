@@ -6181,6 +6181,7 @@ function normalizeActionRow(r) {
 // Middle of the code = root-cause area. Order matters (first match wins).
 const PILLAR_CODE_RULES = [
   [/maps visibility|local pack|grid scan/i, 'MAPS'],
+  [/serp visibility|not ranking/i, 'SERP'],
   [/core web vitals|pagespeed|\bspeed\b|\bcwv\b/i, 'CWV'],
   [/index/i, 'INDX'],
   [/cannibal/i, 'CANB'],
@@ -6207,7 +6208,7 @@ function deriveFixType(item) {
   const ex = (item.execution_type || '').toLowerCase();
   const pil = (item.pillar || '').toLowerCase();
   const cat = (item.category || '').toLowerCase();
-  if (/copywriter|content|copy/.test(ex) || /content|suburb|thin|low ctr|underperform|zero|quick win|cannibal/.test(cat)) return 'Copywriting';
+  if (/copywriter|content|copy/.test(ex) || /content|suburb|thin|low ctr|underperform|zero|quick win|cannibal|serp visibility/.test(cat)) return 'Copywriting';
   if (pil.startsWith('gbp') || /citation|director|profile|\bnap\b|photo|review|hours|categor/.test(cat)) return 'GBP';
   if (/automated|plugin/.test(ex) || /website|technical/.test(pil) || /schema|canonical|noindex|core web vitals|crawl|site health/.test(cat)) return 'Technical';
   return 'Manual';
@@ -6353,6 +6354,9 @@ const TICKET_PLAYBOOK = {
     'Open the Security Audit page — each failing check below has its own fix instructions there.',
     'Fix in order of severity (critical first: malware/spam, exposed logins, SSL).',
     'Re-run the Security Audit to confirm each check goes green, then Finish.' ] },
+  SERP: { where: 'Rankings → SERP Rankings', steps: [
+    'Work the to-dos in the ticket description — pick/create ONE page for the keyword, optimize meta + H1, add internal links.',
+    'Run "Check Rankings" after the next crawl to confirm the keyword enters the top 100.' ] },
   MAPS: { where: 'Rankings → Maps Rankings', steps: [
     'Open the keyword row for this suburb — the expanded view lists exactly what is missing (service area, suburb page, directories, reviews, posts).',
     'Work the to-dos in the ticket description, in order.',
@@ -6465,6 +6469,7 @@ const TICKET_DONE_WHEN = {
   CANB: 'Only one page targets the keyword (other page re-targeted or redirected). The lead reviews and approves.',
   BLNK: 'The toxic/outreach work is done. The lead reviews and approves.',
   MAPS: 'The to-dos for this suburb are done and a fresh Grid Scan shows improved visibility. The lead reviews and approves.',
+  SERP: 'A page targets the keyword and a fresh Check Rankings finds it in the top 100. The lead reviews and approves.',
   MANUAL: 'The lead reviews and approves.',
 };
 

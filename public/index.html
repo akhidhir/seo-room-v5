@@ -19749,7 +19749,7 @@
     // ============ SITE ISSUES PAGE (triage view) ============
     // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
     // Where each ticket type opens when clicked "Open" (fix-in-place routing)
-    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', MAPS: 'maps-rankings', GEN: 'fix-center' };
+    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', MAPS: 'maps-rankings', SERP: 'serp-rankings', GEN: 'fix-center' };
 
     // Ticket code chip — shows the Control Centre ticket code(s) on the audit page where the work happens.
     const __ticketCodesCache = {};
@@ -25722,6 +25722,25 @@
         });
       }, [serpOnly, sortCol, sortDir]);
 
+      // Mint ONE ticket per keyword that is NOT RANKING (checked, but no position in top 100)
+      const notRankingKey = serpOnly.filter(kw => kw.checked_at && !kw.serp_position).map(kw => kw.keyword).sort().join('|');
+      useEffect(() => {
+        if (!project || !project.id || !notRankingKey) return;
+        const issues = serpOnly.filter(kw => kw.checked_at && !kw.serp_position).map(kw => ({
+          title: `Not ranking: "${kw.keyword}"`,
+          description: [
+            `1. Create or pick ONE page to target "${kw.keyword}"${kw.search_volume ? ` (volume: ${kw.search_volume})` : ''}`,
+            '2. Put the keyword in the meta title, H1 and opening paragraph',
+            '3. Add 2-3 internal links to that page using the keyword as anchor',
+            '4. Run Check Rankings after the next crawl to confirm it enters the top 100',
+          ].join('\n'),
+          severity: 'high',
+          category: 'SERP Visibility',
+          pillar: 'serp',
+        }));
+        if (issues.length) syncSourceTickets(project, 'serp', issues);
+      }, [notRankingKey, project && project.id]);
+
       const allChecked = sorted.length > 0 && analysisCheckedCount === sorted.length;
       const toggleAnalysisCheck = (id) => setAnalysisChecked(prev => ({ ...prev, [id]: !prev[id] }));
       const toggleAllAnalysis = () => {
@@ -26341,6 +26360,7 @@
                     <input type="checkbox" checked={!!analysisChecked[kw.id]} onChange={() => toggleAnalysisCheck(kw.id)} onClick={e => e.stopPropagation()} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--accent)', flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{kw.keyword}</span>
+                      {kw.checked_at && !kw.serp_position && <TicketTagForTitle project={project} title={`Not ranking: "${kw.keyword}"`} pillar="SERP" />}
                       <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {kw.serp_url ? <a href={kw.serp_url} target="_blank" rel="noopener" style={{ color: 'var(--text3)', textDecoration: 'none' }} onClick={e => e.stopPropagation()} title={kw.serp_url}>{kw.serp_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a> : kw.checked_at ? <span style={{ color: '#ef4444', fontSize: 12 }}>No ranking page found</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>Click "Check Rankings" to scan</span>}
                       </div>
