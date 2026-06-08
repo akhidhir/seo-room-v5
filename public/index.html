@@ -28408,6 +28408,7 @@
           for (const s of commonSuburbs) { if (!knownSuburbs.includes(s)) knownSuburbs.push(s); }
 
           let added = 0;
+          const byLoc = {};
           for (const kw of kws) {
             const kwLower = kw.keyword.toLowerCase().trim();
             const words = kwLower.split(/\s+/);
@@ -28428,13 +28429,15 @@
             // Remove "near me" from service
             service = service.replace(/\s*near me\s*/gi, '').trim();
             const location = foundSuburb || fallbackLoc;
-            if (service) {
-              await api(`/projects/${project.id}/rank-tracking/keywords`, {
-                method: 'POST',
-                body: { keywords: [service], location }
-              });
-              added++;
-            }
+            if (service) { (byLoc[location] = byLoc[location] || []).push(service); }
+          }
+          // ONE request per location instead of one per keyword — 35 keywords used to mean 35 silent calls
+          for (const [location, services] of Object.entries(byLoc)) {
+            await api(`/projects/${project.id}/rank-tracking/keywords`, {
+              method: 'POST',
+              body: { keywords: services, location }
+            });
+            added += services.length;
           }
           alert(`Added ${added} Maps keywords with extracted locations.`);
           setDiscoveredMaps(null);
@@ -28720,8 +28723,8 @@
                     }} style={{ fontSize: 12 }}>
                       {selectedDiscMaps.size === discoveredMaps.length ? 'Deselect All' : 'Select All'}
                     </button>
-                    <button className="btn btn-primary" onClick={addDiscoveredMapKeywords} disabled={selectedDiscMaps.size === 0} style={{ fontSize: 12 }}>
-                      <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {selectedDiscMaps.size} Keywords
+                    <button className="btn btn-primary" onClick={addDiscoveredMapKeywords} disabled={selectedDiscMaps.size === 0 || discovering} style={{ fontSize: 12, opacity: discovering ? 0.7 : 1 }}>
+                      {discovering ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Adding...</> : <><i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add {selectedDiscMaps.size} Keywords</>}
                     </button>
                     <button onClick={() => setDiscoveredMaps(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18, padding: '0 4px' }}>×</button>
                   </div>
