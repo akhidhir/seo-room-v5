@@ -625,6 +625,10 @@ async function initDb() {
     try {
     // Junk cleanup: legacy 404 items minted from cache-buster bot probes (same URL, ?nocache=timestamp)
     await client.query(`DELETE FROM action_items WHERE title LIKE '404:%nocache=%'`).catch(() => {});
+    // De-dupe source tickets: concurrent syncs could insert the same issue twice (same code) — keep the oldest row
+    await client.query(`DELETE FROM action_items a USING action_items b
+      WHERE a.id > b.id AND a.project_id = b.project_id AND a.type = b.type AND a.type LIKE 'src_%'
+        AND a.title = b.title AND COALESCE(a.ranking_page,'') = COALESCE(b.ranking_page,'')`).catch(() => {});
 
       const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_source_reset_v5'`);
       if (!remint.rows.length) {
@@ -37397,7 +37401,10 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     );
     const actionsByStatus = { done: 0, pending: 0, 'in-progress': 0 };
     const recentActions = [];
+    const seenCodes = new Set();
     for (const r of actionsRes.rows) {
+      if (r.code && seenCodes.has(r.code)) continue; // one row per ticket
+      if (r.code) seenCodes.add(r.code);
       const st = ['done', 'completed', 'fixed', 'applied', 'executed'].includes((r.status || '').toLowerCase()) ? 'done' : (r.status === 'in-progress' || r.status === 'in_progress' ? 'in-progress' : 'pending');
       actionsByStatus[st] = (actionsByStatus[st] || 0) + 1;
       recentActions.push({ title: r.title, status: st, pillar: r.pillar, severity: r.severity, code: r.code, category: r.category });

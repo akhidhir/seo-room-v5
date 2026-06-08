@@ -30114,7 +30114,7 @@
     }
 
     // ============ MONTHLY REPORTS PAGE ============
-    function MonthlyReportsPage({ project }) {
+    function MonthlyReportsPage({ project, setPage }) {
       const [reports, setReports] = useState([]);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
@@ -30593,6 +30593,7 @@
                             <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 80 }}>Pillar</th>
                             <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 80 }}>Severity</th>
                             <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 100 }}>Status</th>
+                            <th style={{ textAlign: 'right', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 70 }}></th>
                           </tr>
                         </thead>
                         <tbody>
@@ -30610,6 +30611,19 @@
                               </td>
                               <td style={{ textAlign: 'center', padding: '10px 10px' }}>
                                 <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: `${statusColor[act.status] || '#6b7280'}18`, color: statusColor[act.status] || '#6b7280' }}>{statusLabel[act.status] || act.status}</span>
+                              </td>
+                              <td style={{ textAlign: 'right', padding: '10px 10px' }}>
+                                {act.code && act.status !== 'done' && setPage && (() => {
+                                  const pCode = (act.code.split('-')[1] || '').toUpperCase();
+                                  const route = TICKET_ROUTE[pCode];
+                                  if (!route) return null;
+                                  return (
+                                    <button onClick={() => { window.__ticketFocus = { pillar: pCode, title: act.title, code: act.code }; setPage(route); }}
+                                      style={{ padding: '4px 12px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000' }}>
+                                      <i className="fas fa-wrench" style={{ marginRight: 4 }} />Fix
+                                    </button>
+                                  );
+                                })()}
                               </td>
                             </tr>
                           ))}
@@ -35375,7 +35389,7 @@ case 'action-plan':
           case 'baseline-report':
             return <BaselineReportPage project={project} />;
           case 'monthly-reports':
-            return <MonthlyReportsPage project={project} />;
+            return <MonthlyReportsPage project={project} setPage={setActiveTab} />;
           case 'gbp-posts':
             return <GBPPostsPage project={project} />;
           case 'blog':
