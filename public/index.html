@@ -35227,6 +35227,23 @@
           if (activeBuild?.id === id) { setActiveBuild(null); setBuildListView(true); }
         } catch (e) { alert('Error: ' + e.message); }
       };
+      const renameBuild = async (id, currentName) => {
+        const name = prompt('Rename website:', currentName || '');
+        if (name == null) return;
+        const trimmed = name.trim();
+        if (!trimmed || trimmed === currentName) return;
+        try {
+          const updated = await api('/website-builds/' + id, { method: 'PUT', body: { name: trimmed } });
+          setAllBuilds(prev => prev.map(b => b.id === id ? { ...b, name: trimmed } : b));
+          if (activeBuild?.id === id) setActiveBuild(prev => ({ ...prev, name: trimmed }));
+        } catch (e) { alert('Error: ' + e.message); }
+      };
+      const backToBuildList = () => {
+        setActiveBuild(null);
+        setBuildListView(true);
+        setActiveTab('build-list');
+        api('/website-builds').then(d => setAllBuilds(d.builds || [])).catch(() => {});
+      };
 
       // Load agent audit reports for sidebar sections
       useEffect(() => {
@@ -35591,11 +35608,16 @@ case 'action-plan':
               </button>
               {/* Project selector / back button */}
               {buildMode ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                   <button onClick={exitBuildMode} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', padding: '2px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
                     <i className="fas fa-arrow-left" style={{ fontSize: 11 }}></i> Projects
                   </button>
-                  {activeBuild && <span style={{ fontSize: 12, color: 'var(--primary)', fontWeight: 700 }}>{activeBuild.name}</span>}
+                  {activeBuild && !buildListView && (
+                    <button onClick={backToBuildList} style={{ background: 'none', border: 'none', color: '#eab308', cursor: 'pointer', padding: '2px 0', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <i className="fas fa-list" style={{ fontSize: 11 }}></i> All Websites
+                    </button>
+                  )}
+                  {activeBuild && !buildListView && <span style={{ fontSize: 12, color: 'var(--primary)', fontWeight: 700 }}>{activeBuild.name}</span>}
                 </div>
               ) : (activeTab === 'kw-research' || activeTab === 'nw-migration') ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
@@ -35655,11 +35677,14 @@ case 'action-plan':
                       <div key={b.id} style={{ display: 'flex', alignItems: 'center', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', marginBottom: 8, cursor: 'pointer', background: 'var(--bg)' }}
                         onClick={() => selectBuild(b)}
                       >
-                        <div style={{ flex: 1 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{b.name}</div>
                           {b.domain && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{b.domain}</div>}
                         </div>
-                        <button onClick={(e) => { e.stopPropagation(); deleteBuild(b.id); }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 13, padding: '4px 6px' }}>
+                        <button onClick={(e) => { e.stopPropagation(); renameBuild(b.id, b.name); }} title="Rename" style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 13, padding: '4px 6px' }}>
+                          <i className="fas fa-pen"></i>
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteBuild(b.id); }} title="Delete" style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 13, padding: '4px 6px' }}>
                           <i className="fas fa-trash"></i>
                         </button>
                       </div>
