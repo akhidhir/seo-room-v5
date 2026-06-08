@@ -1259,35 +1259,51 @@
 
     const api = async (path, opts = {}) => {
       const token = localStorage.getItem('token');
-      const res = await fetch(`${API_BASE}${path}`, {
-        ...opts,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token && { Authorization: `Bearer ${token}` }),
-          ...opts.headers,
-        },
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
-      });
+      // Railway returns an HTML error page while a deploy restarts the server. Instead of failing the
+      // user's click, wait and retry — the request never reached the app, so retrying is safe.
+      const MAX_TRIES = 4;
+      for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+        let res;
+        try {
+          res = await fetch(`${API_BASE}${path}`, {
+            ...opts,
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token && { Authorization: `Bearer ${token}` }),
+              ...opts.headers,
+            },
+            body: opts.body ? JSON.stringify(opts.body) : undefined,
+          });
+        } catch (netErr) {
+          if (attempt < MAX_TRIES) { console.warn(`[api] Network error on ${path} (attempt ${attempt}) — retrying...`); await new Promise(r => setTimeout(r, attempt * 5000)); continue; }
+          throw new Error('Network error: ' + netErr.message);
+        }
 
-      if (res.status === 401) {
-        console.warn('[api] 401 on', path);
-        return { error: 'Not authenticated' };
-      }
+        if (res.status === 401) {
+          console.warn('[api] 401 on', path);
+          return { error: 'Not authenticated' };
+        }
 
-      const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        console.warn('[api] Non-JSON response on', path, contentType);
-        throw new Error('Server returned non-JSON response — deploy may be pending');
-      }
+        const contentType = res.headers.get('content-type') || '';
+        const isProxyError = !contentType.includes('application/json') || res.status === 502 || res.status === 503;
+        if (isProxyError) {
+          if (attempt < MAX_TRIES) {
+            console.warn(`[api] Server restarting? Non-JSON/${res.status} on ${path} (attempt ${attempt}/${MAX_TRIES}) — retrying in ${attempt * 5}s...`);
+            await new Promise(r => setTimeout(r, attempt * 5000));
+            continue;
+          }
+          throw new Error('Server is restarting (deploy in progress). Waited 30s — please try again in a minute.');
+        }
 
-      const data = await res.json();
-      if (!res.ok) {
-        const err = new Error(data.error || 'Request failed');
-        err.canForce = data.canForce || false;
-        err.status = res.status;
-        throw err;
+        const data = await res.json();
+        if (!res.ok) {
+          const err = new Error(data.error || 'Request failed');
+          err.canForce = data.canForce || false;
+          err.status = res.status;
+          throw err;
+        }
+        return data;
       }
-      return data;
     };
 
     // Cost estimation + budget check before API operations
