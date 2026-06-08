@@ -3988,7 +3988,7 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   });
   const payload = { title: title || 'Cloned page', status: status || 'draft', slug, meta };
   if (template) payload.template = template;
-  const r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, payload, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 30000 });
+  const r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, payload, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
 
@@ -4004,7 +4004,9 @@ app.post('/api/migrations/:migrationId/build-template', async (req, res) => {
     const pageType = type || 'suburb';
 
     // 1. Extract blocks from the source page
+    console.log('[build-template] Step 1: extracting blocks from', source_url);
     const { title: srcTitle, blocks } = await extractOldPageBlocks(source_url);
+    console.log('[build-template] Extracted', blocks.length, 'blocks from source');
 
     // 2. Build Elementor JSON — one section per h1/h2 heading group, with matching widgets
     const rid = () => Math.random().toString(16).slice(2, 9);
@@ -4054,7 +4056,9 @@ app.post('/api/migrations/:migrationId/build-template', async (req, res) => {
 
     // 3. Create the page on the new site
     const pageTitle = `${pageType} template (auto)`;
+    console.log('[build-template] Step 3: creating page with', elSections.length, 'sections on WP');
     const created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, elSections, {}, '', 'draft');
+    console.log('[build-template] Created page', created.id);
 
     // 4. Read back to get slot count
     const tpl = await readElementorTemplate(wpUrl, authHeaders, 'pages', created.id);
