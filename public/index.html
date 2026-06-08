@@ -1278,6 +1278,36 @@
       document.body.removeChild(a); URL.revokeObjectURL(url);
     };
 
+    // Brief non-blocking confirmation toast (bottom-centre).
+    const showToast = (msg) => {
+      const t = document.createElement('div');
+      t.textContent = msg;
+      t.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.35);z-index:99999;border:1px solid rgba(255,255,255,0.12);opacity:0;transition:opacity 0.2s';
+      document.body.appendChild(t);
+      requestAnimationFrame(() => { t.style.opacity = '1'; });
+      setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 250); }, 2600);
+    };
+
+    // Copy rows (array of arrays) to clipboard as TSV — paste straight into Google Sheets / Excel (splits into columns).
+    const copyForSheets = async (rows) => {
+      const cell = (v) => {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        return /[\t\n"]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const tsv = rows.map(r => r.map(cell).join('\t')).join('\n');
+      try {
+        await navigator.clipboard.writeText(tsv);
+      } catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = tsv; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e2) {}
+        document.body.removeChild(ta);
+      }
+      showToast('Copied ' + (rows.length - 1) + ' rows — open a Google Sheet and paste (' + (navigator.platform.indexOf('Mac') >= 0 ? '⌘V' : 'Ctrl+V') + ')');
+    };
+
     const api = async (path, opts = {}) => {
       const token = localStorage.getItem('token');
       // Railway returns an HTML error page while a deploy restarts the server. Instead of failing the
@@ -26549,6 +26579,20 @@
             }} style={{ fontSize: 13, padding: '7px 14px' }}>
               <i className="fa-solid fa-file-export" style={{ marginRight: 5 }} />Export CSV
             </button>}
+            {keywords.length > 0 && <button className="btn" onClick={() => {
+              const rows = [['Keyword', 'Search Volume', 'SERP Position', 'Change', 'Ranking URL', 'Last Checked']];
+              sorted.forEach(kw => rows.push([
+                kw.keyword,
+                kw.search_volume != null ? kw.search_volume : '',
+                kw.serp_position ? kw.serp_position : (kw.checked_at ? '>100' : ''),
+                kw.serp_change ? (kw.serp_change > 0 ? '+' : '') + kw.serp_change : '',
+                kw.serp_url || '',
+                kw.checked_at ? new Date(kw.checked_at).toLocaleDateString() : ''
+              ]));
+              copyForSheets(rows);
+            }} style={{ fontSize: 13, padding: '7px 14px' }}>
+              <i className="fa-brands fa-google" style={{ marginRight: 5 }} />Copy for Sheets
+            </button>}
             {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 13, padding: '7px 14px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)' }}>
               <i className="fa-solid fa-trash" style={{ marginRight: 5 }} />Delete All
             </button>}
@@ -28638,6 +28682,31 @@
                 downloadCsv('maps-rankings-' + (project.name || 'project').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-' + stamp + '.csv', rows);
               }} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-file-export" style={{ marginRight: 4 }} />Export CSV
+              </button>}
+              {mapsKeywordsRaw.length > 0 && <button className="btn" onClick={() => {
+                const rows = [['Service Keyword', 'Suburb', 'Search Volume', 'Avg Rank (ARP)', 'True Rank (ATRP)', 'SOLV %', 'Coverage', 'Status']];
+                mapsKeywords.forEach(kw => {
+                  const g = getGridData(kw);
+                  const scanned = g.solv !== undefined || g.arp !== undefined;
+                  const status = !scanned ? 'Not scanned'
+                    : g.solv >= 50 ? 'Dominant'
+                    : g.solv >= 20 ? 'Competitive'
+                    : g.solv > 0 ? 'Needs Work'
+                    : g.found_in > 0 ? 'Weak' : 'Not Visible';
+                  rows.push([
+                    kw.keyword,
+                    kw.location || '',
+                    kw.search_volume != null ? kw.search_volume : '',
+                    g.arp != null ? g.arp.toFixed(1) : '',
+                    g.atrp != null ? g.atrp.toFixed(1) : '',
+                    g.solv != null ? g.solv.toFixed(0) : '',
+                    (g.found_in != null && g.data_points) ? g.found_in + '/' + g.data_points : '',
+                    status
+                  ]);
+                });
+                copyForSheets(rows);
+              }} style={{ fontSize: 13 }}>
+                <i className="fa-brands fa-google" style={{ marginRight: 4 }} />Copy for Sheets
               </button>}
               <button className="btn" onClick={importMapsCSV} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />Import CSV
