@@ -3980,21 +3980,11 @@ function swapElementorText(tree, blocks) {
   let hi = 0, ti = 0;
   // 1. Fill heading slots
   headingSlots.forEach(sl => { sl.obj[sl.key] = hi < headings.length ? headings[hi++] : ''; });
-  // 2. Fill text-editor slots — last slot absorbs ALL remaining text + leftover headings
+  // 2. Fill text-editor slots one-to-one (no overflow into last slot)
   const formatTextBlock = (b) => b.html ? b.html : `<p>${escCloneHtml(b.text)}</p>`;
-  textSlots.forEach((sl, idx) => {
-    const last = idx === textSlots.length - 1;
+  textSlots.forEach(sl => {
     if (ti >= textBlocks.length) { sl.obj[sl.key] = ''; return; }
-    if (last) {
-      // Last text slot: pour ALL remaining text blocks + any leftover headings
-      let overflow = textBlocks.slice(ti).map(formatTextBlock).join('');
-      if (hi < headings.length) overflow += headings.slice(hi).map(t => `<h3>${escCloneHtml(t)}</h3>`).join('');
-      sl.obj[sl.key] = overflow;
-      ti = textBlocks.length;
-      hi = headings.length;
-    } else {
-      sl.obj[sl.key] = formatTextBlock(textBlocks[ti++]);
-    }
+    sl.obj[sl.key] = formatTextBlock(textBlocks[ti++]);
   });
   // 3. Remove icon-list items (template defaults don't apply to cloned content)
   const iconListSlots = slots.filter(s => s.kind === 'icon-list');
@@ -4007,13 +3997,48 @@ function swapElementorText(tree, blocks) {
     const tabs = sl.obj[sl.key];
     if (Array.isArray(tabs)) tabs.forEach(tab => { tab.tab_title = ''; tab.tab_content = ''; });
   });
-  // 5. Safety net: if any content still not placed (e.g. no text slots), append to last text slot
-  if ((hi < headings.length || ti < textBlocks.length) && textSlots.length) {
-    const lastText = textSlots[textSlots.length - 1];
-    let extra = '';
-    if (hi < headings.length) extra += headings.slice(hi).map(t => `<h3>${escCloneHtml(t)}</h3>`).join('');
-    if (ti < textBlocks.length) extra += textBlocks.slice(ti).map(formatTextBlock).join('');
-    lastText.obj[lastText.key] = (lastText.obj[lastText.key] || '') + extra;
+  // 5. Overflow: remaining blocks go into a new clean section appended to the tree
+  const remainingText = textBlocks.slice(ti);
+  const remainingHeadings = headings.slice(hi);
+  if (remainingText.length || remainingHeadings.length) {
+    let overflowHtml = '';
+    // Interleave remaining headings and text in original block order
+    const remainingBlocks = blocks.filter(b => {
+      if (/^h[1-4]$/.test(b.tag)) return headings.indexOf(b.text) >= hi;
+      return (b.tag === 'p' || b.tag === 'li') && textBlocks.indexOf(b) >= ti;
+    });
+    if (remainingBlocks.length) {
+      overflowHtml = remainingBlocks.map(b => {
+        if (/^h[1-4]$/.test(b.tag)) return `<h3>${escCloneHtml(b.text)}</h3>`;
+        return b.html ? b.html : `<p>${escCloneHtml(b.text)}</p>`;
+      }).join('');
+    } else {
+      // Fallback: just concat remaining
+      if (remainingHeadings.length) overflowHtml += remainingHeadings.map(t => `<h3>${escCloneHtml(t)}</h3>`).join('');
+      if (remainingText.length) overflowHtml += remainingText.map(formatTextBlock).join('');
+    }
+    const rId = () => Math.random().toString(16).slice(2, 9);
+    const overflowSection = {
+      id: rId(), elType: 'section',
+      settings: { layout: 'boxed', content_width: { unit: 'px', size: 1140 }, padding: { unit: 'px', top: '40', bottom: '40', left: '0', right: '0', isLinked: false } },
+      elements: [{
+        id: rId(), elType: 'column',
+        settings: { _column_size: 100 },
+        elements: [{
+          id: rId(), elType: 'widget', widgetType: 'text-editor',
+          settings: { editor: overflowHtml },
+          elements: []
+        }]
+      }]
+    };
+    // Insert before the last section (CTA) to keep CTA at the bottom
+    if (Array.isArray(clone) && clone.length > 1) {
+      clone.splice(clone.length - 1, 0, overflowSection);
+    } else if (Array.isArray(clone)) {
+      clone.push(overflowSection);
+    }
+    ti = textBlocks.length;
+    hi = headings.length;
   }
   return { tree: clone, slots: slots.length, headingSlots: headingSlots.length, textSlots: textSlots.length,
     headingsTotal: headings.length, textsTotal: textBlocks.length, headingsUsed: headings.length, textsUsed: textBlocks.length };
