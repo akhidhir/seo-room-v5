@@ -3955,7 +3955,7 @@ app.put('/api/migrations/:migrationId/clone-templates', async (req, res) => {
     const incoming = req.body || {};
     const templates = Object.assign({}, migration.clone_templates || {});
     const results = {};
-    for (const type of ['home', 'suburb', 'blog']) {
+    for (const type of ['home', 'service', 'suburb', 'blog']) {
       if (!(type in incoming)) continue;
       const url = (incoming[type] || '').trim();
       if (!url) { delete templates[type]; results[type] = { cleared: true }; continue; }
@@ -3994,7 +3994,7 @@ app.post('/api/migrations/:migrationId/clones', async (req, res) => {
     for (const raw of urls) {
       const url = (raw || '').toString().trim();
       if (!url || !/^https?:\/\//i.test(url)) { skipped++; continue; }
-      const type = (forcedType === 'home' || forcedType === 'suburb' || forcedType === 'blog') ? forcedType : detectCloneType(url);
+      const type = (forcedType === 'home' || forcedType === 'service' || forcedType === 'suburb' || forcedType === 'blog') ? forcedType : detectCloneType(url);
       const r = await pool.query(
         `INSERT INTO migration_clones (migration_id, old_url, page_type, status) VALUES ($1,$2,$3,'pending')
          ON CONFLICT (migration_id, old_url) DO NOTHING RETURNING id`,
@@ -4011,7 +4011,7 @@ app.post('/api/migrations/:migrationId/clones', async (req, res) => {
 app.put('/api/migrations/:migrationId/clones/:cloneId', async (req, res) => {
   try {
     const { page_type } = req.body;
-    if (!['home', 'suburb', 'blog'].includes(page_type)) return res.status(400).json({ error: 'Invalid type' });
+    if (!['home', 'service', 'suburb', 'blog'].includes(page_type)) return res.status(400).json({ error: 'Invalid type' });
     await pool.query('UPDATE migration_clones SET page_type=$1, updated_at=NOW() WHERE id=$2 AND migration_id=$3', [page_type, req.params.cloneId, req.params.migrationId]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
