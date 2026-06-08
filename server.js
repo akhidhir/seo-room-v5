@@ -4357,7 +4357,7 @@ app.post('/api/migrations/:migrationId/clones/publish', async (req, res) => {
     let published = 0; const errors = [];
     for (const clone of rows) {
       try {
-        await axios.post(`${wpUrl}/wp-json/wp/v2/${clone.new_post_type || 'pages'}/${clone.new_page_id}`, { status: 'publish' }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 20000 });
+        await axios.post(`${wpUrl}/wp-json/wp/v2/${clone.new_post_type || 'pages'}/${clone.new_page_id}`, { status: 'publish' }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
         await pool.query(`UPDATE migration_clones SET status='published', updated_at=NOW() WHERE id=$1`, [clone.id]);
         published++;
       } catch (e) { errors.push({ id: clone.id, error: e.response?.data?.message || e.message }); }
