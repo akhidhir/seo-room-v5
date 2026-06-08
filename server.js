@@ -3846,8 +3846,24 @@ async function extractOldPageBlocks(url) {
     if (!text || text.length < 2) continue;
     blocks.push({ tag, text });
   }
+  // Dedup consecutive identical texts
+  const deduped = [];
+  for (const b of blocks) { if (!deduped.length || deduped[deduped.length - 1].text !== b.text) deduped.push(b); }
+  // Group consecutive li items into single blocks with pre-formatted HTML
   const out = [];
-  for (const b of blocks) { if (!out.length || out[out.length - 1].text !== b.text) out.push(b); }
+  let liBuffer = [];
+  const flushLi = () => {
+    if (!liBuffer.length) return;
+    const plainText = liBuffer.join('; ');
+    const html = '<ul>' + liBuffer.map(t => `<li>${escCloneHtml(t)}</li>`).join('') + '</ul>';
+    out.push({ tag: 'p', text: plainText, html });
+    liBuffer = [];
+  };
+  for (const b of deduped) {
+    if (b.tag === 'li') { liBuffer.push(b.text); }
+    else { flushLi(); out.push(b); }
+  }
+  flushLi();
   if (!title && out.length) { const h = out.find(b => b.tag === 'h1'); title = h ? h.text : out[0].text; }
   return { title: title.slice(0, 180), blocks: out };
 }
@@ -3902,6 +3918,14 @@ function collectElementorTextSlots(node, slots) {
       if (typeof s.title_text === 'string') slots.push({ obj: s, key: 'title_text', kind: 'heading' });
       if (typeof s.description_text === 'string') slots.push({ obj: s, key: 'description_text', kind: 'text' });
     }
+    // Icon-list widget: each item has a 'text' field — collect as a single text slot (joined)
+    else if (wt === 'icon-list' && Array.isArray(s.icon_list)) {
+      slots.push({ obj: s, key: 'icon_list', kind: 'icon-list' });
+    }
+    // Accordion / Toggle widgets: each tab has tab_title + tab_content
+    else if ((wt === 'accordion' || wt === 'toggle') && Array.isArray(s.tabs)) {
+      slots.push({ obj: s, key: 'tabs', kind: 'accordion' });
+    }
   }
   if (Array.isArray(node.elements)) node.elements.forEach(n => collectElementorTextSlots(n, slots));
 }
@@ -3914,16 +3938,39 @@ function swapElementorText(tree, blocks) {
   collectElementorTextSlots(clone, slots);
   if (!slots.length) throw new Error('Template has no editable Heading/Text widgets to pour content into. Pick a template page built from standard Elementor text widgets.');
   const headings = blocks.filter(b => /^h[1-4]$/.test(b.tag)).map(b => b.text);
-  const texts = blocks.filter(b => b.tag === 'p' || b.tag === 'li').map(b => b.text);
+  // Keep full block objects for text items (need .html for grouped li blocks)
+  const textBlocks = blocks.filter(b => b.tag === 'p' || b.tag === 'li');
   const headingSlots = slots.filter(s => s.kind === 'heading');
   const textSlots = slots.filter(s => s.kind === 'text');
   let hi = 0, ti = 0;
   headingSlots.forEach(sl => { sl.obj[sl.key] = hi < headings.length ? headings[hi++] : ''; });
+  const formatTextBlock = (b) => b.html ? b.html : `<p>${escCloneHtml(b.text)}</p>`;
   textSlots.forEach((sl, idx) => {
     const last = idx === textSlots.length - 1;
-    if (ti >= texts.length) { sl.obj[sl.key] = ''; return; }
-    if (last && texts.length - ti > 1) { sl.obj[sl.key] = texts.slice(ti).map(t => `<p>${escCloneHtml(t)}</p>`).join(''); ti = texts.length; }
-    else { sl.obj[sl.key] = `<p>${escCloneHtml(texts[ti++])}</p>`; }
+    if (ti >= textBlocks.length) { sl.obj[sl.key] = ''; return; }
+    if (last && textBlocks.length - ti > 1) { sl.obj[sl.key] = textBlocks.slice(ti).map(formatTextBlock).join(''); ti = textBlocks.length; }
+    else { sl.obj[sl.key] = formatTextBlock(textBlocks[ti++]); }
+  });
+  // Fill icon-list slots with consecutive text blocks (one block per item)
+  const iconListSlots = slots.filter(s => s.kind === 'icon-list');
+  iconListSlots.forEach(sl => {
+    if (ti >= textBlocks.length) return;
+    const items = sl.obj[sl.key]; // array of { text, _id, ... }
+    const available = textBlocks.slice(ti, ti + items.length);
+    for (let i = 0; i < items.length; i++) {
+      items[i].text = i < available.length ? available[i].text : '';
+    }
+    ti += Math.min(items.length, available.length);
+  });
+  // Fill accordion/toggle slots with heading+text pairs
+  const accordionSlots = slots.filter(s => s.kind === 'accordion');
+  accordionSlots.forEach(sl => {
+    if (hi >= headings.length && ti >= textBlocks.length) return;
+    const tabs = sl.obj[sl.key]; // array of { tab_title, tab_content, _id, ... }
+    for (let i = 0; i < tabs.length; i++) {
+      if (hi < headings.length) tabs[i].tab_title = headings[hi++];
+      if (ti < textBlocks.length) tabs[i].tab_content = formatTextBlock(textBlocks[ti++]);
+    }
   });
   if (hi < headings.length && textSlots.length) {
     const lastText = textSlots[textSlots.length - 1];
@@ -3944,6 +3991,98 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   const r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, payload, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 30000 });
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
+
+// Build an auto-generated Elementor template from a source page's content structure
+app.post('/api/migrations/:migrationId/build-template', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'New-site WordPress credentials not set.' });
+    const { type, source_url } = req.body || {};
+    if (!source_url) return res.status(400).json({ error: 'source_url required' });
+    const pageType = type || 'suburb';
+
+    // 1. Extract blocks from the source page
+    const { title: srcTitle, blocks } = await extractOldPageBlocks(source_url);
+
+    // 2. Build Elementor JSON — one section per h1/h2 heading group, with matching widgets
+    const rid = () => Math.random().toString(16).slice(2, 9);
+    const elSections = [];
+    // Group blocks into logical sections (h1/h2 starts a new section)
+    const groups = [];
+    let cur = { headings: [], texts: [] };
+    for (const b of blocks) {
+      if (/^h[12]$/.test(b.tag) && (cur.headings.length || cur.texts.length)) {
+        groups.push(cur);
+        cur = { headings: [], texts: [] };
+      }
+      if (/^h[1-4]$/.test(b.tag)) cur.headings.push(b);
+      else cur.texts.push(b);
+    }
+    if (cur.headings.length || cur.texts.length) groups.push(cur);
+
+    // Build one Elementor section per content group
+    for (const grp of groups) {
+      const widgets = [];
+      // Add heading widgets in order
+      for (const h of grp.headings) {
+        widgets.push({
+          id: rid(), elType: 'widget', widgetType: 'heading',
+          settings: { title: 'Heading placeholder', header_size: h.tag, align: 'left',
+            title_color: '#1a1a2e', typography_typography: 'custom', typography_font_size: { unit: 'px', size: h.tag === 'h1' ? 36 : h.tag === 'h2' ? 28 : 22 } }
+        });
+      }
+      // Add one text-editor widget for all text blocks in this group
+      if (grp.texts.length) {
+        widgets.push({
+          id: rid(), elType: 'widget', widgetType: 'text-editor',
+          settings: { editor: '<p>Content placeholder</p>' }
+        });
+      }
+      if (!widgets.length) continue;
+      elSections.push({
+        id: rid(), elType: 'section',
+        settings: { padding: { unit: 'px', top: '30', bottom: '30', left: '40', right: '40' } },
+        elements: [{
+          id: rid(), elType: 'column',
+          settings: { _column_size: 100 },
+          elements: widgets
+        }]
+      });
+    }
+
+    // 3. Create the page on the new site
+    const pageTitle = `${pageType} template (auto)`;
+    const created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, elSections, {
+      _elementor_page_settings: '{}',
+      _elementor_template_type: 'wp-page',
+    }, '', 'publish');
+
+    // 4. Read back to get slot count
+    const tpl = await readElementorTemplate(wpUrl, authHeaders, 'pages', created.id);
+    const tplSlots = [];
+    if (tpl.tree) collectElementorTextSlots(tpl.tree, tplSlots);
+
+    // 5. Update migration clone_templates
+    const templates = Object.assign({}, migration.clone_templates || {});
+    templates[pageType] = {
+      url: created.link, page_id: created.id, post_type: 'pages',
+      title: pageTitle, has_elementor: !!tpl.tree, text_slots: tplSlots.length,
+      auto_generated: true, source_url
+    };
+    await pool.query('UPDATE seo_migrations SET clone_templates=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(templates), migration.id]);
+
+    const headingCount = blocks.filter(b => /^h[1-4]$/.test(b.tag)).length;
+    const textCount = blocks.filter(b => b.tag === 'p').length;
+    res.json({
+      ok: true, page_id: created.id, page_url: created.link, slug: created.slug,
+      sections: elSections.length, slots: tplSlots.length,
+      source_blocks: { headings: headingCount, texts: textCount, total: blocks.length },
+      template_set: pageType
+    });
+  } catch (e) { console.error('[build-template]', e); res.status(500).json({ error: e.message }); }
+});
 
 // Save the three clone templates (home/suburb/blog) by URL; resolve each on the new site.
 app.put('/api/migrations/:migrationId/clone-templates', async (req, res) => {
