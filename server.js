@@ -3814,7 +3814,7 @@ function escCloneHtml(s) {
 
 // Fetch an old page and pull ordered TEXT blocks. Drops images and links (entire <a> tag + text removed).
 async function extractOldPageBlocks(url) {
-  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 SEORoom-Clone/5.0' }, redirect: 'follow', signal: AbortSignal.timeout(20000) });
+  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 SEORoom-Clone/5.0' }, redirect: 'follow', signal: AbortSignal.timeout(60000) });
   if (!resp.ok) throw new Error(`Old page returned ${resp.status}`);
   const html = await resp.text();
   let title = '';
