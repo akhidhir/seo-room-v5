@@ -3812,7 +3812,7 @@ function escCloneHtml(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Fetch an old page and pull ordered TEXT blocks. Drops images, unwraps links (text kept, href discarded).
+// Fetch an old page and pull ordered TEXT blocks. Drops images and links (entire <a> tag + text removed).
 async function extractOldPageBlocks(url) {
   const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 SEORoom-Clone/5.0' }, redirect: 'follow', signal: AbortSignal.timeout(20000) });
   if (!resp.ok) throw new Error(`Old page returned ${resp.status}`);
@@ -3832,7 +3832,7 @@ async function extractOldPageBlocks(url) {
     .replace(/<footer[\s\S]*?<\/footer>/gi, '')
     .replace(/<form[\s\S]*?<\/form>/gi, '')
     .replace(/<img[^>]*>/gi, '')
-    .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+    .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '');
   const decode = (t) => t.replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#8217;|&rsquo;|&#039;|&#39;/g, "'")
     .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;|&quot;/g, '"').replace(/&#8211;|&ndash;/g, '–').replace(/&#8212;|&mdash;/g, '—')
@@ -3974,45 +3974,50 @@ function swapElementorText(tree, blocks) {
   collectElementorTextSlots(clone, slots);
   if (!slots.length) throw new Error('Template has no editable Heading/Text widgets to pour content into. Pick a template page built from standard Elementor text widgets.');
   const headings = blocks.filter(b => /^h[1-4]$/.test(b.tag)).map(b => b.text);
-  // Keep full block objects for text items (need .html for grouped li blocks)
   const textBlocks = blocks.filter(b => b.tag === 'p' || b.tag === 'li');
   const headingSlots = slots.filter(s => s.kind === 'heading');
   const textSlots = slots.filter(s => s.kind === 'text');
   let hi = 0, ti = 0;
+  // 1. Fill heading slots
   headingSlots.forEach(sl => { sl.obj[sl.key] = hi < headings.length ? headings[hi++] : ''; });
+  // 2. Fill text-editor slots — last slot absorbs ALL remaining text + leftover headings
   const formatTextBlock = (b) => b.html ? b.html : `<p>${escCloneHtml(b.text)}</p>`;
   textSlots.forEach((sl, idx) => {
     const last = idx === textSlots.length - 1;
     if (ti >= textBlocks.length) { sl.obj[sl.key] = ''; return; }
-    if (last && textBlocks.length - ti > 1) { sl.obj[sl.key] = textBlocks.slice(ti).map(formatTextBlock).join(''); ti = textBlocks.length; }
-    else { sl.obj[sl.key] = formatTextBlock(textBlocks[ti++]); }
+    if (last) {
+      // Last text slot: pour ALL remaining text blocks + any leftover headings
+      let overflow = textBlocks.slice(ti).map(formatTextBlock).join('');
+      if (hi < headings.length) overflow += headings.slice(hi).map(t => `<h3>${escCloneHtml(t)}</h3>`).join('');
+      sl.obj[sl.key] = overflow;
+      ti = textBlocks.length;
+      hi = headings.length;
+    } else {
+      sl.obj[sl.key] = formatTextBlock(textBlocks[ti++]);
+    }
   });
-  // Fill icon-list slots with consecutive text blocks (one block per item)
+  // 3. Clear icon-list slots (template defaults don't apply to cloned content)
   const iconListSlots = slots.filter(s => s.kind === 'icon-list');
   iconListSlots.forEach(sl => {
-    if (ti >= textBlocks.length) return;
-    const items = sl.obj[sl.key]; // array of { text, _id, ... }
-    const available = textBlocks.slice(ti, ti + items.length);
-    for (let i = 0; i < items.length; i++) {
-      items[i].text = i < available.length ? available[i].text : '';
-    }
-    ti += Math.min(items.length, available.length);
+    const items = sl.obj[sl.key];
+    if (Array.isArray(items)) items.forEach(item => { item.text = ''; });
   });
-  // Fill accordion/toggle slots with heading+text pairs
+  // 4. Clear accordion/toggle slots
   const accordionSlots = slots.filter(s => s.kind === 'accordion');
   accordionSlots.forEach(sl => {
-    if (hi >= headings.length && ti >= textBlocks.length) return;
-    const tabs = sl.obj[sl.key]; // array of { tab_title, tab_content, _id, ... }
-    for (let i = 0; i < tabs.length; i++) {
-      if (hi < headings.length) tabs[i].tab_title = headings[hi++];
-      if (ti < textBlocks.length) tabs[i].tab_content = formatTextBlock(textBlocks[ti++]);
-    }
+    const tabs = sl.obj[sl.key];
+    if (Array.isArray(tabs)) tabs.forEach(tab => { tab.tab_title = ''; tab.tab_content = ''; });
   });
-  if (hi < headings.length && textSlots.length) {
+  // 5. Safety net: if any content still not placed (e.g. no text slots), append to last text slot
+  if ((hi < headings.length || ti < textBlocks.length) && textSlots.length) {
     const lastText = textSlots[textSlots.length - 1];
-    lastText.obj[lastText.key] = (lastText.obj[lastText.key] || '') + headings.slice(hi).map(t => `<h3>${escCloneHtml(t)}</h3>`).join('');
+    let extra = '';
+    if (hi < headings.length) extra += headings.slice(hi).map(t => `<h3>${escCloneHtml(t)}</h3>`).join('');
+    if (ti < textBlocks.length) extra += textBlocks.slice(ti).map(formatTextBlock).join('');
+    lastText.obj[lastText.key] = (lastText.obj[lastText.key] || '') + extra;
   }
-  return { tree: clone, slots: slots.length, headingsUsed: Math.min(hi, headings.length), textsUsed: ti };
+  return { tree: clone, slots: slots.length, headingSlots: headingSlots.length, textSlots: textSlots.length,
+    headingsTotal: headings.length, textsTotal: textBlocks.length, headingsUsed: headings.length, textsUsed: textBlocks.length };
 }
 
 async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree, elMeta, template, status) {
@@ -4332,7 +4337,9 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
             `UPDATE migration_clones SET status='cloned', title=$1, blocks=$2, new_page_id=$3, new_page_url=$4, new_post_type=$5, error=NULL, updated_at=NOW() WHERE id=$6`,
             [pageTitle, JSON.stringify(blocks), created.id, created.link, created.post_type, clone.id]
           );
-          results.push({ id: clone.id, status: 'cloned', new_page_url: created.link, blocks: blocks.length, slots: swapped.slots });
+          results.push({ id: clone.id, status: 'cloned', new_page_url: created.link, blocks: blocks.length,
+            slots: swapped.slots, headingSlots: swapped.headingSlots, textSlots: swapped.textSlots,
+            headingsTotal: swapped.headingsTotal, textsTotal: swapped.textsTotal });
         }
       } catch (e) {
         await pool.query(`UPDATE migration_clones SET status='error', error=$1, updated_at=NOW() WHERE id=$2`, [e.message.slice(0, 400), clone.id]);
