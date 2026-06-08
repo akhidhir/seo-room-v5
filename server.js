@@ -4054,10 +4054,7 @@ app.post('/api/migrations/:migrationId/build-template', async (req, res) => {
 
     // 3. Create the page on the new site
     const pageTitle = `${pageType} template (auto)`;
-    const created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, elSections, {
-      _elementor_page_settings: '{}',
-      _elementor_template_type: 'wp-page',
-    }, '', 'publish');
+    const created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, elSections, {}, '', 'draft');
 
     // 4. Read back to get slot count
     const tpl = await readElementorTemplate(wpUrl, authHeaders, 'pages', created.id);
