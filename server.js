@@ -14251,12 +14251,16 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
           continue;
         }
 
-        // 3. Write meta values to WordPress (only if there are meta changes)
+        // 3. Write meta values to WordPress — ONLY the fields that actually changed.
+        // WP returns 500 rest_meta_database_error when a meta value is written with its existing
+        // value (update_metadata() returns false) — sending unchanged fields poisons the whole request.
         if (changes.length > 0) {
           const meta = {};
-          if (fix.new_meta_title) meta._yoast_wpseo_title = fix.new_meta_title;
-          if (fix.new_meta_desc) meta._yoast_wpseo_metadesc = fix.new_meta_desc;
-          if (fix.new_focus_keyword) meta._yoast_wpseo_focuskw = fix.new_focus_keyword;
+          for (const ch of changes) {
+            if (ch.field === 'yoast_wpseo_title') meta._yoast_wpseo_title = ch.new;
+            if (ch.field === 'yoast_wpseo_metadesc') meta._yoast_wpseo_metadesc = ch.new;
+            if (ch.field === 'yoast_wpseo_focuskw') meta._yoast_wpseo_focuskw = ch.new;
+          }
 
           console.log(`[onpage-fix] Writing to ${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId} meta:`, JSON.stringify(meta));
 
@@ -14283,11 +14287,24 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
             });
           }
 
+          let alreadyApplied = false;
           if (!writeResp.ok) {
             const errText = await writeResp.text();
-            console.error(`[onpage-fix] WP write failed: ${writeResp.status} — ${errText.slice(0, 300)}`);
-            results.push({ id: fix.id, success: false, error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
-            continue;
+            // rest_meta_database_error usually means "the value is already exactly this" (e.g. a
+            // previous interrupted apply went through). Verify by reading back — if it matches, it's done.
+            if (errText.includes('rest_meta_database_error')) {
+              const re = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+              alreadyApplied = re &&
+                (!meta._yoast_wpseo_title || re.yoast_wpseo_title === meta._yoast_wpseo_title) &&
+                (!meta._yoast_wpseo_metadesc || re.yoast_wpseo_metadesc === meta._yoast_wpseo_metadesc) &&
+                (!meta._yoast_wpseo_focuskw || re.yoast_wpseo_focuskw === meta._yoast_wpseo_focuskw);
+              if (alreadyApplied) console.log(`[onpage-fix] WP said rest_meta_database_error but values verify as already applied — treating as success`);
+            }
+            if (!alreadyApplied) {
+              console.error(`[onpage-fix] WP write failed: ${writeResp.status} — ${errText.slice(0, 300)}`);
+              results.push({ id: fix.id, success: false, error: `WordPress returned ${writeResp.status}: ${errText.slice(0, 200)}` });
+              continue;
+            }
           }
 
           // 4. Verify write succeeded by reading back
