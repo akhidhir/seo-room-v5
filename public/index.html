@@ -28794,6 +28794,11 @@
               const inMatch = line.match(/^(.*?)\s+in\s+(.+)$/i);
               if (ci >= 0) { service = line.slice(0, ci).trim(); suburb = line.slice(ci + 1).trim(); }
               else if (inMatch) { service = inMatch[1].trim(); suburb = inMatch[2].trim(); }
+              else {
+                // No comma / "in": assume "service suburb" — first word = service, the rest = suburb.
+                const sp = line.indexOf(' ');
+                if (sp > 0) { service = line.slice(0, sp).trim(); suburb = line.slice(sp + 1).trim(); }
+              }
               return { keyword: service, location: suburb };
             }).filter(x => x.keyword);
             const parsed = parse(mapsBulkText);
@@ -28803,9 +28808,9 @@
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setMapsBulkOpen(false)}>
               <div style={{ background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 480, width: '100%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
                 <h3 style={{ margin: '0 0 6px', fontSize: 18 }}><i className="fa-solid fa-list" style={{ marginRight: 8, color: '#22c55e' }} />Bulk Add Maps Keywords</h3>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>One per line as <b style={{ color: 'var(--text2)' }}>service, suburb</b> (or <b style={{ color: 'var(--text2)' }}>service in suburb</b>). Each needs a suburb so it can be grid-scanned.</div>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>One per line, e.g. <b style={{ color: 'var(--text2)' }}>plumber deagon</b> — the first word is the service, the rest the suburb. For multi-word services use a comma: <b style={{ color: 'var(--text2)' }}>emergency plumber, Deagon</b>.</div>
                 <textarea value={mapsBulkText} onChange={e => setMapsBulkText(e.target.value)} autoFocus
-                  placeholder={'emergency plumber, Joondalup\nblocked drains, Hocking\nhot water repair in Wanneroo'}
+                  placeholder={'plumber deagon\nplumber bracken ridge\nemergency plumber, Wanneroo'}
                   style={{ width: '100%', minHeight: 180, padding: '10px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
                 <div style={{ fontSize: 12, marginTop: 8, display: 'flex', gap: 14 }}>
                   <span style={{ color: '#22c55e' }}>{valid.length} ready</span>
