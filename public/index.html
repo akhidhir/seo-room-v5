@@ -747,6 +747,8 @@
 
     .kw-quick { opacity: 0; transition: opacity 0.12s; }
     .kw-row:hover .kw-quick { opacity: 1; }
+    /* Touch devices have no hover — always show the quick buttons */
+    @media (hover: none), (pointer: coarse) { .kw-quick { opacity: 1; } }
 
     .empty-state {
       text-align: center;
@@ -16495,11 +16497,11 @@
                             key: kw.id,
                             className: 'kw-row',
                             onClick: function() { toggleUnassigned(kw.id); },
-                            style: { padding: '7px 10px', borderRadius: 6, border: sel ? '1px solid var(--accent)' : '1px solid var(--border)', background: sel ? 'rgba(99,102,241,0.08)' : 'var(--bg)', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 },
+                            style: { padding: '7px 10px', borderRadius: 6, border: sel ? '1px solid var(--accent)' : '1px solid var(--border)', background: sel ? 'rgba(99,102,241,0.08)' : 'var(--bg)', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 8 },
                           },
-                            React.createElement('input', { type: 'checkbox', checked: sel, readOnly: true, style: { pointerEvents: 'none', flexShrink: 0 } }),
-                            React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, kw.keyword),
-                            React.createElement('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+                            React.createElement('input', { type: 'checkbox', checked: sel, readOnly: true, style: { pointerEvents: 'none', flexShrink: 0, marginTop: 2 } }),
+                            React.createElement('span', { style: { flex: 1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', lineHeight: 1.35 } }, kw.keyword),
+                            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 1 } },
                               kw.search_volume ? React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, kw.search_volume.toLocaleString()) : null,
                               React.createElement('div', { className: 'kw-quick', style: { display: 'flex', gap: 4 } },
                                 quickBtn('service', '#22c55e', 'fas fa-briefcase', 'Make a Service page from this keyword'),
