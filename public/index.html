@@ -30588,6 +30588,7 @@
                       <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '0 4px' }}>
                         <thead>
                           <tr>
+                            <th style={{ textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 110 }}>Ticket</th>
                             <th style={{ textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px' }}>Action</th>
                             <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 80 }}>Pillar</th>
                             <th style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', padding: '6px 10px', letterSpacing: '0.5px', width: 80 }}>Severity</th>
@@ -30597,6 +30598,9 @@
                         <tbody>
                           {recentActions.map((act, i) => (
                             <tr key={i} style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent', borderRadius: 8 }}>
+                              <td style={{ padding: '10px 10px' }}>
+                                {act.code ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 5, background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e', letterSpacing: 0.5, whiteSpace: 'nowrap' }}>{act.code}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}
+                              </td>
                               <td style={{ padding: '10px 10px', fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{act.title}</td>
                               <td style={{ textAlign: 'center', padding: '10px 10px' }}>
                                 <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: 'rgba(74,125,252,0.12)', color: '#4a7dfc' }}>{pillarLabel[act.pillar] || act.pillar}</span>

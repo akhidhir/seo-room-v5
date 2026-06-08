@@ -623,6 +623,9 @@ async function initDb() {
     await client.query(`CREATE TABLE IF NOT EXISTS seodity_usage (month TEXT PRIMARY KEY, used INTEGER DEFAULT 0)`).catch(() => {});
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS error_message TEXT`).catch(() => {});
     try {
+    // Junk cleanup: legacy 404 items minted from cache-buster bot probes (same URL, ?nocache=timestamp)
+    await client.query(`DELETE FROM action_items WHERE title LIKE '404:%nocache=%'`).catch(() => {});
+
       const remint = await client.query(`SELECT 1 FROM app_flags WHERE name='ticket_source_reset_v5'`);
       if (!remint.rows.length) {
         await client.query(`DELETE FROM ticket_codes`);
@@ -37386,16 +37389,18 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       if (r.status === 'new') findingsByPillar[p].pending++;
     }
 
-    // 4. Action items with detail
+    // 4. Action items — TICKETS ONLY (code IS NOT NULL). The raw uncoded action_items are
+    // the legacy pre-Control-Centre dump (bot-probe 404s etc.) and must not pollute the client report.
     const actionsRes = await pool.query(
-      `SELECT status, pillar, title, severity FROM action_items WHERE project_id=$1 ORDER BY created_at DESC`,
+      `SELECT status, pillar, title, severity, code, category FROM action_items WHERE project_id=$1 AND code IS NOT NULL ORDER BY created_at DESC`,
       [projectId]
     );
     const actionsByStatus = { done: 0, pending: 0, 'in-progress': 0 };
     const recentActions = [];
     for (const r of actionsRes.rows) {
-      actionsByStatus[r.status] = (actionsByStatus[r.status] || 0) + 1;
-      recentActions.push({ title: r.title, status: r.status, pillar: r.pillar, severity: r.severity });
+      const st = ['done', 'completed', 'fixed', 'applied', 'executed'].includes((r.status || '').toLowerCase()) ? 'done' : (r.status === 'in-progress' || r.status === 'in_progress' ? 'in-progress' : 'pending');
+      actionsByStatus[st] = (actionsByStatus[st] || 0) + 1;
+      recentActions.push({ title: r.title, status: st, pillar: r.pillar, severity: r.severity, code: r.code, category: r.category });
     }
     const totalActions = Object.values(actionsByStatus).reduce((s, v) => s + v, 0);
     const completionRate = totalActions > 0 ? Math.round((actionsByStatus.done / totalActions) * 100) : 0;
