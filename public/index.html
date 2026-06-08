@@ -18318,6 +18318,7 @@
       var [cloneTemplates, setCloneTemplates] = React.useState({});
       var [cloneLoaded, setCloneLoaded] = React.useState(null);
       var [tplHome, setTplHome] = React.useState('');
+      var [tplService, setTplService] = React.useState('');
       var [tplSuburb, setTplSuburb] = React.useState('');
       var [tplBlog, setTplBlog] = React.useState('');
       var [savingTpls, setSavingTpls] = React.useState(false);
@@ -18330,6 +18331,9 @@
       var [cloneMsg, setCloneMsg] = React.useState('');
       var [showCrawlPicker, setShowCrawlPicker] = React.useState(false);
       var [previewClone, setPreviewClone] = React.useState(null);
+      var [addType, setAddType] = React.useState('auto');
+      var [useAiMap, setUseAiMap] = React.useState(true);
+      var [cloneModel, setCloneModel] = React.useState('sonnet-4.6');
 
       var PHASES = ['crawl', 'match', 'redirects', 'clone', 'monitor', 'settings'];
       var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', clone: 'Clone Pages', monitor: 'Monitor', settings: 'Settings' };
@@ -18358,6 +18362,7 @@
           setCloneTemplates(r.templates || {});
           var t = r.templates || {};
           setTplHome((t.home && t.home.url) || '');
+          setTplService((t.service && t.service.url) || '');
           setTplSuburb((t.suburb && t.suburb.url) || '');
           setTplBlog((t.blog && t.blog.url) || '');
         }).catch(function() {});
@@ -18365,17 +18370,18 @@
       function saveCloneTemplates() {
         var m = activeMigration; if (!m) return;
         setSavingTpls(true); setTplResult(null);
-        api('/migrations/' + m.id + '/clone-templates', { method: 'PUT', body: { home: tplHome, suburb: tplSuburb, blog: tplBlog } })
+        api('/migrations/' + m.id + '/clone-templates', { method: 'PUT', body: { home: tplHome, service: tplService, suburb: tplSuburb, blog: tplBlog } })
           .then(function(r) { setCloneTemplates(r.templates || {}); setTplResult(r.results || {}); })
           .catch(function(e) { setTplResult({ _error: e.message }); })
           .finally(function() { setSavingTpls(false); });
       }
+      function cloneAddBody(urls) { var b = { urls: urls }; if (addType !== 'auto') b.type = addType; return b; }
       function addClonesFromText() {
         var m = activeMigration; if (!m) return;
         var urls = bulkUrls.split(/\n/).map(function(s) { return s.trim(); }).filter(Boolean);
         if (!urls.length) return;
         setAddingClones(true); setCloneMsg('');
-        api('/migrations/' + m.id + '/clones', { method: 'POST', body: { urls: urls } })
+        api('/migrations/' + m.id + '/clones', { method: 'POST', body: cloneAddBody(urls) })
           .then(function(r) { setClones(r.clones || []); setBulkUrls(''); setCloneMsg('Added ' + r.added + (r.skipped ? ' · ' + r.skipped + ' skipped (duplicates/invalid)' : '')); })
           .catch(function(e) { setCloneMsg('Error: ' + e.message); })
           .finally(function() { setAddingClones(false); });
@@ -18383,10 +18389,16 @@
       function addClonesFromCrawl(urls) {
         var m = activeMigration; if (!m || !urls.length) return;
         setAddingClones(true);
-        api('/migrations/' + m.id + '/clones', { method: 'POST', body: { urls: urls } })
+        api('/migrations/' + m.id + '/clones', { method: 'POST', body: cloneAddBody(urls) })
           .then(function(r) { setClones(r.clones || []); setCloneMsg('Added ' + r.added + (r.skipped ? ' · ' + r.skipped + ' already added' : '')); setShowCrawlPicker(false); })
           .catch(function(e) { setCloneMsg('Error: ' + e.message); })
           .finally(function() { setAddingClones(false); });
+      }
+      function setTypeBulk(ids, type) {
+        var m = activeMigration; if (!m || !ids.length) return;
+        api('/migrations/' + m.id + '/clones/set-type', { method: 'POST', body: { ids: ids, type: type } }).then(function() {
+          setClones(function(prev) { return prev.map(function(c) { return ids.indexOf(c.id) !== -1 ? Object.assign({}, c, { page_type: type }) : c; }); });
+        });
       }
       function setCloneTypeFor(id, type) {
         api('/migrations/' + activeMigration.id + '/clones/' + id, { method: 'PUT', body: { page_type: type } }).then(function() {
@@ -18400,9 +18412,9 @@
       }
       function runClones(ids) {
         var m = activeMigration; if (!m) return;
-        setRunningClones(true); setCloneMsg('Cloning pages — this can take a few seconds each...');
-        api('/migrations/' + m.id + '/clones/run', { method: 'POST', body: { ids: ids || [] } })
-          .then(function(r) { loadClones(m.id); var rs = r.results || []; var ok = rs.filter(function(x) { return x.status === 'cloned'; }).length; var err = rs.filter(function(x) { return x.status === 'error'; }).length; setCloneMsg('Cloned ' + ok + (err ? ' · ' + err + ' failed (see Error rows)' : '') + '. Open the drafts to review, then Publish.'); })
+        setRunningClones(true); setCloneMsg(useAiMap ? 'Cloning with AI mapping — this takes a few seconds per page...' : 'Cloning pages — this can take a few seconds each...');
+        api('/migrations/' + m.id + '/clones/run', { method: 'POST', body: { ids: ids || [], ai: useAiMap, model: cloneModel } })
+          .then(function(r) { loadClones(m.id); var rs = r.results || []; var ok = rs.filter(function(x) { return x.status === 'cloned'; }).length; var err = rs.filter(function(x) { return x.status === 'error'; }).length; var fb = rs.filter(function(x) { return x.method === 'sequential-fallback'; }).length; setCloneMsg('Cloned ' + ok + (err ? ' · ' + err + ' failed (see Error rows)' : '') + (fb ? ' · ' + fb + ' fell back to sequential' : '') + '. Open the drafts to review, then Publish.'); })
           .catch(function(e) { setCloneMsg('Error: ' + e.message); })
           .finally(function() { setRunningClones(false); setCloneSel({}); });
       }
@@ -19000,7 +19012,7 @@
         if (cloneLoaded !== m.id) { setCloneLoaded(m.id); loadClones(m.id); }
         var hasWp = !!(m.wp_url && m.wp_username && m.wp_app_password);
         var inputStyle = { width: '100%', padding: '9px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box' };
-        var typeMeta = { home: { c: '#6366f1', l: 'Home' }, suburb: { c: '#f59e0b', l: 'Suburb' }, blog: { c: '#3b82f6', l: 'Blog' } };
+        var typeMeta = { home: { c: '#6366f1', l: 'Home' }, service: { c: '#22c55e', l: 'Service' }, suburb: { c: '#f59e0b', l: 'Suburb' }, blog: { c: '#3b82f6', l: 'Blog' } };
         var statusMeta = { pending: { c: '#9ca3af', l: 'Pending' }, cloned: { c: '#3b82f6', l: 'Draft ready' }, published: { c: '#22c55e', l: 'Published' }, error: { c: '#ef4444', l: 'Error' } };
         var oldCrawl = (m.old_crawl || []).filter(function(p) { return p && p.url; });
         var existingUrls = {}; clones.forEach(function(c) { existingUrls[(c.old_url || '').replace(/\/+$/, '')] = true; });
@@ -19038,6 +19050,7 @@
             e('div', { style: { fontSize: 14, fontWeight: 700, marginBottom: 4 } }, e('i', { className: 'fas fa-table-cells-large', style: { marginRight: 8, color: accent } }), '1. New-site templates'),
             e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 14 } }, 'Paste the URL of one page per type on the new site. Its Elementor design becomes the shell for every cloned page of that type.'),
             tplRow('home', tplHome, setTplHome, 'https://new-site.com/'),
+            tplRow('service', tplService, setTplService, 'https://new-site.com/sample-service/'),
             tplRow('suburb', tplSuburb, setTplSuburb, 'https://new-site.com/sample-suburb/'),
             tplRow('blog', tplBlog, setTplBlog, 'https://new-site.com/sample-blog-post/'),
             e('button', { onClick: saveCloneTemplates, disabled: savingTpls || !hasWp, style: Object.assign({}, btnSmall, (savingTpls || !hasWp) ? { opacity: 0.6 } : {}) }, savingTpls ? 'Checking templates...' : 'Save & verify templates'),
@@ -19049,7 +19062,15 @@
             e('div', { style: { fontSize: 14, fontWeight: 700, marginBottom: 4 } }, e('i', { className: 'fas fa-link', style: { marginRight: 8, color: accent } }), '2. Add old pages'),
             e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 10 } }, 'Paste old-site URLs (one per line), or pick them from the crawl. Type is auto-detected and editable in the table.'),
             e('textarea', { value: bulkUrls, onChange: function(ev) { setBulkUrls(ev.target.value); }, placeholder: 'https://old-site.com/plumber-warner/\nhttps://old-site.com/about/', style: Object.assign({}, inputStyle, { minHeight: 90, fontFamily: 'inherit', resize: 'vertical' }) }),
-            e('div', { style: { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' } },
+            e('div', { style: { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' } },
+              e('span', { style: { fontSize: 12, color: 'var(--text3)' } }, 'Add as:'),
+              e('select', { value: addType, onChange: function(ev) { setAddType(ev.target.value); }, style: { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 8px', fontSize: 12, fontWeight: 600 } },
+                e('option', { value: 'auto' }, 'Auto-detect'),
+                e('option', { value: 'home' }, 'All Home'),
+                e('option', { value: 'service' }, 'All Service'),
+                e('option', { value: 'suburb' }, 'All Suburb'),
+                e('option', { value: 'blog' }, 'All Blog')
+              ),
               e('button', { onClick: addClonesFromText, disabled: addingClones || !bulkUrls.trim(), style: Object.assign({}, btnSmall, (addingClones || !bulkUrls.trim()) ? { opacity: 0.6 } : {}) }, addingClones ? 'Adding...' : 'Add URLs'),
               oldCrawl.length ? e('button', { onClick: function() { setShowCrawlPicker(!showCrawlPicker); }, style: btnOutline }, e('i', { className: 'fas fa-list', style: { marginRight: 6 } }), showCrawlPicker ? 'Hide crawl list' : 'Pick from crawl (' + oldCrawl.length + ')') : null,
               oldCrawl.length ? e('button', { onClick: function() { addClonesFromCrawl(oldCrawl.map(function(p) { return p.url; })); }, disabled: addingClones, style: btnOutline }, 'Add all ' + oldCrawl.length) : null
@@ -19068,11 +19089,28 @@
 
           // Clones table
           clones.length ? e('div', { style: card },
-            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 } },
-              e('div', { style: { fontSize: 14, fontWeight: 700 } }, e('i', { className: 'fas fa-clone', style: { marginRight: 8, color: accent } }), '3. Clone & publish (' + clones.length + ')'),
-              e('div', { style: { display: 'flex', gap: 8 } },
-                e('button', { onClick: function() { runClones(selIds); }, disabled: runningClones || !hasWp, style: Object.assign({}, btnSmall, (runningClones || !hasWp) ? { opacity: 0.6 } : {}) }, runningClones ? 'Cloning...' : (selIds.length ? 'Clone ' + selIds.length + ' selected' : 'Clone all')),
-                e('button', { onClick: function() { publishClones(selIds); }, disabled: publishingClones || !hasWp, style: Object.assign({}, btnOutline, { borderColor: '#22c55e', color: '#22c55e' }, (publishingClones || !hasWp) ? { opacity: 0.6 } : {}) }, publishingClones ? 'Publishing...' : (selIds.length ? 'Publish ' + selIds.length + ' selected' : 'Publish all drafts'))
+            e('div', { style: { marginBottom: 12 } },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 } },
+                e('div', { style: { fontSize: 14, fontWeight: 700 } }, e('i', { className: 'fas fa-clone', style: { marginRight: 8, color: accent } }), '3. Clone & publish (' + clones.length + ')'),
+                e('div', { style: { display: 'flex', gap: 8 } },
+                  e('button', { onClick: function() { runClones(selIds); }, disabled: runningClones || !hasWp, style: Object.assign({}, btnSmall, (runningClones || !hasWp) ? { opacity: 0.6 } : {}) }, runningClones ? 'Cloning...' : (selIds.length ? 'Clone ' + selIds.length + ' selected' : 'Clone all')),
+                  e('button', { onClick: function() { publishClones(selIds); }, disabled: publishingClones || !hasWp, style: Object.assign({}, btnOutline, { borderColor: '#22c55e', color: '#22c55e' }, (publishingClones || !hasWp) ? { opacity: 0.6 } : {}) }, publishingClones ? 'Publishing...' : (selIds.length ? 'Publish ' + selIds.length + ' selected' : 'Publish all drafts'))
+                )
+              ),
+              e('div', { style: { display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 12, color: 'var(--text2)' } },
+                e('label', { style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' } },
+                  e('input', { type: 'checkbox', checked: useAiMap, onChange: function() { setUseAiMap(!useAiMap); } }),
+                  e('span', null, e('i', { className: 'fas fa-wand-magic-sparkles', style: { marginRight: 4, color: '#a855f7' } }), 'AI text mapping')
+                ),
+                useAiMap ? e('select', { value: cloneModel, onChange: function(ev) { setCloneModel(ev.target.value); }, style: { background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600 } },
+                  e('option', { value: 'sonnet-4.6' }, 'Sonnet 4.6 (best)'),
+                  e('option', { value: 'opus-4.6' }, 'Opus 4.6 (max quality)'),
+                  e('option', { value: 'haiku-4.5' }, 'Haiku 4.5 (fast/cheap)')
+                ) : e('span', { style: { color: 'var(--text3)' } }, 'Off — text fills template slots in order'),
+                selIds.length ? e('span', { style: { display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' } },
+                  e('span', { style: { color: 'var(--text3)' } }, 'Set ' + selIds.length + ' to:'),
+                  ['home', 'service', 'suburb', 'blog'].map(function(t) { return e('button', { key: t, onClick: function() { setTypeBulk(selIds, t); }, style: { background: 'transparent', border: '1px solid ' + typeMeta[t].c, color: typeMeta[t].c, borderRadius: 5, padding: '3px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer' } }, typeMeta[t].l); })
+                ) : null
               )
             ),
             e('table', { style: { width: '100%', borderCollapse: 'collapse' } },
@@ -19089,7 +19127,7 @@
                 return e('tr', { key: c.id },
                   e('td', { style: tdStyle }, e('input', { type: 'checkbox', checked: !!cloneSel[c.id], onChange: function() { setCloneSel(Object.assign({}, cloneSel, { [c.id]: !cloneSel[c.id] })); } })),
                   e('td', { style: Object.assign({}, tdStyle, { maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }, e('a', { href: c.old_url, target: '_blank', rel: 'noopener', style: { color: 'var(--text2)', textDecoration: 'none' }, title: c.old_url }, (c.old_url || '').replace(/^https?:\/\/[^/]+/, '') || '/')),
-                  e('td', { style: tdStyle }, e('select', { value: c.page_type, onChange: function(ev) { setCloneTypeFor(c.id, ev.target.value); }, style: { background: 'var(--bg)', color: typeMeta[c.page_type] ? typeMeta[c.page_type].c : 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', fontSize: 12, fontWeight: 700 } }, ['home', 'suburb', 'blog'].map(function(t) { return e('option', { key: t, value: t }, typeMeta[t].l); }))),
+                  e('td', { style: tdStyle }, e('select', { value: c.page_type, onChange: function(ev) { setCloneTypeFor(c.id, ev.target.value); }, style: { background: 'var(--bg)', color: typeMeta[c.page_type] ? typeMeta[c.page_type].c : 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', fontSize: 12, fontWeight: 700 } }, ['home', 'service', 'suburb', 'blog'].map(function(t) { return e('option', { key: t, value: t }, typeMeta[t] ? typeMeta[t].l : t); }))),
                   e('td', { style: tdStyle }, e('span', { style: { fontSize: 11, fontWeight: 700, color: sm.c, padding: '2px 8px', borderRadius: 10, background: sm.c + '22' }, title: c.error || '' }, sm.l), c.status === 'error' && c.error ? e('div', { style: { fontSize: 10, color: '#ef4444', marginTop: 2, maxWidth: 220 } }, c.error) : null),
                   e('td', { style: tdStyle }, c.new_page_url ? e('a', { href: c.new_page_url, target: '_blank', rel: 'noopener', style: { color: accent, fontSize: 12, textDecoration: 'none' } }, e('i', { className: 'fas fa-up-right-from-square', style: { marginRight: 4 } }), 'Open') : e('span', { style: { color: 'var(--text3)', fontSize: 12 } }, '—')),
                   e('td', { style: tdStyle }, e('div', { style: { display: 'flex', gap: 8 } },

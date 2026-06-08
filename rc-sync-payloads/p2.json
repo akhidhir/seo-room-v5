@@ -1,0 +1,63 @@
+{
+  "location_id": "locations/8702513397324148400",
+  "profile": {
+    "name": "locations/8702513397324148400",
+    "languageCode": "en",
+    "storeCode": "loc-Y7tSIg6iLjPZimjsyzCg-20240717",
+    "title": "Gold PC Services",
+    "phoneNumbers": { "primaryPhone": "(08) 9271 9924" },
+    "categories": {
+      "primaryCategory": { "name": "categories/gcid:computer_repair_service", "displayName": "Computer repair service" },
+      "additionalCategories": [
+        { "name": "categories/gcid:computer_store", "displayName": "Computer Shop" },
+        { "name": "categories/gcid:computer_service", "displayName": "Computer service" },
+        { "name": "categories/gcid:data_recovery_service", "displayName": "Data recovery service" },
+        { "name": "categories/gcid:computer_hardware_manufacturer", "displayName": "Computer Hardware Company" }
+      ]
+    },
+    "storefrontAddress": { "regionCode": "AU", "languageCode": "en", "postalCode": "6053", "administrativeArea": "WA", "locality": "Bayswater", "addressLines": ["U A 8 King William Street"] },
+    "websiteUri": "https://goldpc.net.au/",
+    "regularHours": {
+      "periods": [
+        { "openDay": "MONDAY", "openTime": { "hours": 10 }, "closeDay": "MONDAY", "closeTime": { "hours": 16 } },
+        { "openDay": "TUESDAY", "openTime": { "hours": 10 }, "closeDay": "TUESDAY", "closeTime": { "hours": 16 } },
+        { "openDay": "WEDNESDAY", "openTime": { "hours": 10 }, "closeDay": "WEDNESDAY", "closeTime": { "hours": 16 } },
+        { "openDay": "THURSDAY", "openTime": { "hours": 10 }, "closeDay": "THURSDAY", "closeTime": { "hours": 16 } },
+        { "openDay": "FRIDAY", "openTime": { "hours": 10 }, "closeDay": "FRIDAY", "closeTime": { "hours": 16 } }
+      ]
+    },
+    "serviceArea": {
+      "businessType": "CUSTOMER_AND_BUSINESS_LOCATION",
+      "regionCode": "AU",
+      "places": { "placeInfos": [
+        { "placeName": "Perth, WA, Australia", "placeId": "ChIJC4Rr0Cq7MioRAFPLcwKhtHI" },
+        { "placeName": "Ascot WA 6104, Australia", "placeId": "ChIJpdh70zO6MioRID7fNbXwBAU" },
+        { "placeName": "Morley WA 6062, Australia", "placeId": "ChIJU_dpGJCwMioRoEvfNbXwBAU" },
+        { "placeName": "Belmont WA 6104, Australia", "placeId": "ChIJw23v7I-7MioRsD_fNbXwBAU" },
+        { "placeName": "Noranda WA 6062, Australia", "placeId": "ChIJHaAO81ewMioRIE3fNbXwBAU" },
+        { "placeName": "Subiaco WA 6008, Australia", "placeId": "ChIJcfF77xalMioREFLfNbXwBAU" },
+        { "placeName": "Dianella WA 6059, Australia", "placeId": "ChIJy9ZCIj6wMioRIEPfNbXwBAU" },
+        { "placeName": "Maylands WA 6051, Australia", "placeId": "ChIJSUVf81e6MioR0ErfNbXwBAU" },
+        { "placeName": "Bayswater WA 6053, Australia", "placeId": "ChIJkSZrj266MioRAD_fNbXwBAU" },
+        { "placeName": "Beechboro WA 6063, Australia", "placeId": "ChIJ0dJunFG3MioRUD_fNbXwBAU" },
+        { "placeName": "Guildford WA 6055, Australia", "placeId": "ChIJ2aJf4ty5MioRgEXfNbXwBAU" },
+        { "placeName": "Inglewood WA 6052, Australia", "placeId": "ChIJQR_MlZm6MioREEffNbXwBAU" },
+        { "placeName": "Bassendean WA 6054, Australia", "placeId": "ChIJLSl-sB26MioR4D7fNbXwBAU" },
+        { "placeName": "Mirrabooka WA 6061, Australia", "placeId": "ChIJmd6t986xMioRkEvfNbXwBAU" },
+        { "placeName": "North Perth WA 6006, Australia", "placeId": "ChIJLaYVnLK6MioRYE3fNbXwBAU" },
+        { "placeName": "Northbridge WA 6003, Australia", "placeId": "ChIJF_HIftK6MioRgE3fNbXwBAU" },
+        { "placeName": "Mount Lawley WA 6050, Australia", "placeId": "ChIJL_rVreq6MioR8EvfNbXwBAU" },
+        { "placeName": "Osborne Park WA 6017, Australia", "placeId": "ChIJreJzBGOuMioREE7fNbXwBAU" },
+        { "placeName": "Perth Airport WA 6105, Australia", "placeId": "ChIJ5QzDHbS-MioR8E7fNbXwBAU" },
+        { "placeName": "South Guildford WA 6055, Australia", "placeId": "ChIJu_ZO_L65MioRMFHfNbXwBAU" }
+      ] }
+    },
+    "labels": ["Mac And Computer Repairs"],
+    "openInfo": { "status": "OPEN", "canReopen": true, "openingDate": { "year": 2006, "month": 9 } },
+    "metadata": { "placeId": "ChIJD0nVmWi6MioRI4X20D1cC7c", "mapsUri": "https://maps.google.com/maps?cid=13189737354253206819", "hasVoiceOfMerchant": true },
+    "profile": { "description": "Gold PC Services is Perth's trusted computer and Mac repair specialist based in Bayswater, serving Morley, Bassendean, Embleton, Bedford, Inglewood, Maylands, Dianella, Noranda, and the wider Perth metro area. Since 2006, we've provided same-day computer repairs, MacBook and iMac repairs, laptop screen replacements, SSD upgrades, data recovery, and virus removal for home and business customers. We also sell quality refurbished laptops, MacBooks, and desktops with a 90-day warranty. Over 25 years IT experience. Visit us at 8A King William Street, Bayswater, or call (08) 9271 9924 for a free quote. Trade in your old device and upgrade today." },
+    "services": ["IT consulting", "Tablet repair", "Apple Mac Repairs", "Data Backup And Recovery", "Data Recovery Services", "MacBook Logic Board Repairs", "iMac Repairs", "iMac SSD Upgrade", "SSD Upgrades", "Memory Upgrades", "Virus Removals", "Gaming Computers Repairs", "Broken Screen Replacements", "Battery Replacement", "Refurbished Computers", "Refurbished MacBook", "Small Business IT Support", "Remote Support", "On-Site Support", "Keyboard Replacement", "Hard Drive Failure", "Motherboard Fix"]
+  },
+  "reviews_stats": { "total_reviews": 888, "average_rating": 4.89, "reply_rate": 63.2, "replied_count": 561, "unreplied_count": 327, "rating_distribution": { "5": 841, "4": 27, "3": 3, "2": 0, "1": 17 } },
+  "posts": { "count": 0, "published_posts": [] }
+}
