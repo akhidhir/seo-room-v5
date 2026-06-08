@@ -3996,11 +3996,10 @@ function swapElementorText(tree, blocks) {
       sl.obj[sl.key] = formatTextBlock(textBlocks[ti++]);
     }
   });
-  // 3. Clear icon-list slots (template defaults don't apply to cloned content)
+  // 3. Remove icon-list items (template defaults don't apply to cloned content)
   const iconListSlots = slots.filter(s => s.kind === 'icon-list');
   iconListSlots.forEach(sl => {
-    const items = sl.obj[sl.key];
-    if (Array.isArray(items)) items.forEach(item => { item.text = ''; });
+    if (Array.isArray(sl.obj[sl.key])) sl.obj[sl.key] = [];
   });
   // 4. Clear accordion/toggle slots
   const accordionSlots = slots.filter(s => s.kind === 'accordion');
@@ -4020,9 +4019,9 @@ function swapElementorText(tree, blocks) {
     headingsTotal: headings.length, textsTotal: textBlocks.length, headingsUsed: headings.length, textsUsed: textBlocks.length };
 }
 
-async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree, elMeta, template, status) {
+async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree, elMeta, template, status, overrideSlug) {
   const axios = require('axios');
-  const slug = (title || 'cloned-page').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || ('clone-' + Date.now());
+  const slug = overrideSlug || (title || 'cloned-page').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || ('clone-' + Date.now());
   const meta = Object.assign({}, elMeta || {}, {
     _elementor_data: JSON.stringify(tree),
     _elementor_edit_mode: 'builder',
@@ -4317,7 +4316,8 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
           const templateHTML = tplPage.data.content?.rendered || tplPage.data.content?.raw || '';
           if (!templateHTML) throw new Error('Template page has no content.');
           const swapped = swapStyledHTML(templateHTML, blocks);
-          const slug = (pageTitle || 'clone').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+          const oldSlugHTML = clone.old_url ? new URL(clone.old_url).pathname.replace(/^\/|\/$/g, '').split('/').pop() : null;
+          const slug = oldSlugHTML || (pageTitle || 'clone').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
           const newPage = await axios.post(`${wpUrl}/wp-json/wp/v2/${tplRef.post_type}`, {
             title: pageTitle, status: 'draft', slug, content: swapped.html
           }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
@@ -4332,7 +4332,9 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
           const tpl = await readElementorTemplate(wpUrl, authHeaders, tplRef.post_type, tplRef.page_id);
           if (!tpl.tree) throw new Error('Template page has no Elementor data.');
           const swapped = swapElementorText(tpl.tree, blocks);
-          created = await createNewElementorPage(wpUrl, authHeaders, tplRef.post_type, pageTitle, swapped.tree, tpl.elMeta, tpl.template, 'draft');
+          // Extract slug from old URL path to preserve URL structure
+          const oldSlug = clone.old_url ? new URL(clone.old_url).pathname.replace(/^\/|\/$/g, '').split('/').pop() : null;
+          created = await createNewElementorPage(wpUrl, authHeaders, tplRef.post_type, pageTitle, swapped.tree, tpl.elMeta, tpl.template, 'draft', oldSlug);
           await pool.query(
             `UPDATE migration_clones SET status='cloned', title=$1, blocks=$2, new_page_id=$3, new_page_url=$4, new_post_type=$5, error=NULL, updated_at=NOW() WHERE id=$6`,
             [pageTitle, JSON.stringify(blocks), created.id, created.link, created.post_type, clone.id]
