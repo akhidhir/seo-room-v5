@@ -27277,6 +27277,89 @@
       );
     }
 
+    // Territory view of a grid scan: each cell coloured by who ranks #1 there (from grid_points top3).
+    function GridDominationMap({ gridPoints, gridSize, businessName }) {
+      const center = Math.floor(gridSize / 2);
+      const cellSize = gridSize <= 3 ? 56 : gridSize <= 5 ? 44 : 36;
+      const ownerOf = (p) => {
+        const t = (p && p.top3 && p.top3[0]) || null;
+        const name = t ? (t.title || t.name || '') : '';
+        return name.trim();
+      };
+      const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+      const bizWords = norm(businessName).split(/\s+/).filter(w => w.length > 2);
+      const isUs = (name) => {
+        const n = norm(name);
+        if (!n || !bizWords.length) return false;
+        if (n.includes(norm(businessName)) || norm(businessName).includes(n)) return true;
+        const hits = bizWords.filter(w => n.includes(w)).length;
+        return hits >= Math.ceil(bizWords.length * 0.6);
+      };
+      // Tally owners (excluding us / empty) to assign colours by territory size
+      const counts = {};
+      gridPoints.forEach(p => {
+        const o = ownerOf(p);
+        if (!o || isUs(o)) return;
+        counts[o] = (counts[o] || 0) + 1;
+      });
+      const rivalOrder = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+      const palette = [
+        { fill: '#FAC775', text: '#633806', dot: '#BA7517' },
+        { fill: '#F5C4B3', text: '#712B13', dot: '#D85A30' },
+        { fill: '#F4C0D1', text: '#72243E', dot: '#D4537E' },
+        { fill: '#B5D4F4', text: '#0C447C', dot: '#378ADD' },
+        { fill: '#CECBF6', text: '#3C3489', dot: '#7F77DD' },
+      ];
+      const usStyle = { fill: '#9FE1CB', text: '#085041', dot: '#1D9E75' };
+      const openStyle = { fill: 'rgba(136,135,128,0.18)', text: 'var(--text3)', dot: '#888780' };
+      const rivalStyle = {};
+      rivalOrder.forEach((name, i) => { rivalStyle[name] = palette[i] || { fill: '#D3D1C7', text: '#444441', dot: '#888780' }; });
+      const styleFor = (o) => !o ? openStyle : isUs(o) ? usStyle : (rivalStyle[o] || { fill: '#D3D1C7', text: '#444441', dot: '#888780' });
+      const shortName = (o) => !o ? 'open' : isUs(o) ? 'you' : norm(o).split(/\s+/)[0].slice(0, 8);
+
+      // Territory tally for legend
+      let usCells = 0, openCells = 0;
+      gridPoints.forEach(p => { const o = ownerOf(p); if (!o) openCells++; else if (isUs(o)) usCells++; });
+      const total = gridPoints.length || 1;
+      const pct = (n) => Math.round(n / total * 100);
+      const legend = [{ key: '__you__', label: 'You', n: usCells, dot: usStyle.dot }]
+        .concat(rivalOrder.slice(0, 5).map(name => ({ key: name, label: name, n: counts[name], dot: rivalStyle[name].dot })))
+        .concat(openCells ? [{ key: '__open__', label: 'Up for grabs', n: openCells, dot: openStyle.dot }] : []);
+
+      return (
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${gridSize}, ${cellSize}px)`, gap: 3, justifyContent: 'center' }}>
+            {gridPoints.map((p, i) => {
+              const o = ownerOf(p);
+              const st = styleFor(o);
+              const mine = o && isUs(o);
+              const ourPos = p.found ? p.position : null;
+              return (
+                <div key={i} title={(o ? (mine ? 'You rank #1 here' : o + ' ranks #1 here') : 'No clear leader here') + (ourPos ? ' · you are #' + ourPos : (p.found ? '' : ' · you not shown'))}
+                  style={{ width: cellSize, height: cellSize, borderRadius: 6, background: st.fill,
+                    border: (p.row === center && p.col === center) ? '2px solid var(--accent)' : '1px solid var(--border)',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ fontSize: 9, color: st.text, opacity: 0.85, maxWidth: cellSize - 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shortName(o)}</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: st.text }}>{ourPos ? '#' + ourPos : '—'}</div>
+                  {mine && <i className="fa-solid fa-crown" style={{ position: 'absolute', top: 3, right: 4, fontSize: 9, color: st.text }} />}
+                  {p.row === center && p.col === center && <i className="fa-solid fa-location-dot" style={{ position: 'absolute', bottom: 2, right: 3, fontSize: 8, color: st.text }} />}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', justifyContent: 'center', marginTop: 10, fontSize: 11, color: 'var(--text3)' }}>
+            {legend.map(l => (
+              <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: l.dot, flexShrink: 0 }} />
+                <span style={{ color: 'var(--text2)', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.label}</span>
+                <span>{l.n} · {pct(l.n)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     // ============ MAPS RANKINGS PAGE ============
     const TOP_DIRECTORIES = [
       { name: 'Google Business Profile', url: 'business.google.com', free: true, type: 'Essential' },
@@ -28040,6 +28123,8 @@
       const [mapsBulkOpen, setMapsBulkOpen] = useState(false);
       const [mapsBulkText, setMapsBulkText] = useState('');
       const [mapsBulkSaving, setMapsBulkSaving] = useState(false);
+      const [dominationView, setDominationView] = useState(false);
+      const [planningKw, setPlanningKw] = useState(null);
       const [syncing, setSyncing] = useState(false);
       const [mapsChecked, setMapsChecked] = useState(false);
       const [expandedMapRow, setExpandedMapRow] = useState(null);
@@ -28531,6 +28616,24 @@
         }
         setMapsAnalyzing(false);
         if (toAnalyze.length === 1 && lastKey) setExpandedMapsAnalysis(lastKey);
+      };
+
+      // AI battle plan for a single keyword (on-demand from the Domination view)
+      const analyzeOneMapsKeyword = async (kw) => {
+        const key = `${kw.keyword}|||${kw.location}`;
+        setPlanningKw(key);
+        const g = getGridData(kw);
+        try {
+          const r = await api(`/projects/${project.id}/maps/analyze`, {
+            method: 'POST',
+            body: { keyword: kw.keyword, location: kw.location, model: mapsAnalysisModel,
+              avg_rank: g.arp, visibility: g.solv, coverage: `${g.found_in || 0}/${g.data_points || 0}`,
+              found_in: g.found_in, data_points: g.data_points }
+          });
+          if (r.ok) { setMapsAnalysisResults(prev => ({ ...prev, [key]: r })); setExpandedMapsAnalysis(key); }
+          else setMapsAnalysisResults(prev => ({ ...prev, [key]: { error: r.error || 'Unknown error' } }));
+        } catch (e) { setMapsAnalysisResults(prev => ({ ...prev, [key]: { error: e.message } })); }
+        setPlanningKw(null);
       };
 
       const handleAdd = () => {
@@ -29668,7 +29771,26 @@
                                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8, textAlign: 'center' }}>
                                     <i className="fa-solid fa-th" style={{ marginRight: 4 }} />Grid Scan — {gridScanData.grid_size}×{gridScanData.grid_size}, {gridScanData.radius_km}km radius
                                   </div>
-                                  <GridHeatmap gridPoints={gridPointsData} gridSize={gridScanData.grid_size || 5} keyword={kw.keyword} location={kw.location} suburbGps={suburbGps} />
+                                  {(() => {
+                                    const hasOwners = gridPointsData.some(p => p.top3 && p.top3.length > 0);
+                                    return (
+                                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+                                      <div style={{ display: 'flex', background: 'var(--bg)', borderRadius: 7, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                                        {[{ k: false, label: 'Your position', icon: 'fa-location-crosshairs' }, { k: true, label: 'Who owns it', icon: 'fa-chess-rook' }].map(t => (
+                                          <button key={String(t.k)} onClick={() => hasOwners && setDominationView(t.k)} disabled={t.k && !hasOwners}
+                                            title={t.k && !hasOwners ? 'Re-run the grid scan to capture who ranks #1 at each point' : ''}
+                                            style={{ fontSize: 11, padding: '5px 12px', border: 'none', cursor: (t.k && !hasOwners) ? 'not-allowed' : 'pointer', fontWeight: dominationView === t.k ? 700 : 500,
+                                              background: dominationView === t.k ? 'var(--accent)' : 'transparent', color: dominationView === t.k ? '#fff' : (t.k && !hasOwners) ? 'var(--text3)' : 'var(--text2)', opacity: (t.k && !hasOwners) ? 0.5 : 1 }}>
+                                            <i className={`fa-solid ${t.icon}`} style={{ marginRight: 5 }} />{t.label}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    );
+                                  })()}
+                                  {dominationView && gridPointsData.some(p => p.top3 && p.top3.length > 0)
+                                    ? <GridDominationMap gridPoints={gridPointsData} gridSize={gridScanData.grid_size || 5} businessName={project.business_name || project.name || ''} />
+                                    : <GridHeatmap gridPoints={gridPointsData} gridSize={gridScanData.grid_size || 5} keyword={kw.keyword} location={kw.location} suburbGps={suburbGps} />}
                                   {gridScanData.scanned_at && (
                                     <div style={{ fontSize: 10, color: 'var(--text3)', textAlign: 'center', marginTop: 6 }}>
                                       Scanned: {new Date(gridScanData.scanned_at).toLocaleDateString()} {new Date(gridScanData.scanned_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
@@ -29681,6 +29803,54 @@
                                   <div style={{ fontWeight: 700, fontSize: 13, color: advice.color, marginBottom: 10 }}>
                                     <i className={`fa-solid ${advice.icon}`} style={{ marginRight: 6 }} />{advice.title}
                                   </div>
+                                  {(() => {
+                                    const comp = (gridScanData && gridScanData.competitors) || {};
+                                    const rivals = comp.top || [];
+                                    const us = comp.our_business || {};
+                                    const topRival = rivals.find(r => r && r.reviews != null) || rivals[0] || null;
+                                    const loc = (kw.location || '').toLowerCase().trim();
+                                    const svcAreas = (auditInsights.serviceAreas || []).map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase().trim());
+                                    const inArea = svcAreas.some(a => a && loc && (a.includes(loc) || loc.includes(a)));
+                                    const hasPage = (auditInsights.sitePages || []).some(p => { const pn = (p.page_name || '').toLowerCase(), sl = (p.slug || '').toLowerCase(); return loc && (pn.includes(loc) || sl.includes(loc)); });
+                                    const cits = Array.isArray(auditInsights.citations) ? auditInsights.citations : [];
+                                    const missingFree = cits.filter(d => d.status === 'not_listed' && d.free);
+                                    const numOr = (v) => (v == null || isNaN(Number(v))) ? null : Number(v);
+                                    const ourReviews = numOr(us.reviews), ourRating = numOr(us.rating);
+                                    const rivReviews = topRival ? numOr(topRival.reviews) : null;
+                                    const rivRating = topRival ? numOr(topRival.rating) : null;
+                                    const moves = [];
+                                    if (!hasPage) moves.push({ icon: 'fa-file-circle-plus', impact: 3, effort: 2, text: `Create a "${kw.keyword}" page for ${kw.location} — you have none, and a dedicated suburb page is the strongest on-page signal here.` });
+                                    if (topRival && ourReviews != null && rivReviews != null && rivReviews > ourReviews)
+                                      moves.push({ icon: 'fa-star', impact: 3, effort: 2, text: `Close the review gap: ${topRival.name || 'the area leader'} has ${rivReviews} reviews vs your ${ourReviews}. Target +${rivReviews - ourReviews} — reviews are the biggest prominence lever.` });
+                                    if (!inArea) moves.push({ icon: 'fa-map-location-dot', impact: 2, effort: 1, text: `Add ${kw.location} to your GBP service areas (Settings) — Google won't rank you there without it.` });
+                                    if (topRival && ourRating != null && rivRating != null && (rivRating - ourRating) >= 0.2)
+                                      moves.push({ icon: 'fa-thumbs-up', impact: 2, effort: 2, text: `Lift your rating from ${ourRating.toFixed(1)}★ toward ${rivRating.toFixed(1)}★ — reply to every review and follow up unhappy customers.` });
+                                    if (missingFree.length) moves.push({ icon: 'fa-list-check', impact: 1, effort: 1, text: `Claim ${missingFree.length} free ${missingFree.length === 1 ? 'directory' : 'directories'} you're missing (${missingFree.slice(0, 3).map(d => d.name).join(', ')}${missingFree.length > 3 ? '…' : ''}) — easy citations that feed prominence.` });
+                                    if ((solv || 0) < 50 && foundIn > 0) moves.push({ icon: 'fa-bullhorn', impact: 1, effort: 1, text: `Post weekly GBP updates mentioning ${kw.location} — fresh activity widens the area where you appear.` });
+                                    const climb = moves.map(m => ({ ...m, score: m.impact / m.effort })).sort((a, b) => b.score - a.score);
+                                    if (!climb.length) return null;
+                                    const pk = `${kw.keyword}|||${kw.location}`;
+                                    return (
+                                      <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: 'rgba(20,184,166,0.06)', border: '1px solid rgba(20,184,166,0.25)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
+                                          <div style={{ fontSize: 12, fontWeight: 800, color: '#14b8a6' }}><i className="fa-solid fa-arrow-trend-up" style={{ marginRight: 6 }} />How to climb — biggest levers first</div>
+                                          <button onClick={() => analyzeOneMapsKeyword(kw)} disabled={planningKw === pk}
+                                            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '1px solid #a855f7', background: 'transparent', color: '#a855f7', cursor: planningKw === pk ? 'wait' : 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                            {planningKw === pk ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Writing…</> : <><i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />Write the battle plan (AI)</>}
+                                          </button>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                                          {climb.slice(0, 4).map((m, mi) => (
+                                            <div key={mi} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, color: 'var(--text2)', lineHeight: 1.45 }}>
+                                              <span style={{ flexShrink: 0, width: 18, height: 18, borderRadius: 5, background: '#14b8a622', color: '#14b8a6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800 }}>{mi + 1}</span>
+                                              <div style={{ flex: 1 }}><i className={`fa-solid ${m.icon}`} style={{ marginRight: 6, color: '#14b8a6', fontSize: 11 }} />{m.text}</div>
+                                              <span style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', padding: '2px 6px', borderRadius: 4, background: m.impact >= 3 ? '#22c55e22' : m.impact >= 2 ? '#f59e0b22' : '#6b728022', color: m.impact >= 3 ? '#22c55e' : m.impact >= 2 ? '#f59e0b' : '#9ca3af' }}>{m.impact >= 3 ? 'high' : m.impact >= 2 ? 'med' : 'low'}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                     {advice.actions.map((action, i) => {
                                       const act = typeof action === 'string' ? { text: action, color: 'var(--text2)' } : action;
