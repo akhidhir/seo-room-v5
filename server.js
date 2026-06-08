@@ -4306,6 +4306,19 @@ app.put('/api/migrations/:migrationId/clones/:cloneId', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Reset clones back to pending (after deleting WP pages)
+app.post('/api/migrations/:migrationId/clones/reset', async (req, res) => {
+  try {
+    const ids = (req.body.ids || []).map(n => parseInt(n, 10)).filter(Boolean);
+    if (!ids.length) return res.status(400).json({ error: 'No clone ids provided' });
+    await pool.query(
+      `UPDATE migration_clones SET status='pending', new_page_id=NULL, updated_at=NOW() WHERE migration_id=$1 AND id=ANY($2)`,
+      [req.params.migrationId, ids]
+    );
+    res.json({ ok: true, reset: ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete('/api/migrations/:migrationId/clones/:cloneId', async (req, res) => {
   try {
     await pool.query('DELETE FROM migration_clones WHERE id=$1 AND migration_id=$2', [req.params.cloneId, req.params.migrationId]);
