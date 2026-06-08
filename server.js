@@ -3865,7 +3865,11 @@ async function extractOldPageBlocks(url) {
   }
   flushLi();
   if (!title && out.length) { const h = out.find(b => b.tag === 'h1'); title = h ? h.text : out[0].text; }
-  return { title: title.slice(0, 180), blocks: out };
+  // Extract meta tags from <head>
+  const metaTitle = (html.match(/<meta\s+(?:property="og:title"|name="title")\s+content="([^"]*?)"/i) || [])[1] || title;
+  const metaDesc = (html.match(/<meta\s+name="description"\s+content="([^"]*?)"/i) || [])[1] || '';
+  const focusKw = (html.match(/<meta\s+name="keywords"\s+content="([^"]*?)"/i) || [])[1] || '';
+  return { title: title.slice(0, 180), blocks: out, meta: { metaTitle: metaTitle.slice(0, 180), metaDesc: metaDesc.slice(0, 320), focusKw: focusKw.slice(0, 100) } };
 }
 
 // Swap text in styled HTML template content. Replaces heading/paragraph text while preserving HTML structure.
@@ -4342,7 +4346,7 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
       try {
         const tplRef = templates[clone.page_type];
         if (!tplRef || !tplRef.page_id) throw new Error(`No ${clone.page_type} template set — add one in the Templates section.`);
-        const { title, blocks } = await extractOldPageBlocks(clone.old_url);
+        const { title, blocks, meta: oldMeta } = await extractOldPageBlocks(clone.old_url);
         if (!blocks.length) throw new Error('No readable text found on the old page.');
         const pageTitle = title || clone.old_url;
         let created;
@@ -4380,6 +4384,18 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
           results.push({ id: clone.id, status: 'cloned', new_page_url: created.link, blocks: blocks.length,
             slots: swapped.slots, headingSlots: swapped.headingSlots, textSlots: swapped.textSlots,
             headingsTotal: swapped.headingsTotal, textsTotal: swapped.textsTotal });
+        }
+        // Write Yoast meta tags from old page to new page
+        if (oldMeta && created && (oldMeta.metaTitle || oldMeta.metaDesc)) {
+          try {
+            const axios = require('axios');
+            const yoastMeta = {};
+            if (oldMeta.metaTitle) yoastMeta._yoast_wpseo_title = oldMeta.metaTitle;
+            if (oldMeta.metaDesc) yoastMeta._yoast_wpseo_metadesc = oldMeta.metaDesc;
+            if (oldMeta.focusKw) yoastMeta._yoast_wpseo_focuskw = oldMeta.focusKw;
+            await axios.post(`${wpUrl}/wp-json/wp/v2/${created.post_type}/${created.id}`, { meta: yoastMeta },
+              { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
+          } catch (metaErr) { console.error(`[clone] Yoast meta write failed for page ${created.id}:`, metaErr.message); }
         }
       } catch (e) {
         await pool.query(`UPDATE migration_clones SET status='error', error=$1, updated_at=NOW() WHERE id=$2`, [e.message.slice(0, 400), clone.id]);
