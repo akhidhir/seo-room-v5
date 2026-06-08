@@ -2279,6 +2279,20 @@ app.put('/api/builds/:buildId/content-keywords/bulk-assign', async (req, res) =>
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Assign each selected keyword to its OWN page (page_name = the keyword). One keyword = one page.
+app.put('/api/builds/:buildId/content-keywords/assign-individual', async (req, res) => {
+  try {
+    const { keyword_ids, page_type } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    if (!page_type) return res.status(400).json({ error: 'No page_type' });
+    const r = await pool.query(
+      `UPDATE content_keywords SET page_type=$1, page_name=INITCAP(keyword) WHERE id = ANY($2) AND build_id=$3 RETURNING *`,
+      [page_type, keyword_ids, req.params.buildId]
+    );
+    res.json({ success: true, pages_created: r.rowCount, keywords: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/builds/:buildId/content-keywords/bulk-delete', async (req, res) => {
   try {
     const { keyword_ids } = req.body;
@@ -22724,6 +22738,20 @@ app.put('/api/projects/:projectId/content-keywords/bulk-assign', async (req, res
       [page_type, page_name || null, keyword_ids, req.params.projectId]
     );
     res.json({ success: true, updated: keyword_ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Assign each selected keyword to its OWN page (page_name = the keyword). One keyword = one page.
+app.put('/api/projects/:projectId/content-keywords/assign-individual', async (req, res) => {
+  try {
+    const { keyword_ids, page_type } = req.body;
+    if (!Array.isArray(keyword_ids) || keyword_ids.length === 0) return res.status(400).json({ error: 'No keyword IDs' });
+    if (!page_type) return res.status(400).json({ error: 'No page_type' });
+    const r = await pool.query(
+      `UPDATE content_keywords SET page_type=$1, page_name=INITCAP(keyword) WHERE id = ANY($2) AND project_id=$3 RETURNING *`,
+      [page_type, keyword_ids, req.params.projectId]
+    );
+    res.json({ success: true, pages_created: r.rowCount, keywords: r.rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

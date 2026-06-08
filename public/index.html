@@ -745,6 +745,9 @@
       to { transform: rotate(360deg); }
     }
 
+    .kw-quick { opacity: 0; transition: opacity 0.12s; }
+    .kw-row:hover .kw-quick { opacity: 1; }
+
     .empty-state {
       text-align: center;
       padding: 48px 24px;
@@ -16315,6 +16318,22 @@
         setSaving(false);
       };
 
+      // One keyword = one page. Turns each selected (or one passed-in) keyword into its own page of pageType.
+      var handleCreatePages = async function(pageType, explicitIds) {
+        var ids = explicitIds || Array.from(selectedUnassigned);
+        if (!ids.length || saving) return;
+        setSaving(true);
+        try {
+          await api(apiPrefix + '/content-keywords/assign-individual', {
+            method: 'PUT',
+            body: { keyword_ids: ids, page_type: pageType },
+          });
+          await loadKeywords();
+          setSelectedUnassigned(new Set());
+        } catch (e) { alert('Error: ' + e.message); }
+        setSaving(false);
+      };
+
       var handleCreatePage = function() {
         if (!newPageName.trim() || !newPageModal) return;
         var type = newPageModal.type;
@@ -16433,25 +16452,60 @@
                       style: { padding: '6px 10px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 11, fontWeight: 600, cursor: addKwText.trim() ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }
                     }, addingKw ? '...' : '+ Add')
                   ),
-                  selectedUnassigned.size > 0 && React.createElement('div', { style: { fontSize: 11, color: 'var(--accent)', fontWeight: 600, marginBottom: 8 } },
-                    selectedUnassigned.size + ' selected — click a page on the right to assign'
+                  selectedUnassigned.size > 0 && React.createElement('div', { style: { marginBottom: 10, padding: 10, borderRadius: 8, background: 'rgba(99,102,241,0.06)', border: '1px solid var(--border)' } },
+                    React.createElement('div', { style: { fontSize: 11, color: 'var(--accent)', fontWeight: 700, marginBottom: 7 } },
+                      selectedUnassigned.size + ' selected — make one page each:'
+                    ),
+                    React.createElement('div', { style: { display: 'flex', gap: 6 } },
+                      React.createElement('button', {
+                        onClick: function() { handleCreatePages('service'); }, disabled: saving,
+                        style: { flex: 1, padding: '7px 8px', borderRadius: 6, border: '1px solid #22c55e60', background: '#22c55e14', color: '#22c55e', fontSize: 11, fontWeight: 700, cursor: saving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }
+                      },
+                        React.createElement('i', { className: 'fas fa-briefcase', style: { fontSize: 10 } }),
+                        (saving ? '...' : 'Service Pages (' + selectedUnassigned.size + ')')
+                      ),
+                      React.createElement('button', {
+                        onClick: function() { handleCreatePages('suburb'); }, disabled: saving,
+                        style: { flex: 1, padding: '7px 8px', borderRadius: 6, border: '1px solid #f59e0b60', background: '#f59e0b14', color: '#f59e0b', fontSize: 11, fontWeight: 700, cursor: saving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }
+                      },
+                        React.createElement('i', { className: 'fas fa-map-marker-alt', style: { fontSize: 10 } }),
+                        (saving ? '...' : 'Suburb Pages (' + selectedUnassigned.size + ')')
+                      )
+                    ),
+                    React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', marginTop: 6 } },
+                      'Each keyword becomes its own page. Or click a page on the right to group them into one.'
+                    )
                   ),
-                  React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 12 } },
-                    selectedUnassigned.size === 0 ? 'Select keywords, then click a page to assign' : ''
+                  selectedUnassigned.size === 0 && React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginBottom: 12 } },
+                    'Select keywords, then make one page each — or hover a keyword for quick buttons'
                   ),
                   unassigned.length === 0
                     ? React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: 16, textAlign: 'center' } }, 'All keywords assigned!')
                     : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 550, overflowY: 'auto' } },
                         unassigned.map(function(kw) {
                           var sel = selectedUnassigned.has(kw.id);
+                          var quickBtn = function(type, color, icon, title) {
+                            return React.createElement('button', {
+                              title: title, disabled: saving,
+                              onClick: function(e) { e.stopPropagation(); handleCreatePages(type, [kw.id]); },
+                              style: { width: 22, height: 22, borderRadius: 5, border: '1px solid ' + color + '50', background: color + '14', color: color, fontSize: 10, cursor: saving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, flexShrink: 0 }
+                            }, React.createElement('i', { className: icon }));
+                          };
                           return React.createElement('div', {
                             key: kw.id,
+                            className: 'kw-row',
                             onClick: function() { toggleUnassigned(kw.id); },
                             style: { padding: '7px 10px', borderRadius: 6, border: sel ? '1px solid var(--accent)' : '1px solid var(--border)', background: sel ? 'rgba(99,102,241,0.08)' : 'var(--bg)', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 },
                           },
-                            React.createElement('input', { type: 'checkbox', checked: sel, readOnly: true, style: { pointerEvents: 'none' } }),
-                            kw.keyword,
-                            kw.search_volume ? React.createElement('span', { style: { marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' } }, kw.search_volume.toLocaleString()) : null
+                            React.createElement('input', { type: 'checkbox', checked: sel, readOnly: true, style: { pointerEvents: 'none', flexShrink: 0 } }),
+                            React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, kw.keyword),
+                            React.createElement('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+                              kw.search_volume ? React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, kw.search_volume.toLocaleString()) : null,
+                              React.createElement('div', { className: 'kw-quick', style: { display: 'flex', gap: 4 } },
+                                quickBtn('service', '#22c55e', 'fas fa-briefcase', 'Make a Service page from this keyword'),
+                                quickBtn('suburb', '#f59e0b', 'fas fa-map-marker-alt', 'Make a Suburb page from this keyword')
+                              )
+                            )
                           );
                         })
                       )
