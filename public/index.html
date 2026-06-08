@@ -30118,6 +30118,22 @@
       const [activeSection, setActiveSection] = useState('overview');
       const [reportTab, setReportTab] = useState('overview');
       const [expandedCats, setExpandedCats] = useState({});
+      const [qSort, setQSort] = useState({ col: null, dir: 'desc' }); // keyword rankings table sort
+      const [mkSort, setMkSort] = useState({ col: null, dir: 'desc' }); // maps keywords table sort
+      const sortToggle = (setter) => (col) => setter(s => ({ col, dir: s.col === col && s.dir === 'desc' ? 'asc' : 'desc' }));
+      const sortArrow = (s, col) => s.col === col ? (s.dir === 'asc' ? ' ▲' : ' ▼') : '';
+      const sortRows = (rows, s, getters) => {
+        if (!s.col || !getters[s.col]) return rows;
+        const g = getters[s.col];
+        return [...rows].sort((a, b) => {
+          const va = g(a), vb = g(b);
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1; if (vb == null) return -1;
+          if (va < vb) return s.dir === 'asc' ? -1 : 1;
+          if (va > vb) return s.dir === 'asc' ? 1 : -1;
+          return 0;
+        });
+      };
 
       useEffect(() => {
         if (project) loadReports();
@@ -30421,15 +30437,19 @@
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ ...thStyle, textAlign: 'left' }}>Keyword</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Google</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Google Change</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Clicks</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Impressions</th>
+                    {[['keyword', 'Keyword', 'left'], ['position', 'Google', 'center'], ['change', 'Google Change', 'center'], ['clicks', 'Clicks', 'center'], ['impressions', 'Impressions', 'center']].map(([k, l, al]) => (
+                      <th key={k} onClick={() => sortToggle(setQSort)(k)} style={{ ...thStyle, textAlign: al, cursor: 'pointer', userSelect: 'none', color: qSort.col === k ? 'var(--accent)' : thStyle.color }}>{l}{sortArrow(qSort, k)}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {topQueries.map((q, i) => {
+                  {sortRows(topQueries, qSort, {
+                    keyword: q => (q.query || '').toLowerCase(),
+                    position: q => q.position,
+                    change: q => q.change,
+                    clicks: q => q.clicks || 0,
+                    impressions: q => q.impressions || 0,
+                  }).map((q, i) => {
                     const change = q.change ?? null; // real GSC month-over-month only — never invented
                     return (
                       <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -30467,15 +30487,19 @@
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ ...thStyle, textAlign: 'left' }}>Keyword</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Avg Rank</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Change</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Visibility</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
+                    {[['keyword', 'Keyword', 'left'], ['arp', 'Avg Rank', 'center'], ['change', 'Change', 'center'], ['visibility', 'Visibility', 'center'], ['status', 'Status', 'center']].map(([k, l, al]) => (
+                      <th key={k} onClick={() => sortToggle(setMkSort)(k)} style={{ ...thStyle, textAlign: al, cursor: 'pointer', userSelect: 'none', color: mkSort.col === k ? 'var(--accent)' : thStyle.color }}>{l}{sortArrow(mkSort, k)}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {mapsKws.slice(0, 8).map((kw, i) => {
+                  {sortRows(mapsKws.slice(0, 8), mkSort, {
+                    keyword: kw => (kw.keyword || '').toLowerCase(),
+                    arp: kw => kw.arp,
+                    change: kw => kw.change,
+                    visibility: kw => kw.visibility || 0,
+                    status: kw => kw.status || '',
+                  }).map((kw, i) => {
                     const sc = { 'Dominant': '#22c55e', 'Competitive': '#3b82f6', 'Needs Work': '#f97316', 'Not Visible': '#6b7280' };
                     const statusCol = sc[kw.status] || '#6b7280';
                     const change = kw.change ?? 0;
