@@ -33253,17 +33253,30 @@ app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => 
       if (available <= 0) return res.status(400).json({ error: `Maps keyword limit reached (${limit}). Upgrade your plan or remove existing keywords.`, limit, current });
     }
 
-    let added = 0;
+    let added = 0, skipped = 0;
+    const seenInBatch = new Set();
     for (const kw of keywords) {
       if (!kw || typeof kw !== 'string') continue;
-      await pool.query(
-        `INSERT INTO rank_keywords (project_id, keyword, location, location_code) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
-        [projectId, kw.trim(), location || '', location_code || 2036]
+      const k = kw.trim();
+      if (!k) continue;
+      // De-dupe within this batch, case-insensitively (keyword + suburb).
+      const dedupeKey = k.toLowerCase() + '|' + (location || '').toLowerCase().trim();
+      if (seenInBatch.has(dedupeKey)) { skipped++; continue; }
+      seenInBatch.add(dedupeKey);
+      // De-dupe against already-tracked keywords, case-insensitively (the unique index is exact-case).
+      const exists = await pool.query(
+        'SELECT 1 FROM rank_keywords WHERE project_id=$1 AND LOWER(keyword)=LOWER($2) AND LOWER(COALESCE(location,\'\'))=LOWER($3) LIMIT 1',
+        [projectId, k, location || '']
       );
-      added++;
+      if (exists.rows.length) { skipped++; continue; }
+      const ins = await pool.query(
+        `INSERT INTO rank_keywords (project_id, keyword, location, location_code) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
+        [projectId, k, location || '', location_code || 2036]
+      );
+      if (ins.rowCount > 0) added++; else skipped++;
     }
     const { rows } = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1 ORDER BY added_at DESC', [projectId]);
-    res.json({ ok: true, added, total: rows.length, keywords: rows });
+    res.json({ ok: true, added, skipped, total: rows.length, keywords: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

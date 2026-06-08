@@ -25465,15 +25465,17 @@
           const loc = (it.location || '').trim();
           (byLoc[loc] = byLoc[loc] || []).push(kw);
         }
-        let added = 0;
+        let added = 0, skipped = 0;
         for (const loc of Object.keys(byLoc)) {
-          // de-dupe within the batch
-          const uniq = [...new Set(byLoc[loc])];
+          // de-dupe within the batch (case-insensitive)
+          const seen = new Set();
+          const uniq = byLoc[loc].filter(k => { const lk = k.toLowerCase(); if (seen.has(lk)) return false; seen.add(lk); return true; });
           const r = await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: uniq, location: loc || null } });
-          added += (r && r.added) || uniq.length;
+          added += (r && r.added != null) ? r.added : uniq.length;
+          skipped += (r && r.skipped) || 0;
         }
         await loadData();
-        return added;
+        return { added, skipped };
       };
       const removeKeyword = async (id) => {
         await api(`/projects/${project.id}/rank-tracking/keywords/${id}`, { method: 'DELETE' });
@@ -26641,8 +26643,14 @@
                   style={{ width: '100%', minHeight: 180, padding: '10px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
                 {(() => {
                   const list = serpBulkText.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
-                  const count = new Set(list.map(s => s.toLowerCase())).size;
-                  return <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>{count} keyword{count !== 1 ? 's' : ''} ready</div>;
+                  const uniq = [...new Set(list.map(s => s.toLowerCase()))];
+                  const existing = new Set(keywords.filter(k => !k.location).map(k => (k.keyword || '').toLowerCase().trim()));
+                  const dupes = uniq.filter(k => existing.has(k)).length;
+                  const fresh = uniq.length - dupes;
+                  return <div style={{ fontSize: 12, marginTop: 8, display: 'flex', gap: 14 }}>
+                    <span style={{ color: '#22c55e' }}>{fresh} new</span>
+                    {dupes > 0 && <span style={{ color: 'var(--text3)' }}>{dupes} already tracked (skipped)</span>}
+                  </div>;
                 })()}
                 <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
                   <button className="btn" onClick={() => setSerpBulkOpen(false)} style={{ flex: 1, fontSize: 14, padding: '10px' }}>Cancel</button>
@@ -26652,9 +26660,9 @@
                     if (!uniq.length) return;
                     setSerpBulkSaving(true);
                     try {
-                      const added = await bulkAddKeywords(uniq.map(k => ({ keyword: k, location: '' })));
+                      const { added, skipped } = await bulkAddKeywords(uniq.map(k => ({ keyword: k, location: '' })));
                       setSerpBulkOpen(false); setSerpBulkText('');
-                      showToast('Added ' + added + ' keyword' + (added !== 1 ? 's' : '') + ' to SERP Rankings');
+                      showToast('Added ' + added + ' keyword' + (added !== 1 ? 's' : '') + ' to SERP Rankings' + (skipped ? ' · ' + skipped + ' already tracked' : ''));
                     } catch (e) { alert('Error: ' + e.message); }
                     setSerpBulkSaving(false);
                   }} style={{ flex: 1, fontSize: 14, padding: '10px' }}>
@@ -28804,6 +28812,9 @@
             const parsed = parse(mapsBulkText);
             const valid = parsed.filter(x => x.location);
             const missing = parsed.length - valid.length;
+            const existingMaps = new Set(keywords.filter(k => k.location).map(k => (k.keyword || '').toLowerCase().trim() + '|' + (k.location || '').toLowerCase().trim()));
+            const dupes = valid.filter(x => existingMaps.has(x.keyword.toLowerCase().trim() + '|' + x.location.toLowerCase().trim())).length;
+            const freshCount = valid.length - dupes;
             return (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setMapsBulkOpen(false)}>
               <div style={{ background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 480, width: '100%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
@@ -28812,22 +28823,23 @@
                 <textarea value={mapsBulkText} onChange={e => setMapsBulkText(e.target.value)} autoFocus
                   placeholder={'plumber deagon\nplumber bracken ridge\nemergency plumber, Wanneroo'}
                   style={{ width: '100%', minHeight: 180, padding: '10px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
-                <div style={{ fontSize: 12, marginTop: 8, display: 'flex', gap: 14 }}>
-                  <span style={{ color: '#22c55e' }}>{valid.length} ready</span>
+                <div style={{ fontSize: 12, marginTop: 8, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                  <span style={{ color: '#22c55e' }}>{freshCount} new</span>
+                  {dupes > 0 && <span style={{ color: 'var(--text3)' }}>{dupes} already tracked (skipped)</span>}
                   {missing > 0 && <span style={{ color: '#f59e0b' }}><i className="fa-solid fa-triangle-exclamation" style={{ marginRight: 4 }} />{missing} missing a suburb (will be skipped)</span>}
                 </div>
                 <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
                   <button className="btn" onClick={() => setMapsBulkOpen(false)} style={{ flex: 1, fontSize: 14, padding: '10px' }}>Cancel</button>
-                  <button className="btn btn-primary" disabled={mapsBulkSaving || !valid.length} onClick={async () => {
+                  <button className="btn btn-primary" disabled={mapsBulkSaving || !freshCount} onClick={async () => {
                     setMapsBulkSaving(true);
                     try {
-                      const added = await bulkAddKeywords(valid);
+                      const { added, skipped } = await bulkAddKeywords(valid);
                       setMapsBulkOpen(false); setMapsBulkText('');
-                      showToast('Added ' + added + ' Maps keyword' + (added !== 1 ? 's' : ''));
+                      showToast('Added ' + added + ' Maps keyword' + (added !== 1 ? 's' : '') + (skipped ? ' · ' + skipped + ' already tracked' : ''));
                     } catch (e) { alert('Error: ' + e.message); }
                     setMapsBulkSaving(false);
                   }} style={{ flex: 1, fontSize: 14, padding: '10px' }}>
-                    {mapsBulkSaving ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Adding...</> : <><i className="fa-solid fa-plus" style={{ marginRight: 6 }} />Add {valid.length || ''} Keywords</>}
+                    {mapsBulkSaving ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Adding...</> : <><i className="fa-solid fa-plus" style={{ marginRight: 6 }} />Add {freshCount || ''} Keywords</>}
                   </button>
                 </div>
               </div>
