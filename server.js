@@ -3868,6 +3868,42 @@ async function extractOldPageBlocks(url) {
   return { title: title.slice(0, 180), blocks: out };
 }
 
+// Swap text in styled HTML template content. Replaces heading/paragraph text while preserving HTML structure.
+function swapStyledHTML(templateHTML, newBlocks) {
+  const newHeadings = newBlocks.filter(b => /^h[1-4]$/.test(b.tag));
+  const newTexts = newBlocks.filter(b => b.tag === 'p' || b.tag === 'li');
+  let hi = 0, ti = 0;
+  // Replace headings (h1-h4) in order
+  let result = templateHTML.replace(/<(h[1-4])(\b[^>]*)>([\s\S]*?)<\/\1>/gi, (match, tag, attrs, content) => {
+    // Skip headings that look like nav/button items (very short or have specific classes)
+    const plainText = content.replace(/<[^>]+>/g, '').trim();
+    if (plainText.length < 2) return match; // skip empty
+    if (hi < newHeadings.length) {
+      const newText = escCloneHtml(newHeadings[hi++].text);
+      return `<${tag}${attrs}>${newText}</${tag}>`;
+    }
+    return match;
+  });
+  // Replace paragraph/text content in order
+  result = result.replace(/<p(\b[^>]*)>([\s\S]*?)<\/p>/gi, (match, attrs, content) => {
+    const plainText = content.replace(/<[^>]+>/g, '').trim();
+    if (plainText.length < 5) return match; // skip tiny/empty paragraphs
+    if (ti < newTexts.length) {
+      const block = newTexts[ti++];
+      const newContent = block.html || `<p${attrs}>${escCloneHtml(block.text)}</p>`;
+      if (block.html) return block.html; // grouped li blocks have their own HTML
+      return `<p${attrs}>${escCloneHtml(block.text)}</p>`;
+    }
+    return match;
+  });
+  // Replace icon-list text items
+  result = result.replace(/(<span[^>]*class="[^"]*elementor-icon-list-text[^"]*"[^>]*>)([\s\S]*?)(<\/span>)/gi, (match, open, content, close) => {
+    if (ti < newTexts.length) return `${open}${escCloneHtml(newTexts[ti++].text)}${close}`;
+    return match;
+  });
+  return { html: result, headingsSwapped: hi, textsSwapped: ti };
+}
+
 async function resolveNewWpPage(wpUrl, authHeaders, pageUrl) {
   const axios = require('axios');
   let path;
@@ -4085,6 +4121,90 @@ app.post('/api/migrations/:migrationId/build-template', async (req, res) => {
   } catch (e) { console.error('[build-template]', e); res.status(500).json({ error: e.message }); }
 });
 
+// Copy the full visual design from an old-site page (rendered HTML + Elementor CSS).
+// Creates a styled template on the new site that preserves the original look.
+app.post('/api/migrations/:migrationId/copy-design', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not set.' });
+    const { type, source_url } = req.body || {};
+    if (!source_url) return res.status(400).json({ error: 'source_url required' });
+    const pageType = type || 'suburb';
+
+    // 1. Find the old page ID from the old site's REST API
+    const oldDomain = new URL(source_url).origin;
+    const slug = source_url.replace(/\/$/, '').split('/').pop();
+    console.log('[copy-design] Fetching page data for slug:', slug, 'from', oldDomain);
+    const pageResp = await fetch(`${oldDomain}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}&_fields=id,content,title`, { signal: AbortSignal.timeout(20000) });
+    if (!pageResp.ok) throw new Error(`Old site REST API returned ${pageResp.status}`);
+    const pages = await pageResp.json();
+    if (!pages.length) throw new Error(`Page with slug "${slug}" not found on old site`);
+    const oldPage = pages[0];
+    const oldPageId = oldPage.id;
+    const renderedHTML = oldPage.content?.rendered || '';
+    const pageTitle = oldPage.title?.rendered || slug;
+    console.log('[copy-design] Got page', oldPageId, 'with', renderedHTML.length, 'bytes of HTML');
+
+    // 2. Fetch the page-specific Elementor CSS
+    let pageCSS = '';
+    try {
+      const cssResp = await fetch(`${oldDomain}/wp-content/uploads/elementor/css/post-${oldPageId}.css`, { signal: AbortSignal.timeout(10000) });
+      if (cssResp.ok) pageCSS = await cssResp.text();
+    } catch (e) { console.log('[copy-design] No page CSS found:', e.message); }
+    console.log('[copy-design] Page CSS:', pageCSS.length, 'bytes');
+
+    // 3. Rewrite the CSS: change old page ID references to a generic wrapper class
+    // Old CSS uses: .elementor-{oldPageId} .elementor-element.elementor-element-{id}
+    // We'll wrap content in a div with class "elementor-{oldPageId}" so CSS still works
+    const wrapperClass = `elementor-${oldPageId}`;
+
+    // 4. Rewrite image URLs to be absolute (in case they're relative)
+    let finalHTML = renderedHTML.replace(/src="\/wp-content/g, `src="${oldDomain}/wp-content`);
+    finalHTML = finalHTML.replace(/url\(\/wp-content/g, `url(${oldDomain}/wp-content`);
+    // Also fix CSS background images
+    let finalCSS = pageCSS.replace(/url\(\/wp-content/g, `url(${oldDomain}/wp-content`);
+    finalCSS = finalCSS.replace(/url\("\/wp-content/g, `url("${oldDomain}/wp-content`);
+
+    // 5. Build the complete page content: CSS + wrapped HTML
+    const fullContent = `<style>${finalCSS}</style>\n<div class="${wrapperClass}" data-elementor-type="wp-page">${finalHTML}</div>`;
+
+    // 6. Create the page on the new site (as classic editor page, not Elementor)
+    const axios = require('axios');
+    const newSlug = `${pageType}-template-styled`;
+    const payload = {
+      title: `${pageType} template (styled)`,
+      status: 'draft',
+      slug: newSlug,
+      content: fullContent
+    };
+    console.log('[copy-design] Creating styled page on new site...');
+    const wpResp = await axios.post(`${wpUrl}/wp-json/wp/v2/pages`, payload, {
+      headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }),
+      timeout: 60000
+    });
+    const created = wpResp.data;
+    console.log('[copy-design] Created page', created.id);
+
+    // 7. Update migration clone_templates
+    const templates = Object.assign({}, migration.clone_templates || {});
+    templates[pageType] = {
+      url: created.link, page_id: created.id, post_type: 'pages',
+      title: payload.title, has_elementor: false, is_styled_html: true,
+      old_page_id: oldPageId, wrapper_class: wrapperClass,
+      source_url, css_length: finalCSS.length, html_length: finalHTML.length
+    };
+    await pool.query('UPDATE seo_migrations SET clone_templates=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(templates), migration.id]);
+
+    res.json({
+      ok: true, page_id: created.id, page_url: created.link, slug: created.slug,
+      old_page_id: oldPageId, css_bytes: finalCSS.length, html_bytes: finalHTML.length,
+      template_set: pageType
+    });
+  } catch (e) { console.error('[copy-design]', e); res.status(500).json({ error: e.message }); }
+});
+
 // Save the three clone templates (home/suburb/blog) by URL; resolve each on the new site.
 app.put('/api/migrations/:migrationId/clone-templates', async (req, res) => {
   try {
@@ -4180,18 +4300,40 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
       try {
         const tplRef = templates[clone.page_type];
         if (!tplRef || !tplRef.page_id) throw new Error(`No ${clone.page_type} template set — add one in the Templates section.`);
-        const tpl = await readElementorTemplate(wpUrl, authHeaders, tplRef.post_type, tplRef.page_id);
-        if (!tpl.tree) throw new Error('Template page has no Elementor data.');
         const { title, blocks } = await extractOldPageBlocks(clone.old_url);
         if (!blocks.length) throw new Error('No readable text found on the old page.');
-        const swapped = swapElementorText(tpl.tree, blocks);
         const pageTitle = title || clone.old_url;
-        const created = await createNewElementorPage(wpUrl, authHeaders, tplRef.post_type, pageTitle, swapped.tree, tpl.elMeta, tpl.template, 'draft');
-        await pool.query(
-          `UPDATE migration_clones SET status='cloned', title=$1, blocks=$2, new_page_id=$3, new_page_url=$4, new_post_type=$5, error=NULL, updated_at=NOW() WHERE id=$6`,
-          [pageTitle, JSON.stringify(blocks), created.id, created.link, created.post_type, clone.id]
-        );
-        results.push({ id: clone.id, status: 'cloned', new_page_url: created.link, blocks: blocks.length, slots: swapped.slots });
+        let created;
+
+        if (tplRef.is_styled_html) {
+          // Styled HTML template: read page content, swap text in HTML, create new page
+          const axios = require('axios');
+          const tplPage = await axios.get(`${wpUrl}/wp-json/wp/v2/${tplRef.post_type}/${tplRef.page_id}?_fields=content`, { headers: authHeaders, timeout: 30000 });
+          const templateHTML = tplPage.data.content?.rendered || tplPage.data.content?.raw || '';
+          if (!templateHTML) throw new Error('Template page has no content.');
+          const swapped = swapStyledHTML(templateHTML, blocks);
+          const slug = (pageTitle || 'clone').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+          const newPage = await axios.post(`${wpUrl}/wp-json/wp/v2/${tplRef.post_type}`, {
+            title: pageTitle, status: 'draft', slug, content: swapped.html
+          }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
+          created = { id: newPage.data.id, link: newPage.data.link, post_type: tplRef.post_type };
+          await pool.query(
+            `UPDATE migration_clones SET status='cloned', title=$1, blocks=$2, new_page_id=$3, new_page_url=$4, new_post_type=$5, error=NULL, updated_at=NOW() WHERE id=$6`,
+            [pageTitle, JSON.stringify(blocks), created.id, created.link, created.post_type, clone.id]
+          );
+          results.push({ id: clone.id, status: 'cloned', new_page_url: created.link, blocks: blocks.length, headings: swapped.headingsSwapped, texts: swapped.textsSwapped });
+        } else {
+          // Elementor template: swap in Elementor JSON
+          const tpl = await readElementorTemplate(wpUrl, authHeaders, tplRef.post_type, tplRef.page_id);
+          if (!tpl.tree) throw new Error('Template page has no Elementor data.');
+          const swapped = swapElementorText(tpl.tree, blocks);
+          created = await createNewElementorPage(wpUrl, authHeaders, tplRef.post_type, pageTitle, swapped.tree, tpl.elMeta, tpl.template, 'draft');
+          await pool.query(
+            `UPDATE migration_clones SET status='cloned', title=$1, blocks=$2, new_page_id=$3, new_page_url=$4, new_post_type=$5, error=NULL, updated_at=NOW() WHERE id=$6`,
+            [pageTitle, JSON.stringify(blocks), created.id, created.link, created.post_type, clone.id]
+          );
+          results.push({ id: clone.id, status: 'cloned', new_page_url: created.link, blocks: blocks.length, slots: swapped.slots });
+        }
       } catch (e) {
         await pool.query(`UPDATE migration_clones SET status='error', error=$1, updated_at=NOW() WHERE id=$2`, [e.message.slice(0, 400), clone.id]);
         results.push({ id: clone.id, status: 'error', error: e.message });
