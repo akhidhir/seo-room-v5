@@ -29688,26 +29688,39 @@
                                       if (act.text === '__directories__' && act.directories) {
                                         const listed = act.directories.filter(d => d.status === 'listed');
                                         const notListed = act.directories.filter(d => d.status === 'not_listed');
-                                        const unknown = act.directories.filter(d => d.status === 'unknown');
+                                        // Anything not confirmed listed/absent = couldn't verify (blocked, timeout, never scanned)
+                                        const unverified = act.directories.filter(d => d.status !== 'listed' && d.status !== 'not_listed');
+                                        // Plain-English explanation for the hover tooltip on each directory.
+                                        const tipFor = (d) => {
+                                          const when = d.updated_at ? ' · checked ' + new Date(d.updated_at).toLocaleDateString() : '';
+                                          if (d.status === 'listed') return 'Listed' + (d.found_name ? ' as "' + d.found_name + '"' : '') + (d.notes ? ' — ' + d.notes : '') + when + '. Click to open the listing.';
+                                          if (d.status === 'not_listed') return "Not found in Google's index for this directory" + (d.notes && !/google index/i.test(d.notes) ? ' (' + d.notes + ')' : '') + when + '. Your listing may exist but be unindexed — worth checking by hand. Click to search the directory.';
+                                          return "Couldn't verify automatically" + (d.notes ? ' — ' + d.notes : ' (site blocked or unreachable)') + '. Click to check the directory manually.';
+                                        };
                                         return (
                                         <div key={i} style={{ marginTop: 4, marginBottom: 2 }}>
-                                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
+                                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}
+                                               title={'Listed = confirmed in Google’s index for that directory. Not found = no indexed listing (may still exist unindexed). Couldn’t check = the directory blocked the automated check. Hover any directory for detail.'}>
                                             <i className="fa-solid fa-list-check" style={{ marginRight: 5 }} />
-                                            Directories ({listed.length} listed{notListed.length > 0 ? ', ' + notListed.length + ' missing' : ''}{unknown.length > 0 ? ', ' + unknown.length + ' not checked' : ''})
+                                            Directories ({listed.length} listed{notListed.length > 0 ? ', ' + notListed.length + ' not found' : ''}{unverified.length > 0 ? ", " + unverified.length + " couldn’t check" : ''})
+                                            <i className="fa-solid fa-circle-info" style={{ marginLeft: 5, fontSize: 9, color: 'var(--text3)', cursor: 'help' }} />
                                           </div>
                                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 16px' }}>
-                                            {act.directories.map((d, j) => (
-                                              <div key={j} style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, padding: '2px 0' }}>
-                                                <i className={`fa-solid ${d.status === 'listed' ? 'fa-circle-check' : d.status === 'not_listed' ? 'fa-circle-xmark' : 'fa-circle-question'}`}
-                                                   style={{ fontSize: 10, color: d.status === 'listed' ? '#22c55e' : d.status === 'not_listed' ? '#ef4444' : '#6b7280', flexShrink: 0 }} />
-                                                <a href={'https://' + d.url} target="_blank" rel="noopener noreferrer"
+                                            {act.directories.map((d, j) => {
+                                              const color = d.status === 'listed' ? '#22c55e' : d.status === 'not_listed' ? '#ef4444' : '#9ca3af';
+                                              const icon = d.status === 'listed' ? 'fa-circle-check' : d.status === 'not_listed' ? 'fa-circle-xmark' : 'fa-circle-question';
+                                              return (
+                                              <div key={j} title={tipFor(d)} style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, padding: '2px 0', cursor: 'help' }}>
+                                                <i className={`fa-solid ${icon}`} style={{ fontSize: 10, color, flexShrink: 0 }} />
+                                                <a href={d.listing_url || ('https://' + d.url)} target="_blank" rel="noopener noreferrer" title={tipFor(d)}
                                                    style={{ color: d.status === 'listed' ? '#22c55e' : d.status === 'not_listed' ? '#ef4444' : 'var(--text3)', textDecoration: 'none', fontSize: 11 }}
                                                    onMouseEnter={(e) => { e.target.style.textDecoration = 'underline'; }} onMouseLeave={(e) => { e.target.style.textDecoration = 'none'; }}>
                                                   {d.name}
                                                 </a>
                                                 {d.free && d.status !== 'listed' && <span style={{ fontSize: 9, color: '#22c55e', opacity: 0.7 }}>FREE</span>}
                                               </div>
-                                            ))}
+                                              );
+                                            })}
                                           </div>
                                         </div>
                                         );
