@@ -25456,6 +25456,25 @@
         await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: [kw.trim()], location: location || null } });
         loadData();
       };
+      // Bulk add. items: array of { keyword, location } — groups by location so each call carries one location.
+      const bulkAddKeywords = async (items) => {
+        const byLoc = {};
+        for (const it of items) {
+          const kw = (it.keyword || '').trim();
+          if (!kw) continue;
+          const loc = (it.location || '').trim();
+          (byLoc[loc] = byLoc[loc] || []).push(kw);
+        }
+        let added = 0;
+        for (const loc of Object.keys(byLoc)) {
+          // de-dupe within the batch
+          const uniq = [...new Set(byLoc[loc])];
+          const r = await api(`/projects/${project.id}/rank-tracking/keywords`, { method: 'POST', body: { keywords: uniq, location: loc || null } });
+          added += (r && r.added) || uniq.length;
+        }
+        await loadData();
+        return added;
+      };
       const removeKeyword = async (id) => {
         await api(`/projects/${project.id}/rank-tracking/keywords/${id}`, { method: 'DELETE' });
         loadData();
@@ -25543,12 +25562,15 @@
         return { ...kw, ...rank };
       });
 
-      return { keywords, rankings, merged, syncing, importing, addKeyword, removeKeyword, deleteAllKeywords, importKeywords, importCSV, syncRanks, loadData };
+      return { keywords, rankings, merged, syncing, importing, addKeyword, bulkAddKeywords, removeKeyword, deleteAllKeywords, importKeywords, importCSV, syncRanks, loadData };
     }
 
     // ============ SERP RANKINGS PAGE ============
     function SERPRankingsPage({ project, setPage }) {
-      const { keywords, rankings, merged, syncing, importing, addKeyword, removeKeyword, deleteAllKeywords, importKeywords, importCSV, syncRanks, loadData } = useRankData(project);
+      const { keywords, rankings, merged, syncing, importing, addKeyword, bulkAddKeywords, removeKeyword, deleteAllKeywords, importKeywords, importCSV, syncRanks, loadData } = useRankData(project);
+      const [serpBulkOpen, setSerpBulkOpen] = useState(false);
+      const [serpBulkText, setSerpBulkText] = useState('');
+      const [serpBulkSaving, setSerpBulkSaving] = useState(false);
       const [newKw, setNewKw] = useState('');
       const [history, setHistory] = useState([]);
       const [selectedKw, setSelectedKw] = useState(null);
@@ -26602,8 +26624,46 @@
               <button className="btn btn-primary" onClick={() => { if (newKw.trim()) { addKeyword(newKw); setNewKw(''); } }} disabled={!newKw.trim()} style={{ fontSize: 13, padding: '7px 14px' }}>
                 <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Add
               </button>
+              <button className="btn" onClick={() => { setSerpBulkText(''); setSerpBulkOpen(true); }} style={{ fontSize: 13, padding: '7px 14px' }}>
+                <i className="fa-solid fa-list" style={{ marginRight: 4 }} />Bulk Add
+              </button>
             </div>
           </div>
+
+          {/* Bulk add keywords modal */}
+          {serpBulkOpen && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setSerpBulkOpen(false)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 460, width: '100%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+                <h3 style={{ margin: '0 0 6px', fontSize: 18 }}><i className="fa-solid fa-list" style={{ marginRight: 8, color: 'var(--accent)' }} />Bulk Add Keywords</h3>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>One keyword per line (or comma-separated). Duplicates are skipped automatically.</div>
+                <textarea value={serpBulkText} onChange={e => setSerpBulkText(e.target.value)} autoFocus
+                  placeholder={'emergency plumber perth\nblocked drain repairs\nhot water system installation'}
+                  style={{ width: '100%', minHeight: 180, padding: '10px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
+                {(() => {
+                  const list = serpBulkText.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+                  const count = new Set(list.map(s => s.toLowerCase())).size;
+                  return <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>{count} keyword{count !== 1 ? 's' : ''} ready</div>;
+                })()}
+                <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+                  <button className="btn" onClick={() => setSerpBulkOpen(false)} style={{ flex: 1, fontSize: 14, padding: '10px' }}>Cancel</button>
+                  <button className="btn btn-primary" disabled={serpBulkSaving || !serpBulkText.trim()} onClick={async () => {
+                    const list = serpBulkText.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+                    const uniq = [...new Set(list.map(s => s.toLowerCase()))];
+                    if (!uniq.length) return;
+                    setSerpBulkSaving(true);
+                    try {
+                      const added = await bulkAddKeywords(uniq.map(k => ({ keyword: k, location: '' })));
+                      setSerpBulkOpen(false); setSerpBulkText('');
+                      showToast('Added ' + added + ' keyword' + (added !== 1 ? 's' : '') + ' to SERP Rankings');
+                    } catch (e) { alert('Error: ' + e.message); }
+                    setSerpBulkSaving(false);
+                  }} style={{ flex: 1, fontSize: 14, padding: '10px' }}>
+                    {serpBulkSaving ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Adding...</> : <><i className="fa-solid fa-plus" style={{ marginRight: 6 }} />Add Keywords</>}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Cost confirmation modal */}
           {showCostConfirm && (
@@ -27968,7 +28028,10 @@
     }
 
     function MapsRankingsPage({ project, setPage }) {
-      const { keywords, rankings, merged, addKeyword, removeKeyword, loadData } = useRankData(project);
+      const { keywords, rankings, merged, addKeyword, bulkAddKeywords, removeKeyword, loadData } = useRankData(project);
+      const [mapsBulkOpen, setMapsBulkOpen] = useState(false);
+      const [mapsBulkText, setMapsBulkText] = useState('');
+      const [mapsBulkSaving, setMapsBulkSaving] = useState(false);
       const [syncing, setSyncing] = useState(false);
       const [mapsChecked, setMapsChecked] = useState(false);
       const [expandedMapRow, setExpandedMapRow] = useState(null);
@@ -28648,6 +28711,9 @@
               <button className="btn" onClick={openGenerator} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-wand-magic-sparkles" style={{ marginRight: 4 }} />Generate Keywords
               </button>
+              <button className="btn" onClick={() => { setMapsBulkText(''); setMapsBulkOpen(true); }} style={{ fontSize: 13 }}>
+                <i className="fa-solid fa-list" style={{ marginRight: 4 }} />Bulk Add
+              </button>
               <button className="btn" onClick={handleSmartGenerate} disabled={smartGenLoading} style={{ fontSize: 13, borderColor: '#a855f7', color: '#a855f7' }}>
                 {smartGenLoading ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />Analyzing...</> : <><i className="fa-solid fa-bolt" style={{ marginRight: 4 }} />Smart Generate</>}
               </button>
@@ -28719,6 +28785,50 @@
               </button>
             </div>
           </div>
+
+          {/* Bulk add Maps keywords modal */}
+          {mapsBulkOpen && (() => {
+            const parse = (text) => text.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+              let service = line, suburb = '';
+              const ci = line.indexOf(',');
+              const inMatch = line.match(/^(.*?)\s+in\s+(.+)$/i);
+              if (ci >= 0) { service = line.slice(0, ci).trim(); suburb = line.slice(ci + 1).trim(); }
+              else if (inMatch) { service = inMatch[1].trim(); suburb = inMatch[2].trim(); }
+              return { keyword: service, location: suburb };
+            }).filter(x => x.keyword);
+            const parsed = parse(mapsBulkText);
+            const valid = parsed.filter(x => x.location);
+            const missing = parsed.length - valid.length;
+            return (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }} onClick={() => setMapsBulkOpen(false)}>
+              <div style={{ background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 480, width: '100%', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+                <h3 style={{ margin: '0 0 6px', fontSize: 18 }}><i className="fa-solid fa-list" style={{ marginRight: 8, color: '#22c55e' }} />Bulk Add Maps Keywords</h3>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>One per line as <b style={{ color: 'var(--text2)' }}>service, suburb</b> (or <b style={{ color: 'var(--text2)' }}>service in suburb</b>). Each needs a suburb so it can be grid-scanned.</div>
+                <textarea value={mapsBulkText} onChange={e => setMapsBulkText(e.target.value)} autoFocus
+                  placeholder={'emergency plumber, Joondalup\nblocked drains, Hocking\nhot water repair in Wanneroo'}
+                  style={{ width: '100%', minHeight: 180, padding: '10px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
+                <div style={{ fontSize: 12, marginTop: 8, display: 'flex', gap: 14 }}>
+                  <span style={{ color: '#22c55e' }}>{valid.length} ready</span>
+                  {missing > 0 && <span style={{ color: '#f59e0b' }}><i className="fa-solid fa-triangle-exclamation" style={{ marginRight: 4 }} />{missing} missing a suburb (will be skipped)</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+                  <button className="btn" onClick={() => setMapsBulkOpen(false)} style={{ flex: 1, fontSize: 14, padding: '10px' }}>Cancel</button>
+                  <button className="btn btn-primary" disabled={mapsBulkSaving || !valid.length} onClick={async () => {
+                    setMapsBulkSaving(true);
+                    try {
+                      const added = await bulkAddKeywords(valid);
+                      setMapsBulkOpen(false); setMapsBulkText('');
+                      showToast('Added ' + added + ' Maps keyword' + (added !== 1 ? 's' : ''));
+                    } catch (e) { alert('Error: ' + e.message); }
+                    setMapsBulkSaving(false);
+                  }} style={{ flex: 1, fontSize: 14, padding: '10px' }}>
+                    {mapsBulkSaving ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Adding...</> : <><i className="fa-solid fa-plus" style={{ marginRight: 6 }} />Add {valid.length || ''} Keywords</>}
+                  </button>
+                </div>
+              </div>
+            </div>
+            );
+          })()}
 
           {/* Grid scan settings */}
           {mapsKeywordsRaw.length > 0 && (
