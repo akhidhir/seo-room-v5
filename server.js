@@ -37230,11 +37230,28 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     const avgSerp = serpPositions.length > 0 ? serpPositions.reduce((a, b) => a + b, 0) / serpPositions.length : null;
     const avgMaps = mapsPositions.length > 0 ? mapsPositions.reduce((a, b) => a + b, 0) / mapsPositions.length : null;
 
+    // REAL month-over-month change: latest position vs the earliest record 21-60 days back (positive = improved)
+    const prevRankRes = await pool.query(
+      `SELECT DISTINCT ON (keyword) keyword, serp_position, maps_position FROM rank_tracking
+       WHERE project_id=$1 AND checked_at < NOW() - INTERVAL '21 days' AND checked_at >= NOW() - INTERVAL '60 days'
+       ORDER BY keyword, checked_at ASC`, [projectId]);
+    const prevByKw = {}; for (const r of prevRankRes.rows) prevByKw[r.keyword] = r;
+    const serpDeltas = [], mapsDeltas = [];
+    for (const r of rankEntries) {
+      const p = prevByKw[r.keyword];
+      if (!p) continue;
+      if (r.serp_position && p.serp_position) serpDeltas.push(p.serp_position - r.serp_position);
+      if (r.maps_position && p.maps_position) mapsDeltas.push(p.maps_position - r.maps_position);
+    }
+    const avgDelta = (a) => a.length ? parseFloat((a.reduce((x, y) => x + y, 0) / a.length).toFixed(1)) : null;
+
     const mapsRankings = {
       totalKeywords: gridEntries.length || mapsPositions.length,
       avgArp: avgArp,
       avgAtrp: avgAtrp,
-      avgVisibility: avgSolv,
+      avgVisibility: avgSolv != null ? parseFloat(avgSolv.toFixed(1)) : null,
+      serpChange: avgDelta(serpDeltas),
+      mapsChange: avgDelta(mapsDeltas),
       dominant: gridEntries.filter(r => r.solv >= 60).length,
       competitive: gridEntries.filter(r => r.solv >= 30 && r.solv < 60).length,
       needsWork: gridEntries.filter(r => r.solv > 0 && r.solv < 30).length,
@@ -37270,10 +37287,29 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
         if (qRes.ok) {
           const qData = await qRes.json();
           const rows = qData.rows || [];
-          gscData.topQueries = rows.map(r => ({
-            query: r.keys[0], clicks: r.clicks, impressions: r.impressions,
-            ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1))
-          }));
+          // REAL per-query position change: compare vs the PREVIOUS 30-day window (no invented numbers)
+          let prevPosByQuery = {};
+          try {
+            const prevStart = new Date(now - 60 * 86400000).toISOString().split('T')[0];
+            const prevEnd = startDate;
+            const pqRes = await fetch('https://www.googleapis.com/webmasters/v3/sites/' + encodeURIComponent(project.gsc_property) + '/searchAnalytics/query', {
+              method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ startDate: prevStart, endDate: prevEnd, dimensions: ['query'], rowLimit: 250 }),
+              signal: AbortSignal.timeout(15000),
+            });
+            if (pqRes.ok) {
+              const pqData = await pqRes.json();
+              for (const r of (pqData.rows || [])) prevPosByQuery[r.keys[0].toLowerCase()] = r.position;
+            }
+          } catch (e) { /* change column shows — when unavailable */ }
+          gscData.topQueries = rows.map(r => {
+            const prevPos = prevPosByQuery[r.keys[0].toLowerCase()];
+            return {
+              query: r.keys[0], clicks: r.clicks, impressions: r.impressions,
+              ctr: parseFloat((r.ctr * 100).toFixed(1)), position: parseFloat(r.position.toFixed(1)),
+              change: prevPos != null ? Math.round(prevPos - r.position) : null,
+            };
+          });
           gscData.clicks = rows.reduce((s, r) => s + r.clicks, 0);
           gscData.impressions = rows.reduce((s, r) => s + r.impressions, 0);
           gscData.totalKeywords = rows.length;

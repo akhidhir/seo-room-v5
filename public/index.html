@@ -30248,34 +30248,36 @@
 
       // ============ REPORT RENDERER (AgencyAnalytics style) ============
       const renderReport = (report) => {
+        // NO sample fallbacks — missing data shows as 0/—, never a fake number
+        const r1 = (v) => (v == null || isNaN(v)) ? null : Math.round(v * 10) / 10;
         const d = {
-          month: report.monthLabel || report.month || 'May 2026',
-          healthScore: report.healthScore ?? 15,
-          clicks: report.gscData?.clicks ?? 197,
-          impressions: report.gscData?.impressions ?? 29460,
-          ctr: report.gscData?.ctr ?? 0.7,
-          avgPos: report.gscData?.avgPosition ?? 30.0,
-          mapsAvgRank: report.mapsRankings?.avgArp ?? 4.8,
-          mapsVis: report.mapsRankings?.avgVisibility ?? 18.6,
-          mapsChange: report.mapsRankings?.mapsChange ?? 2.5,
-          serpChange: report.mapsRankings?.serpChange ?? -1.2,
-          kwTracked: report.mapsRankings?.totalKeywords ?? 20,
-          kwDominant: report.mapsRankings?.dominant ?? 5,
-          kwCompetitive: report.mapsRankings?.competitive ?? 8,
-          kwNeedsWork: report.mapsRankings?.needsWork ?? 4,
-          kwNotVisible: report.mapsRankings?.notVisible ?? 3,
-          mapsRankings: report.mapsRankings?.mapsRankings ?? 10,
-          serpRankings: report.mapsRankings?.serpRankings ?? 10,
+          month: report.monthLabel || report.month || '',
+          healthScore: report.healthScore ?? null,
+          clicks: report.gscData?.clicks ?? 0,
+          impressions: report.gscData?.impressions ?? 0,
+          ctr: r1(report.gscData?.ctr) ?? 0,
+          avgPos: r1(report.gscData?.avgPosition),
+          mapsAvgRank: r1(report.mapsRankings?.avgArp),
+          mapsVis: r1(report.mapsRankings?.avgVisibility),
+          mapsChange: r1(report.mapsRankings?.mapsChange),
+          serpChange: r1(report.mapsRankings?.serpChange),
+          kwTracked: report.mapsRankings?.totalKeywords ?? 0,
+          kwDominant: report.mapsRankings?.dominant ?? 0,
+          kwCompetitive: report.mapsRankings?.competitive ?? 0,
+          kwNeedsWork: report.mapsRankings?.needsWork ?? 0,
+          kwNotVisible: report.mapsRankings?.notVisible ?? 0,
+          mapsRankings: report.mapsRankings?.mapsRankings ?? report.mapsRankings?.totalKeywords ?? 0,
+          serpRankings: report.mapsRankings?.serpRankings ?? report.serpRankings?.keywordsTracked ?? 0,
           onPageScore: report.onPageStats?.avgScore ?? 0,
-          psPerformance: report.pageSpeedStats?.avgPerformance ?? 58,
-          psAccessibility: report.pageSpeedStats?.avgAccessibility ?? 53,
-          psBestPractices: report.pageSpeedStats?.avgBestPractices ?? 51,
-          psSeo: report.pageSpeedStats?.avgSeo ?? 46,
-          actTotal: report.actions?.total ?? 36,
-          actDone: report.actions?.completed ?? 14,
-          actProgress: report.actions?.inProgress ?? 8,
-          actPending: report.actions?.pending ?? 14,
-          actRate: report.actions?.completionRate ?? 39,
+          psPerformance: report.pageSpeedStats?.avgPerformance ?? null,
+          psAccessibility: report.pageSpeedStats?.avgAccessibility ?? null,
+          psBestPractices: report.pageSpeedStats?.avgBestPractices ?? null,
+          psSeo: report.pageSpeedStats?.avgSeo ?? null,
+          actTotal: report.actions?.total ?? 0,
+          actDone: report.actions?.completed ?? 0,
+          actProgress: report.actions?.inProgress ?? 0,
+          actPending: report.actions?.pending ?? 0,
+          actRate: report.actions?.completionRate ?? 0,
         };
 
         // Monthly data for ranking chart (use all reports or sample)
@@ -30295,30 +30297,13 @@
           top50: r.mapsRankings?.notVisible || 0,
           beyond: 0,
         })) : [
-          { label: 'Jan', top3: 2, top10: 4, top20: 6, top50: 5, beyond: 3 },
-          { label: 'Feb', top3: 3, top10: 5, top20: 5, top50: 4, beyond: 3 },
-          { label: 'Mar', top3: 4, top10: 6, top20: 4, top50: 4, beyond: 2 },
-          { label: 'Apr', top3: 5, top10: 7, top20: 4, top50: 3, beyond: 1 },
-          { label: 'May', top3: d.kwDominant, top10: d.kwCompetitive, top20: d.kwNeedsWork, top50: d.kwNotVisible, beyond: 0 },
+          // only one report exists — show ONLY the real current month, never invented history
+          { label: (report.monthLabel || report.month || 'Now').replace(/\s*\d{4}$/, '').slice(0, 3), top3: d.kwDominant, top10: d.kwCompetitive, top20: d.kwNeedsWork, top50: d.kwNotVisible, beyond: 0 },
         ];
 
-        // Top queries
-        const topQueries = report.gscData?.topQueries || [
-          { query: 'gold pc services', clicks: 17, impressions: 67, ctr: 25.4, position: 1.1 },
-          { query: 'goldpc', clicks: 8, impressions: 35, ctr: 22.9, position: 5.4 },
-          { query: 'gold pc', clicks: 6, impressions: 207, ctr: 2.9, position: 7.1 },
-          { query: 'refurbished laptops perth', clicks: 5, impressions: 195, ctr: 2.6, position: 8.8 },
-          { query: 'gold pc bayswater', clicks: 3, impressions: 12, ctr: 25.0, position: 1.0 },
-        ];
-
-        // Maps keywords
-        const mapsKws = report.mapsRankings?.topKeywords || [
-          { keyword: 'computer repairs bayswater', arp: 1.8, change: 2, visibility: 82, status: 'Dominant' },
-          { keyword: 'pc repair morley', arp: 3.2, change: -1, visibility: 64, status: 'Dominant' },
-          { keyword: 'laptop repair perth', arp: 5.4, change: 3, visibility: 38, status: 'Competitive' },
-          { keyword: 'data recovery bayswater', arp: 8.1, change: 0, visibility: 22, status: 'Needs Work' },
-          { keyword: 'phone repair midland', arp: 12.4, change: -2, visibility: 8, status: 'Needs Work' },
-        ];
+        // Real data only — empty arrays render an empty-state row, never sample keywords
+        const topQueries = report.gscData?.topQueries || [];
+        const mapsKws = report.mapsRankings?.topKeywords || [];
 
         const wCard = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8 };
         const thStyle = { padding: '12px 16px', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' };
@@ -30357,9 +30342,10 @@
                     <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Google Change</span>
                   </div>
                   <div style={{ fontSize: 36, fontWeight: 800, textAlign: 'center' }}>
-                    {d.mapsChange >= 0
-                      ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.mapsChange)}</span>
-                      : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.mapsChange)}</span>}
+                    {d.serpChange == null ? <span style={{ color: 'var(--text3)' }}>—</span>
+                      : d.serpChange >= 0
+                        ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.serpChange)}</span>
+                        : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.serpChange)}</span>}
                   </div>
                 </div>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -30368,9 +30354,10 @@
                     <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Maps Change</span>
                   </div>
                   <div style={{ fontSize: 36, fontWeight: 800, textAlign: 'center' }}>
-                    {d.serpChange >= 0
-                      ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.serpChange)}</span>
-                      : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.serpChange)}</span>}
+                    {d.mapsChange == null ? <span style={{ color: 'var(--text3)' }}>—</span>
+                      : d.mapsChange >= 0
+                        ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.mapsChange)}</span>
+                        : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.mapsChange)}</span>}
                   </div>
                 </div>
               </div>
@@ -30399,7 +30386,7 @@
                   <i className="fas fa-eye" style={{ fontSize: 14, color: '#ef4444' }} />
                   <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Visibility</span>
                 </div>
-                <div style={{ fontSize: 56, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{d.mapsVis}%</div>
+                <div style={{ fontSize: 56, fontWeight: 800, color: 'var(--text)', lineHeight: 1 }}>{d.mapsVis == null ? '—' : `${d.mapsVis}%`}</div>
               </div>
             </div>
 
@@ -30443,7 +30430,7 @@
                 </thead>
                 <tbody>
                   {topQueries.map((q, i) => {
-                    const change = q.change ?? (Math.round((Math.random() - 0.4) * 10));
+                    const change = q.change ?? null; // real GSC month-over-month only — never invented
                     return (
                       <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '14px 16px', fontSize: 15, color: 'var(--text)', fontWeight: 500 }}>
@@ -30456,7 +30443,7 @@
                           {ordinal(q.position)}
                         </td>
                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          {change !== 0 ? (
+                          {change != null && change !== 0 ? (
                             <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 15, fontWeight: 600 }}>
                               {change > 0 ? '+' : ''}{change}
                             </span>
@@ -30504,7 +30491,7 @@
                           {ordinal(kw.arp)}
                         </td>
                         <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          {change !== 0 ? (
+                          {change != null && change !== 0 ? (
                             <span style={{ color: change > 0 ? '#22c55e' : '#ef4444', fontSize: 15, fontWeight: 600 }}>
                               {change > 0 ? '+' : ''}{change}
                             </span>
