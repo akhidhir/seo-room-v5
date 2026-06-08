@@ -1262,6 +1262,22 @@
 
     const API_BASE = window.location.origin + '/api';
 
+    // Build + download a CSV from rows (array of arrays; first row = header). Escapes quotes/commas/newlines.
+    const downloadCsv = (filename, rows) => {
+      const esc = (v) => {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const csv = rows.map(r => r.map(esc).join(',')).join('\r\n');
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    };
+
     const api = async (path, opts = {}) => {
       const token = localStorage.getItem('token');
       // Railway returns an HTML error page while a deploy restarts the server. Instead of failing the
@@ -26518,6 +26534,21 @@
             <button className="btn" onClick={importFromMaps} disabled={importingMaps} style={{ fontSize: 13, padding: '7px 14px' }}>
               {importingMaps ? <i className="fa-solid fa-spinner fa-spin" /> : <><i className="fa-solid fa-map-location-dot" style={{ marginRight: 5 }} />Maps</>}
             </button>
+            {keywords.length > 0 && <button className="btn" onClick={() => {
+              const rows = [['Keyword', 'Search Volume', 'SERP Position', 'Change', 'Ranking URL', 'Last Checked']];
+              sorted.forEach(kw => rows.push([
+                kw.keyword,
+                kw.search_volume != null ? kw.search_volume : '',
+                kw.serp_position ? kw.serp_position : (kw.checked_at ? '>100' : ''),
+                kw.serp_change ? (kw.serp_change > 0 ? '+' : '') + kw.serp_change : '',
+                kw.serp_url || '',
+                kw.checked_at ? new Date(kw.checked_at).toLocaleDateString() : ''
+              ]));
+              const stamp = new Date().toISOString().slice(0, 10);
+              downloadCsv('serp-rankings-' + (project.name || 'project').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-' + stamp + '.csv', rows);
+            }} style={{ fontSize: 13, padding: '7px 14px' }}>
+              <i className="fa-solid fa-file-export" style={{ marginRight: 5 }} />Export CSV
+            </button>}
             {keywords.length > 0 && <button className="btn" onClick={deleteAllKeywords} style={{ fontSize: 13, padding: '7px 14px', color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)' }}>
               <i className="fa-solid fa-trash" style={{ marginRight: 5 }} />Delete All
             </button>}
@@ -28582,6 +28613,32 @@
               <button className="btn" onClick={() => setShowGuide(!showGuide)} style={{ fontSize: 13, borderColor: 'var(--text3)', color: 'var(--text3)' }}>
                 <i className="fa-solid fa-circle-question" style={{ marginRight: 4 }} />{showGuide ? 'Hide Guide' : 'How To Use'}
               </button>
+              {mapsKeywordsRaw.length > 0 && <button className="btn" onClick={() => {
+                const rows = [['Service Keyword', 'Suburb', 'Search Volume', 'Avg Rank (ARP)', 'True Rank (ATRP)', 'SOLV %', 'Coverage', 'Status']];
+                mapsKeywords.forEach(kw => {
+                  const g = getGridData(kw);
+                  const scanned = g.solv !== undefined || g.arp !== undefined;
+                  const status = !scanned ? 'Not scanned'
+                    : g.solv >= 50 ? 'Dominant'
+                    : g.solv >= 20 ? 'Competitive'
+                    : g.solv > 0 ? 'Needs Work'
+                    : g.found_in > 0 ? 'Weak' : 'Not Visible';
+                  rows.push([
+                    kw.keyword,
+                    kw.location || '',
+                    kw.search_volume != null ? kw.search_volume : '',
+                    g.arp != null ? g.arp.toFixed(1) : '',
+                    g.atrp != null ? g.atrp.toFixed(1) : '',
+                    g.solv != null ? g.solv.toFixed(0) : '',
+                    (g.found_in != null && g.data_points) ? g.found_in + '/' + g.data_points : '',
+                    status
+                  ]);
+                });
+                const stamp = new Date().toISOString().slice(0, 10);
+                downloadCsv('maps-rankings-' + (project.name || 'project').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '-' + stamp + '.csv', rows);
+              }} style={{ fontSize: 13 }}>
+                <i className="fa-solid fa-file-export" style={{ marginRight: 4 }} />Export CSV
+              </button>}
               <button className="btn" onClick={importMapsCSV} style={{ fontSize: 13 }}>
                 <i className="fa-solid fa-file-csv" style={{ marginRight: 4 }} />Import CSV
               </button>
