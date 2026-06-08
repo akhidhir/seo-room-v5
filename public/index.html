@@ -18313,10 +18313,27 @@
       var [newPatternTarget, setNewPatternTarget] = React.useState('');
       var [patternPreview, setPatternPreview] = React.useState(null);
       var [showPatternHelp, setShowPatternHelp] = React.useState(false);
+      // Page cloning state
+      var [clones, setClones] = React.useState([]);
+      var [cloneTemplates, setCloneTemplates] = React.useState({});
+      var [cloneLoaded, setCloneLoaded] = React.useState(null);
+      var [tplHome, setTplHome] = React.useState('');
+      var [tplSuburb, setTplSuburb] = React.useState('');
+      var [tplBlog, setTplBlog] = React.useState('');
+      var [savingTpls, setSavingTpls] = React.useState(false);
+      var [tplResult, setTplResult] = React.useState(null);
+      var [bulkUrls, setBulkUrls] = React.useState('');
+      var [addingClones, setAddingClones] = React.useState(false);
+      var [cloneSel, setCloneSel] = React.useState({});
+      var [runningClones, setRunningClones] = React.useState(false);
+      var [publishingClones, setPublishingClones] = React.useState(false);
+      var [cloneMsg, setCloneMsg] = React.useState('');
+      var [showCrawlPicker, setShowCrawlPicker] = React.useState(false);
+      var [previewClone, setPreviewClone] = React.useState(null);
 
-      var PHASES = ['crawl', 'match', 'redirects', 'monitor', 'settings'];
-      var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', monitor: 'Monitor', settings: 'Settings' };
-      var PHASE_ICONS = { crawl: 'fa-spider', match: 'fa-link', redirects: 'fa-directions', monitor: 'fa-chart-line', settings: 'fa-cog' };
+      var PHASES = ['crawl', 'match', 'redirects', 'clone', 'monitor', 'settings'];
+      var PHASE_LABELS = { crawl: 'Crawl', match: 'Match', redirects: 'Redirects', clone: 'Clone Pages', monitor: 'Monitor', settings: 'Settings' };
+      var PHASE_ICONS = { crawl: 'fa-spider', match: 'fa-link', redirects: 'fa-directions', clone: 'fa-clone', monitor: 'fa-chart-line', settings: 'fa-cog' };
 
       var accent = '#f97316';
       var btnStyle = { padding: '10px 20px', borderRadius: 8, border: 'none', background: accent, color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' };
@@ -18332,6 +18349,71 @@
 
       function loadMigration(mid) {
         api('/migrations/' + mid).then(function(r) { setActiveMigration(r); if (editedMap === null && r.url_map) setEditedMap(r.url_map); }).catch(function() {});
+      }
+
+      // ----- Page cloning handlers -----
+      function loadClones(mid) {
+        api('/migrations/' + mid + '/clones').then(function(r) {
+          setClones(r.clones || []);
+          setCloneTemplates(r.templates || {});
+          var t = r.templates || {};
+          setTplHome((t.home && t.home.url) || '');
+          setTplSuburb((t.suburb && t.suburb.url) || '');
+          setTplBlog((t.blog && t.blog.url) || '');
+        }).catch(function() {});
+      }
+      function saveCloneTemplates() {
+        var m = activeMigration; if (!m) return;
+        setSavingTpls(true); setTplResult(null);
+        api('/migrations/' + m.id + '/clone-templates', { method: 'PUT', body: { home: tplHome, suburb: tplSuburb, blog: tplBlog } })
+          .then(function(r) { setCloneTemplates(r.templates || {}); setTplResult(r.results || {}); })
+          .catch(function(e) { setTplResult({ _error: e.message }); })
+          .finally(function() { setSavingTpls(false); });
+      }
+      function addClonesFromText() {
+        var m = activeMigration; if (!m) return;
+        var urls = bulkUrls.split(/\n/).map(function(s) { return s.trim(); }).filter(Boolean);
+        if (!urls.length) return;
+        setAddingClones(true); setCloneMsg('');
+        api('/migrations/' + m.id + '/clones', { method: 'POST', body: { urls: urls } })
+          .then(function(r) { setClones(r.clones || []); setBulkUrls(''); setCloneMsg('Added ' + r.added + (r.skipped ? ' · ' + r.skipped + ' skipped (duplicates/invalid)' : '')); })
+          .catch(function(e) { setCloneMsg('Error: ' + e.message); })
+          .finally(function() { setAddingClones(false); });
+      }
+      function addClonesFromCrawl(urls) {
+        var m = activeMigration; if (!m || !urls.length) return;
+        setAddingClones(true);
+        api('/migrations/' + m.id + '/clones', { method: 'POST', body: { urls: urls } })
+          .then(function(r) { setClones(r.clones || []); setCloneMsg('Added ' + r.added + (r.skipped ? ' · ' + r.skipped + ' already added' : '')); setShowCrawlPicker(false); })
+          .catch(function(e) { setCloneMsg('Error: ' + e.message); })
+          .finally(function() { setAddingClones(false); });
+      }
+      function setCloneTypeFor(id, type) {
+        api('/migrations/' + activeMigration.id + '/clones/' + id, { method: 'PUT', body: { page_type: type } }).then(function() {
+          setClones(function(prev) { return prev.map(function(c) { return c.id === id ? Object.assign({}, c, { page_type: type }) : c; }); });
+        });
+      }
+      function deleteClone(id) {
+        api('/migrations/' + activeMigration.id + '/clones/' + id, { method: 'DELETE' }).then(function() {
+          setClones(function(prev) { return prev.filter(function(c) { return c.id !== id; }); });
+        });
+      }
+      function runClones(ids) {
+        var m = activeMigration; if (!m) return;
+        setRunningClones(true); setCloneMsg('Cloning pages — this can take a few seconds each...');
+        api('/migrations/' + m.id + '/clones/run', { method: 'POST', body: { ids: ids || [] } })
+          .then(function(r) { loadClones(m.id); var rs = r.results || []; var ok = rs.filter(function(x) { return x.status === 'cloned'; }).length; var err = rs.filter(function(x) { return x.status === 'error'; }).length; setCloneMsg('Cloned ' + ok + (err ? ' · ' + err + ' failed (see Error rows)' : '') + '. Open the drafts to review, then Publish.'); })
+          .catch(function(e) { setCloneMsg('Error: ' + e.message); })
+          .finally(function() { setRunningClones(false); setCloneSel({}); });
+      }
+      function publishClones(ids) {
+        var m = activeMigration; if (!m) return;
+        if (!confirm('Publish the selected cloned pages on the new site?')) return;
+        setPublishingClones(true);
+        api('/migrations/' + m.id + '/clones/publish', { method: 'POST', body: { ids: ids || [] } })
+          .then(function(r) { loadClones(m.id); setCloneMsg('Published ' + r.published + ((r.errors && r.errors.length) ? ' · ' + r.errors.length + ' failed' : '')); })
+          .catch(function(e) { setCloneMsg('Error: ' + e.message); })
+          .finally(function() { setPublishingClones(false); setCloneSel({}); });
       }
 
       React.useEffect(function() { loadMigrations(); return function() { if (pollTimer) clearInterval(pollTimer); }; }, []);
@@ -18912,6 +18994,132 @@
       }
 
       // --- Settings Phase ---
+      function renderClonePhase() {
+        var e = React.createElement;
+        var m = activeMigration;
+        if (cloneLoaded !== m.id) { setCloneLoaded(m.id); loadClones(m.id); }
+        var hasWp = !!(m.wp_url && m.wp_username && m.wp_app_password);
+        var inputStyle = { width: '100%', padding: '9px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, boxSizing: 'border-box' };
+        var typeMeta = { home: { c: '#6366f1', l: 'Home' }, suburb: { c: '#f59e0b', l: 'Suburb' }, blog: { c: '#3b82f6', l: 'Blog' } };
+        var statusMeta = { pending: { c: '#9ca3af', l: 'Pending' }, cloned: { c: '#3b82f6', l: 'Draft ready' }, published: { c: '#22c55e', l: 'Published' }, error: { c: '#ef4444', l: 'Error' } };
+        var oldCrawl = (m.old_crawl || []).filter(function(p) { return p && p.url; });
+        var existingUrls = {}; clones.forEach(function(c) { existingUrls[(c.old_url || '').replace(/\/+$/, '')] = true; });
+        var selIds = Object.keys(cloneSel).filter(function(k) { return cloneSel[k]; }).map(Number);
+        var card = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 16 };
+
+        function tplRow(type, val, setter, placeholder) {
+          var info = cloneTemplates[type];
+          var res = tplResult && tplResult[type];
+          return e('div', { key: type, style: { marginBottom: 12 } },
+            e('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' } },
+              e('span', { style: { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: typeMeta[type].c, minWidth: 110 } }, typeMeta[type].l + ' template'),
+              info && info.has_elementor ? e('span', { style: { fontSize: 11, color: '#22c55e' } }, e('i', { className: 'fas fa-check-circle', style: { marginRight: 4 } }), (info.title || 'set') + ' · ' + (info.text_slots || 0) + ' text slots') : null,
+              info && !info.has_elementor ? e('span', { style: { fontSize: 11, color: '#f59e0b' } }, e('i', { className: 'fas fa-triangle-exclamation', style: { marginRight: 4 } }), 'Found, but no Elementor data on that page') : null,
+              res && res.error ? e('span', { style: { fontSize: 11, color: '#ef4444' } }, res.error) : null
+            ),
+            e('input', { value: val, onChange: function(ev) { setter(ev.target.value); }, placeholder: placeholder, style: inputStyle })
+          );
+        }
+
+        return e('div', null,
+          !hasWp ? e('div', { style: { padding: 12, borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid #f59e0b', marginBottom: 16, fontSize: 13, color: 'var(--text)' } },
+            e('i', { className: 'fas fa-triangle-exclamation', style: { marginRight: 8, color: '#f59e0b' } }),
+            'Set the new-site WordPress URL, username and application password in the ',
+            e('button', { onClick: function() { setPhase('settings'); }, style: { background: 'none', border: 'none', color: accent, cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 13 } }, 'Settings tab'),
+            ' first — cloning publishes drafts to the new site.'
+          ) : null,
+
+          e('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 16, lineHeight: 1.5 } },
+            'Clone old-site pages into the new site. Each page keeps the ', e('b', null, 'new site’s design'), ' — its text is poured into the matching Elementor template below. Images and links are skipped. Cloned pages are created as ', e('b', null, 'drafts'), ' for review before you publish.'
+          ),
+
+          // Templates
+          e('div', { style: card },
+            e('div', { style: { fontSize: 14, fontWeight: 700, marginBottom: 4 } }, e('i', { className: 'fas fa-table-cells-large', style: { marginRight: 8, color: accent } }), '1. New-site templates'),
+            e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 14 } }, 'Paste the URL of one page per type on the new site. Its Elementor design becomes the shell for every cloned page of that type.'),
+            tplRow('home', tplHome, setTplHome, 'https://new-site.com/'),
+            tplRow('suburb', tplSuburb, setTplSuburb, 'https://new-site.com/sample-suburb/'),
+            tplRow('blog', tplBlog, setTplBlog, 'https://new-site.com/sample-blog-post/'),
+            e('button', { onClick: saveCloneTemplates, disabled: savingTpls || !hasWp, style: Object.assign({}, btnSmall, (savingTpls || !hasWp) ? { opacity: 0.6 } : {}) }, savingTpls ? 'Checking templates...' : 'Save & verify templates'),
+            tplResult && tplResult._error ? e('span', { style: { marginLeft: 10, color: '#ef4444', fontSize: 12 } }, tplResult._error) : null
+          ),
+
+          // Add URLs
+          e('div', { style: card },
+            e('div', { style: { fontSize: 14, fontWeight: 700, marginBottom: 4 } }, e('i', { className: 'fas fa-link', style: { marginRight: 8, color: accent } }), '2. Add old pages'),
+            e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 10 } }, 'Paste old-site URLs (one per line), or pick them from the crawl. Type is auto-detected and editable in the table.'),
+            e('textarea', { value: bulkUrls, onChange: function(ev) { setBulkUrls(ev.target.value); }, placeholder: 'https://old-site.com/plumber-warner/\nhttps://old-site.com/about/', style: Object.assign({}, inputStyle, { minHeight: 90, fontFamily: 'inherit', resize: 'vertical' }) }),
+            e('div', { style: { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' } },
+              e('button', { onClick: addClonesFromText, disabled: addingClones || !bulkUrls.trim(), style: Object.assign({}, btnSmall, (addingClones || !bulkUrls.trim()) ? { opacity: 0.6 } : {}) }, addingClones ? 'Adding...' : 'Add URLs'),
+              oldCrawl.length ? e('button', { onClick: function() { setShowCrawlPicker(!showCrawlPicker); }, style: btnOutline }, e('i', { className: 'fas fa-list', style: { marginRight: 6 } }), showCrawlPicker ? 'Hide crawl list' : 'Pick from crawl (' + oldCrawl.length + ')') : null,
+              oldCrawl.length ? e('button', { onClick: function() { addClonesFromCrawl(oldCrawl.map(function(p) { return p.url; })); }, disabled: addingClones, style: btnOutline }, 'Add all ' + oldCrawl.length) : null
+            ),
+            showCrawlPicker && oldCrawl.length ? e('div', { style: { marginTop: 12, maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 } },
+              oldCrawl.map(function(p, i) {
+                var added = existingUrls[(p.url || '').replace(/\/+$/, '')];
+                return e('div', { key: i, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '7px 12px', borderBottom: '1px solid var(--border)', fontSize: 12 } },
+                  e('span', { style: { color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 } }, p.url),
+                  added ? e('span', { style: { color: '#22c55e', fontSize: 11 } }, e('i', { className: 'fas fa-check', style: { marginRight: 4 } }), 'Added') : e('button', { onClick: function() { addClonesFromCrawl([p.url]); }, style: { background: 'none', border: '1px solid var(--border)', color: accent, borderRadius: 5, padding: '2px 10px', fontSize: 11, cursor: 'pointer' } }, '+ Add')
+                );
+              })
+            ) : null,
+            cloneMsg ? e('div', { style: { marginTop: 10, fontSize: 12, color: 'var(--text2)' } }, cloneMsg) : null
+          ),
+
+          // Clones table
+          clones.length ? e('div', { style: card },
+            e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 } },
+              e('div', { style: { fontSize: 14, fontWeight: 700 } }, e('i', { className: 'fas fa-clone', style: { marginRight: 8, color: accent } }), '3. Clone & publish (' + clones.length + ')'),
+              e('div', { style: { display: 'flex', gap: 8 } },
+                e('button', { onClick: function() { runClones(selIds); }, disabled: runningClones || !hasWp, style: Object.assign({}, btnSmall, (runningClones || !hasWp) ? { opacity: 0.6 } : {}) }, runningClones ? 'Cloning...' : (selIds.length ? 'Clone ' + selIds.length + ' selected' : 'Clone all')),
+                e('button', { onClick: function() { publishClones(selIds); }, disabled: publishingClones || !hasWp, style: Object.assign({}, btnOutline, { borderColor: '#22c55e', color: '#22c55e' }, (publishingClones || !hasWp) ? { opacity: 0.6 } : {}) }, publishingClones ? 'Publishing...' : (selIds.length ? 'Publish ' + selIds.length + ' selected' : 'Publish all drafts'))
+              )
+            ),
+            e('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+              e('thead', null, e('tr', null,
+                e('th', { style: { width: 28, padding: '6px 8px' } }, e('input', { type: 'checkbox', checked: selIds.length === clones.length && clones.length > 0, onChange: function() { if (selIds.length === clones.length) setCloneSel({}); else { var n = {}; clones.forEach(function(c) { n[c.id] = true; }); setCloneSel(n); } } })),
+                e('th', { style: thStyle }, 'Old page'),
+                e('th', { style: thStyle }, 'Type'),
+                e('th', { style: thStyle }, 'Status'),
+                e('th', { style: thStyle }, 'Draft'),
+                e('th', { style: thStyle }, '')
+              )),
+              e('tbody', null, clones.map(function(c) {
+                var sm = statusMeta[c.status] || statusMeta.pending;
+                return e('tr', { key: c.id },
+                  e('td', { style: tdStyle }, e('input', { type: 'checkbox', checked: !!cloneSel[c.id], onChange: function() { setCloneSel(Object.assign({}, cloneSel, { [c.id]: !cloneSel[c.id] })); } })),
+                  e('td', { style: Object.assign({}, tdStyle, { maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }) }, e('a', { href: c.old_url, target: '_blank', rel: 'noopener', style: { color: 'var(--text2)', textDecoration: 'none' }, title: c.old_url }, (c.old_url || '').replace(/^https?:\/\/[^/]+/, '') || '/')),
+                  e('td', { style: tdStyle }, e('select', { value: c.page_type, onChange: function(ev) { setCloneTypeFor(c.id, ev.target.value); }, style: { background: 'var(--bg)', color: typeMeta[c.page_type] ? typeMeta[c.page_type].c : 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', fontSize: 12, fontWeight: 700 } }, ['home', 'suburb', 'blog'].map(function(t) { return e('option', { key: t, value: t }, typeMeta[t].l); }))),
+                  e('td', { style: tdStyle }, e('span', { style: { fontSize: 11, fontWeight: 700, color: sm.c, padding: '2px 8px', borderRadius: 10, background: sm.c + '22' }, title: c.error || '' }, sm.l), c.status === 'error' && c.error ? e('div', { style: { fontSize: 10, color: '#ef4444', marginTop: 2, maxWidth: 220 } }, c.error) : null),
+                  e('td', { style: tdStyle }, c.new_page_url ? e('a', { href: c.new_page_url, target: '_blank', rel: 'noopener', style: { color: accent, fontSize: 12, textDecoration: 'none' } }, e('i', { className: 'fas fa-up-right-from-square', style: { marginRight: 4 } }), 'Open') : e('span', { style: { color: 'var(--text3)', fontSize: 12 } }, '—')),
+                  e('td', { style: tdStyle }, e('div', { style: { display: 'flex', gap: 8 } },
+                    (c.blocks && c.blocks.length) ? e('button', { onClick: function() { setPreviewClone(c); }, title: 'Preview cloned text', style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 13 } }, e('i', { className: 'fas fa-eye' })) : null,
+                    e('button', { onClick: function() { deleteClone(c.id); }, title: 'Remove from list', style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 13 } }, e('i', { className: 'fas fa-trash' }))
+                  ))
+                );
+              }))
+            )
+          ) : null,
+
+          // Preview modal
+          previewClone ? e('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }, onClick: function() { setPreviewClone(null); } },
+            e('div', { style: { background: 'var(--bg2)', borderRadius: 12, padding: 24, width: 640, maxWidth: '92%', maxHeight: '82vh', overflowY: 'auto', border: '1px solid var(--border)' }, onClick: function(ev) { ev.stopPropagation(); } },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 } },
+                e('div', { style: { fontSize: 16, fontWeight: 700 } }, previewClone.title || 'Cloned content'),
+                e('button', { onClick: function() { setPreviewClone(null); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 } }, '×')
+              ),
+              e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 14 } }, 'Text poured into the ' + (typeMeta[previewClone.page_type] ? typeMeta[previewClone.page_type].l : previewClone.page_type) + ' template. Images and links were skipped.', previewClone.new_page_url ? e('span', null, ' · ', e('a', { href: previewClone.new_page_url, target: '_blank', rel: 'noopener', style: { color: accent } }, 'Open draft')) : null),
+              (previewClone.blocks || []).map(function(b, i) {
+                var isH = /^h[1-4]$/.test(b.tag);
+                return e('div', { key: i, style: { padding: '4px 0', fontSize: isH ? 14 : 13, fontWeight: isH ? 700 : 400, color: isH ? 'var(--text)' : 'var(--text2)', borderBottom: '1px solid var(--border)' } },
+                  e('span', { style: { fontSize: 9, color: 'var(--text3)', marginRight: 8, textTransform: 'uppercase' } }, b.tag), b.text
+                );
+              })
+            )
+          ) : null
+        );
+      }
+
       function renderSettingsPhase() {
         var m = activeMigration;
         var inputStyle = { width: '100%', padding: '10px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, marginBottom: 12, boxSizing: 'border-box' };
@@ -18994,7 +19202,7 @@
           React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 4 } }, activeMigration.name),
           React.createElement('div', { style: { fontSize: 13, color: 'var(--text3)', marginBottom: 16 } }, activeMigration.old_site_url + ' → ' + activeMigration.new_site_url),
           renderPhaseBar(),
-          phase === 'crawl' ? renderCrawlPhase() : phase === 'match' ? renderMatchPhase() : phase === 'redirects' ? renderRedirectsPhase() : phase === 'monitor' ? renderMonitorPhase() : phase === 'settings' ? renderSettingsPhase() : null
+          phase === 'crawl' ? renderCrawlPhase() : phase === 'match' ? renderMatchPhase() : phase === 'redirects' ? renderRedirectsPhase() : phase === 'clone' ? renderClonePhase() : phase === 'monitor' ? renderMonitorPhase() : phase === 'settings' ? renderSettingsPhase() : null
         ) : React.createElement('div', null,
           // Migration list
           React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', marginBottom: 16 } },

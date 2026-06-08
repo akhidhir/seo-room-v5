@@ -1189,6 +1189,28 @@ async function initDb() {
     await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS wp_url TEXT`).catch(() => {});
     await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
+    // Page-clone templates: { home:{url,page_id,post_type,title}, suburb:{...}, blog:{...} }
+    await client.query(`ALTER TABLE seo_migrations ADD COLUMN IF NOT EXISTS clone_templates JSONB DEFAULT '{}'`).catch(() => {});
+
+    // Migration page clones — clone old-site pages into the new site using new-site Elementor templates
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS migration_clones (
+        id SERIAL PRIMARY KEY,
+        migration_id INTEGER NOT NULL REFERENCES seo_migrations(id) ON DELETE CASCADE,
+        old_url TEXT NOT NULL,
+        page_type TEXT NOT NULL DEFAULT 'suburb',
+        status TEXT NOT NULL DEFAULT 'pending',
+        title TEXT,
+        blocks JSONB DEFAULT '[]',
+        new_page_id INTEGER,
+        new_page_url TEXT,
+        new_post_type TEXT,
+        error TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(migration_id, old_url)
+      )
+    `).catch((e) => { console.error('[migration_clones] table create:', e.message); });
 
     // Plagiarism checks table (Copyleaks)
     await client.query(`
@@ -3758,6 +3780,307 @@ app.post('/api/migrations/:migrationId/transfer-meta', async (req, res) => {
       } catch (e) { console.error('[migration] Transfer meta error for', match.old_url, e.message); }
     }
     res.json({ transferred, total: urlMap.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== MIGRATION PAGE CLONING (old content → new-site Elementor templates) ====================
+
+async function getMigrationWp(migration) {
+  let wpUrl = migration.wp_url ? migration.wp_url.replace(/\/$/, '') : null;
+  let authHeaders = null;
+  if (wpUrl && migration.wp_username && migration.wp_app_password) {
+    const token = Buffer.from(migration.wp_username + ':' + migration.wp_app_password).toString('base64');
+    authHeaders = { Authorization: 'Basic ' + token };
+  } else if (migration.project_id) {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [migration.project_id])).rows[0];
+    if (project) { wpUrl = (project.wp_url || project.wordpress_url || '').replace(/\/$/, ''); authHeaders = getWpAuthHeaders(project); }
+  }
+  return { wpUrl, authHeaders };
+}
+
+function detectCloneType(url) {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, '').toLowerCase();
+    if (path === '' || path === '/') return 'home';
+    if (/\/blog\/|\/news\/|\/article|\/post\/|\/\d{4}\/\d{2}\//.test(url.toLowerCase())) return 'blog';
+    return 'suburb';
+  } catch (e) { return 'suburb'; }
+}
+
+function escCloneHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Fetch an old page and pull ordered TEXT blocks. Drops images, unwraps links (text kept, href discarded).
+async function extractOldPageBlocks(url) {
+  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 SEORoom-Clone/5.0' }, redirect: 'follow', signal: AbortSignal.timeout(20000) });
+  if (!resp.ok) throw new Error(`Old page returned ${resp.status}`);
+  const html = await resp.text();
+  let title = '';
+  const tm = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (tm) title = tm[1].replace(/\s*[|\-–—]\s*[^|\-–—]*$/, '').replace(/<[^>]+>/g, '').trim();
+  const region = (html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
+                  html.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+                  html.match(/<div[^>]*class="[^"]*(?:entry-content|elementor)[^"]*"[^>]*>([\s\S]*)<\/div>/i) ||
+                  [null, html])[1] || html;
+  const body = region
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+    .replace(/<form[\s\S]*?<\/form>/gi, '')
+    .replace(/<img[^>]*>/gi, '')
+    .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+  const decode = (t) => t.replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#8217;|&rsquo;|&#039;|&#39;/g, "'")
+    .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;|&quot;/g, '"').replace(/&#8211;|&ndash;/g, '–').replace(/&#8212;|&mdash;/g, '—')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim();
+  const blocks = [];
+  const re = /<(h1|h2|h3|h4|p|li)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    const tag = m[1].toLowerCase();
+    const text = decode(m[2]);
+    if (!text || text.length < 2) continue;
+    blocks.push({ tag, text });
+  }
+  const out = [];
+  for (const b of blocks) { if (!out.length || out[out.length - 1].text !== b.text) out.push(b); }
+  if (!title && out.length) { const h = out.find(b => b.tag === 'h1'); title = h ? h.text : out[0].text; }
+  return { title: title.slice(0, 180), blocks: out };
+}
+
+async function resolveNewWpPage(wpUrl, authHeaders, pageUrl) {
+  const axios = require('axios');
+  let path;
+  try { path = pageUrl.startsWith('http') ? new URL(pageUrl).pathname : pageUrl; } catch (e) { path = pageUrl; }
+  const slug = path.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+  if (slug) {
+    for (const type of ['pages', 'posts']) {
+      try {
+        const r = await axios.get(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id`, { headers: authHeaders, timeout: 15000 });
+        if (r.data && r.data.length) return { id: r.data[0].id, post_type: type };
+      } catch (e) {}
+    }
+  } else {
+    try { const r = await axios.get(`${wpUrl}/wp-json/wp/v2/pages?per_page=1&orderby=id&order=asc&_fields=id`, { headers: authHeaders, timeout: 15000 }); if (r.data && r.data.length) return { id: r.data[0].id, post_type: 'pages' }; } catch (e) {}
+  }
+  return null;
+}
+
+// Read a new-site page's Elementor data + all _elementor* meta + title/template
+async function readElementorTemplate(wpUrl, authHeaders, postType, id) {
+  const axios = require('axios');
+  const r = await axios.get(`${wpUrl}/wp-json/wp/v2/${postType}/${id}?context=edit&_fields=id,title,meta,template`, { headers: authHeaders, timeout: 20000 });
+  const meta = r.data.meta || {};
+  let tree = null;
+  const raw = meta._elementor_data;
+  if (typeof raw === 'string' && raw.length > 5) { try { tree = JSON.parse(raw); } catch (e) { tree = null; } }
+  const elMeta = {};
+  for (const k of Object.keys(meta)) { if (k.indexOf('_elementor') === 0 && k !== '_elementor_data') elMeta[k] = meta[k]; }
+  return { title: (r.data.title && (r.data.title.rendered || r.data.title.raw)) || '', tree, elMeta, template: r.data.template || '' };
+}
+
+function elementorReplaceIds(node) {
+  if (Array.isArray(node)) { node.forEach(elementorReplaceIds); return; }
+  if (node && typeof node === 'object') {
+    if (typeof node.id === 'string') node.id = Math.random().toString(16).slice(2, 9);
+    if (Array.isArray(node.elements)) node.elements.forEach(elementorReplaceIds);
+  }
+}
+
+function collectElementorTextSlots(node, slots) {
+  if (Array.isArray(node)) { node.forEach(n => collectElementorTextSlots(n, slots)); return; }
+  if (!node || typeof node !== 'object') return;
+  if (node.elType === 'widget' && node.settings) {
+    const s = node.settings, wt = node.widgetType;
+    if (wt === 'heading' && typeof s.title === 'string') slots.push({ obj: s, key: 'title', kind: 'heading' });
+    else if (wt === 'text-editor' && typeof s.editor === 'string') slots.push({ obj: s, key: 'editor', kind: 'text' });
+    else if ((wt === 'icon-box' || wt === 'image-box')) {
+      if (typeof s.title_text === 'string') slots.push({ obj: s, key: 'title_text', kind: 'heading' });
+      if (typeof s.description_text === 'string') slots.push({ obj: s, key: 'description_text', kind: 'text' });
+    }
+  }
+  if (Array.isArray(node.elements)) node.elements.forEach(n => collectElementorTextSlots(n, slots));
+}
+
+// Duplicate a template tree and pour old text blocks into its text slots. Images/links already excluded upstream.
+function swapElementorText(tree, blocks) {
+  const clone = JSON.parse(JSON.stringify(tree));
+  elementorReplaceIds(clone);
+  const slots = [];
+  collectElementorTextSlots(clone, slots);
+  if (!slots.length) throw new Error('Template has no editable Heading/Text widgets to pour content into. Pick a template page built from standard Elementor text widgets.');
+  const headings = blocks.filter(b => /^h[1-4]$/.test(b.tag)).map(b => b.text);
+  const texts = blocks.filter(b => b.tag === 'p' || b.tag === 'li').map(b => b.text);
+  const headingSlots = slots.filter(s => s.kind === 'heading');
+  const textSlots = slots.filter(s => s.kind === 'text');
+  let hi = 0, ti = 0;
+  headingSlots.forEach(sl => { sl.obj[sl.key] = hi < headings.length ? headings[hi++] : ''; });
+  textSlots.forEach((sl, idx) => {
+    const last = idx === textSlots.length - 1;
+    if (ti >= texts.length) { sl.obj[sl.key] = ''; return; }
+    if (last && texts.length - ti > 1) { sl.obj[sl.key] = texts.slice(ti).map(t => `<p>${escCloneHtml(t)}</p>`).join(''); ti = texts.length; }
+    else { sl.obj[sl.key] = `<p>${escCloneHtml(texts[ti++])}</p>`; }
+  });
+  if (hi < headings.length && textSlots.length) {
+    const lastText = textSlots[textSlots.length - 1];
+    lastText.obj[lastText.key] = (lastText.obj[lastText.key] || '') + headings.slice(hi).map(t => `<h3>${escCloneHtml(t)}</h3>`).join('');
+  }
+  return { tree: clone, slots: slots.length, headingsUsed: Math.min(hi, headings.length), textsUsed: ti };
+}
+
+async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree, elMeta, template, status) {
+  const axios = require('axios');
+  const slug = (title || 'cloned-page').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || ('clone-' + Date.now());
+  const meta = Object.assign({}, elMeta || {}, {
+    _elementor_data: JSON.stringify(tree),
+    _elementor_edit_mode: 'builder',
+  });
+  const payload = { title: title || 'Cloned page', status: status || 'draft', slug, meta };
+  if (template) payload.template = template;
+  const r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, payload, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 30000 });
+  return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
+}
+
+// Save the three clone templates (home/suburb/blog) by URL; resolve each on the new site.
+app.put('/api/migrations/:migrationId/clone-templates', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'New-site WordPress credentials not set on this migration (Settings tab).' });
+    const incoming = req.body || {};
+    const templates = Object.assign({}, migration.clone_templates || {});
+    const results = {};
+    for (const type of ['home', 'suburb', 'blog']) {
+      if (!(type in incoming)) continue;
+      const url = (incoming[type] || '').trim();
+      if (!url) { delete templates[type]; results[type] = { cleared: true }; continue; }
+      const resolved = await resolveNewWpPage(wpUrl, authHeaders, url);
+      if (!resolved) { results[type] = { error: 'Could not find that page on the new site' }; continue; }
+      let tpl = null;
+      try { tpl = await readElementorTemplate(wpUrl, authHeaders, resolved.post_type, resolved.id); } catch (e) { results[type] = { error: 'Read failed: ' + e.message }; continue; }
+      const slots = [];
+      if (tpl.tree) collectElementorTextSlots(tpl.tree, slots);
+      templates[type] = { url, page_id: resolved.id, post_type: resolved.post_type, title: tpl.title, has_elementor: !!tpl.tree, text_slots: slots.length };
+      results[type] = templates[type];
+    }
+    await pool.query('UPDATE seo_migrations SET clone_templates=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(templates), migration.id]);
+    res.json({ ok: true, templates, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// List clones + current templates
+app.get('/api/migrations/:migrationId/clones', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT clone_templates FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const rows = (await pool.query('SELECT * FROM migration_clones WHERE migration_id=$1 ORDER BY created_at ASC', [req.params.migrationId])).rows;
+    res.json({ templates: migration.clone_templates || {}, clones: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add old URLs to clone (bulk). body: { urls: [string], type?: 'home'|'suburb'|'blog' }
+app.post('/api/migrations/:migrationId/clones', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT id FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const urls = Array.isArray(req.body.urls) ? req.body.urls : [];
+    const forcedType = req.body.type;
+    let added = 0, skipped = 0;
+    for (const raw of urls) {
+      const url = (raw || '').toString().trim();
+      if (!url || !/^https?:\/\//i.test(url)) { skipped++; continue; }
+      const type = (forcedType === 'home' || forcedType === 'suburb' || forcedType === 'blog') ? forcedType : detectCloneType(url);
+      const r = await pool.query(
+        `INSERT INTO migration_clones (migration_id, old_url, page_type, status) VALUES ($1,$2,$3,'pending')
+         ON CONFLICT (migration_id, old_url) DO NOTHING RETURNING id`,
+        [migration.id, url.replace(/\/+$/, '') || url, type]
+      );
+      if (r.rows.length) added++; else skipped++;
+    }
+    const rows = (await pool.query('SELECT * FROM migration_clones WHERE migration_id=$1 ORDER BY created_at ASC', [migration.id])).rows;
+    res.json({ ok: true, added, skipped, clones: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update a clone's page_type
+app.put('/api/migrations/:migrationId/clones/:cloneId', async (req, res) => {
+  try {
+    const { page_type } = req.body;
+    if (!['home', 'suburb', 'blog'].includes(page_type)) return res.status(400).json({ error: 'Invalid type' });
+    await pool.query('UPDATE migration_clones SET page_type=$1, updated_at=NOW() WHERE id=$2 AND migration_id=$3', [page_type, req.params.cloneId, req.params.migrationId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/migrations/:migrationId/clones/:cloneId', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM migration_clones WHERE id=$1 AND migration_id=$2', [req.params.cloneId, req.params.migrationId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Run clone for selected ids (creates drafts on the new site)
+app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'New-site WordPress credentials not set on this migration (Settings tab).' });
+    const templates = migration.clone_templates || {};
+    const ids = (req.body.ids || []).map(n => parseInt(n, 10)).filter(Boolean);
+    const where = ids.length ? 'AND id = ANY($2)' : '';
+    const rows = (await pool.query(`SELECT * FROM migration_clones WHERE migration_id=$1 ${where} ORDER BY created_at ASC`, ids.length ? [migration.id, ids] : [migration.id])).rows;
+    const results = [];
+    for (const clone of rows) {
+      try {
+        const tplRef = templates[clone.page_type];
+        if (!tplRef || !tplRef.page_id) throw new Error(`No ${clone.page_type} template set — add one in the Templates section.`);
+        const tpl = await readElementorTemplate(wpUrl, authHeaders, tplRef.post_type, tplRef.page_id);
+        if (!tpl.tree) throw new Error('Template page has no Elementor data.');
+        const { title, blocks } = await extractOldPageBlocks(clone.old_url);
+        if (!blocks.length) throw new Error('No readable text found on the old page.');
+        const swapped = swapElementorText(tpl.tree, blocks);
+        const pageTitle = title || clone.old_url;
+        const created = await createNewElementorPage(wpUrl, authHeaders, tplRef.post_type, pageTitle, swapped.tree, tpl.elMeta, tpl.template, 'draft');
+        await pool.query(
+          `UPDATE migration_clones SET status='cloned', title=$1, blocks=$2, new_page_id=$3, new_page_url=$4, new_post_type=$5, error=NULL, updated_at=NOW() WHERE id=$6`,
+          [pageTitle, JSON.stringify(blocks), created.id, created.link, created.post_type, clone.id]
+        );
+        results.push({ id: clone.id, status: 'cloned', new_page_url: created.link, blocks: blocks.length, slots: swapped.slots });
+      } catch (e) {
+        await pool.query(`UPDATE migration_clones SET status='error', error=$1, updated_at=NOW() WHERE id=$2`, [e.message.slice(0, 400), clone.id]);
+        results.push({ id: clone.id, status: 'error', error: e.message });
+      }
+    }
+    res.json({ ok: true, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Publish selected cloned drafts on the new site
+app.post('/api/migrations/:migrationId/clones/publish', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'New-site WordPress credentials not set.' });
+    const axios = require('axios');
+    const ids = (req.body.ids || []).map(n => parseInt(n, 10)).filter(Boolean);
+    const where = ids.length ? 'AND id = ANY($2)' : '';
+    const rows = (await pool.query(`SELECT * FROM migration_clones WHERE migration_id=$1 AND status='cloned' AND new_page_id IS NOT NULL ${where}`, ids.length ? [migration.id, ids] : [migration.id])).rows;
+    let published = 0; const errors = [];
+    for (const clone of rows) {
+      try {
+        await axios.post(`${wpUrl}/wp-json/wp/v2/${clone.new_post_type || 'pages'}/${clone.new_page_id}`, { status: 'publish' }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 20000 });
+        await pool.query(`UPDATE migration_clones SET status='published', updated_at=NOW() WHERE id=$1`, [clone.id]);
+        published++;
+      } catch (e) { errors.push({ id: clone.id, error: e.response?.data?.message || e.message }); }
+    }
+    res.json({ ok: true, published, errors });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
