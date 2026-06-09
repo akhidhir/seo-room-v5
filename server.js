@@ -4086,8 +4086,8 @@ app.get('/cleanup-suburb-templates', async (req, res) => {
 app.get('/create-suburb-template-now', async (req, res) => {
   try {
     const axios = require('axios');
-    // First trash old page 367
-    try { await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/delete-pages', { api_key: 'sr_2026_kX9mNpQ4wR7vBz', ids: [367] }, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 }); } catch(e) { /* ignore */ }
+    // Trash old template pages
+    try { await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/delete-pages', { api_key: 'sr_2026_kX9mNpQ4wR7vBz', ids: [367,378,382] }, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 }); } catch(e) { /* ignore */ }
 
     const rid = () => Math.random().toString(16).slice(2, 9);
     const S = (s,c) => ({id:rid(),elType:'section',settings:s||{},elements:c});
@@ -4104,7 +4104,12 @@ app.get('/create-suburb-template-now', async (req, res) => {
         W('icon-list',{icon_list:[{text:'Lorem ipsum dolor sit amet, consectetur adipiscing elit',selected_icon:{value:'fas fa-check-double',library:'fa-solid'}},{text:'Lorem ipsum dolor sit amet, consectetur adipiscing elit',selected_icon:{value:'fas fa-check-double',library:'fa-solid'}}],icon_color:'#81C2B2',text_color:'#FFFFFF'}),
         W('button',{text:'Call Us Now!',selected_icon:{value:'fas fa-phone-alt',library:'fa-solid'},background_color:'#006E68',border_radius:{top:'100',right:'100',bottom:'100',left:'100',unit:'px'},typography_typography:'custom',typography_font_family:'Space Grotesk',typography_font_size:{size:23,unit:'px'},typography_font_weight:'600'})
       ]),
-      C(40,[W('text-editor',{editor:'<div style="background:#fff;border-radius:12px;padding:30px;box-shadow:0 8px 30px rgba(0,0,0,0.15);"><h3 style="font-family:Familjen Grotesk,sans-serif;font-size:22px;text-align:center;margin-bottom:20px;color:#10202E;">Excepteur sint occaecat cupidatat non proident</h3><input type="text" placeholder="Your Name" style="width:100%;padding:14px 16px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;font-family:Roboto Flex,sans-serif;color:#7D8393;"><input type="email" placeholder="Your Email" style="width:100%;padding:14px 16px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;font-family:Roboto Flex,sans-serif;color:#7D8393;"><select style="width:100%;padding:14px 16px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;font-family:Roboto Flex,sans-serif;color:#7D8393;background:#fff;-webkit-appearance:auto;"><option>Gas Line Services</option></select><input type="tel" placeholder="Your Phone" style="width:100%;padding:14px 16px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;font-family:Roboto Flex,sans-serif;color:#7D8393;"><button style="width:100%;padding:15px 30px;background:#81C2B2;color:#fff;border:none;border-radius:100px;font-size:16px;font-weight:600;font-family:Roboto Flex,sans-serif;cursor:pointer;">Get A Quote</button></div>'})])
+      C(40,[
+        // Form title heading — matches homepage exactly (white bg, asymmetric top border-radius)
+        W('heading',{title:'Excepteur sint occaecat cupidatat non proident',header_size:'h3',align:'left',title_color:'#10202E',typography_typography:'custom',typography_font_family:'Familjen Grotesk',typography_font_size:{size:25,unit:'px'},typography_font_weight:'700',_background_background:'classic',_background_color:'#FFFFFF',_border_radius:{top:'10',right:'100',bottom:'0',left:'0',unit:'px',isLinked:false},_padding:{top:'30',right:'40',bottom:'15',left:'40',unit:'px',isLinked:false}}),
+        // Elementor Pro Form widget — matches homepage styling exactly
+        W('form',{form_name:'Quote Request',form_fields:[{_id:rid(),field_type:'text',field_label:'Your Name',placeholder:'Your Name',required:'',width:'100'},{_id:rid(),field_type:'email',field_label:'Your Email',placeholder:'Your Email',required:'',width:'100'},{_id:rid(),field_type:'select',field_label:'Type Services',placeholder:'',field_options:'Gas Line Services\nBasement Plumbing\nKitchen Plumbing\nRemodeling Service\nBathroom Plumbing\nType of Service',width:'100'},{_id:rid(),field_type:'tel',field_label:'Your Phone',placeholder:'Your Phone',required:'',width:'100'}],input_size:'md',show_labels:'',button_text:'Get a quote',button_size:'md',button_width:'100',button_align:'stretch',button_background_color:'#81C2B2',button_text_color:'#FFFFFF',button_border_radius:{top:'100',right:'100',bottom:'100',left:'100',unit:'px',isLinked:true},button_typography_typography:'custom',button_typography_font_size:{size:16,unit:'px'},button_typography_font_weight:'600',field_border_color:'#E5EAF0',field_border_width:{top:'1',right:'1',bottom:'1',left:'1',unit:'px',isLinked:true},field_border_radius:{top:'10',right:'10',bottom:'10',left:'10',unit:'px',isLinked:true},_background_background:'classic',_background_color:'#FFFFFF',_border_radius:{top:'0',right:'0',bottom:'10',left:'10',unit:'px',isLinked:false},_padding:{top:'15',right:'40',bottom:'40',left:'40',unit:'px',isLinked:false}})
+      ])
     ]));
 
     // ── SERVICE STRIP ──
@@ -4179,7 +4184,7 @@ app.get('/create-suburb-template-now', async (req, res) => {
     // Send as pre-encoded JSON string to avoid PHP empty-object encoding issues
     const treeJson = JSON.stringify(tree);
     const r = await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/create-page', {
-      api_key: 'sr_2026_kX9mNpQ4wR7vBz', title: 'Suburb Template - [Suburb Name]', slug: 'suburb-template-v2', tree_json: treeJson, status: 'draft'
+      api_key: 'sr_2026_kX9mNpQ4wR7vBz', title: 'Suburb Template - [Suburb Name]', slug: 'suburb-template-v3', tree_json: treeJson, status: 'draft'
     }, { headers: { 'Content-Type': 'application/json' }, timeout: 60000 });
     console.log('[suburb-template] Created page:', r.data);
     res.json(r.data);
