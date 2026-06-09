@@ -4066,11 +4066,13 @@ app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const { title, slug, tree, api_key } = req.body;
+    const { title, slug, tree } = req.body;
     if (!title || !tree) return res.status(400).json({ error: 'title and tree required' });
 
     // Try SEO Room API plugin first (works on hosts that strip auth headers)
-    const wpApiKey = api_key || project.wp_api_key;
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const wpHost = project.wordpress_url ? new URL(project.wordpress_url).hostname : '';
+    const wpApiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key;
     if (wpApiKey) {
       const axios = require('axios');
       const r = await axios.post(`${project.wordpress_url}/wp-json/seoroom/v1/create-page`, {
