@@ -4054,6 +4054,7 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   const meta = Object.assign({}, elMeta || {}, {
     _elementor_data: JSON.stringify(tree),
     _elementor_edit_mode: 'builder',
+    _elementor_page_settings: JSON.stringify({ hide_title: 'yes' }),
   });
   const payload = { title: title || 'Cloned page', status: status || 'draft', slug, meta };
   if (template) payload.template = template;
@@ -4320,6 +4321,31 @@ app.post('/api/migrations/:migrationId/clones/reset', async (req, res) => {
       [req.params.migrationId, ids]
     );
     res.json({ ok: true, reset: ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Fix: hide WordPress page title on all cloned Elementor pages
+app.post('/api/migrations/:migrationId/clones/fix-titles', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not set' });
+    const clones = (await pool.query(
+      `SELECT new_page_id FROM migration_clones WHERE migration_id=$1 AND new_page_id IS NOT NULL AND status IN ('cloned','published')`,
+      [req.params.migrationId]
+    )).rows.map(r => r.new_page_id);
+    const axios = require('axios');
+    let fixed = 0, errors = [];
+    for (const pageId of clones) {
+      try {
+        await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${pageId}`,
+          { meta: { _elementor_page_settings: JSON.stringify({ hide_title: 'yes' }) } },
+          { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
+        fixed++;
+      } catch (e) { errors.push({ pageId, error: e.message }); }
+    }
+    res.json({ ok: true, fixed, errors: errors.length, errorDetails: errors.slice(0, 5) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
