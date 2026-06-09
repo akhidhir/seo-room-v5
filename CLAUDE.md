@@ -310,17 +310,18 @@ const PILLAR_CATEGORIES = {
 
 ## Pending / Next Up (Priority Order)
 
-1. **Update technical-fix endpoint** — Switch schema injection from post_content to `_seoroom_schema` meta field. Install seoroom-schema plugin on all client sites. Clean up old auto-fix routes (remove seoroom-helper dependency from Route 2/3).
-2. **Model selector** — Add AI model dropdown to Project Settings (Sonnet/Opus/Haiku). Currently hardcoded Haiku.
-3. **Remove "Sync from Audits" button** — Audits are diagnostic only, don't auto-push to Action Plan.
-4. **Monthly hours budget** — Settings field for monthly hours per project. Calendar auto-distributes tasks within budget.
-5. **Shared helper refactor** — Extract duplicated logic: `resolvePageId`, `resolvePageUrl`, `getPageContent`, `loadItemIntoEditor`. Do incrementally.
-6. **GBP fix automation** — Chrome extension executes approved GBP action items.
-7. **Copywriter pages** — replace fake data with real content workflow.
-8. **Ahrefs data ingestion** — port from v4.
-9. **DataForSEO integration** — richer GBP profile data.
-10. **Grid scan history** — track position changes over time.
-11. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
+1. **Suburb Template System → Generic Solution** — Currently hardcoded for Sureflow. Needs: per-project theme settings in DB (primary_color, accent_color, heading_font, body_font, hero_image), seoroom-api plugin installed per client site with API key in `project_integrations`, dynamic template builder `POST /api/projects/:id/create-suburb-template` that pulls colors/fonts/services/domain from project row. The Elementor raw-meta approach + `tree_json` + seoroom-api plugin is proven — just needs parameterization.
+2. **Update technical-fix endpoint** — Switch schema injection from post_content to `_seoroom_schema` meta field. Install seoroom-schema plugin on all client sites. Clean up old auto-fix routes (remove seoroom-helper dependency from Route 2/3).
+3. **Model selector** — Add AI model dropdown to Project Settings (Sonnet/Opus/Haiku). Currently hardcoded Haiku.
+4. **Remove "Sync from Audits" button** — Audits are diagnostic only, don't auto-push to Action Plan.
+5. **Monthly hours budget** — Settings field for monthly hours per project. Calendar auto-distributes tasks within budget.
+6. **Shared helper refactor** — Extract duplicated logic: `resolvePageId`, `resolvePageUrl`, `getPageContent`, `loadItemIntoEditor`. Do incrementally.
+7. **GBP fix automation** — Chrome extension executes approved GBP action items.
+8. **Copywriter pages** — replace fake data with real content workflow.
+9. **Ahrefs data ingestion** — port from v4.
+10. **DataForSEO integration** — richer GBP profile data.
+11. **Grid scan history** — track position changes over time.
+12. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
 
 ## Recent Changes (This Session — June 3 2026)
 
@@ -451,6 +452,43 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 - Had: managed agents via Claude API, WordPress plugin integration, Ahrefs data ingestion (handleAhrefsIngest), page health system, backlink gap analysis
 - v5 should match v4 quality with better architecture
 - v4 audit pattern: gather data → send to Haiku → parse JSON findings → save to DB (v5 now follows this)
+
+## Suburb Template System (Elementor Page Creation via API)
+
+### Architecture
+- **SEO Room API plugin** (`seoroom-api.php`, v5) — Custom WP REST endpoints with hardcoded API key in POST body. Bypasses hosting that strips Authorization headers. Installed per client site.
+- **Raw meta approach** — Uses `update_post_meta()` directly instead of Elementor's `document->save()`. Native save BREAKS frontend rendering (strips section styling). Raw meta renders correctly on frontend AND opens in Elementor editor.
+- **`tree_json` parameter** — Pre-encoded JSON string sent from server.js to avoid PHP `json_decode()` converting `{}` to `[]`. Plugin applies `str_replace('"settings":[]', '"settings":{}', ...)` as safety net.
+- **`_elementor_page_settings`** — MUST be stored as PHP array (`['hide_title'=>'yes']`), NOT JSON string. JSON string crashes Elementor editor with critical PHP error.
+
+### Key Learnings (Hard-Won)
+1. WordPress Application Passwords don't work on some hosts (auth headers stripped at server/proxy level) → seoroom-api plugin with API key in POST body
+2. Elementor `document->save()` strips section-level styling during creation (backgrounds, padding, column sizes vanish on frontend) → raw `update_post_meta` only
+3. PHP `json_decode($body, true)` converts `{}` to `[]` → use `tree_json` (pre-encoded string) + `str_replace` fix
+4. `_elementor_page_settings` as JSON string → Elementor editor crash. Must be PHP array (WordPress auto-serializes).
+5. `wp_slash()` required on `_elementor_data` before `update_post_meta` because WordPress internally runs `wp_unslash` on meta values
+
+### Current State (Sureflow — Hardcoded)
+- Endpoint: `GET /create-suburb-template-now` — one-shot, creates template on sureflow.seoroom.au
+- Plugin API key: `sr_2026_kX9mNpQ4wR7vBz`
+- Template: 14 Elementor sections (Hero with Elementor Form widget, Service Strip, Top Service, CTA Bars, Service Blocks, Why Choose Us, Differences, Assurance, Service Area List, FAQ)
+- Form uses real Elementor Pro Form widget (`widgetType: 'form'`) matching homepage styling exactly
+- Theme: teal #006E68, mint #81C2B2, heading #10202E, Familjen Grotesk / Space Grotesk fonts
+
+### Future: Generic Solution
+- `POST /api/projects/:id/create-suburb-template` — pulls theme/colors/fonts/services from project settings
+- Per-project theme settings in DB: `primary_color`, `accent_color`, `heading_font`, `body_font`, `hero_image`
+- seoroom-api plugin installed per client site, API key stored in `project_integrations`
+- Template builder parameterized from project row, not hardcoded
+- Mass-create 72+ suburb pages from approved template with suburb-specific content substitution
+
+### Plugin Endpoints (seoroom-api v5)
+- `GET /seoroom/v1/test` — health check (Elementor version, PHP, WP)
+- `POST /seoroom/v1/create-page` — create Elementor page (accepts `tree_json`)
+- `POST /seoroom/v1/delete-pages` — trash pages by ID array
+- `GET /seoroom/v1/list-pages` — list all pages with status
+- `GET /seoroom/v1/read-meta/{id}` — debug: show page meta (ps_type, data validity, section count)
+- `GET /seoroom/v1/fix-page/{id}` — fix: page_settings string→array, empty settings []→{}, ensure meta fields
 
 ## Chrome Extension
 
