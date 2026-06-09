@@ -4159,6 +4159,39 @@ app.get('/create-suburb-template-now', async (req, res) => {
   }
 });
 
+// One-shot: diagnose page 367 meta data on sureflow
+app.get('/diagnose-suburb-template', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const r = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/read-meta/367?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 15000 });
+    res.json(r.data);
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data || e.message });
+  }
+});
+
+// One-shot: fix page 367 on sureflow (fixes settings format + native re-save)
+app.get('/fix-suburb-template', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const r = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/fix-page/367?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 30000 });
+    res.json(r.data);
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data || e.message });
+  }
+});
+
+// One-shot: create minimal test page on sureflow to verify Elementor works
+app.get('/test-elementor-minimal', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const r = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/test-minimal?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 30000 });
+    res.json(r.data);
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data || e.message });
+  }
+});
+
 // Quick create Elementor page for a project — uses SEO Room API plugin (bypasses hosting auth issues)
 app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
   try {
