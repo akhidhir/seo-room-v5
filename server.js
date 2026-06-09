@@ -4061,6 +4061,24 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
 
+// Quick create Elementor page for a project (used by suburb template builder)
+app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'No WP credentials configured' });
+    const { title, slug, tree } = req.body;
+    if (!title || !tree) return res.status(400).json({ error: 'title and tree required' });
+    const result = await createNewElementorPage(project.wordpress_url, authHeaders, 'pages', title, tree, {}, 'elementor_header_footer', 'draft', slug);
+    console.log('[create-elementor-page] Created page', result.id, 'on', project.wordpress_url);
+    res.json(result);
+  } catch (e) {
+    console.error('[create-elementor-page]', e.response?.data || e.message);
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
 // Build an auto-generated Elementor template from a source page's content structure
 app.post('/api/migrations/:migrationId/build-template', async (req, res) => {
   try {
