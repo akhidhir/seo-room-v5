@@ -4385,6 +4385,7 @@ app.post('/api/migrations/:migrationId/clones/delete-all-wp', async (req, res) =
     )).rows;
     const slugs = allClones.map(c => c.old_url.split('/').filter(Boolean).pop());
     let orphansDeleted = 0;
+    const debugInfo = { slugCount: slugs.length, slugSample: slugs.slice(0, 5), pagesScanned: 0, wpPages: [] };
     try {
       // Fetch all pages (up to 100 per page, scan 30 pages = 3000 max)
       for (let pg = 1; pg <= 30; pg++) {
@@ -4392,7 +4393,9 @@ app.post('/api/migrations/:migrationId/clones/delete-all-wp', async (req, res) =
           { headers: authHeaders, timeout: 30000 });
         const pages = r.data;
         if (!pages.length) break;
+        debugInfo.pagesScanned += pages.length;
         for (const page of pages) {
+          debugInfo.wpPages.push({ id: page.id, slug: page.slug, status: page.status });
           // Check if slug matches any migration slug (with possible -N suffix)
           const baseSlug = page.slug.replace(/-\d+$/, '');
           if (slugs.includes(baseSlug) || slugs.includes(page.slug)) {
@@ -4400,12 +4403,12 @@ app.post('/api/migrations/:migrationId/clones/delete-all-wp', async (req, res) =
               await axios.delete(`${wpUrl}/wp-json/wp/v2/pages/${page.id}?force=true`,
                 { headers: authHeaders, timeout: 15000 });
               orphansDeleted++;
-            } catch (de) { /* skip */ }
+            } catch (de) { debugInfo.deleteErrors = (debugInfo.deleteErrors || []).concat({ id: page.id, slug: page.slug, err: de.message }); }
           }
         }
         if (pages.length < 100) break;
       }
-    } catch (scanErr) { console.error('[delete-all-wp] Orphan scan error:', scanErr.message); }
+    } catch (scanErr) { debugInfo.scanError = scanErr.message; }
 
     // 3. Reset all clone statuses to pending
     await pool.query(
@@ -4413,7 +4416,7 @@ app.post('/api/migrations/:migrationId/clones/delete-all-wp', async (req, res) =
       [req.params.migrationId]
     );
 
-    res.json({ ok: true, deleted, orphansDeleted, errors: errors.length, errorDetails: errors.slice(0, 5) });
+    res.json({ ok: true, deleted, orphansDeleted, errors: errors.length, errorDetails: errors.slice(0, 5), debug: debugInfo });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
