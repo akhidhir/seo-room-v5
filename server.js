@@ -4061,17 +4061,30 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
 
-// Quick create Elementor page for a project (used by suburb template builder)
+// Quick create Elementor page for a project — uses SEO Room API plugin (bypasses hosting auth issues)
 app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const authHeaders = getWpAuthHeaders(project);
-    if (!authHeaders) return res.status(400).json({ error: 'No WP credentials configured' });
-    const { title, slug, tree } = req.body;
+    const { title, slug, tree, api_key } = req.body;
     if (!title || !tree) return res.status(400).json({ error: 'title and tree required' });
+
+    // Try SEO Room API plugin first (works on hosts that strip auth headers)
+    const wpApiKey = api_key || project.wp_api_key;
+    if (wpApiKey) {
+      const axios = require('axios');
+      const r = await axios.post(`${project.wordpress_url}/wp-json/seoroom/v1/create-page`, {
+        api_key: wpApiKey, title, slug, tree, status: 'draft'
+      }, { headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
+      console.log('[create-elementor-page] Created page via SEO Room API:', r.data.id);
+      return res.json(r.data);
+    }
+
+    // Fallback: standard WP REST API with Application Passwords
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'No WP credentials or API key configured' });
     const result = await createNewElementorPage(project.wordpress_url, authHeaders, 'pages', title, tree, {}, 'elementor_header_footer', 'draft', slug);
-    console.log('[create-elementor-page] Created page', result.id, 'on', project.wordpress_url);
+    console.log('[create-elementor-page] Created page via WP API:', result.id);
     res.json(result);
   } catch (e) {
     console.error('[create-elementor-page]', e.response?.data || e.message);
