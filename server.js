@@ -4056,8 +4056,7 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
     _elementor_edit_mode: 'builder',
     _elementor_page_settings: JSON.stringify({ hide_title: 'yes' }),
   });
-  const payload = { title: title || 'Cloned page', status: status || 'draft', slug, meta };
-  if (template) payload.template = template;
+  const payload = { title: title || 'Cloned page', status: status || 'draft', slug, meta, template: template || 'elementor_header_footer' };
   const r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, payload, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
@@ -4345,7 +4344,7 @@ app.post('/api/migrations/:migrationId/clones/fix-titles', async (req, res) => {
     for (const pageId of clones) {
       try {
         await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${pageId}`,
-          { meta: { _elementor_page_settings: JSON.stringify({ hide_title: 'yes' }) } },
+          { template: 'elementor_header_footer' },
           { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
         fixed++;
       } catch (e) { errors.push({ pageId, error: e.message }); }
