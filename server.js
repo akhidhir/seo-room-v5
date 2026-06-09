@@ -4420,6 +4420,29 @@ app.post('/api/migrations/:migrationId/clones/delete-all-wp', async (req, res) =
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Direct delete specific WP page IDs (no scanning)
+app.post('/api/migrations/:migrationId/clones/delete-wp-pages', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not set' });
+    const axios = require('axios');
+    const pageIds = req.body.pageIds || [];
+    let deleted = 0, errors = [];
+    for (const pid of pageIds) {
+      try {
+        await axios.delete(`${wpUrl}/wp-json/wp/v2/pages/${pid}?force=true`, { headers: authHeaders, timeout: 15000 });
+        deleted++;
+      } catch (e) {
+        if (e.response && e.response.status === 404) deleted++;
+        else errors.push({ id: pid, err: e.message });
+      }
+    }
+    res.json({ ok: true, deleted, errors });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete('/api/migrations/:migrationId/clones/:cloneId', async (req, res) => {
   try {
     await pool.query('DELETE FROM migration_clones WHERE id=$1 AND migration_id=$2', [req.params.cloneId, req.params.migrationId]);
