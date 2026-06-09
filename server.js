@@ -4353,6 +4353,67 @@ app.post('/api/migrations/:migrationId/clones/fix-titles', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bulk delete all cloned WP pages + reset clone status + clean orphans
+app.post('/api/migrations/:migrationId/clones/delete-all-wp', async (req, res) => {
+  try {
+    const migration = (await pool.query('SELECT * FROM seo_migrations WHERE id=$1', [req.params.migrationId])).rows[0];
+    if (!migration) return res.status(404).json({ error: 'Migration not found' });
+    const { wpUrl, authHeaders } = await getMigrationWp(migration);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not set' });
+    const axios = require('axios');
+
+    // 1. Delete pages tracked in DB
+    const clones = (await pool.query(
+      `SELECT id, new_page_id, old_url FROM migration_clones WHERE migration_id=$1 AND new_page_id IS NOT NULL`,
+      [req.params.migrationId]
+    )).rows;
+    let deleted = 0, errors = [];
+    for (const clone of clones) {
+      try {
+        await axios.delete(`${wpUrl}/wp-json/wp/v2/pages/${clone.new_page_id}?force=true`,
+          { headers: authHeaders, timeout: 15000 });
+        deleted++;
+      } catch (e) {
+        if (e.response && e.response.status === 404) { deleted++; /* already gone */ }
+        else errors.push({ pageId: clone.new_page_id, error: e.message });
+      }
+    }
+
+    // 2. Scan WP for orphan pages matching migration slugs
+    const slugs = clones.map(c => c.old_url.split('/').filter(Boolean).pop());
+    let orphansDeleted = 0;
+    try {
+      // Fetch all pages (up to 100 per page, scan 30 pages = 3000 max)
+      for (let pg = 1; pg <= 30; pg++) {
+        const r = await axios.get(`${wpUrl}/wp-json/wp/v2/pages?per_page=100&page=${pg}&status=any`,
+          { headers: authHeaders, timeout: 30000 });
+        const pages = r.data;
+        if (!pages.length) break;
+        for (const page of pages) {
+          // Check if slug matches any migration slug (with possible -N suffix)
+          const baseSlug = page.slug.replace(/-\d+$/, '');
+          if (slugs.includes(baseSlug) || slugs.includes(page.slug)) {
+            try {
+              await axios.delete(`${wpUrl}/wp-json/wp/v2/pages/${page.id}?force=true`,
+                { headers: authHeaders, timeout: 15000 });
+              orphansDeleted++;
+            } catch (de) { /* skip */ }
+          }
+        }
+        if (pages.length < 100) break;
+      }
+    } catch (scanErr) { console.error('[delete-all-wp] Orphan scan error:', scanErr.message); }
+
+    // 3. Reset all clone statuses to pending
+    await pool.query(
+      `UPDATE migration_clones SET status='pending', new_page_id=NULL, updated_at=NOW() WHERE migration_id=$1`,
+      [req.params.migrationId]
+    );
+
+    res.json({ ok: true, deleted, orphansDeleted, errors: errors.length, errorDetails: errors.slice(0, 5) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete('/api/migrations/:migrationId/clones/:cloneId', async (req, res) => {
   try {
     await pool.query('DELETE FROM migration_clones WHERE id=$1 AND migration_id=$2', [req.params.cloneId, req.params.migrationId]);
