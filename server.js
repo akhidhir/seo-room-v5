@@ -4061,6 +4061,83 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
 
+// One-shot: create suburb template on sureflow (GET — no auth needed, single use)
+app.get('/api/create-suburb-template-now', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const rid = () => Math.random().toString(16).slice(2, 9);
+    const S = (s,c) => ({id:rid(),elType:'section',settings:s||{},elements:c});
+    const C = (sz,w) => ({id:rid(),elType:'column',settings:{_column_size:sz,_inline_size:sz},elements:w});
+    const W = (t,s) => ({id:rid(),elType:'widget',widgetType:t,settings:s||{}});
+    const tree = [];
+
+    // HERO
+    tree.push(S({layout:'full_width',height:'min-height',custom_height:{size:520,unit:'px'},background_background:'classic',background_image:{url:'https://sureflow.seoroom.au/wp-content/uploads/2026/04/get-fixed-professional-plumber-wearing-tool-belt-2022-02-22-05-13-25-utc-min.jpg',id:''},background_overlay_background:'classic',background_overlay_color:'rgba(0,30,28,0.5)',content_width:{size:1200,unit:'px'},padding:{top:'60',right:'60',bottom:'60',left:'60',unit:'px'}},[
+      C(60,[W('text-editor',{editor:'<p style="display:inline-block;background:#81C2B2;color:#fff;padding:4px 14px;border-radius:4px;font-size:13px;font-weight:600;">Lorem Ipsum Dolor Sit Amet</p>'}),W('heading',{title:'Lorem Ipsum Dolor Sit Amet',header_size:'h1',title_color:'#FFFFFF',typography_typography:'custom',typography_font_family:'Familjen Grotesk',typography_font_size:{size:48,unit:'px'},typography_font_weight:'700'}),W('text-editor',{editor:'<p style="color:rgba(255,255,255,0.85);font-size:15px;">Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>'}),W('icon-list',{icon_list:[{text:'Lorem ipsum dolor sit amet',selected_icon:{value:'fas fa-check-double',library:'fa-solid'}},{text:'Lorem ipsum dolor sit amet',selected_icon:{value:'fas fa-check-double',library:'fa-solid'}}],icon_color:'#81C2B2',text_color:'#FFFFFF'}),W('button',{text:'Call Us Now!',selected_icon:{value:'fas fa-phone-alt',library:'fa-solid'},background_color:'#006E68',border_radius:{top:'100',right:'100',bottom:'100',left:'100',unit:'px'},typography_typography:'custom',typography_font_family:'Space Grotesk',typography_font_size:{size:23,unit:'px'},typography_font_weight:'600'})]),
+      C(40,[W('text-editor',{editor:'<div style="background:#fff;border-radius:12px;padding:30px;box-shadow:0 8px 30px rgba(0,0,0,0.15);"><h3 style="font-family:Familjen Grotesk,sans-serif;font-size:22px;text-align:center;margin-bottom:20px;color:#10202E;">Get A Free Quote</h3><input type="text" placeholder="Your Name" style="width:100%;padding:14px 16px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;"><input type="email" placeholder="Your Email" style="width:100%;padding:14px 16px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;"><input type="tel" placeholder="Your Phone" style="width:100%;padding:14px 16px;border:1px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box;"><button style="width:100%;padding:15px 30px;background:#81C2B2;color:#fff;border:none;border-radius:100px;font-size:16px;font-weight:600;">Get A Quote</button></div>'})])
+    ]));
+
+    // SERVICE STRIP
+    const sc=[];for(let i=0;i<6;i++)sc.push(C(16,[W('icon-box',{selected_icon:{value:'fas fa-wrench',library:'fa-solid'},title_text:'Service '+(i+1),description_text:'',primary_color:'rgba(255,255,255,0.7)',title_color:'#FFFFFF',position:'top',title_bottom_space:{size:0,unit:'px'}})]));
+    tree.push(S({layout:'full_width',background_background:'classic',background_color:'#006E68',content_width:{size:1200,unit:'px'},padding:{top:'24',right:'10',bottom:'24',left:'10',unit:'px'}},sc));
+
+    // TOP SERVICE
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'60',right:'20',bottom:'60',left:'20',unit:'px'}},[C(100,[W('heading',{title:'Top Service in Demand in [Suburb]',header_size:'h2',title_color:'#10202E',typography_typography:'custom',typography_font_family:'Familjen Grotesk',typography_font_size:{size:25,unit:'px'},typography_font_weight:'700'}),W('text-editor',{editor:'<p style="color:#7D8393;">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>'}),W('image',{image:{url:'',id:''},image_size:'full'})])]));
+
+    // CTA BAR
+    const ctaBar = (sub) => S({layout:'full_width',background_background:'classic',background_color:'#006E68',padding:{top:'28',right:'60',bottom:'28',left:'60',unit:'px'}},[C(100,[W('text-editor',{editor:`<div style="display:flex;align-items:center;gap:20px;"><div style="width:54px;height:54px;border:2px solid rgba(255,255,255,0.4);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span style="font-size:22px;color:#fff;">&#9742;</span></div><div><div style="font-size:14px;color:rgba(255,255,255,0.8);">${sub}</div><div style="font-size:15px;font-weight:700;color:#fff;">CALL US NOW!</div><div style="font-size:28px;font-weight:700;color:#fff;font-family:Familjen Grotesk,sans-serif;">0400 838 622</div></div></div>`})])]);
+    tree.push(ctaBar('Need a plumber in [Suburb] right now?'));
+
+    // SERVICE BLOCKS
+    const sB = (h,rev) => {const tx=C(50,[W('heading',{title:h,header_size:'h2',title_color:'#10202E',typography_typography:'custom',typography_font_family:'Familjen Grotesk',typography_font_size:{size:25,unit:'px'},typography_font_weight:'700'}),W('text-editor',{editor:'<p style="color:#7D8393;">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore.</p>'}),W('button',{text:'SERVICE NAME',background_color:'transparent',button_text_color:'#10202E',border_border:'solid',border_width:{top:'2',right:'2',bottom:'2',left:'2',unit:'px'},border_color:'#10202E',border_radius:{top:'100',right:'100',bottom:'100',left:'100',unit:'px'}})]);const im=C(50,[W('image',{image:{url:'',id:''},image_size:'full'})]);return S({content_width:{size:1200,unit:'px'},padding:{top:'50',right:'20',bottom:'50',left:'20',unit:'px'},column_gap:{size:50,unit:'px'}},rev?[im,tx]:[tx,im]);};
+    tree.push(sB('Service KW + [Suburb]',false));
+    tree.push(sB('Service KW + [Suburb]',true));
+    tree.push(sB('Service KW + [Suburb]',false));
+    tree.push(ctaBar('Looking for a reliable plumber in [Suburb]?'));
+    tree.push(sB('Service KW + [Suburb]',true));
+
+    // WHY CHOOSE US
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'60',right:'20',bottom:'60',left:'20',unit:'px'},column_gap:{size:50,unit:'px'}},[
+      C(50,[W('image',{image:{url:'',id:''},image_size:'full'})]),
+      C(50,[W('text-editor',{editor:'<p style="display:inline-block;background:#81C2B2;color:#fff;padding:4px 14px;border-radius:4px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1px;">ABOUT US</p>'}),W('heading',{title:'Why Choose Us',header_size:'h2',title_color:'#10202E',typography_typography:'custom',typography_font_family:'Familjen Grotesk',typography_font_size:{size:25,unit:'px'},typography_font_weight:'700'}),W('text-editor',{editor:'<p style="color:#7D8393;">Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>'}),W('icon-list',{icon_list:[{text:'A Proficient Team',selected_icon:{value:'far fa-circle',library:'fa-regular'}},{text:'Reasonable Cost',selected_icon:{value:'far fa-circle',library:'fa-regular'}},{text:'Speedy Assistance',selected_icon:{value:'far fa-circle',library:'fa-regular'}},{text:'Emergency Support',selected_icon:{value:'far fa-circle',library:'fa-regular'}}],icon_color:'#81C2B2',text_color:'#10202E'}),W('text-editor',{editor:'<div style="background:#81C2B2;border-radius:12px;padding:20px 24px;color:#fff;font-size:14px;line-height:1.6;margin-top:20px;">We pride ourselves on delivering the best plumbing service in Perth.</div>'})])
+    ]));
+
+    // DIFFERENCES (4 cols)
+    const dI=['fas fa-th-large','fas fa-user','far fa-clock','far fa-credit-card'];const dC=[];
+    for(let i=0;i<4;i++){const e=i%2===1;dC.push(C(25,[W('icon-box',{selected_icon:{value:dI[i],library:i<2?'fa-solid':'fa-regular'},title_text:'Lorem Ipsum',description_text:'Lorem ipsum dolor sit amet, consectetur adipiscing elit.',position:'top',primary_color:e?'#FFFFFF':'#006E68',title_color:e?'#FFFFFF':'#10202E',description_color:e?'rgba(255,255,255,0.85)':'#7D8393'})]));}
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'60',right:'0',bottom:'0',left:'0',unit:'px'},column_gap:{size:0,unit:'px'}},dC));
+
+    // ASSURANCE
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'80',right:'20',bottom:'80',left:'20',unit:'px'},column_gap:{size:40,unit:'px'}},[
+      C(45,[W('image',{image:{url:'',id:''},image_size:'full'})]),
+      C(55,[W('text-editor',{editor:'<div style="background:#006E68;border-radius:20px;padding:50px 40px;color:#fff;"><h2 style="font-family:Familjen Grotesk,sans-serif;font-size:25px;font-weight:700;color:#fff;margin-bottom:14px;">Our Promise</h2><p style="color:rgba(255,255,255,0.85);margin-bottom:16px;">We deliver excellence in every job.</p><ul style="list-style:none;padding:0;margin:0;"><li style="display:flex;align-items:center;gap:10px;color:#fff;font-size:15px;padding:5px 0;"><span style="width:10px;height:10px;border-radius:50%;background:#81C2B2;flex-shrink:0;"></span> Top-Notch Service</li><li style="display:flex;align-items:center;gap:10px;color:#fff;font-size:15px;padding:5px 0;"><span style="width:10px;height:10px;border-radius:50%;background:#81C2B2;flex-shrink:0;"></span> Excellent Results</li><li style="display:flex;align-items:center;gap:10px;color:#fff;font-size:15px;padding:5px 0;"><span style="width:10px;height:10px;border-radius:50%;background:#81C2B2;flex-shrink:0;"></span> Full Satisfaction</li></ul></div>'})])
+    ]));
+
+    // SERVICE AREA LIST
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'60',right:'20',bottom:'60',left:'20',unit:'px'}},[C(100,[
+      W('heading',{title:'Service Area List',header_size:'h2',title_color:'#10202E',align:'center',typography_typography:'custom',typography_font_family:'Familjen Grotesk',typography_font_size:{size:25,unit:'px'},typography_font_weight:'700'}),
+      W('text-editor',{editor:'<p style="text-align:center;color:#7D8393;">Areas we service across Perth</p>'}),
+      W('text-editor',{editor:'<div style="display:grid;grid-template-columns:240px 1fr;gap:0;border-radius:12px;overflow:hidden;border:1px solid #e0e0e0;"><div style="background:#fff;"><div style="padding:14px 20px;background:#006E68;color:#fff;border-radius:100px;margin:10px;text-align:center;font-weight:600;font-size:15px;">Group Of Suburb</div><div style="padding:14px 20px;font-size:15px;font-weight:600;color:#006E68;border-bottom:1px solid #f0f0f0;">Group Of Suburb</div><div style="padding:14px 20px;font-size:15px;font-weight:600;color:#006E68;border-bottom:1px solid #f0f0f0;">Group Of Suburb</div><div style="padding:14px 20px;font-size:15px;font-weight:600;color:#006E68;">Group Of Suburb</div></div><div style="background:#F7F7F7;padding:30px 40px;display:grid;grid-template-columns:1fr 1fr;gap:6px 40px;"><div style="font-size:14px;color:#7D8393;padding:5px 0;">Suburb</div><div style="font-size:14px;color:#7D8393;padding:5px 0;">Suburb</div><div style="font-size:14px;color:#7D8393;padding:5px 0;">Suburb</div><div style="font-size:14px;color:#7D8393;padding:5px 0;">Suburb</div><div style="font-size:14px;color:#7D8393;padding:5px 0;">Suburb</div><div style="font-size:14px;color:#7D8393;padding:5px 0;">Suburb</div></div></div>'})
+    ])]));
+
+    // FAQ
+    tree.push(S({background_background:'classic',background_color:'#F7F7F7',content_width:{size:900,unit:'px'},padding:{top:'60',right:'20',bottom:'60',left:'20',unit:'px'}},[C(100,[
+      W('heading',{title:'Frequently Asked Questions',header_size:'h2',title_color:'#10202E',align:'center',typography_typography:'custom',typography_font_family:'Familjen Grotesk',typography_font_size:{size:25,unit:'px'},typography_font_weight:'700'}),
+      W('accordion',{tabs:[{tab_title:'Lorem ipsum dolor sit amet?',tab_content:'Lorem ipsum dolor sit amet, consectetur adipiscing elit.'},{tab_title:'Ut enim ad minim veniam?',tab_content:'Quis nostrud exercitation ullamco laboris.'},{tab_title:'Duis aute irure dolor?',tab_content:'In voluptate velit esse cillum dolore eu fugiat nulla pariatur.'}]})
+    ])]));
+
+    console.log('[suburb-template] Built', tree.length, 'sections, posting to seoroom API...');
+    const r = await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/create-page', {
+      api_key: 'sr_2026_kX9mNpQ4wR7vBz', title: 'Suburb Template - [Suburb Name]', slug: 'suburb-template', tree, status: 'draft'
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 60000 });
+    console.log('[suburb-template] Created page:', r.data);
+    res.json(r.data);
+  } catch (e) {
+    console.error('[suburb-template]', e.response?.data || e.message);
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
 // Quick create Elementor page for a project — uses SEO Room API plugin (bypasses hosting auth issues)
 app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
   try {
