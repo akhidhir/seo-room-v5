@@ -14443,7 +14443,7 @@ app.get('/api/projects/:projectId/onpage-audit/results', async (req, res) => {
 function getWpAuthHeaders(project) {
   if (!project.wp_username || !project.wp_app_password) return null;
   const token = Buffer.from(`${project.wp_username}:${project.wp_app_password}`).toString('base64');
-  return { 'Authorization': `Basic ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0 (WordPress Integration)' };
+  return { 'Authorization': `Basic ${token}`, 'X-WP-Authorization': `Basic ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'SEORoom-Dashboard/5.0 (WordPress Integration)' };
 }
 
 // Helper: purge Cloudflare cache for specific URLs
