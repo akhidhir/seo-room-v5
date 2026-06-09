@@ -4079,20 +4079,71 @@ app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
   }
 });
 
-// Test WP auth for a project — diagnostic endpoint
+// Test WP auth for a project — diagnostic endpoint (tries multiple auth methods)
 app.get('/api/projects/:id/test-wp-auth', async (req, res) => {
+  const axios = require('axios');
+  let project;
   try {
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const authHeaders = getWpAuthHeaders(project);
-    if (!authHeaders) return res.status(400).json({ error: 'No WP credentials configured' });
-    const axios = require('axios');
-    console.log('[test-wp-auth] Testing auth for', project.wordpress_url, 'user:', project.wp_username, 'pass_len:', project.wp_app_password?.length);
-    const r = await axios.get(`${project.wordpress_url}/wp-json/wp/v2/users/me`, { headers: authHeaders, timeout: 15000 });
-    res.json({ ok: true, user_id: r.data.id, name: r.data.name, slug: r.data.slug, roles: r.data.roles });
+    if (!project.wp_username || !project.wp_app_password) return res.status(400).json({ error: 'No WP credentials configured' });
+
+    const wpUrl = project.wordpress_url;
+    const user = project.wp_username;
+    const pass = project.wp_app_password;
+    const results = {};
+
+    // Method 1: Standard Authorization header
+    try {
+      const token = Buffer.from(`${user}:${pass}`).toString('base64');
+      const r = await axios.get(`${wpUrl}/wp-json/wp/v2/users/me`, {
+        headers: { 'Authorization': `Basic ${token}`, 'X-WP-Authorization': `Basic ${token}`, 'Content-Type': 'application/json' },
+        timeout: 10000
+      });
+      results.method1_header = { ok: true, user_id: r.data.id, name: r.data.name };
+    } catch (e1) {
+      results.method1_header = { error: e1.response?.data?.code || e1.message, status: e1.response?.status };
+    }
+
+    // Method 2: axios auth option
+    try {
+      const r = await axios.get(`${wpUrl}/wp-json/wp/v2/users/me`, {
+        auth: { username: user, password: pass },
+        timeout: 10000
+      });
+      results.method2_axios_auth = { ok: true, user_id: r.data.id, name: r.data.name };
+    } catch (e2) {
+      results.method2_axios_auth = { error: e2.response?.data?.code || e2.message, status: e2.response?.status };
+    }
+
+    // Method 3: URL-embedded credentials
+    try {
+      const urlObj = new URL(`${wpUrl}/wp-json/wp/v2/users/me`);
+      urlObj.username = user;
+      urlObj.password = pass;
+      const r = await axios.get(urlObj.toString(), { timeout: 10000 });
+      results.method3_url_auth = { ok: true, user_id: r.data.id, name: r.data.name };
+    } catch (e3) {
+      results.method3_url_auth = { error: e3.response?.data?.code || e3.message, status: e3.response?.status };
+    }
+
+    // Method 4: Password without spaces
+    try {
+      const passNoSpaces = pass.replace(/\s/g, '');
+      const token = Buffer.from(`${user}:${passNoSpaces}`).toString('base64');
+      const r = await axios.get(`${wpUrl}/wp-json/wp/v2/users/me`, {
+        headers: { 'Authorization': `Basic ${token}`, 'X-WP-Authorization': `Basic ${token}` },
+        timeout: 10000
+      });
+      results.method4_no_spaces = { ok: true, user_id: r.data.id, name: r.data.name };
+    } catch (e4) {
+      results.method4_no_spaces = { error: e4.response?.data?.code || e4.message, status: e4.response?.status };
+    }
+
+    res.json({ wp_url: wpUrl, wp_user: user, pass_len: pass.length, results });
   } catch (e) {
-    console.error('[test-wp-auth]', e.response?.status, JSON.stringify(e.response?.data || e.message));
-    res.status(500).json({ error: e.response?.data?.message || e.message, status: e.response?.status, code: e.response?.data?.code, full: e.response?.data, headers_sent: Object.keys(authHeaders) });
+    console.error('[test-wp-auth] crash:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
