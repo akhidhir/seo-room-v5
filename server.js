@@ -4332,9 +4332,14 @@ app.post('/api/migrations/:migrationId/clones/fix-titles', async (req, res) => {
     const { wpUrl, authHeaders } = await getMigrationWp(migration);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not set' });
     const clones = (await pool.query(
-      `SELECT new_page_id FROM migration_clones WHERE migration_id=$1 AND new_page_id IS NOT NULL AND status IN ('cloned','published')`,
+      `SELECT new_page_id FROM migration_clones WHERE migration_id=$1 AND new_page_id IS NOT NULL`,
       [req.params.migrationId]
     )).rows.map(r => r.new_page_id);
+    // Also fix status to published for all clones that have page IDs
+    await pool.query(
+      `UPDATE migration_clones SET status='published', updated_at=NOW() WHERE migration_id=$1 AND new_page_id IS NOT NULL AND status != 'published'`,
+      [req.params.migrationId]
+    );
     const axios = require('axios');
     let fixed = 0, errors = [];
     for (const pageId of clones) {
