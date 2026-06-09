@@ -4062,7 +4062,7 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
 }
 
 // One-shot: create suburb template on sureflow (GET — no auth needed, single use)
-app.get('/api/create-suburb-template-now', async (req, res) => {
+app.get('/create-suburb-template-now', async (req, res) => {
   try {
     const axios = require('axios');
     const rid = () => Math.random().toString(16).slice(2, 9);
