@@ -4379,8 +4379,11 @@ app.post('/api/migrations/:migrationId/clones/delete-all-wp', async (req, res) =
       }
     }
 
-    // 2. Scan WP for orphan pages matching migration slugs
-    const slugs = clones.map(c => c.old_url.split('/').filter(Boolean).pop());
+    // 2. Scan WP for orphan pages matching migration slugs (get ALL clone slugs, not just ones with page IDs)
+    const allClones = (await pool.query(
+      `SELECT old_url FROM migration_clones WHERE migration_id=$1`, [req.params.migrationId]
+    )).rows;
+    const slugs = allClones.map(c => c.old_url.split('/').filter(Boolean).pop());
     let orphansDeleted = 0;
     try {
       // Fetch all pages (up to 100 per page, scan 30 pages = 3000 max)
