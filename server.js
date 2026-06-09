@@ -4079,6 +4079,23 @@ app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
   }
 });
 
+// Test WP auth for a project — diagnostic endpoint
+app.get('/api/projects/:id/test-wp-auth', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'No WP credentials configured' });
+    const axios = require('axios');
+    console.log('[test-wp-auth] Testing auth for', project.wordpress_url, 'user:', project.wp_username, 'pass_len:', project.wp_app_password?.length);
+    const r = await axios.get(`${project.wordpress_url}/wp-json/wp/v2/users/me`, { headers: authHeaders, timeout: 15000 });
+    res.json({ ok: true, user_id: r.data.id, name: r.data.name, slug: r.data.slug, roles: r.data.roles });
+  } catch (e) {
+    console.error('[test-wp-auth]', e.response?.status, e.response?.data || e.message);
+    res.status(500).json({ error: e.response?.data?.message || e.message, status: e.response?.status, code: e.response?.data?.code });
+  }
+});
+
 // Build an auto-generated Elementor template from a source page's content structure
 app.post('/api/migrations/:migrationId/build-template', async (req, res) => {
   try {
