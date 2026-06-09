@@ -4091,8 +4091,8 @@ app.get('/api/projects/:id/test-wp-auth', async (req, res) => {
     const r = await axios.get(`${project.wordpress_url}/wp-json/wp/v2/users/me`, { headers: authHeaders, timeout: 15000 });
     res.json({ ok: true, user_id: r.data.id, name: r.data.name, slug: r.data.slug, roles: r.data.roles });
   } catch (e) {
-    console.error('[test-wp-auth]', e.response?.status, e.response?.data || e.message);
-    res.status(500).json({ error: e.response?.data?.message || e.message, status: e.response?.status, code: e.response?.data?.code });
+    console.error('[test-wp-auth]', e.response?.status, JSON.stringify(e.response?.data || e.message));
+    res.status(500).json({ error: e.response?.data?.message || e.message, status: e.response?.status, code: e.response?.data?.code, full: e.response?.data, headers_sent: Object.keys(authHeaders) });
   }
 });
 
