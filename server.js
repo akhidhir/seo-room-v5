@@ -4061,6 +4061,27 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
 
+// One-shot: cleanup duplicate suburb template pages, keep only page 367
+app.get('/cleanup-suburb-templates', async (req, res) => {
+  try {
+    const axios = require('axios');
+    // List all pages
+    const list = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/list-pages?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 15000 });
+    const pages = list.data;
+    // Find suburb template pages that aren't page 367
+    const toDelete = pages.filter(p => p.title && p.title.toLowerCase().includes('suburb template') && p.id !== 367).map(p => p.id);
+    if (toDelete.length === 0) return res.json({ message: 'No duplicates found', kept: 367 });
+    // Delete them
+    const del = await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/delete-pages', {
+      api_key: 'sr_2026_kX9mNpQ4wR7vBz', ids: toDelete
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    res.json({ kept: 367, trashed: del.data.trashed, count: del.data.count });
+  } catch (e) {
+    console.error('[cleanup]', e.response?.data || e.message);
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
 // One-shot: create suburb template on sureflow (GET — no auth needed, single use)
 app.get('/create-suburb-template-now', async (req, res) => {
   try {
