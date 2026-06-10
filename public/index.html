@@ -18345,7 +18345,7 @@
               React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
                 matchingWf.sections.map(function(s, i) {
                   return React.createElement('span', { key: i, style: { fontSize: 10, padding: '2px 8px', borderRadius: 12, background: s.locked ? '#ef444420' : '#22c55e20', color: s.locked ? '#ef4444' : '#22c55e', fontWeight: 600 } },
-                    s.name + (s.word_estimate ? ' ~' + s.word_estimate + 'w' : '') + (s.locked ? ' (locked)' : '')
+                    (s.type || s.name || 'Section ' + (i+1)) + (s.word_estimate ? ' ~' + s.word_estimate + 'w' : '') + (s.locked ? ' (locked)' : '')
                   );
                 })
               )
