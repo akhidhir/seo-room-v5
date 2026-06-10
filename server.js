@@ -4435,6 +4435,47 @@ function hexLuminance(hex) {
   return 0.2126*r + 0.7152*g + 0.0722*b;
 }
 
+// Strip Elementor HTML to clean text with structural markers for wireframe parsing
+function stripHtmlForWireframe(html) {
+  let text = html;
+  // Remove script, style, svg, noscript blocks entirely
+  text = text.replace(/<(script|style|svg|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '');
+  // Remove HTML comments
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
+  // Mark Elementor sections with clear boundaries
+  text = text.replace(/<section[^>]*>/gi, '\n\n=== SECTION ===\n');
+  text = text.replace(/<\/section>/gi, '\n=== /SECTION ===\n');
+  // Convert headings to markdown-style markers
+  text = text.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n# $1\n');
+  text = text.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n');
+  text = text.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n### $1\n');
+  text = text.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n#### $1\n');
+  text = text.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n##### $1\n');
+  text = text.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n###### $1\n');
+  // Convert list items to bullets
+  text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n');
+  // Mark forms as locked
+  text = text.replace(/<form[^>]*>[\s\S]*?<\/form>/gi, '\n[FORM WIDGET - LOCKED]\n');
+  // Mark iframes (maps) as locked
+  text = text.replace(/<iframe[^>]*src="([^"]*)"[^>]*>[\s\S]*?<\/iframe>/gi, '\n[MAP/IFRAME: $1 - LOCKED]\n');
+  // Preserve images with src
+  text = text.replace(/<img[^>]*src="([^"]*)"[^>]*>/gi, '[IMAGE: $1]');
+  // Convert links
+  text = text.replace(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
+  // Convert <br> to newline
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+  // Convert <p> to paragraph breaks
+  text = text.replace(/<\/p>/gi, '\n\n');
+  text = text.replace(/<p[^>]*>/gi, '');
+  // Strip all remaining HTML tags
+  text = text.replace(/<[^>]+>/g, '');
+  // Decode common HTML entities
+  text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ');
+  // Collapse multiple blank lines to max 2
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
 // Parse a wireframe template page and store its section structure per page type
 // page_type: suburb | service | about | contact
 app.post('/api/projects/:id/parse-wireframe', async (req, res) => {
@@ -4456,46 +4497,56 @@ app.post('/api/projects/:id/parse-wireframe', async (req, res) => {
     if (!resp.ok) return res.status(502).json({ error: `Failed to fetch wireframe: ${resp.status}` });
     const fullHtml = await resp.text();
 
-    // Extract content between </header> and <footer>
+    // Extract content between </header> and <footer>, then strip Elementor bloat
     const headerEnd = fullHtml.search(/<\/header>/i);
     const footerStart = fullHtml.search(/<footer[\s>]/i);
-    const contentHtml = fullHtml.slice(
+    const rawContentHtml = fullHtml.slice(
       headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
       footerStart !== -1 ? footerStart : fullHtml.length
     );
+    // Strip Elementor HTML to clean text — reduces 200k+ chars to ~6k
+    const contentText = stripHtmlForWireframe(rawContentHtml);
+    console.log(`[parse-wireframe] Raw HTML: ${rawContentHtml.length} chars → stripped: ${contentText.length} chars`);
 
     // Send to Claude to identify sections and extract content prompts
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 6000,
+      max_tokens: 8000,
       system: `You are analysing a WIREFRAME TEMPLATE page for a website. This is NOT a live page with real content — it contains placeholder text, content prompts, and instructions for a copywriter.
 
-Your job is to identify every section on the page and extract:
-1. The section TYPE (hero, services-strip, reviews, content-with-map, cta-bar, service-block, why-choose-us, accreditations, company-differences, faq, service-area-list, footer-cta, or other)
-2. The HEADING text (as-is from the wireframe, e.g. "H1(KEYWORD + SUBURB)", "SERVICE KW + SUBURB", "TOP SERVICE IN DEMAND IN THE SUBURB + SUBURB")
-3. The CONTENT PROMPT — the copywriting instructions embedded in the wireframe (e.g. "Write a description about the plumbers in {{suburb}}. On the first part talk about how {{tradies}} and {{tradies services}} are essential in that {{suburb}}.")
+The content has been stripped from Elementor HTML. "=== SECTION ===" markers indicate Elementor section boundaries.
+
+Your job is to identify EVERY distinct section on the page (there are typically 15-20 sections on a full wireframe). Extract for each:
+1. The section TYPE — use one of: hero, form, services-strip, reviews, top-service-content, map, cta-bar, service-block, why-choose-us, accreditations, company-differences, service-area-list, services-detail, footer-cta, or other
+2. The HEADING text (as-is from the wireframe, e.g. "H1(KEYWORD + SUBURB)", "SERVICE KW + SUBURB")
+3. The CONTENT PROMPT — the copywriting instructions embedded in the wireframe. If it says "Write a description about..." or has {{variable}} placeholders, include the FULL instruction text
 4. WIDGET TYPES present (heading, text-editor, form, icon-list, icon-box, image, button, toggle/accordion, google-maps, image-carousel)
-5. Whether the section is LOCKED (forms, maps, image carousels — copywriter should NOT rewrite these)
+5. Whether the section is LOCKED (forms, maps, image carousels, brand logo carousels — copywriter should NOT rewrite these)
 6. LAYOUT — column split (e.g. "50/50", "60/40", "100") and whether image is left or right
+
+CRITICAL: Do NOT merge multiple sections into one. Each "=== SECTION ===" boundary typically indicates a separate section. CTA bars that repeat ("CALL US NOW!") should each be their own section. Service blocks with different headings are separate sections even if they look similar.
 
 Return JSON array ordered by page position:
 [{
   "type": "hero",
   "heading": "H1(KEYWORD + SUBURB)",
   "content_prompt": "Short blurb appealing to customers + 3 selling points",
-  "widgets": ["heading", "text-editor", "icon-list", "button", "form"],
+  "widgets": ["heading", "text-editor", "icon-list", "button"],
   "locked": false,
   "layout": "60/40",
   "word_estimate": 80,
-  "notes": "Left side: tag + H1 + paragraph + selling points + CTA button. Right side: quote form (locked)."
+  "notes": "Left side: tag + H1 + paragraph + selling points + CTA button. Right side: quote form."
 }, ...]
 
 IMPORTANT:
 - Preserve ALL placeholder text and {{variable}} markers exactly as they appear
 - If the wireframe has content writing instructions (like "On the 1st paragraph write about..."), include the FULL instruction in content_prompt
-- Mark forms, maps, and carousels as locked:true
-- Estimate word count needed for each section`,
-      messages: [{ role: 'user', content: `Analyse this wireframe template HTML and identify all sections:\n\n${contentHtml.slice(0, 40000)}` }]
+- Mark forms, maps, brand logo carousels as locked:true
+- CTA bars ("CALL US NOW!" + phone) = locked:true
+- Lorem ipsum sections = NOT locked (copywriter replaces lorem with real copy)
+- Estimate word count needed for each UNLOCKED section
+- If a section has lorem ipsum placeholder text, note it in content_prompt as "Replace lorem ipsum with..."`,
+      messages: [{ role: 'user', content: `Analyse this wireframe template and identify ALL sections (expect 15-20):\n\n${contentText.slice(0, 60000)}` }]
     });
 
     let aiText = aiResp.content[0].text;
@@ -4559,42 +4610,51 @@ app.post('/api/builds/:id/parse-wireframe', async (req, res) => {
 
     const headerEnd = fullHtml.search(/<\/header>/i);
     const footerStart = fullHtml.search(/<footer[\s>]/i);
-    const contentHtml = fullHtml.slice(
+    const rawContentHtml = fullHtml.slice(
       headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
       footerStart !== -1 ? footerStart : fullHtml.length
     );
+    const contentText = stripHtmlForWireframe(rawContentHtml);
+    console.log(`[parse-wireframe-build] Raw HTML: ${rawContentHtml.length} chars → stripped: ${contentText.length} chars`);
 
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 6000,
+      max_tokens: 8000,
       system: `You are analysing a WIREFRAME TEMPLATE page for a website. This is NOT a live page with real content — it contains placeholder text, content prompts, and instructions for a copywriter.
 
-Your job is to identify every section on the page and extract:
-1. The section TYPE (hero, services-strip, reviews, content-with-map, cta-bar, service-block, why-choose-us, accreditations, company-differences, faq, service-area-list, footer-cta, or other)
-2. The HEADING text (as-is from the wireframe)
-3. The CONTENT PROMPT — the copywriting instructions embedded in the wireframe
+The content has been stripped from Elementor HTML. "=== SECTION ===" markers indicate Elementor section boundaries.
+
+Your job is to identify EVERY distinct section on the page (there are typically 15-20 sections on a full wireframe). Extract for each:
+1. The section TYPE — use one of: hero, form, services-strip, reviews, top-service-content, map, cta-bar, service-block, why-choose-us, accreditations, company-differences, service-area-list, services-detail, footer-cta, or other
+2. The HEADING text (as-is from the wireframe, e.g. "H1(KEYWORD + SUBURB)", "SERVICE KW + SUBURB")
+3. The CONTENT PROMPT — the copywriting instructions embedded in the wireframe. If it says "Write a description about..." or has {{variable}} placeholders, include the FULL instruction text
 4. WIDGET TYPES present (heading, text-editor, form, icon-list, icon-box, image, button, toggle/accordion, google-maps, image-carousel)
-5. Whether the section is LOCKED (forms, maps, image carousels — copywriter should NOT rewrite these)
+5. Whether the section is LOCKED (forms, maps, image carousels, brand logo carousels — copywriter should NOT rewrite these)
 6. LAYOUT — column split (e.g. "50/50", "60/40", "100") and whether image is left or right
+
+CRITICAL: Do NOT merge multiple sections into one. Each "=== SECTION ===" boundary typically indicates a separate section. CTA bars that repeat ("CALL US NOW!") should each be their own section. Service blocks with different headings are separate sections even if they look similar.
 
 Return JSON array ordered by page position:
 [{
   "type": "hero",
   "heading": "H1(KEYWORD + SUBURB)",
   "content_prompt": "Short blurb appealing to customers + 3 selling points",
-  "widgets": ["heading", "text-editor", "icon-list", "button", "form"],
+  "widgets": ["heading", "text-editor", "icon-list", "button"],
   "locked": false,
   "layout": "60/40",
   "word_estimate": 80,
-  "notes": "Left side: tag + H1 + paragraph + selling points + CTA button. Right side: quote form (locked)."
+  "notes": "Left side: tag + H1 + paragraph + selling points + CTA button. Right side: quote form."
 }, ...]
 
 IMPORTANT:
 - Preserve ALL placeholder text and {{variable}} markers exactly as they appear
-- If the wireframe has content writing instructions, include the FULL instruction in content_prompt
-- Mark forms, maps, and carousels as locked:true
-- Estimate word count needed for each section`,
-      messages: [{ role: 'user', content: `Analyse this wireframe template HTML and identify all sections:\n\n${contentHtml.slice(0, 40000)}` }]
+- If the wireframe has content writing instructions (like "On the 1st paragraph write about..."), include the FULL instruction in content_prompt
+- Mark forms, maps, brand logo carousels as locked:true
+- CTA bars ("CALL US NOW!" + phone) = locked:true
+- Lorem ipsum sections = NOT locked (copywriter replaces lorem with real copy)
+- Estimate word count needed for each UNLOCKED section
+- If a section has lorem ipsum placeholder text, note it in content_prompt as "Replace lorem ipsum with..."`,
+      messages: [{ role: 'user', content: `Analyse this wireframe template and identify ALL sections (expect 15-20):\n\n${contentText.slice(0, 60000)}` }]
     });
 
     let aiText = aiResp.content[0].text;
@@ -18534,12 +18594,17 @@ function buildWireframeContext(wireframeTemplates, pageType) {
   const wf = wireframeTemplates[pageType];
   if (!wf || !wf.sections || !wf.sections.length) return '';
 
+  const unlockedSections = wf.sections.filter(s => !s.locked);
+  const lockedSections = wf.sections.filter(s => s.locked);
+
   const sectionGuide = wf.sections.map((s, i) => {
-    let desc = `Section ${i + 1}: [${(s.type || 'content').toUpperCase()}]`;
+    const num = i + 1;
+    if (s.locked) {
+      return `Section ${num}: [${(s.type || 'content').toUpperCase()}] ⛔ LOCKED — SKIP (${s.notes || 'form/widget/map/carousel'})`;
+    }
+    let desc = `Section ${num}: [${(s.type || 'content').toUpperCase()}]`;
     if (s.heading) desc += `\n  Heading: "${s.heading}"`;
-    if (s.content_prompt) desc += `\n  Content prompt: ${s.content_prompt}`;
-    if (s.widgets) desc += `\n  Widgets: ${Array.isArray(s.widgets) ? s.widgets.join(', ') : s.widgets}`;
-    if (s.locked) desc += `\n  ⚠️ LOCKED — Do NOT write content for this section (form/widget/map/carousel)`;
+    if (s.content_prompt) desc += `\n  ✏️ WRITE: ${s.content_prompt}`;
     if (s.layout) desc += `\n  Layout: ${s.layout}`;
     if (s.word_estimate) desc += `\n  Target words: ~${s.word_estimate}`;
     if (s.notes) desc += `\n  Notes: ${s.notes}`;
@@ -18547,26 +18612,38 @@ function buildWireframeContext(wireframeTemplates, pageType) {
   }).join('\n\n');
 
   const totalWords = wf.total_word_estimate || wf.sections.reduce((sum, s) => sum + (s.word_estimate || 0), 0);
+  const writableWords = unlockedSections.reduce((sum, s) => sum + (s.word_estimate || 0), 0);
 
   return `
 
-=== WIREFRAME TEMPLATE (DESIGN STRUCTURE — MUST FOLLOW EXACTLY) ===
-This page has a human-designed wireframe template with ${wf.sections.length} sections (total ~${totalWords} words).
-You MUST write content that matches this EXACT section structure. The design is already built — you are writing copy to FIT the design.
+=== WIREFRAME TEMPLATE (DESIGN STRUCTURE — YOUR CONTENT MUST MATCH THIS EXACTLY) ===
 
+This page has a designed wireframe with ${wf.sections.length} total sections:
+- ${unlockedSections.length} sections need copy written (total ~${writableWords} words)
+- ${lockedSections.length} sections are LOCKED (forms/maps/widgets — skip these entirely)
+
+PAGE SECTIONS (in exact page order):
 ${sectionGuide}
 
-WIREFRAME RULES (NON-NEGOTIABLE):
-- Write content for EACH section in the EXACT order shown above
-- Start each section with a comment: <!-- Section N: TYPE -->
-- Match the heading text/placeholders (replace {{suburb}}, {{company}}, {{service}} with real values)
-- Respect the word estimate per section — do not drastically exceed or undercut it
-- Do NOT skip any sections
-- Do NOT add sections that aren't in the wireframe
-- LOCKED sections = output ONLY the comment marker, no content (forms/widgets/maps stay as-is)
-- The content for each section must match what the content prompt describes
-- Total page word count should be approximately ${totalWords} words
-=== END WIREFRAME TEMPLATE ===
+=== WIREFRAME OUTPUT FORMAT (MANDATORY) ===
+Your output MUST follow this exact structure:
+
+${wf.sections.map((s, i) => {
+    const num = i + 1;
+    if (s.locked) return `<!-- Section ${num}: ${(s.type || 'LOCKED').toUpperCase()} [LOCKED - SKIP] -->`;
+    return `<!-- Section ${num}: ${(s.type || 'CONTENT').toUpperCase()} -->
+<h2>${s.heading || '[Section heading]'}</h2>
+[Write ${s.word_estimate || 100}+ words following the content prompt above]`;
+  }).join('\n\n')}
+
+RULES:
+1. Output EVERY section marker comment, even for LOCKED sections (just the comment, no content)
+2. Replace {{suburb}}, {{company}}, {{service}}, {{tradies}} etc. with real values from context
+3. Each section's content MUST match its content prompt — follow the writing instructions precisely
+4. Do NOT merge, reorder, skip, or add sections
+5. Word estimates are targets — match them within ±20%
+6. Total writable content: ~${writableWords} words
+=== END WIREFRAME ===
 `;
 }
 
