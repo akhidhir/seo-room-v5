@@ -33828,6 +33828,14 @@ app.get('/api/drive/callback', async (req, res) => {
     const tokens = await tokenRes.json();
     if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
 
+    // Fetch connected account email
+    let driveEmail = '';
+    try {
+      const uiRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: `Bearer ${tokens.access_token}` } });
+      const ui = await uiRes.json();
+      driveEmail = ui.email || '';
+    } catch (e) { console.warn('[drive] Could not fetch userinfo:', e.message); }
+
     await pool.query(
       `INSERT INTO user_integrations (user_id, kind, config, status)
        VALUES ($1, 'google_drive', $2, 'connected')
@@ -33835,7 +33843,8 @@ app.get('/api/drive/callback', async (req, res) => {
       [userId, JSON.stringify({
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
-        expires_at: Date.now() + (tokens.expires_in * 1000)
+        expires_at: Date.now() + (tokens.expires_in * 1000),
+        email: driveEmail
       })]
     );
     console.log(`[drive] OAuth tokens stored for user ${userId}`);
@@ -33847,9 +33856,10 @@ app.get('/api/drive/callback', async (req, res) => {
 });
 
 app.get('/api/user/drive/status', async (req, res) => {
-  const r = await pool.query('SELECT status, updated_at FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth.userId, 'google_drive']);
+  const r = await pool.query('SELECT status, config, updated_at FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth.userId, 'google_drive']);
   if (r.rows.length === 0) return res.json({ connected: false });
-  res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at });
+  const cfg = typeof r.rows[0].config === 'string' ? JSON.parse(r.rows[0].config) : (r.rows[0].config || {});
+  res.json({ connected: r.rows[0].status === 'connected', email: cfg.email || '', updated_at: r.rows[0].updated_at });
 });
 
 app.post(['/api/user/drive/disconnect', '/api/user/google_drive/disconnect'], async (req, res) => {
@@ -33948,9 +33958,17 @@ async function driveListComments(accessToken, fileId) {
 // User-level: get all Google integration statuses
 app.get('/api/user/integrations', async (req, res) => {
   try {
-    const r = await pool.query('SELECT kind, status, updated_at FROM user_integrations WHERE user_id=$1', [req.auth.userId]);
+    const r = await pool.query('SELECT kind, status, config, updated_at FROM user_integrations WHERE user_id=$1', [req.auth.userId]);
     const integrations = {};
-    r.rows.forEach(row => { integrations[row.kind] = { status: row.status, connected: row.status === 'connected', updated_at: row.updated_at }; });
+    r.rows.forEach(row => {
+      const entry = { status: row.status, connected: row.status === 'connected', updated_at: row.updated_at };
+      // Include email for Drive (don't leak tokens)
+      if (row.kind === 'google_drive' && row.config) {
+        const cfg = typeof row.config === 'string' ? JSON.parse(row.config) : row.config;
+        if (cfg.email) entry.email = cfg.email;
+      }
+      integrations[row.kind] = entry;
+    });
     res.json({ integrations });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

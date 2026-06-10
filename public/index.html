@@ -35767,6 +35767,7 @@
               <div className="integration-status">
                 <div className={`status-dot ${integrations.google_drive?.connected ? 'connected' : 'disconnected'}`}></div>
                 <span>{integrations.google_drive?.connected ? 'Connected' : 'Not Connected'}</span>
+                {integrations.google_drive?.email && <span style={{ marginLeft: 8, fontSize: '12px', color: 'var(--text2)' }}>({integrations.google_drive.email})</span>}
               </div>
             </div>
             <p style={{ fontSize: '12px', color: 'var(--text3)', margin: '4px 0 10px' }}>Used for copywriter review loop — drafts are pushed as Google Docs for internal and client feedback.</p>
