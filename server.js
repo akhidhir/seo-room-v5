@@ -21971,11 +21971,20 @@ app.get('/api/projects/:projectId/discover-pages', async (req, res) => {
 });
 
 // Preview for site_pages (New Website) — standalone preview since no live URL
-app.get('/api/projects/:projectId/site-pages/:id/preview', async (req, res) => {
+app.get(['/api/projects/:projectId/site-pages/:id/preview', '/api/builds/:buildId/site-pages/:id/preview'], async (req, res) => {
   try {
-    const item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
-    if (!item) return res.status(404).send('Not found');
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    let item, project;
+    if (req.params.buildId) {
+      item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND build_id=$2', [req.params.id, req.params.buildId])).rows[0];
+      if (!item) return res.status(404).send('Not found');
+      const build = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [req.params.buildId])).rows[0];
+      project = build ? (await pool.query('SELECT * FROM projects WHERE id=$1', [build.project_id])).rows[0] : null;
+      if (!project && build) project = { domain: build.domain, name: build.name, business_name: build.business_name };
+    } else {
+      item = (await pool.query('SELECT * FROM site_pages WHERE id=$1 AND project_id=$2', [req.params.id, req.params.projectId])).rows[0];
+      if (!item) return res.status(404).send('Not found');
+      project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    }
 
     const draftContent = item.draft_content || '';
     const draftTitle = item.meta_title || item.page_name || '';
