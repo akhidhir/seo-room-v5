@@ -15627,7 +15627,59 @@
               )
             );
           })
-        )
+        ),
+
+        // ===== Google Drive Review Folder =====
+        React.createElement(DriveFolderCard, { project: project, isBuild: isBuild, onUpdate: onUpdate })
+      );
+    }
+
+    // Drive Folder Card — used in NewWebsiteSetupPage
+    function DriveFolderCard({ project, isBuild, onUpdate }) {
+      var [creating, setCreating] = React.useState(false);
+      var [folderId, setFolderId] = React.useState(project?.drive_folder_id || '');
+
+      var handleCreate = async function() {
+        setCreating(true);
+        try {
+          var endpoint = isBuild ? '/builds/' + project.build_id + '/drive/create-folder' : '/projects/' + project.id + '/drive/create-folder';
+          var data = await api(endpoint, { method: 'POST' });
+          setFolderId(data.folder_id);
+          if (onUpdate) onUpdate(Object.assign({}, project, { drive_folder_id: data.folder_id }));
+          alert('Drive folder created: ' + (data.folder_name || data.folder_id));
+        } catch(e) { alert('Error: ' + (e.message || e)); }
+        setCreating(false);
+      };
+
+      return React.createElement('div', { style: { maxWidth: 600, marginTop: 24, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 } },
+        React.createElement('h3', { style: { fontSize: 18, fontWeight: 700, margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('i', { className: 'fa-brands fa-google-drive', style: { color: '#4285f4' } }),
+          'Google Drive Review'
+        ),
+        React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, margin: '0 0 16px' } },
+          'Create a Google Drive folder for this project. Drafts will be pushed here for internal & client review.'
+        ),
+        folderId
+          ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(34,197,94,0.06)', borderRadius: 8, border: '1px solid rgba(34,197,94,0.2)' } },
+              React.createElement('i', { className: 'fa-solid fa-check-circle', style: { color: '#22c55e', fontSize: 18 } }),
+              React.createElement('div', null,
+                React.createElement('div', { style: { fontWeight: 600, fontSize: 13 } }, 'Drive folder connected'),
+                React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', fontFamily: 'monospace' } }, folderId)
+              ),
+              React.createElement('button', {
+                onClick: handleCreate,
+                disabled: creating,
+                style: { marginLeft: 'auto', fontSize: 11, padding: '4px 10px', background: 'var(--bg3)', color: 'var(--text2)', border: 'none', borderRadius: 6, cursor: 'pointer' }
+              }, 'Re-create')
+            )
+          : React.createElement('button', {
+              onClick: handleCreate,
+              disabled: creating,
+              style: { padding: '10px 20px', background: creating ? 'var(--bg3)' : '#4285f4', color: '#fff', border: 'none', borderRadius: 8, cursor: creating ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+            },
+              React.createElement('i', { className: creating ? 'fa-solid fa-spinner fa-spin' : 'fa-brands fa-google-drive', style: { marginRight: 8 } }),
+              creating ? 'Creating...' : 'Create Drive Folder'
+            )
       );
     }
 
@@ -16912,8 +16964,70 @@
       var [briefCheckResult, setBriefCheckResult] = React.useState(page.brief_gaps ? { gaps: page.brief_gaps, score: null } : null);
       var [lightOptimising, setLightOptimising] = React.useState(false);
       var [suggestingKws, setSuggestingKws] = React.useState(false);
+      // Drive review loop
+      var [pushingToDrive, setPushingToDrive] = React.useState(false);
+      var [readingFeedback, setReadingFeedback] = React.useState(false);
+      var [driveFeedback, setDriveFeedback] = React.useState(null);
+      var [driveOptimising, setDriveOptimising] = React.useState(false);
+      var [reviewStatus, setReviewStatus] = React.useState(page.review_status || 'draft');
+      var [optimiseRound, setOptimiseRound] = React.useState(page.optimise_round || 0);
 
       var [suggestedKws, setSuggestedKws] = React.useState([]);
+
+      // Drive review loop handlers
+      var handlePushToDrive = async function() {
+        if (pushingToDrive) return;
+        // Save first
+        await handleSaveEdit();
+        setPushingToDrive(true);
+        try {
+          var data = await api(apiPrefix + '/site-pages/' + page.id + '/push-to-drive', { method: 'POST' });
+          setReviewStatus(data.review_status || 'internal_review');
+          if (data.drive_doc_id) page.drive_doc_id = data.drive_doc_id;
+          alert('Pushed to Google Drive' + (data.doc_url ? '. Doc: ' + data.doc_url : ''));
+          if (onUpdate) onUpdate();
+        } catch(e) { alert('Push to Drive failed: ' + (e.message || e)); }
+        setPushingToDrive(false);
+      };
+
+      var handleReadFeedback = async function() {
+        if (readingFeedback) return;
+        setReadingFeedback(true);
+        setDriveFeedback(null);
+        try {
+          var data = await api(apiPrefix + '/site-pages/' + page.id + '/drive-feedback');
+          setDriveFeedback(data);
+        } catch(e) { alert('Read feedback failed: ' + (e.message || e)); }
+        setReadingFeedback(false);
+      };
+
+      var handleDriveOptimise = async function() {
+        if (driveOptimising) return;
+        setDriveOptimising(true);
+        try {
+          var data = await api(apiPrefix + '/site-pages/' + page.id + '/optimise', { method: 'POST' });
+          if (data.draft_content) {
+            setEditContent(data.draft_content);
+            setEditorKey(function(k) { return k + 1; });
+          }
+          setOptimiseRound(data.optimise_round || optimiseRound + 1);
+          setReviewStatus(data.review_status || 'internal_review');
+          setDriveFeedback(null);
+          alert('Content optimised from Drive feedback (round ' + (data.optimise_round || optimiseRound + 1) + ')');
+          if (onUpdate) onUpdate();
+        } catch(e) { alert('Drive optimise failed: ' + (e.message || e)); }
+        setDriveOptimising(false);
+      };
+
+      var handleUpdateReviewStatus = async function(newStatus) {
+        try {
+          await api(apiPrefix + '/site-pages/' + page.id + '/review-status', {
+            method: 'POST', body: { review_status: newStatus }
+          });
+          setReviewStatus(newStatus);
+          if (onUpdate) onUpdate();
+        } catch(e) { alert('Status update failed: ' + (e.message || e)); }
+      };
 
       var handleSuggestKeywords = async function() {
         if (suggestingKws) return;
@@ -17491,8 +17605,50 @@
             style: { padding: '8px 16px', background: savingMeta === 'done' ? '#22c55e' : '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
             React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), savingMeta === 'done' ? 'Saved!' : 'Save'
           ),
-          // Send for Approval
-          !isPublished && hasDraft && React.createElement('button', { onClick: handleApprove,
+          // Review Status Badge
+          reviewStatus !== 'draft' && React.createElement('span', {
+            style: { padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px',
+              background: reviewStatus === 'internal_review' ? '#3b82f6' : reviewStatus === 'internal_approved' ? '#22c55e' : reviewStatus === 'client_review' ? '#f59e0b' : reviewStatus === 'client_approved' ? '#10b981' : reviewStatus === 'ready_to_publish' ? '#8b5cf6' : reviewStatus === 'published' ? '#059669' : '#6b7280',
+              color: '#fff' }
+          }, reviewStatus.replace(/_/g, ' ') + (optimiseRound > 0 ? ' (R' + optimiseRound + ')' : '')),
+          // Push to Drive
+          !isPublished && hasDraft && React.createElement('button', {
+            onClick: handlePushToDrive, disabled: pushingToDrive,
+            title: page.drive_doc_id ? 'Update existing Drive Doc' : 'Create new Drive Doc & start review',
+            style: { padding: '8px 16px', background: pushingToDrive ? 'var(--bg3)' : '#4285f4', color: '#fff', border: 'none', borderRadius: 8, cursor: pushingToDrive ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: pushingToDrive ? 'fa-solid fa-spinner fa-spin' : 'fa-brands fa-google-drive', style: { marginRight: 6 } }), pushingToDrive ? 'Pushing...' : (page.drive_doc_id ? 'Update Drive' : 'Push to Drive')),
+          // Read Feedback (only when in review)
+          page.drive_doc_id && ['internal_review', 'client_review'].indexOf(reviewStatus) !== -1 && React.createElement('button', {
+            onClick: handleReadFeedback, disabled: readingFeedback,
+            title: 'Read comments & feedback from Google Drive',
+            style: { padding: '8px 16px', background: readingFeedback ? 'var(--bg3)' : '#0ea5e9', color: '#fff', border: 'none', borderRadius: 8, cursor: readingFeedback ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: readingFeedback ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-comments', style: { marginRight: 6 } }), readingFeedback ? 'Reading...' : 'Read Feedback' + (driveFeedback && driveFeedback.comments ? ' (' + driveFeedback.comments.length + ')' : '')),
+          // Optimise from Feedback
+          driveFeedback && driveFeedback.comments && driveFeedback.comments.length > 0 && React.createElement('button', {
+            onClick: handleDriveOptimise, disabled: driveOptimising,
+            title: 'AI rewrites content based on Drive feedback',
+            style: { padding: '8px 16px', background: driveOptimising ? 'var(--bg3)' : 'linear-gradient(135deg, #f59e0b, #ef4444)', color: '#fff', border: 'none', borderRadius: 8, cursor: driveOptimising ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: driveOptimising ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles', style: { marginRight: 6 } }), driveOptimising ? 'Optimising...' : 'Optimise from Feedback'),
+          // Review Status Controls
+          reviewStatus === 'internal_review' && React.createElement('button', {
+            onClick: function() { handleUpdateReviewStatus('internal_approved'); },
+            style: { padding: '8px 16px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Approve (Internal)'),
+          reviewStatus === 'internal_approved' && React.createElement('button', {
+            onClick: function() { handleUpdateReviewStatus('client_review'); },
+            title: 'Share the Drive Doc with the client for review',
+            style: { padding: '8px 16px', background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: 'fa-solid fa-share', style: { marginRight: 6 } }), 'Send to Client'),
+          reviewStatus === 'client_review' && React.createElement('button', {
+            onClick: function() { handleUpdateReviewStatus('client_approved'); },
+            style: { padding: '8px 16px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: 'fa-solid fa-check-double', style: { marginRight: 6 } }), 'Approve (Client)'),
+          reviewStatus === 'client_approved' && React.createElement('button', {
+            onClick: function() { handleUpdateReviewStatus('ready_to_publish'); },
+            style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: 'fa-solid fa-flag-checkered', style: { marginRight: 6 } }), 'Ready to Publish'),
+          // Send for Approval (legacy — keep for non-Drive workflow)
+          !isPublished && hasDraft && reviewStatus === 'draft' && !page.drive_doc_id && React.createElement('button', { onClick: handleApprove,
             style: { padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 } },
             React.createElement('i', { className: 'fas fa-paper-plane', style: { marginRight: 6 } }), 'Send for Approval'
           ),
@@ -17587,6 +17743,37 @@
             style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
             React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), publishing ? 'Publishing...' : 'Publish'
           )
+        ),
+
+        // Drive Feedback Panel
+        driveFeedback && driveFeedback.comments && driveFeedback.comments.length > 0 && React.createElement('div', {
+          style: { margin: '12px 0', padding: 16, background: 'var(--bg2)', borderRadius: 10, border: '1px solid rgba(14,165,233,0.3)' }
+        },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 } },
+            React.createElement('h4', { style: { margin: 0, color: '#0ea5e9', fontSize: 14, fontWeight: 700 } },
+              React.createElement('i', { className: 'fa-brands fa-google-drive', style: { marginRight: 8 } }),
+              'Drive Feedback (' + driveFeedback.comments.length + ' comments)'
+            ),
+            React.createElement('button', {
+              onClick: function() { setDriveFeedback(null); },
+              style: { background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16 }
+            }, '×')
+          ),
+          driveFeedback.comments.map(function(c, i) {
+            return React.createElement('div', { key: i, style: { padding: '8px 12px', marginBottom: 8, background: 'var(--bg3)', borderRadius: 6, borderLeft: '3px solid #0ea5e9' } },
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
+                React.createElement('span', { style: { fontWeight: 600, fontSize: 13, color: 'var(--text1)' } }, c.author || 'Reviewer'),
+                React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, c.createdTime ? new Date(c.createdTime).toLocaleDateString() : '')
+              ),
+              c.quotedText && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', marginBottom: 4, padding: '4px 8px', background: 'rgba(255,255,255,0.05)', borderRadius: 4 } }, '"' + c.quotedText + '"'),
+              React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)' } }, c.content),
+              c.replies && c.replies.length > 0 && c.replies.map(function(r, ri) {
+                return React.createElement('div', { key: ri, style: { marginTop: 6, marginLeft: 16, padding: '4px 8px', fontSize: 12, color: 'var(--text3)', borderLeft: '2px solid var(--bg3)' } },
+                  React.createElement('strong', null, r.author + ': '), r.content
+                );
+              })
+            );
+          })
         ),
 
         // OptimisePreviewModal (AI Content Editor)
@@ -35367,6 +35554,7 @@
       const [integrations, setIntegrations] = useState({
         gbp: { connected: false },
         gsc: { connected: false },
+        google_drive: { connected: false },
         serpapi: { connected: false },
         localfalcon: { connected: false },
         wordpress: { connected: false },
@@ -35395,6 +35583,7 @@
               ...prev,
               gsc: raw.gsc || { connected: false },
               gbp: raw.gbp || { connected: false },
+              google_drive: raw.google_drive || { connected: false },
             }));
           }
           // Load project-level integrations (SerpAPI, LocalFalcon, WordPress, Ahrefs)
@@ -35561,6 +35750,32 @@
               </button>
               {integrations.gsc?.connected && (
                 <button className="btn btn-secondary" onClick={() => handleDisconnectOAuth('gsc')}>
+                  <i className="fas fa-unlink"></i> Disconnect
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Google Drive */}
+          <div className="integration-card">
+            <div className="integration-header">
+              <div className="integration-title">
+                <i className="fab fa-google-drive" style={{ marginRight: '8px', color: '#0F9D58' }}></i>
+                Google Drive
+                <span style={{ fontSize: '11px', color: 'var(--text2)', marginLeft: '8px', fontWeight: 400 }}>Account-level</span>
+              </div>
+              <div className="integration-status">
+                <div className={`status-dot ${integrations.google_drive?.connected ? 'connected' : 'disconnected'}`}></div>
+                <span>{integrations.google_drive?.connected ? 'Connected' : 'Not Connected'}</span>
+              </div>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text3)', margin: '4px 0 10px' }}>Used for copywriter review loop — drafts are pushed as Google Docs for internal and client feedback.</p>
+            <div className="btn-group" style={{ gap: '8px' }}>
+              <button className="btn btn-primary" onClick={() => handleConnectOAuth('google_drive')}>
+                <i className="fas fa-link"></i> {integrations.google_drive?.connected ? 'Reconnect' : 'Connect'}
+              </button>
+              {integrations.google_drive?.connected && (
+                <button className="btn btn-secondary" onClick={() => handleDisconnectOAuth('google_drive')}>
                   <i className="fas fa-unlink"></i> Disconnect
                 </button>
               )}
