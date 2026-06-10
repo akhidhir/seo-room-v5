@@ -908,6 +908,13 @@ async function initDb() {
     // Make project_id nullable on site_pages and content_keywords for build-only items
     await client.query(`ALTER TABLE site_pages ALTER COLUMN project_id DROP NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE content_keywords ALTER COLUMN project_id DROP NOT NULL`).catch(() => {});
+    // Old site import fields on content_keywords
+    await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS old_url TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS meta_title TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS meta_description TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS h1 TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS old_content TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS word_count INTEGER`).catch(() => {});
 
     // Content settings — tone, style, word count per project
     await client.query(`
@@ -18461,7 +18468,33 @@ WIREFRAME RULES (NON-NEGOTIABLE):
 `;
 }
 
-function buildCopywriterContext(project, item) {
+// Fetch old site content from imported URLs for a project or item context
+async function getOldSiteContent(projectId, buildId, pageName) {
+  try {
+    const col = buildId ? 'build_id' : 'project_id';
+    const val = buildId || projectId;
+    if (!val) return '';
+    const r = await pool.query(
+      `SELECT keyword, old_url, meta_title, meta_description, h1, old_content FROM content_keywords WHERE ${col}=$1 AND old_content IS NOT NULL AND old_content != '' ORDER BY keyword`,
+      [val]
+    );
+    if (r.rows.length === 0) return '';
+    // Best match: keyword matches page name
+    const matches = pageName ? r.rows.filter(k => k.keyword && pageName && k.keyword.toLowerCase().includes(pageName.toLowerCase())) : [];
+    const relevant = matches.length > 0 ? matches : r.rows;
+    return relevant.slice(0, 3).map(k => {
+      const parts = [`--- Old Page: "${k.meta_title || k.keyword}" ---`];
+      if (k.old_url) parts.push(`URL: ${k.old_url}`);
+      if (k.meta_title) parts.push(`Meta Title: ${k.meta_title}`);
+      if (k.meta_description) parts.push(`Meta Description: ${k.meta_description}`);
+      if (k.h1) parts.push(`H1: ${k.h1}`);
+      if (k.old_content) parts.push(`Content:\n${k.old_content.substring(0, 5000)}`);
+      return parts.join('\n');
+    }).join('\n\n');
+  } catch (e) { console.warn('[getOldSiteContent] Error:', e.message); return ''; }
+}
+
+function buildCopywriterContext(project, item, oldSiteContent) {
   const parts = [];
   if (project.tone_of_voice) {
     parts.push(`TONE OF VOICE (MUST follow strictly):
@@ -18505,6 +18538,12 @@ ${project.nw_notes}`);
     }).join('\n\n');
     parts.push(`LINKED REFERENCE DOCUMENTS (existing copy, feedback, or guides the team shared — use as context and match their style/tone):
 ${docsContext}`);
+  }
+
+  // Old site content (imported URLs) — passed in by caller
+  if (oldSiteContent) {
+    parts.push(`OLD WEBSITE CONTENT (use as reference — preserve key messaging, improve SEO and readability):
+${oldSiteContent}`);
   }
 
   // Always add human writing rules — comprehensive anti-AI-detection
@@ -19008,6 +19047,9 @@ app.post('/api/projects/:projectId/content-queue/:id/generate-draft', async (req
     if (!item) return res.status(404).json({ error: 'Not found' });
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
 
+    // Load old site content from imported URLs
+    const _oldSiteContent = await getOldSiteContent(projectId, null, item.page_title);
+
     // If page has parsed sections, redirect client to use section-aware generation
     if (item.page_sections && item.page_sections.length > 0) {
       console.log(`[generate-draft] Item has ${item.page_sections.length} sections — client should use generate-sections`);
@@ -19062,7 +19104,7 @@ RULES:
 ${HUMAN_WRITING_RULES}
 
 Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "ai_notes": "Brief strategy summary"}
-${buildCopywriterContext(project, item)}`;
+${buildCopywriterContext(project, item, _oldSiteContent)}`;
 
       userPrompt = `Rewrite this page for better SEO performance:
 
@@ -19082,7 +19124,7 @@ ${(currentContent || '').slice(0, 3000)}`;
     } else if (item.content_type === 'meta_only') {
       systemPrompt = `You are an expert SEO copywriter. Write optimized meta tags for a local Australian business page.
 Return JSON: {"meta_title": "<50-60 chars with keyword>", "meta_description": "<140-155 chars with CTA>", "focus_keyword": "<primary keyword>"}
-${buildCopywriterContext(project, item)}`;
+${buildCopywriterContext(project, item, _oldSiteContent)}`;
       userPrompt = `Write optimized meta tags for:
 Page: ${item.page_title} (${item.page_url})
 Business: ${project.business_name || project.name} in ${project.location || 'Australia'}
@@ -19108,7 +19150,7 @@ RULES:
 ${HUMAN_WRITING_RULES}
 
 Return JSON: {"content": "<html content>", "meta_title": "<50-60 chars>", "meta_description": "<140-155 chars>", "focus_keyword": "<primary keyword>", "word_count": <number>, "internal_links": ["url1", "url2", ...], "schema_markup": {optional JSON-LD}, "ai_notes": "Strategy summary"}
-${buildCopywriterContext(project, item)}`;
+${buildCopywriterContext(project, item, _oldSiteContent)}`;
       userPrompt = `Write a new page:
 Title: ${item.page_title}
 Target URL: ${item.page_url || '(to be determined)'}
@@ -24774,6 +24816,112 @@ app.post('/api/projects/:projectId/content-keywords/bulk-delete', async (req, re
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Import URLs from old website — fetch page, extract meta/content, save as keywords
+app.post(['/api/projects/:id/content-keywords/import-urls', '/api/builds/:id/content-keywords/import-urls'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const isProject = !req.path.includes('/builds/');
+    const { urls } = req.body;
+    if (!Array.isArray(urls) || urls.length === 0) return res.status(400).json({ error: 'No URLs provided' });
+    if (urls.length > 50) return res.status(400).json({ error: 'Maximum 50 URLs per import' });
+
+    const results = [];
+    for (const rawUrl of urls) {
+      const url = rawUrl.trim();
+      if (!url || !url.startsWith('http')) { results.push({ url, status: 'skipped', error: 'Invalid URL' }); continue; }
+
+      try {
+        const resp = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 SEORoom-Import/5.0' },
+          redirect: 'follow', signal: AbortSignal.timeout(15000)
+        });
+        if (!resp.ok) { results.push({ url, status: 'error', error: `HTTP ${resp.status}` }); continue; }
+        const html = await resp.text();
+
+        // Extract title
+        const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        let pageTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+
+        // Extract meta tags
+        let metaTitle = '';
+        const ogTitle = html.match(/<meta\s+(?:property="og:title")\s+content="([^"]*?)"/i);
+        if (ogTitle) metaTitle = ogTitle[1];
+        else metaTitle = pageTitle;
+
+        const metaDescMatch = html.match(/<meta\s+name="description"\s+content="([^"]*?)"/i);
+        const metaDesc = metaDescMatch ? metaDescMatch[1] : '';
+
+        // Extract H1
+        const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+        const h1 = h1Match ? h1Match[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : '';
+
+        // Extract focus keyword (Yoast, RankMath, or meta keywords)
+        let focusKw = '';
+        const yoastKw = html.match(/<meta\s+name="(?:keywords)"\s+content="([^"]*?)"/i);
+        if (yoastKw) focusKw = yoastKw[1];
+        // Try Yoast JSON-LD focuskw
+        const yoastJson = html.match(/"focuskw"\s*:\s*"([^"]*?)"/);
+        if (yoastJson && !focusKw) focusKw = yoastJson[1];
+
+        // Extract main content text
+        const region = (html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
+                        html.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+                        html.match(/<div[^>]*class="[^"]*(?:entry-content|elementor)[^"]*"[^>]*>([\s\S]*)<\/div>/i) ||
+                        [null, html])[1] || html;
+        const cleaned = region
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+          .replace(/<header[\s\S]*?<\/header>/gi, '')
+          .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+          .replace(/<form[\s\S]*?<\/form>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#8217;|&rsquo;|&#039;/g, "'")
+          .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;|&quot;/g, '"')
+          .replace(/\s+/g, ' ').trim();
+        const contentText = cleaned.substring(0, 30000);
+        const wordCount = contentText.split(/\s+/).filter(w => w.length > 0).length;
+
+        // Use focus keyword or H1 or meta title as the keyword
+        const keyword = focusKw || h1 || metaTitle || pageTitle || url;
+
+        // Guess page type from URL
+        let pageType = 'unassigned';
+        const urlLower = url.toLowerCase();
+        if (urlLower.match(/\/(home|index\.html?)?$/)) pageType = 'home';
+        else if (urlLower.match(/\/(about|contact|team|faq|privacy|terms)/)) pageType = 'unassigned';
+        else if (urlLower.match(/\/(blog|news|article|post)/)) pageType = 'blog';
+        else if (urlLower.match(/\/(suburb|area|location|region)/)) pageType = 'suburb';
+        else pageType = 'service';
+
+        // Check duplicate by old_url
+        const table = 'content_keywords';
+        const projectCol = isProject ? 'project_id' : 'build_id';
+        const existing = await pool.query(`SELECT id FROM ${table} WHERE ${projectCol}=$1 AND old_url=$2`, [id, url]);
+        if (existing.rows.length > 0) { results.push({ url, status: 'skipped', error: 'Already imported' }); continue; }
+
+        const r = await pool.query(
+          `INSERT INTO content_keywords (${isProject ? 'project_id' : 'build_id'}, keyword, page_type, old_url, meta_title, meta_description, h1, old_content, word_count)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, keyword, page_type, old_url, meta_title, meta_description, h1, word_count`,
+          [id, keyword.substring(0, 200), pageType, url, metaTitle.substring(0, 200), metaDesc.substring(0, 500), h1.substring(0, 200), contentText, wordCount]
+        );
+        results.push({ url, status: 'imported', keyword: r.rows[0] });
+      } catch (e) {
+        results.push({ url, status: 'error', error: e.message.substring(0, 100) });
+      }
+    }
+
+    const imported = results.filter(r => r.status === 'imported').length;
+    const skipped = results.filter(r => r.status === 'skipped').length;
+    const errors = results.filter(r => r.status === 'error').length;
+    console.log(`[import-urls] ${imported} imported, ${skipped} skipped, ${errors} errors for ${isProject ? 'project' : 'build'} ${id}`);
+    res.json({ success: true, imported, skipped, errors, results });
+  } catch (e) {
+    console.error('[import-urls] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ==================== KEYWORD RESEARCH (DataForSEO + SerpAPI) ====================
 
 // Australian location codes for DataForSEO (Google Ads location IDs)
@@ -25736,6 +25884,30 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
       ? '\nLINKED REFERENCE DOCUMENTS:\n' + buildLinkedDocs.map(d => `--- "${d.title}"${d.label ? ' (' + d.label + ')' : ''} ---\n${(d.content || '').substring(0, 4000)}`).join('\n\n')
       : '';
 
+    // Old site content from imported URLs (match by page_name or page_type)
+    let oldSiteContext = '';
+    try {
+      const oldKws = await pool.query(
+        `SELECT keyword, old_url, meta_title, meta_description, h1, old_content, word_count FROM content_keywords WHERE build_id=$1 AND old_content IS NOT NULL AND old_content != '' ORDER BY keyword`,
+        [buildId]
+      );
+      if (oldKws.rows.length > 0) {
+        // Find best match: same page_name, else same page_type, else include all
+        const exactMatch = oldKws.rows.filter(k => k.keyword && page.page_name && k.keyword.toLowerCase().includes(page.page_name.toLowerCase()));
+        const relevantOld = exactMatch.length > 0 ? exactMatch : oldKws.rows;
+        oldSiteContext = '\nOLD WEBSITE CONTENT (use as reference — preserve key messaging, improve SEO and readability):\n' +
+          relevantOld.slice(0, 3).map(k => {
+            let parts = [`--- Old Page: "${k.meta_title || k.keyword}" ---`];
+            if (k.old_url) parts.push(`URL: ${k.old_url}`);
+            if (k.meta_title) parts.push(`Meta Title: ${k.meta_title}`);
+            if (k.meta_description) parts.push(`Meta Description: ${k.meta_description}`);
+            if (k.h1) parts.push(`H1: ${k.h1}`);
+            if (k.old_content) parts.push(`Content:\n${k.old_content.substring(0, 5000)}`);
+            return parts.join('\n');
+          }).join('\n\n');
+      }
+    } catch (e) { console.warn('[build-gen] Old site content lookup error:', e.message); }
+
     // Build full brief text for strict compliance
     let fullBriefText = '';
     if (build.brief_raw_text) fullBriefText = build.brief_raw_text;
@@ -25778,6 +25950,7 @@ ${briefPageContent}
 ${aiNotes}
 ${additionalInfo}
 ${linkedDocsContext}
+${oldSiteContext}
 
 INTERNAL LINKS TO INCLUDE:
 ${linksContext || 'No internal links planned.'}
@@ -26035,6 +26208,29 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
     // Additional info from project settings (existing copy, client feedback, etc.)
     const projAdditionalInfo = project.nw_notes ? `\nADDITIONAL CONTEXT FROM THE TEAM:\n${project.nw_notes}` : '';
 
+    // Old site content from imported URLs
+    let projOldSiteContext = '';
+    try {
+      const oldKws = await pool.query(
+        `SELECT keyword, old_url, meta_title, meta_description, h1, old_content FROM content_keywords WHERE project_id=$1 AND old_content IS NOT NULL AND old_content != '' ORDER BY keyword`,
+        [project.id]
+      );
+      if (oldKws.rows.length > 0) {
+        const exactMatch = oldKws.rows.filter(k => k.keyword && page.page_name && k.keyword.toLowerCase().includes(page.page_name.toLowerCase()));
+        const relevantOld = exactMatch.length > 0 ? exactMatch : oldKws.rows;
+        projOldSiteContext = '\nOLD WEBSITE CONTENT (use as reference — preserve key messaging, improve SEO and readability):\n' +
+          relevantOld.slice(0, 3).map(k => {
+            let parts = [`--- Old Page: "${k.meta_title || k.keyword}" ---`];
+            if (k.old_url) parts.push(`URL: ${k.old_url}`);
+            if (k.meta_title) parts.push(`Meta Title: ${k.meta_title}`);
+            if (k.meta_description) parts.push(`Meta Description: ${k.meta_description}`);
+            if (k.h1) parts.push(`H1: ${k.h1}`);
+            if (k.old_content) parts.push(`Content:\n${k.old_content.substring(0, 5000)}`);
+            return parts.join('\n');
+          }).join('\n\n');
+      }
+    } catch (e) { console.warn('[proj-gen] Old site content lookup error:', e.message); }
+
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
@@ -26044,6 +26240,7 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
 
 CRITICAL: The page topic is "${page.page_name}". ALL content, the H1, meta title, and meta description MUST be specifically about "${page.page_name}". Do NOT write generic content about the business — write specifically about this topic.
 ${projAdditionalInfo}
+${projOldSiteContext}
 ${wireframeContext}
 PAGE TOPIC: "${page.page_name}" (${page.page_type})
 FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}

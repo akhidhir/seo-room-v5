@@ -16195,6 +16195,11 @@
       var [selectedKws, setSelectedKws] = useState(new Set());
       var [saving, setSaving] = useState(false);
       var [deleting, setDeleting] = useState(false);
+      var [showImportUrls, setShowImportUrls] = useState(false);
+      var [importUrlText, setImportUrlText] = useState('');
+      var [importing, setImporting] = useState(false);
+      var [importResults, setImportResults] = useState(null);
+      var [expandedKw, setExpandedKw] = useState(null);
 
       var pid = project ? project.id : null;
       var apiPrefix = project?.build_id ? '/builds/' + project.build_id : '/projects/' + pid;
@@ -16300,6 +16305,21 @@
         setDeleting(false);
       };
 
+      var handleImportUrls = async function() {
+        var urls = importUrlText.split(/[\n\r]+/).map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0 && u.startsWith('http'); });
+        if (urls.length === 0) { alert('No valid URLs found. Each URL must start with http:// or https://'); return; }
+        setImporting(true);
+        setImportResults(null);
+        try {
+          var data = await api(apiPrefix + '/content-keywords/import-urls', {
+            method: 'POST', body: { urls: urls }
+          });
+          setImportResults(data);
+          if (data.imported > 0) await loadKeywords();
+        } catch (e) { alert('Error: ' + e.message); }
+        setImporting(false);
+      };
+
       var toggleSelectKw = function(id) {
         setSelectedKws(function(prev) {
           var s = new Set(prev);
@@ -16352,6 +16372,13 @@
               'Delete ' + selectedKws.size
             ),
             React.createElement('button', {
+              className: 'btn', onClick: function() { setShowImportUrls(true); },
+              style: { fontSize: 13, padding: '8px 18px', color: '#f59e0b', borderColor: '#f59e0b' }
+            },
+              React.createElement('i', { className: 'fas fa-globe', style: { marginRight: 6 } }),
+              'Import URLs'
+            ),
+            React.createElement('button', {
               className: 'btn btn-primary', onClick: function() { setShowUpload(true); },
               style: { fontSize: 13, padding: '8px 18px' }
             },
@@ -16392,26 +16419,74 @@
               )
             : React.createElement('div', null,
                 // Table header
-                React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '30px 2fr 1fr 100px', gap: 8, padding: '8px 12px', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } },
+                React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '30px 2fr 1fr 80px 100px', gap: 8, padding: '8px 12px', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } },
                   React.createElement('input', { type: 'checkbox', checked: selectedKws.size === keywords.length && keywords.length > 0, onChange: selectAllKws }),
                   React.createElement('span', null, 'Keyword'),
                   React.createElement('span', null, 'Page Type'),
+                  React.createElement('span', null, 'Source'),
                   React.createElement('span', null, 'Actions')
                 ),
                 // Rows
                 keywords.map(function(kw) {
                   var c = pageTypeColors[kw.page_type || 'unassigned'];
-                  return React.createElement('div', { key: kw.id, style: { display: 'grid', gridTemplateColumns: '30px 2fr 1fr 100px', gap: 8, padding: '10px 12px', background: selectedKws.has(kw.id) ? 'rgba(99,102,241,0.1)' : 'var(--card)', borderRadius: 6, border: '1px solid ' + (selectedKws.has(kw.id) ? 'var(--accent)' : 'var(--border)'), marginBottom: 2, alignItems: 'center', fontSize: 13 } },
-                    React.createElement('input', { type: 'checkbox', checked: selectedKws.has(kw.id), onChange: function() { toggleSelectKw(kw.id); } }),
-                    React.createElement('span', { style: { fontWeight: 500 } }, kw.keyword),
-                    React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', background: c.bg, color: c.color, border: '1px solid ' + c.border, display: 'inline-block' } }, pageTypeLabel(kw.page_type || 'unassigned')),
-                    React.createElement('button', {
-                      className: 'btn', style: { fontSize: 10, padding: '3px 8px', color: '#ef4444', borderColor: '#ef4444' },
-                      onClick: async function() {
-                        await api(apiPrefix + '/content-keywords/' + kw.id, { method: 'DELETE' });
-                        loadKeywords();
-                      }
-                    }, React.createElement('i', { className: 'fas fa-trash' }))
+                  var isExpanded = expandedKw === kw.id;
+                  var hasOldUrl = !!kw.old_url;
+                  return React.createElement('div', { key: kw.id, style: { marginBottom: 2 } },
+                    React.createElement('div', {
+                      style: { display: 'grid', gridTemplateColumns: '30px 2fr 1fr 80px 100px', gap: 8, padding: '10px 12px', background: selectedKws.has(kw.id) ? 'rgba(99,102,241,0.1)' : 'var(--card)', borderRadius: isExpanded ? '6px 6px 0 0' : 6, border: '1px solid ' + (selectedKws.has(kw.id) ? 'var(--accent)' : 'var(--border)'), alignItems: 'center', fontSize: 13, cursor: hasOldUrl ? 'pointer' : 'default' },
+                      onClick: function(e) { if (e.target.type === 'checkbox' || e.target.closest('button')) return; if (hasOldUrl) setExpandedKw(isExpanded ? null : kw.id); }
+                    },
+                      React.createElement('input', { type: 'checkbox', checked: selectedKws.has(kw.id), onChange: function() { toggleSelectKw(kw.id); } }),
+                      React.createElement('div', null,
+                        React.createElement('span', { style: { fontWeight: 500 } }, kw.keyword),
+                        hasOldUrl && React.createElement('i', { className: 'fas fa-chevron-' + (isExpanded ? 'up' : 'down'), style: { marginLeft: 8, fontSize: 10, color: 'var(--text3)' } })
+                      ),
+                      React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', background: c.bg, color: c.color, border: '1px solid ' + c.border, display: 'inline-block' } }, pageTypeLabel(kw.page_type || 'unassigned')),
+                      React.createElement('span', { style: { fontSize: 10, color: hasOldUrl ? '#f59e0b' : 'var(--text3)' } },
+                        hasOldUrl
+                          ? React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+                              React.createElement('i', { className: 'fas fa-globe', style: { fontSize: 9 } }),
+                              'Imported'
+                            )
+                          : 'Manual'
+                      ),
+                      React.createElement('button', {
+                        className: 'btn', style: { fontSize: 10, padding: '3px 8px', color: '#ef4444', borderColor: '#ef4444' },
+                        onClick: async function() {
+                          await api(apiPrefix + '/content-keywords/' + kw.id, { method: 'DELETE' });
+                          loadKeywords();
+                        }
+                      }, React.createElement('i', { className: 'fas fa-trash' }))
+                    ),
+                    // Expanded detail row for imported URLs
+                    isExpanded && hasOldUrl && React.createElement('div', { style: { background: 'rgba(245,158,11,0.05)', border: '1px solid var(--border)', borderTop: 'none', borderRadius: '0 0 6px 6px', padding: '12px 16px', fontSize: 12 } },
+                      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 } },
+                        React.createElement('div', null,
+                          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } }, 'Source URL'),
+                          React.createElement('a', { href: kw.old_url, target: '_blank', style: { color: '#3b82f6', wordBreak: 'break-all', fontSize: 11 } }, kw.old_url)
+                        ),
+                        React.createElement('div', null,
+                          React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 } }, 'Word Count'),
+                          React.createElement('span', { style: { color: 'var(--text2)' } }, kw.word_count ? kw.word_count.toLocaleString() + ' words' : 'N/A')
+                        )
+                      ),
+                      kw.meta_title && React.createElement('div', { style: { marginTop: 8 } },
+                        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 2 } }, 'Meta Title'),
+                        React.createElement('div', { style: { color: '#3b82f6', fontSize: 13 } }, kw.meta_title)
+                      ),
+                      kw.meta_description && React.createElement('div', { style: { marginTop: 8 } },
+                        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 2 } }, 'Meta Description'),
+                        React.createElement('div', { style: { color: 'var(--text2)', fontSize: 12, lineHeight: 1.4 } }, kw.meta_description)
+                      ),
+                      kw.h1 && React.createElement('div', { style: { marginTop: 8 } },
+                        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 2 } }, 'H1'),
+                        React.createElement('div', { style: { color: 'var(--text2)', fontWeight: 500 } }, kw.h1)
+                      ),
+                      kw.old_content && React.createElement('div', { style: { marginTop: 8 } },
+                        React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 2 } }, 'Content Preview'),
+                        React.createElement('div', { style: { color: 'var(--text3)', fontSize: 11, lineHeight: 1.4, maxHeight: 80, overflow: 'hidden', textOverflow: 'ellipsis' } }, kw.old_content.substring(0, 500) + (kw.old_content.length > 500 ? '...' : ''))
+                      )
+                    )
                   );
                 })
               ),
@@ -16538,6 +16613,91 @@
                       React.createElement('i', { className: 'fas fa-check', style: { marginRight: 6 } }),
                       'Confirm ' + parsedKeywords.filter(function(k) { return k.trim(); }).length + ' Keywords'
                     )
+              )
+            )
+          )
+        ),
+
+        // Import URLs modal
+        showImportUrls && React.createElement('div', { style: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }, onClick: function() { if (!importing) { setShowImportUrls(false); setImportResults(null); setImportUrlText(''); } } },
+          React.createElement('div', { style: { background: 'var(--card)', borderRadius: 12, padding: 24, maxWidth: 650, width: '90%', maxHeight: '85vh', overflow: 'auto', border: '1px solid var(--border)' }, onClick: function(e) { e.stopPropagation(); } },
+            React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+              React.createElement('h3', { style: { margin: 0, fontSize: 18, fontWeight: 700 } },
+                React.createElement('i', { className: 'fas fa-globe', style: { marginRight: 8, color: '#f59e0b' } }),
+                'Import from Old Website'
+              ),
+              React.createElement('button', { onClick: function() { if (!importing) { setShowImportUrls(false); setImportResults(null); setImportUrlText(''); } }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 } },
+                React.createElement('i', { className: 'fas fa-times' })
+              )
+            ),
+
+            React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 } },
+              'Paste URLs from the old website (one per line). We\'ll fetch each page and extract the meta title, meta description, H1, focus keyword, and page content. This data feeds into the AI copywriter when writing new content.'
+            ),
+
+            !importResults && React.createElement('div', null,
+              React.createElement('textarea', {
+                value: importUrlText,
+                onChange: function(e) { setImportUrlText(e.target.value); },
+                placeholder: 'https://oldsite.com.au/\nhttps://oldsite.com.au/plumbing-services/\nhttps://oldsite.com.au/hot-water-systems/\nhttps://oldsite.com.au/blocked-drains/',
+                rows: 8,
+                disabled: importing,
+                style: { width: '100%', padding: 10, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, resize: 'vertical', boxSizing: 'border-box', fontFamily: 'monospace' }
+              }),
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 } },
+                React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } },
+                  importUrlText.trim() ? importUrlText.split(/[\n\r]+/).filter(function(u) { return u.trim().startsWith('http'); }).length + ' URLs detected' : ''
+                ),
+                React.createElement('button', {
+                  className: 'btn btn-primary', onClick: handleImportUrls,
+                  disabled: importing || !importUrlText.trim(),
+                  style: { fontSize: 13, padding: '8px 20px' }
+                },
+                  importing
+                    ? React.createElement('span', null, React.createElement('span', { className: 'spinner', style: { marginRight: 6 } }), 'Importing...')
+                    : React.createElement('span', null, React.createElement('i', { className: 'fas fa-download', style: { marginRight: 6 } }), 'Import & Extract')
+                )
+              )
+            ),
+
+            // Import results
+            importResults && React.createElement('div', null,
+              React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 16 } },
+                React.createElement('div', { style: { flex: 1, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 8, padding: '10px 14px', textAlign: 'center' } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#22c55e' } }, importResults.imported),
+                  React.createElement('div', { style: { fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: '#22c55e' } }, 'Imported')
+                ),
+                React.createElement('div', { style: { flex: 1, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '10px 14px', textAlign: 'center' } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#f59e0b' } }, importResults.skipped),
+                  React.createElement('div', { style: { fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: '#f59e0b' } }, 'Skipped')
+                ),
+                React.createElement('div', { style: { flex: 1, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '10px 14px', textAlign: 'center' } },
+                  React.createElement('div', { style: { fontSize: 22, fontWeight: 700, color: '#ef4444' } }, importResults.errors),
+                  React.createElement('div', { style: { fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: '#ef4444' } }, 'Errors')
+                )
+              ),
+              // Per-URL results
+              React.createElement('div', { style: { maxHeight: 300, overflowY: 'auto', marginBottom: 16 } },
+                (importResults.results || []).map(function(r, i) {
+                  var icon = r.status === 'imported' ? 'fas fa-check-circle' : r.status === 'skipped' ? 'fas fa-minus-circle' : 'fas fa-times-circle';
+                  var color = r.status === 'imported' ? '#22c55e' : r.status === 'skipped' ? '#f59e0b' : '#ef4444';
+                  return React.createElement('div', { key: i, style: { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12 } },
+                    React.createElement('i', { className: icon, style: { color: color, marginTop: 2, flexShrink: 0 } }),
+                    React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                      React.createElement('div', { style: { color: 'var(--text2)', wordBreak: 'break-all', fontSize: 11 } }, r.url),
+                      r.status === 'imported' && r.keyword && React.createElement('div', { style: { color: 'var(--text3)', fontSize: 11, marginTop: 2 } },
+                        'Keyword: ' + r.keyword.keyword + ' | ' + (r.keyword.meta_title || 'No meta title') + ' | ' + r.keyword.word_count + ' words'
+                      ),
+                      r.error && React.createElement('div', { style: { color: '#ef4444', fontSize: 11, marginTop: 2 } }, r.error)
+                    )
+                  );
+                })
+              ),
+              React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
+                React.createElement('button', {
+                  className: 'btn btn-primary', onClick: function() { setShowImportUrls(false); setImportResults(null); setImportUrlText(''); },
+                  style: { fontSize: 13, padding: '8px 20px' }
+                }, 'Done')
               )
             )
           )
