@@ -16441,7 +16441,24 @@
                         React.createElement('span', { style: { fontWeight: 500 } }, kw.keyword),
                         hasOldUrl && React.createElement('i', { className: 'fas fa-chevron-' + (isExpanded ? 'up' : 'down'), style: { marginLeft: 8, fontSize: 10, color: 'var(--text3)' } })
                       ),
-                      React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', background: c.bg, color: c.color, border: '1px solid ' + c.border, display: 'inline-block' } }, pageTypeLabel(kw.page_type || 'unassigned')),
+                      React.createElement('select', {
+                        value: kw.page_type || 'unassigned',
+                        onClick: function(e) { e.stopPropagation(); },
+                        onChange: async function(e) {
+                          var newType = e.target.value;
+                          try {
+                            await api(apiPrefix + '/content-keywords/assign-individual', {
+                              method: 'PUT', body: { keyword_ids: [kw.id], page_type: newType }
+                            });
+                            loadKeywords();
+                          } catch (err) { alert('Error: ' + err.message); }
+                        },
+                        style: { fontSize: 11, padding: '3px 6px', borderRadius: 4, fontWeight: 600, textTransform: 'uppercase', background: c.bg, color: c.color, border: '1px solid ' + c.border, cursor: 'pointer', outline: 'none' }
+                      },
+                        ['unassigned', 'home', 'service', 'suburb', 'blog'].map(function(pt) {
+                          return React.createElement('option', { key: pt, value: pt, style: { background: 'var(--card)', color: 'var(--text)' } }, pageTypeLabel(pt));
+                        })
+                      ),
                       React.createElement('span', { style: { fontSize: 10, color: hasOldUrl ? '#f59e0b' : 'var(--text3)' } },
                         hasOldUrl
                           ? React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
