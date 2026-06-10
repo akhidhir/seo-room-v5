@@ -2175,10 +2175,43 @@ function generateContentRecommendations(summary, grammarErrors, keyword) {
   return recs;
 }
 
-// Site pages and keywords for a build (same structure, build_id instead of project_id)
+// Site pages and keywords for a build — auto-backfill meta from imported content_keywords
 app.get('/api/builds/:buildId/site-pages', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM site_pages WHERE build_id=$1 ORDER BY is_cornerstone DESC, page_type, page_name', [req.params.buildId]);
+    const buildId = req.params.buildId;
+    // Auto-backfill: update site_pages that have empty meta fields from imported content_keywords
+    await pool.query(`
+      UPDATE site_pages sp SET
+        slug = COALESCE(NULLIF(sp.slug, ''), (
+          SELECT regexp_replace(regexp_replace(ck.old_url, '^https?://[^/]+', ''), '/$', '')
+          FROM content_keywords ck
+          WHERE ck.build_id = sp.build_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
+          LIMIT 1
+        ), sp.slug),
+        meta_title = COALESCE(NULLIF(sp.meta_title, ''), (
+          SELECT ck.meta_title FROM content_keywords ck
+          WHERE ck.build_id = sp.build_id AND ck.page_name = sp.page_name AND ck.meta_title IS NOT NULL
+          LIMIT 1
+        ), sp.meta_title),
+        meta_description = COALESCE(NULLIF(sp.meta_description, ''), (
+          SELECT ck.meta_description FROM content_keywords ck
+          WHERE ck.build_id = sp.build_id AND ck.page_name = sp.page_name AND ck.meta_description IS NOT NULL
+          LIMIT 1
+        ), sp.meta_description),
+        focus_keyword = COALESCE(NULLIF(sp.focus_keyword, ''), (
+          SELECT COALESCE(ck.h1, ck.keyword) FROM content_keywords ck
+          WHERE ck.build_id = sp.build_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
+          LIMIT 1
+        ), sp.focus_keyword)
+      WHERE sp.build_id = $1
+        AND EXISTS (
+          SELECT 1 FROM content_keywords ck
+          WHERE ck.build_id = sp.build_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
+        )
+        AND (sp.meta_title IS NULL OR sp.meta_title = '' OR sp.meta_description IS NULL OR sp.meta_description = '' OR sp.slug IS NULL OR sp.slug = '')
+    `, [buildId]);
+
+    const result = await pool.query('SELECT * FROM site_pages WHERE build_id=$1 ORDER BY is_cornerstone DESC, page_type, page_name', [buildId]);
     res.json(result.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -25811,12 +25844,45 @@ app.post('/api/projects/:projectId/site-pages/quick-create', async (req, res) =>
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Get all site pages for a project
+// Get all site pages for a project — auto-backfill meta from imported content_keywords
 app.get('/api/projects/:projectId/site-pages', async (req, res) => {
   try {
+    const projectId = req.params.projectId;
+    // Auto-backfill: update site_pages that have empty meta fields from imported content_keywords
+    await pool.query(`
+      UPDATE site_pages sp SET
+        slug = COALESCE(NULLIF(sp.slug, ''), (
+          SELECT regexp_replace(regexp_replace(ck.old_url, '^https?://[^/]+', ''), '/$', '')
+          FROM content_keywords ck
+          WHERE ck.project_id = sp.project_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
+          LIMIT 1
+        ), sp.slug),
+        meta_title = COALESCE(NULLIF(sp.meta_title, ''), (
+          SELECT ck.meta_title FROM content_keywords ck
+          WHERE ck.project_id = sp.project_id AND ck.page_name = sp.page_name AND ck.meta_title IS NOT NULL
+          LIMIT 1
+        ), sp.meta_title),
+        meta_description = COALESCE(NULLIF(sp.meta_description, ''), (
+          SELECT ck.meta_description FROM content_keywords ck
+          WHERE ck.project_id = sp.project_id AND ck.page_name = sp.page_name AND ck.meta_description IS NOT NULL
+          LIMIT 1
+        ), sp.meta_description),
+        focus_keyword = COALESCE(NULLIF(sp.focus_keyword, ''), (
+          SELECT COALESCE(ck.h1, ck.keyword) FROM content_keywords ck
+          WHERE ck.project_id = sp.project_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
+          LIMIT 1
+        ), sp.focus_keyword)
+      WHERE sp.project_id = $1
+        AND EXISTS (
+          SELECT 1 FROM content_keywords ck
+          WHERE ck.project_id = sp.project_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
+        )
+        AND (sp.meta_title IS NULL OR sp.meta_title = '' OR sp.meta_description IS NULL OR sp.meta_description = '' OR sp.slug IS NULL OR sp.slug = '')
+    `, [projectId]);
+
     const result = await pool.query(
       'SELECT * FROM site_pages WHERE project_id=$1 ORDER BY is_cornerstone DESC, page_type, page_name',
-      [req.params.projectId]
+      [projectId]
     );
     res.json(result.rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
