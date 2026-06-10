@@ -18036,6 +18036,15 @@
             },
             style: { padding: '8px 16px', background: '#059669', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }
           }, React.createElement('i', { className: 'fa-solid fa-eye', style: { marginRight: 6 } }), 'Preview (Design-Safe)'),
+          // Regenerate — full AI regeneration using wireframe template
+          hasDraft && !isPublished && React.createElement('button', {
+            disabled: generating,
+            onClick: function() {
+              if (!confirm('Regenerate content from scratch using the wireframe template? This will replace all current content.')) return;
+              handleGenerate();
+            },
+            style: { padding: '8px 16px', background: generating ? 'var(--bg3)' : '#7c3aed', color: '#fff', border: 'none', borderRadius: 8, cursor: generating ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+          }, React.createElement('i', { className: generating ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-rotate', style: { marginRight: 6 } }), generating ? 'Generating...' : 'Regenerate'),
           // Import Current Copy
           !isPublished && (page.page_url || page.published_url || pageUrl) && React.createElement('button', {
             onClick: handleImportCurrent, disabled: importingCurrent,
