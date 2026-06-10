@@ -29,7 +29,7 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'https://seo-room
 const GSC_SCOPES = 'https://www.googleapis.com/auth/webmasters.readonly';
 const GBP_SCOPES = 'https://www.googleapis.com/auth/business.manage';
 const GBP_REDIRECT_URI = process.env.GBP_REDIRECT_URI || 'https://seo-room-v5-production.up.railway.app/api/gbp/callback';
-const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file email';
 const DRIVE_REDIRECT_URI = process.env.DRIVE_REDIRECT_URI || 'https://seo-room-v5-production.up.railway.app/api/drive/callback';
 
 // External APIs
