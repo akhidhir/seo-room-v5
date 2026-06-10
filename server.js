@@ -22156,17 +22156,39 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
           let draftIdx = 0;
           topSections.each((idx, section) => {
             const $section = $(section);
-            const wfInfo = wfSections[idx]; // wireframe metadata for this section
 
-            // Skip locked sections (forms, maps, CTA bars, carousels, accreditations)
-            if (wfInfo && wfInfo.locked) return;
+            // Detect section content type for smart skipping
+            const headingTexts = [];
+            $section.find('.elementor-heading-title').each((_, h) => { headingTexts.push($(h).text().trim().toUpperCase()); });
+            const allHeadingText = headingTexts.join(' ');
+            const hasForm = $section.find('form, .elementor-widget-form').length > 0;
+            const hasMap = $section.find('iframe[src*="maps"], .elementor-widget-google_maps').length > 0;
+            const hasTextEditor = $section.find('.elementor-widget-text-editor').length > 0;
+            const hasHeading = headingTexts.length > 0;
+            const hasImageCarousel = $section.find('.elementor-widget-image-carousel, .elementor-widget-media-carousel').length > 0;
 
-            // Also skip sections that have forms, iframes, or image carousels (auto-detect even without wireframe metadata)
-            if ($section.find('form, iframe, .elementor-widget-form, .elementor-widget-google_maps').length > 0) return;
+            // SKIP: CTA bars — identified by "CALL US NOW" / "PHONE NUMBER" / phone-like patterns
+            const isCta = /CALL US|PHONE NUMBER|CALL NOW|GET A QUOTE|BOOK NOW|CONTACT US TODAY|FREE QUOTE|REQUEST A QUOTE/.test(allHeadingText);
+            if (isCta) { console.log(`[preview-sp] Section ${idx}: SKIP (CTA bar: "${allHeadingText.slice(0,40)}")`); return; }
 
-            // Check if this section has any text widgets to inject into
-            const hasTextWidget = $section.find('.elementor-heading-title, .elementor-widget-text-editor').length > 0;
-            if (!hasTextWidget) return;
+            // SKIP: Map-only sections
+            if (hasMap && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (map-only)`); return; }
+
+            // SKIP: Form-only sections (no text-editor alongside the form)
+            if (hasForm && !hasTextEditor && headingTexts.length <= 1) { console.log(`[preview-sp] Section ${idx}: SKIP (form-only)`); return; }
+
+            // SKIP: Image carousel / accreditation sections (no text content)
+            if (hasImageCarousel && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (carousel)`); return; }
+
+            // SKIP: Services strip — sections with only icon-boxes and no text-editor
+            if ($section.find('.elementor-widget-icon-box').length >= 3 && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (icon-boxes)`); return; }
+
+            // SKIP: Sections with no heading AND no text-editor (pure visual sections)
+            if (!hasHeading && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (no text content)`); return; }
+
+            // Log which section is being injected into
+            const sectionPreview = headingTexts.slice(0, 2).join(' | ') || '(no heading)';
+            console.log(`[preview-sp] Section ${idx}: INJECT → "${sectionPreview}" (form:${hasForm}, textEd:${hasTextEditor})`);
 
             // Get next draft block
             if (draftIdx >= draftBlocks.length) return;
@@ -22177,9 +22199,22 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
             const tempDiv = cheerio.load(`<div>${draftHtml}</div>`);
             const draftH = tempDiv('h1, h2, h3').first();
 
+            // For sections with forms (like hero), target ONLY widgets NOT inside the form column
+            let $scope = $section;
+            if (hasForm) {
+              // Find columns that do NOT contain a form — inject into those only
+              const $columns = $section.find('.elementor-column');
+              if ($columns.length > 1) {
+                const $nonFormCols = $columns.filter((_, col) => $(col).find('form, .elementor-widget-form').length === 0);
+                if ($nonFormCols.length > 0) {
+                  $scope = $nonFormCols;
+                }
+              }
+            }
+
             // Replace heading widget
             if (draftH.length) {
-              const headingWidget = $section.find('.elementor-heading-title').first();
+              const headingWidget = $scope.find('.elementor-heading-title').first();
               if (headingWidget.length) {
                 headingWidget.html(draftH.html());
                 headingWidget.css('border-left', '3px solid #22c55e');
@@ -22188,17 +22223,18 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
               }
             }
 
-            // Replace text-editor widget content with remaining body
-            const textEditor = $section.find('.elementor-widget-text-editor .elementor-widget-container').first();
+            // Replace ALL text-editor widgets in scope (not just first)
+            const textEditors = $scope.find('.elementor-widget-text-editor .elementor-widget-container');
             const bodyEls = tempDiv('p, ul, ol, blockquote, h3, h4, h5, h6, details, div');
-            if (textEditor.length && bodyEls.length) {
+            if (textEditors.length && bodyEls.length) {
               let bodyHtml = '';
               bodyEls.each((_, el) => { bodyHtml += tempDiv.html(el); });
               if (bodyHtml.trim()) {
-                textEditor.html(bodyHtml);
-                textEditor.css('border-left', '3px solid #22c55e');
-                textEditor.css('padding-left', '12px');
-                textEditor.css('background', 'rgba(34,197,94,0.05)');
+                // Put all body content into the first text editor
+                textEditors.first().html(bodyHtml);
+                textEditors.first().css('border-left', '3px solid #22c55e');
+                textEditors.first().css('padding-left', '12px');
+                textEditors.first().css('background', 'rgba(34,197,94,0.05)');
               }
             }
             injected++;
