@@ -18322,6 +18322,35 @@
             ),
             React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } }, 'Optional — upload design or describe layout')
           ),
+          // Show active wireframe template from Build Settings if matching page type
+          (function() {
+            var wfTemplates = project && (project.wireframe_templates || (project.build_id && project.wireframeTemplates));
+            var matchingWf = wfTemplates && wfTemplates[page.page_type];
+            if (!matchingWf || !matchingWf.sections) return null;
+            return React.createElement('div', { style: { marginBottom: 12, padding: '10px 14px', background: '#8b5cf610', border: '1px solid #8b5cf630', borderRadius: 8 } },
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+                React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+                  React.createElement('i', { className: 'fas fa-check-circle', style: { color: '#22c55e', fontSize: 14 } }),
+                  React.createElement('span', { style: { fontSize: 12, fontWeight: 600, color: '#8b5cf6' } },
+                    (page.page_type.charAt(0).toUpperCase() + page.page_type.slice(1)) + ' wireframe template active'
+                  ),
+                  React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)', fontWeight: 500 } },
+                    matchingWf.sections.length + ' section' + (matchingWf.sections.length !== 1 ? 's' : '')
+                  )
+                ),
+                matchingWf.url && React.createElement('a', { href: matchingWf.url, target: '_blank', style: { fontSize: 10, color: '#8b5cf6', textDecoration: 'none' } },
+                  React.createElement('i', { className: 'fas fa-external-link-alt', style: { marginRight: 3 } }), 'View'
+                )
+              ),
+              React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
+                matchingWf.sections.map(function(s, i) {
+                  return React.createElement('span', { key: i, style: { fontSize: 10, padding: '2px 8px', borderRadius: 12, background: s.locked ? '#ef444420' : '#22c55e20', color: s.locked ? '#ef4444' : '#22c55e', fontWeight: 600 } },
+                    s.name + (s.word_estimate ? ' ~' + s.word_estimate + 'w' : '') + (s.locked ? ' (locked)' : '')
+                  );
+                })
+              )
+            );
+          })(),
           // Wireframe image upload + template dropdown
           React.createElement('div', { style: { display: 'flex', gap: 12, marginBottom: 10 } },
             React.createElement('button', {
