@@ -22265,6 +22265,55 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
             debugLog.push(`#${idx}: INJECT scope:${scopeNote} draft:"${draftHText}" h:${allHeadings.length}→${headingReplaced} p:${paragraphs.length}→${bodyReplaced} headings:[${headingTexts.slice(0,2).join('|')}]`);
             injected++;
           });
+
+          // === WIREFRAME PLACEHOLDER CLEANUP ===
+          // Hide wireframe template placeholders that weren't replaced by draft content
+
+          // 1. Hide icon-list widgets with "Selling point" placeholder text
+          $('[data-widget_type*="icon-list"]').each((_, el) => {
+            if (/selling point/i.test($(el).text())) {
+              const w = $(el).closest('[data-element_type="widget"]');
+              (w.length ? w : $(el)).css('display', 'none');
+            }
+          });
+
+          // 2. Hide "Logoipsum" logo strip sections
+          topSections.each((_, s) => {
+            if (/logoipsum/i.test($(s).text())) $(s).css('display', 'none');
+          });
+
+          // 3. Hide placeholder columns ("Difference 2/3/4", "Feature N", etc.)
+          // When one column got injected content, hide sibling placeholder columns and expand the injected one
+          topSections.each((_, section) => {
+            const $s = $(section);
+            const cols = $s.find('[data-element_type="column"]');
+            if (cols.length < 2) return;
+            const placeholders = [];
+            const injectedCols = [];
+            cols.each((_, col) => {
+              const $c = $(col);
+              const hasInjected = ($c.html() || '').includes('#22c55e');
+              const hTexts = [];
+              $c.find('h1,h2,h3,h4,h5,h6').each((_, h) => hTexts.push($(h).text().trim()));
+              const isPlaceholder = hTexts.some(t => /^(Difference|Feature|Service|Benefit|Point) \d/i.test(t));
+              const hasBlurb = $c.find('p').toArray().some(p => /^Blurb about/i.test($(p).text().trim()));
+              if ((isPlaceholder || hasBlurb) && !hasInjected) placeholders.push($c);
+              else if (hasInjected) injectedCols.push($c);
+            });
+            if (placeholders.length > 0 && injectedCols.length > 0) {
+              placeholders.forEach($c => $c.css('display', 'none'));
+              injectedCols.forEach($c => { $c.css('width', '100%'); $c.css('max-width', '100%'); $c.css('flex', '0 0 100%'); });
+            }
+          });
+
+          // 4. Dim suburb placeholder sections ("Group Of Suburb" / "Suburb" repeated)
+          topSections.each((_, s) => {
+            const text = $(s).text();
+            if (/Group Of Suburb/i.test(text) && (text.match(/\bSuburb\b/g) || []).length > 3) {
+              $(s).css('opacity', '0.15');
+            }
+          });
+
           console.log(`[preview-sp] Injected draft into ${injected}/${topSections.length} sections (used ${draftIdx}/${draftBlocks.length} draft blocks)`);
           console.log(`[preview-sp] Debug log:\n${debugLog.join('\n')}`);
 
@@ -26480,7 +26529,15 @@ BRIEF COMPLIANCE (NON-NEGOTIABLE):
 - NEVER invent numbers, timelines, team backgrounds, or suburb-specific claims not in the brief.
 ${wireframeContext}
 CRITICAL: The page topic is "${page.page_name}". ALL content, H1, meta title, and meta description MUST be specifically about "${page.page_name}".
-
+${page.page_type === 'suburb' ? (() => {
+  const slugParts = (page.slug || page.page_name || '').toLowerCase().replace(/[^a-z0-9-\s]/g, '').split(/[-\s]+/);
+  let suburb = '';
+  for (let i = slugParts.length - 1; i >= 0; i--) {
+    if (typeof SUBURB_GPS !== 'undefined' && SUBURB_GPS[slugParts[i]]) { suburb = slugParts[i].charAt(0).toUpperCase() + slugParts[i].slice(1); break; }
+  }
+  if (!suburb && slugParts.length > 1) suburb = slugParts[slugParts.length - 1].charAt(0).toUpperCase() + slugParts[slugParts.length - 1].slice(1);
+  return suburb ? `\nSUBURB-SPECIFIC (CRITICAL): This is a suburb landing page for "${suburb}". Use "${suburb}" as the PRIMARY location — mention "${suburb}" by name at least 5 times (H1, first paragraph, subheadings, body, CTA). Do NOT use "${build.location || 'the metro area'}" as the main location — "${suburb}" is the specific target suburb. Write as if the reader lives in ${suburb} and is searching for a local ${build.industry || 'service'} provider.\n` : '';
+})() : ''}
 PAGE TOPIC: "${page.page_name}" (${page.page_type})
 FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
 ${briefContext}
@@ -26494,7 +26551,7 @@ INTERNAL LINKS TO INCLUDE:
 ${linksContext || 'No internal links planned.'}
 
 REQUIREMENTS:
-- The H1 MUST include "${page.page_name}" or a close variation
+- The H1 MUST include "${page.page_name}" or a close variation${page.page_type === 'suburb' ? ' and the suburb name' : ''}
 - Target word count: 800-1200 words
 - Use the brand tone specified above
 - NEVER use any of the "words to avoid" listed above
@@ -26783,6 +26840,15 @@ REWRITE BODY CONTENT ONLY — use old content as reference for tone and key mess
         content: `Write a complete webpage for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
 
 CRITICAL: The page topic is "${page.page_name}". ALL content, the H1, meta title, and meta description MUST be specifically about "${page.page_name}". Do NOT write generic content about the business — write specifically about this topic.
+${page.page_type === 'suburb' ? (() => {
+  const slugParts = (page.slug || page.page_name || '').toLowerCase().replace(/[^a-z0-9-\s]/g, '').split(/[-\s]+/);
+  let suburb = '';
+  for (let i = slugParts.length - 1; i >= 0; i--) {
+    if (typeof SUBURB_GPS !== 'undefined' && SUBURB_GPS[slugParts[i]]) { suburb = slugParts[i].charAt(0).toUpperCase() + slugParts[i].slice(1); break; }
+  }
+  if (!suburb && slugParts.length > 1) suburb = slugParts[slugParts.length - 1].charAt(0).toUpperCase() + slugParts[slugParts.length - 1].slice(1);
+  return suburb ? `\nSUBURB-SPECIFIC (CRITICAL): This is a suburb landing page for "${suburb}". Use "${suburb}" as the PRIMARY location — mention "${suburb}" by name at least 5 times (H1, first paragraph, subheadings, body, CTA). Do NOT use "${project.location || 'the metro area'}" as the main location — "${suburb}" is the specific target suburb. Write as if the reader lives in ${suburb} and is searching for a local ${project.industry || 'service'} provider.\n` : '';
+})() : ''}
 ${projAdditionalInfo}
 ${projOldSiteContext}
 ${wireframeContext}
@@ -26799,7 +26865,7 @@ INTERNAL LINKS TO INCLUDE:
 ${linksContext || 'No internal links planned.'}
 
 REQUIREMENTS:
-- The H1 MUST include "${page.page_name}" or a close variation
+- The H1 MUST include "${page.page_name}" or a close variation${page.page_type === 'suburb' ? ' and the suburb name' : ''}
 - Target word count: ${settings.target_word_count} words
 - Tone: ${settings.tone}
 - Style: ${settings.style}
