@@ -17080,9 +17080,15 @@
                         (pages['Home'] || []).length > 0
                           ? React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
                               (pages['Home'] || []).map(function(kw) {
-                                return React.createElement('span', { key: kw.id, style: pillStyle(pt.color) },
-                                  kw.keyword,
-                                  React.createElement('i', { className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6, cursor: 'pointer' }, onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); } })
+                                return React.createElement('span', { key: kw.id, style: Object.assign({}, pillStyle(pt.color), { display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }) },
+                                  React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+                                    kw.keyword,
+                                    React.createElement('i', { className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6, cursor: 'pointer' }, onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); } })
+                                  ),
+                                  kw.old_url && React.createElement('a', { href: kw.old_url, target: '_blank', onClick: function(e) { e.stopPropagation(); }, style: { fontSize: 9, color: '#3b82f6', opacity: 0.7, textDecoration: 'none', marginTop: 1 } },
+                                    React.createElement('i', { className: 'fas fa-external-link-alt', style: { marginRight: 3, fontSize: 8 } }),
+                                    kw.old_url.replace(/^https?:\/\//, '').substring(0, 40)
+                                  )
                                 );
                               })
                             )
@@ -17138,11 +17144,17 @@
                               })
                             )
                           ),
-                          !isEmpty && React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5 } },
+                          !isEmpty && React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' } },
                             pageKws.map(function(kw) {
-                              return React.createElement('span', { key: kw.id, style: pillStyle(pt.color) },
-                                kw.keyword,
-                                React.createElement('i', { className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6, cursor: 'pointer' }, onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); } })
+                              return React.createElement('span', { key: kw.id, style: Object.assign({}, pillStyle(pt.color), { display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }) },
+                                React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+                                  kw.keyword,
+                                  React.createElement('i', { className: 'fas fa-times', style: { fontSize: 9, opacity: 0.6, cursor: 'pointer' }, onClick: function(e) { e.stopPropagation(); handleAssign([kw.id], 'unassigned'); } })
+                                ),
+                                kw.old_url && React.createElement('a', { href: kw.old_url, target: '_blank', onClick: function(e) { e.stopPropagation(); }, style: { fontSize: 9, color: '#3b82f6', opacity: 0.7, textDecoration: 'none', marginTop: 1 } },
+                                  React.createElement('i', { className: 'fas fa-external-link-alt', style: { marginRight: 3, fontSize: 8 } }),
+                                  kw.old_url.replace(/^https?:\/\//, '').substring(0, 40)
+                                )
                               );
                             }),
                             selectedUnassigned.size > 0 && React.createElement('span', { style: { fontSize: 11, color: pt.color, fontStyle: 'italic', alignSelf: 'center' } },
