@@ -564,6 +564,9 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_key TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_expires TIMESTAMPTZ`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS plugin_license_active BOOLEAN DEFAULT true`).catch(() => {});
+    // Suburb template system — generic per-project
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS seoroom_api_key TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS elementor_globals JSONB DEFAULT '{}'`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -2500,6 +2503,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const clarity_api_token = b.clarity_api_token ?? b.clarityApiToken;
   const cloudflare_zone_id = b.cloudflare_zone_id ?? b.cloudflareZoneId;
   const grid_scan_limit = b.grid_scan_limit ?? b.gridScanLimit;
+  const seoroom_api_key = b.seoroom_api_key || b.seoroomApiKey;
   const phone = b.phone;
   const product_slugs = b.product_slugs;
   const defined_services = b.defined_services;
@@ -2545,7 +2549,8 @@ app.put('/api/projects/:id', async (req, res) => {
            monthly_hours=COALESCE($38, monthly_hours),
            monthly_fee=COALESCE($39, monthly_fee),
            cloudflare_zone_id=COALESCE($40, cloudflare_zone_id),
-           grid_scan_limit=COALESCE($41, grid_scan_limit)
+           grid_scan_limit=COALESCE($41, grid_scan_limit),
+           seoroom_api_key=COALESCE($42, seoroom_api_key)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -2570,7 +2575,8 @@ app.put('/api/projects/:id', async (req, res) => {
        monthly_hours !== undefined ? parseFloat(monthly_hours) || null : null,
        monthly_fee !== undefined ? parseFloat(monthly_fee) || null : null,
        cloudflare_zone_id || null,
-       grid_scan_limit !== undefined ? parseInt(grid_scan_limit) || null : null]
+       grid_scan_limit !== undefined ? parseInt(grid_scan_limit) || null : null,
+       seoroom_api_key || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -4195,6 +4201,255 @@ app.get('/create-suburb-template-now', async (req, res) => {
     res.json(r.data);
   } catch (e) {
     console.error('[suburb-template]', e.response?.data || e.message);
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GENERIC SUBURB TEMPLATE SYSTEM — works for any project
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Extract Elementor globals (colors + typography) from a project's WordPress site
+app.post('/api/projects/:id/extract-design', async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const { rows } = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = rows[0];
+    const wpUrl = (project.wordpress_url || project.domain || '').replace(/\/+$/, '');
+    if (!wpUrl) return res.status(400).json({ error: 'No wordpress_url set for this project' });
+
+    const axios = require('axios');
+    // Fetch homepage HTML to extract Elementor CSS vars
+    const siteUrl = wpUrl.startsWith('http') ? wpUrl : `https://${wpUrl}`;
+    console.log(`[extract-design] Fetching ${siteUrl} for project ${projectId}`);
+    const html = (await axios.get(siteUrl, { timeout: 30000, headers: { 'User-Agent': 'SEORoom/1.0' } })).data;
+
+    // Parse --e-global-color-* and --e-global-typography-* from CSS
+    const colors = {};
+    const colorMatches = html.matchAll(/--e-global-color-([^:;\s]+)\s*:\s*([^;}\s]+)/g);
+    for (const m of colorMatches) {
+      if (!m[1].includes(')') && !m[1].includes('font')) colors[m[1]] = m[2].trim();
+    }
+
+    const typography = {};
+    const typoMatches = html.matchAll(/--e-global-typography-([a-zA-Z0-9_-]+)-([a-z_-]+)\s*:\s*([^;}\n]+)/g);
+    for (const m of typoMatches) {
+      const id = m[1], prop = m[2], val = m[3].trim().replace(/"/g, '');
+      if (!typography[id]) typography[id] = {};
+      typography[id][prop] = val;
+    }
+
+    // Auto-detect role mapping from colors
+    const roleMap = { tag_bg: 'primary', cta_bg: 'secondary', hero_text: 'accent', body_text: 'text' };
+
+    // Find heading color (darkest non-black custom color)
+    let headingId = null, headingLum = 999;
+    for (const [id, hex] of Object.entries(colors)) {
+      if (['primary','secondary','text','accent'].includes(id)) continue;
+      const lum = hexLuminance(hex);
+      if (lum < headingLum && lum > 0.01 && lum < 0.15) { headingLum = lum; headingId = id; }
+    }
+    if (headingId) roleMap.heading_color = headingId;
+
+    // Find card background (lightest custom color, usually white)
+    let cardId = null, cardLum = -1;
+    for (const [id, hex] of Object.entries(colors)) {
+      if (['primary','secondary','text','accent'].includes(id)) continue;
+      const lum = hexLuminance(hex);
+      if (lum > cardLum && lum > 0.9) { cardLum = lum; cardId = id; }
+    }
+    if (cardId) roleMap.card_bg = cardId;
+
+    // Find hero heading typography (largest custom font size)
+    let heroTypoId = null, heroSize = 0;
+    for (const [id, t] of Object.entries(typography)) {
+      if (['primary','secondary','text','accent'].includes(id)) continue;
+      const size = parseFloat(t['font-size'] || '0');
+      if (size > heroSize && size < 100 && size > 25) { heroSize = size; heroTypoId = id; }
+    }
+    if (heroTypoId) roleMap.hero_heading_typo = heroTypoId;
+
+    // Find subheading typography (~20-28px)
+    let subTypoId = null, subDist = 999;
+    for (const [id, t] of Object.entries(typography)) {
+      if (['primary','secondary','text','accent'].includes(id) || id === heroTypoId) continue;
+      const size = parseFloat(t['font-size'] || '0');
+      const dist = Math.abs(size - 25);
+      if (dist < subDist && size > 15 && size < 35) { subDist = dist; subTypoId = id; }
+    }
+    if (subTypoId) roleMap.subheading_typo = subTypoId;
+
+    // Find icon list typography (~16-20px, medium weight)
+    let iconTypoId = null, iconDist = 999;
+    for (const [id, t] of Object.entries(typography)) {
+      if (['primary','secondary','text','accent'].includes(id) || id === heroTypoId || id === subTypoId) continue;
+      const size = parseFloat(t['font-size'] || '0');
+      const weight = parseInt(t['font-weight'] || '400');
+      const dist = Math.abs(size - 18) + (weight >= 500 && weight <= 600 ? 0 : 5);
+      if (dist < iconDist && size >= 14 && size <= 22) { iconDist = dist; iconTypoId = id; }
+    }
+    if (iconTypoId) roleMap.icon_list_typo = iconTypoId;
+
+    const globals = { colors, typography, roleMap, extracted_at: new Date().toISOString() };
+    await pool.query('UPDATE projects SET elementor_globals=$1 WHERE id=$2', [JSON.stringify(globals), projectId]);
+
+    console.log(`[extract-design] Extracted ${Object.keys(colors).length} colors, ${Object.keys(typography).length} typographies for project ${projectId}`);
+    res.json({ ok: true, colors_count: Object.keys(colors).length, typography_count: Object.keys(typography).length, roleMap, colors, typography });
+  } catch (e) {
+    console.error('[extract-design]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Helper: hex luminance for auto-detection
+function hexLuminance(hex) {
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  const r = parseInt(hex.substr(0,2),16)/255;
+  const g = parseInt(hex.substr(2,2),16)/255;
+  const b = parseInt(hex.substr(4,2),16)/255;
+  return 0.2126*r + 0.7152*g + 0.0722*b;
+}
+
+// Create suburb template for ANY project using stored globals
+app.post('/api/projects/:id/create-suburb-template', async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const { rows } = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
+    if (!rows.length) return res.status(404).json({ error: 'Project not found' });
+    const project = rows[0];
+
+    const wpUrl = (project.wordpress_url || '').replace(/\/+$/, '');
+    const apiKey = project.seoroom_api_key;
+    if (!wpUrl) return res.status(400).json({ error: 'No wordpress_url set' });
+    if (!apiKey) return res.status(400).json({ error: 'No seoroom_api_key set. Install seoroom-api plugin and add the key in Project Settings.' });
+
+    const globals = project.elementor_globals || {};
+    const rm = globals.roleMap || {};
+    if (!rm.tag_bg) return res.status(400).json({ error: 'No design extracted yet. Click "Extract Design" first.' });
+
+    // Build globals references from role map
+    const G = {
+      tagBg:         `globals/colors?id=${rm.tag_bg}`,
+      tagText:       `globals/colors?id=${rm.card_bg || rm.hero_text || 'accent'}`,
+      ctaBg:         `globals/colors?id=${rm.cta_bg}`,
+      ctaHoverBg:    `globals/colors?id=${rm.tag_bg}`,
+      heroText:      `globals/colors?id=${rm.hero_text || 'accent'}`,
+      headingColor:  `globals/colors?id=${rm.heading_color || 'cf7672c'}`,
+      cardBg:        `globals/colors?id=${rm.card_bg || 'd712090'}`,
+      bodyText:      `globals/colors?id=${rm.body_text || 'text'}`,
+      heroTypo:      rm.hero_heading_typo ? `globals/typography?id=${rm.hero_heading_typo}` : null,
+      subTypo:       rm.subheading_typo ? `globals/typography?id=${rm.subheading_typo}` : null,
+      iconTypo:      rm.icon_list_typo ? `globals/typography?id=${rm.icon_list_typo}` : null,
+    };
+
+    const axios = require('axios');
+    const siteUrl = wpUrl.startsWith('http') ? wpUrl : `https://${wpUrl}`;
+    const apiBase = `${siteUrl}/wp-json/seoroom/v1`;
+
+    // Trash previous template pages if any
+    const trashSlugs = req.body.trash_ids || [];
+    if (trashSlugs.length) {
+      try { await axios.post(`${apiBase}/delete-pages`, { api_key: apiKey, ids: trashSlugs }, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 }); } catch(e) { /* ignore */ }
+    }
+
+    // Build template tree
+    const rid = () => Math.random().toString(16).slice(2, 9);
+    const S = (settings, children) => ({ id: rid(), elType: 'section', settings: settings || {}, elements: children || [] });
+    const C = (size, widgets) => ({ id: rid(), elType: 'column', settings: { _column_size: size, _inline_size: size }, elements: widgets.map(w => w) });
+    const W = (type, settings) => ({ id: rid(), elType: 'widget', widgetType: type, settings: settings || {}, elements: [] });
+
+    const businessName = project.business_name || project.name || 'Business';
+    const industry = project.industry || 'services';
+    const tree = [];
+
+    // ── HERO ──
+    tree.push(S({layout:'full_width',height:'min-height',custom_height:{size:520,unit:'px'},background_background:'classic',background_image:{url:'',id:''},background_overlay_background:'classic',background_overlay_color:'rgba(0,30,28,0.5)',content_width:{size:1200,unit:'px'},padding:{top:'60',right:'60',bottom:'60',left:'60',unit:'px'}},[
+      C(60,[
+        W('heading',{title:'Lorem Ipsum Dolor Sit Amet',header_size:'div',_element_width:'auto',_background_background:'classic',_background_color:'#333',_border_radius:{top:'5',right:'5',bottom:'5',left:'5',unit:'px',isLinked:true},_padding:{top:'4',right:'7',bottom:'3',left:'10',unit:'px',isLinked:false},_animation:'fadeIn',__globals__:{title_color:G.tagText,_background_color:G.tagBg}}),
+        W('heading',{title:'Lorem Ipsum Dolor Sit Amet',_animation:'fadeIn',__globals__:Object.assign({title_color:G.heroText}, G.heroTypo ? {typography_typography:G.heroTypo} : {})}),
+        W('text-editor',{editor:'<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>',_animation:'fadeIn',__globals__:{color:G.heroText}}),
+        W('icon-list',{icon_list:[{text:'Lorem ipsum dolor sit amet',_id:rid()},{text:'Lorem ipsum dolor sit amet',_id:rid()}],icon_color:'#FFFFFF',icon_size:{size:33,unit:'px'},text_color:'#FFFFFF',_element_width:'inherit',__globals__:Object.assign({}, G.iconTypo ? {icon_typography_typography:G.iconTypo} : {})}),
+        W('button',{text:'Call Us Now!',size:'lg',selected_icon:{value:'fas fa-phone-alt',library:'fa-solid'},border_radius:{top:'100',right:'100',bottom:'100',left:'100',unit:'px',isLinked:true},typography_typography:'custom',typography_font_family:'Space Grotesk',typography_font_size:{size:23,unit:'px'},typography_font_weight:'600',hover_animation:'float',_element_width:'inherit',_animation:'fadeIn',_animation_delay:400,__globals__:{background_color:G.ctaBg,button_background_hover_color:G.ctaHoverBg,hover_color:G.heroText}})
+      ]),
+      C(40,[
+        W('heading',{title:'Request a Free Quote',_element_width:'initial',_element_custom_width:{unit:'%',size:80},_background_background:'classic',_border_radius:{top:'10',right:'100',bottom:'0',left:'0',unit:'px',isLinked:false},_padding:{top:'30',right:'40',bottom:'0',left:'40',unit:'px',isLinked:false},__globals__:Object.assign({title_color:G.headingColor,_background_color:G.cardBg}, G.subTypo ? {typography_typography:G.subTypo} : {})}),
+        W('form',{form_name:'Quote Request',form_fields:[{_id:rid(),custom_id:'name',field_type:'text',field_label:'Your Name',placeholder:'Your Name',required:'',width:'100'},{_id:rid(),custom_id:'email',field_type:'email',field_label:'Your Email',placeholder:'Your Email',required:'',width:'100'},{_id:rid(),custom_id:'service',field_type:'select',field_label:'Service Type',placeholder:'',field_options:`Select a service\n${industry}`,width:'100'},{_id:rid(),custom_id:'phone',field_type:'tel',field_label:'Your Phone',placeholder:'Your Phone',required:'',width:'100'}],input_size:'lg',button_text:'Get a quote',button_size:'md',button_align_mobile:'stretch',_element_width:'initial',_element_custom_width:{unit:'%',size:80},_background_background:'classic',_border_radius:{top:'0',right:'0',bottom:'10',left:'10',unit:'px',isLinked:false},_padding:{top:'30',right:'40',bottom:'40',left:'40',unit:'px',isLinked:false},_element_width_tablet:'initial',_element_custom_width_tablet:{unit:'%',size:85},_element_width_mobile:'initial',_element_custom_width_mobile:{unit:'%',size:100},_padding_mobile:{unit:'px',top:'30',right:'30',bottom:'30',left:'30',isLinked:true},__globals__:{_background_color:G.cardBg}})
+      ])
+    ]));
+
+    // ── SERVICE STRIP ──
+    const sc=[];for(let i=0;i<6;i++)sc.push(C(16,[W('icon-box',{selected_icon:{value:'fas fa-wrench',library:'fa-solid'},title_text:'Service 1',description_text:'',primary_color:'rgba(255,255,255,0.7)',title_color:'#FFFFFF',position:'top',title_bottom_space:{size:0,unit:'px'}})]));
+    tree.push(S({layout:'full_width',background_background:'classic',content_width:{size:1200,unit:'px'},padding:{top:'24',right:'10',bottom:'24',left:'10',unit:'px'},__globals__:{background_color:G.ctaBg}},sc));
+
+    // ── TOP SERVICE IN DEMAND ──
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'60',right:'20',bottom:'60',left:'20',unit:'px'}},[C(100,[
+      W('heading',{title:'Top Service in Demand in [Suburb]',header_size:'h2',__globals__:Object.assign({title_color:G.headingColor}, G.subTypo ? {typography_typography:G.subTypo} : {})}),
+      W('text-editor',{editor:'<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>',__globals__:{color:G.bodyText}}),
+      W('text-editor',{editor:'<div style="width:100%;height:300px;margin-top:30px;background:#e5eaf0;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:14px;">Landscape Image Placeholder</div>'})
+    ])]));
+
+    // ── CTA BAR ──
+    const ctaBar = (sub) => S({layout:'full_width',background_background:'classic',padding:{top:'28',right:'60',bottom:'28',left:'60',unit:'px'},__globals__:{background_color:G.ctaBg}},[C(100,[W('text-editor',{editor:`<div style="display:flex;align-items:center;gap:20px;"><div style="width:54px;height:54px;border:2px solid rgba(255,255,255,0.4);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span style="font-size:22px;color:#fff;">&#9742;</span></div><div><div style="font-size:14px;color:rgba(255,255,255,0.8);">${sub}</div><div style="font-size:15px;font-weight:700;color:#fff;">CALL US NOW!</div><div style="font-size:28px;font-weight:700;color:#fff;">Call for a quote</div></div></div>`})])]);
+    tree.push(ctaBar('Need help in [Suburb] right now?'));
+
+    // ── SERVICE BLOCKS ──
+    const sB = (h,rev) => {
+      const tx=C(50,[
+        W('heading',{title:h,header_size:'h2',__globals__:Object.assign({title_color:G.headingColor}, G.subTypo ? {typography_typography:G.subTypo} : {})}),
+        W('text-editor',{editor:'<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt.</p><p>Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt.</p>',__globals__:{color:G.bodyText}}),
+        W('button',{text:'SERVICE NAME',background_color:'transparent',border_border:'solid',border_width:{top:'2',right:'2',bottom:'2',left:'2',unit:'px'},border_radius:{top:'100',right:'100',bottom:'100',left:'100',unit:'px'},__globals__:{button_text_color:G.headingColor,border_color:G.headingColor}})
+      ]);
+      const im=C(50,[W('text-editor',{editor:'<div style="width:100%;height:280px;background:#e5eaf0;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:14px;">Service Image</div>'})]);
+      return S({content_width:{size:1200,unit:'px'},padding:{top:'50',right:'20',bottom:'50',left:'20',unit:'px'},column_gap:{size:50,unit:'px'}},rev?[im,tx]:[tx,im]);
+    };
+    tree.push(sB('Service KW + [Suburb]',false));
+    tree.push(sB('Service KW + [Suburb]',true));
+    tree.push(sB('Service KW + [Suburb]',false));
+    tree.push(ctaBar('Looking for a reliable ' + industry + ' in [Suburb]?'));
+    tree.push(sB('Service KW + [Suburb]',true));
+
+    // ── WHY CHOOSE US ──
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'60',right:'20',bottom:'60',left:'20',unit:'px'},column_gap:{size:50,unit:'px'}},[
+      C(50,[W('text-editor',{editor:'<div style="width:100%;height:360px;background:#e5eaf0;border-radius:16px;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:14px;">Company Image</div>'})]),
+      C(50,[
+        W('heading',{title:'About us',header_size:'div',_element_width:'auto',_background_background:'classic',_background_color:'#333',_border_radius:{top:'5',right:'5',bottom:'5',left:'5',unit:'px',isLinked:true},_padding:{top:'4',right:'7',bottom:'3',left:'10',unit:'px',isLinked:false},__globals__:{title_color:G.tagText,typography_typography:'globals/typography?id=secondary',_background_color:G.tagBg}}),
+        W('heading',{title:'Why Choose ' + businessName,header_size:'h2',__globals__:Object.assign({title_color:G.headingColor}, G.subTypo ? {typography_typography:G.subTypo} : {})}),
+        W('text-editor',{editor:'<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>',__globals__:{color:G.bodyText}}),
+        W('icon-list',{icon_list:[{text:'A Proficient Team',selected_icon:{value:'far fa-circle',library:'fa-regular'},_id:rid()},{text:'Reasonable Cost',selected_icon:{value:'far fa-circle',library:'fa-regular'},_id:rid()},{text:'Speedy Assistance',selected_icon:{value:'far fa-circle',library:'fa-regular'},_id:rid()}],__globals__:{icon_color:G.tagBg,text_color:G.headingColor}}),
+        W('icon-list',{icon_list:[{text:'Supplies & Equipment',selected_icon:{value:'far fa-circle',library:'fa-regular'},_id:rid()},{text:'Licensed & Insured',selected_icon:{value:'far fa-circle',library:'fa-regular'},_id:rid()},{text:'Emergency Support',selected_icon:{value:'far fa-circle',library:'fa-regular'},_id:rid()}],__globals__:{icon_color:G.tagBg,text_color:G.headingColor}})
+      ])
+    ]));
+
+    // ── FAQ ──
+    tree.push(S({content_width:{size:1200,unit:'px'},padding:{top:'60',right:'20',bottom:'60',left:'20',unit:'px'}},[C(100,[
+      W('heading',{title:'Frequently Asked Questions - [Suburb]',header_size:'h2',__globals__:Object.assign({title_color:G.headingColor}, G.subTypo ? {typography_typography:G.subTypo} : {})}),
+      W('text-editor',{editor:'<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>',__globals__:{color:G.bodyText}}),
+      W('toggle',{tab_title:'Lorem ipsum dolor sit amet?',tab_content:'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',__globals__:{title_color:G.headingColor,tab_content_color:G.bodyText}}),
+      W('toggle',{tab_title:'Ut enim ad minim veniam?',tab_content:'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.',__globals__:{title_color:G.headingColor,tab_content_color:G.bodyText}}),
+      W('toggle',{tab_title:'Duis aute irure dolor?',tab_content:'Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.',__globals__:{title_color:G.headingColor,tab_content_color:G.bodyText}}),
+      W('toggle',{tab_title:'Excepteur sint occaecat?',tab_content:'Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.',__globals__:{title_color:G.headingColor,tab_content_color:G.bodyText}})
+    ])]));
+
+    // ── SERVICE AREA LIST ──
+    tree.push(S({layout:'full_width',background_background:'classic',content_width:{size:1200,unit:'px'},padding:{top:'50',right:'20',bottom:'50',left:'20',unit:'px'},__globals__:{background_color:G.ctaBg}},[C(100,[
+      W('heading',{title:'Service Areas Near [Suburb]',header_size:'h2',title_color:'#FFFFFF',__globals__:Object.assign({}, G.subTypo ? {typography_typography:G.subTypo} : {})}),
+      W('text-editor',{editor:'<p style="color:rgba(255,255,255,0.85);">[List of nearby suburbs — auto-populated from service_areas]</p>'})
+    ])]));
+
+    const treeJson = JSON.stringify(tree);
+    const slug = req.body.slug || 'suburb-template';
+    const title = req.body.title || 'Suburb Template - [Suburb Name]';
+
+    const r = await axios.post(`${apiBase}/create-page`, {
+      api_key: apiKey, title, slug, tree_json: treeJson, status: 'draft'
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 60000 });
+
+    console.log(`[create-suburb-template] Project ${projectId}: created page`, r.data);
+    res.json(r.data);
+  } catch (e) {
+    console.error('[create-suburb-template]', e.response?.data || e.message);
     res.status(500).json({ error: e.response?.data?.message || e.message });
   }
 });

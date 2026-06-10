@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Suburb Page Template — Plumber Kingsley</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Roboto+Flex:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ===== RESET ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Roboto Flex', sans-serif; color: #7D8393; background: #fff; font-size: 16px; line-height: 1.6; }
+a { text-decoration: none; color: inherit; }
+ul { list-style: none; }
+
+/* ===== THEME VARIABLES (exact from sureflow.seoroom.au) ===== */
+:root {
+  --teal: #006E68;           /* rgb(0,110,104) — primary */
+  --mint: #81C2B2;           /* rgb(129,194,178) — secondary */
+  --heading: #10202E;        /* rgb(16,32,46) — dark headings */
+  --body: #7D8393;           /* rgb(125,131,147) — body text */
+  --gray-bg: #F7F7F7;        /* rgb(247,247,247) — section bg */
+  --white: #ffffff;
+}
+
+/* ===== TYPOGRAPHY (exact from computed styles) ===== */
+h1, h2, h3 { font-family: 'Familjen Grotesk', sans-serif; }
+h1 { font-size: 48.83px; font-weight: 700; line-height: 1.1; }
+h2 { font-size: 25px; font-weight: 700; color: var(--heading); line-height: 1.3; }
+h3 { font-size: 20px; font-weight: 700; color: var(--heading); }
+p { color: var(--body); line-height: 1.7; }
+
+/* ===== BUTTONS (exact from computed styles) ===== */
+.btn-cta {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 23px; font-weight: 600;
+  background: var(--teal); color: #fff;
+  border: none; border-radius: 100px;
+  padding: 8px 30px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px;
+  letter-spacing: 0.5px;
+}
+.btn-quote {
+  font-family: 'Roboto Flex', sans-serif;
+  font-size: 16px; font-weight: 600;
+  background: var(--mint); color: #fff;
+  border: none; border-radius: 100px;
+  padding: 15px 30px; cursor: pointer;
+  letter-spacing: 0.5px;
+  width: 100%; text-align: center;
+}
+.btn-learn {
+  font-family: 'Roboto Flex', sans-serif;
+  font-size: 16px; font-weight: 600;
+  background: transparent; color: var(--mint);
+  border: none; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn-service {
+  font-family: 'Roboto Flex', sans-serif;
+  font-size: 16px; font-weight: 600;
+  background: transparent; color: var(--heading);
+  border: 2px solid var(--heading); border-radius: 100px;
+  padding: 10px 28px; cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-service:hover { background: var(--teal); color: #fff; border-color: var(--teal); }
+
+/* ===== SOCIAL SIDEBAR ===== */
+.social-sidebar {
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  z-index: 100; display: flex; flex-direction: column;
+}
+.social-sidebar a {
+  background: var(--teal); color: #fff; padding: 10px 8px;
+  font-size: 11px; writing-mode: vertical-rl; text-orientation: mixed;
+  text-align: center; letter-spacing: 1px;
+}
+.social-sidebar a:first-child { border-radius: 8px 0 0 0; }
+.social-sidebar a:last-child { border-radius: 0 0 0 8px; }
+.social-sidebar a:hover { background: var(--mint); }
+
+/* ===== TOP BAR ===== */
+.top-bar {
+  background: var(--teal); color: #fff;
+  display: flex; justify-content: flex-end; gap: 24px;
+  padding: 8px 60px; font-size: 14px; align-items: center;
+}
+.top-bar .item { display: flex; align-items: center; gap: 6px; }
+.top-bar .sep { opacity: 0.5; margin: 0 4px; }
+
+/* ===== HEADER ===== */
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 60px; background: #fff;
+}
+.logo { display: flex; align-items: center; gap: 10px; }
+.logo-icon {
+  width: 50px; height: 50px; position: relative;
+}
+.logo-icon svg { width: 50px; height: 50px; }
+.logo-text { font-family: 'Familjen Grotesk', sans-serif; }
+.logo-text .name { font-size: 24px; font-weight: 700; color: var(--teal); letter-spacing: 2px; }
+.logo-text .sub { font-size: 11px; font-weight: 400; color: var(--body); letter-spacing: 3px; }
+nav { display: flex; gap: 28px; }
+nav a { font-family: 'Roboto Flex', sans-serif; font-size: 16px; font-weight: 600; color: var(--heading); }
+nav a:hover { color: var(--teal); }
+.header-phone { display: flex; align-items: center; gap: 12px; }
+.phone-circle {
+  width: 48px; height: 48px; border: 2px solid var(--teal); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.phone-circle svg { width: 20px; height: 20px; fill: none; stroke: var(--teal); stroke-width: 1.5; }
+.header-phone .label { font-size: 13px; font-weight: 600; color: var(--teal); }
+.header-phone .number { font-size: 18px; font-weight: 700; color: var(--heading); }
+
+/* ===== HERO ===== */
+.hero {
+  position: relative; min-height: 520px;
+  background: linear-gradient(rgba(0,30,28,0.5), rgba(0,30,28,0.5)),
+    url('https://sureflow.seoroom.au/wp-content/uploads/2026/04/get-fixed-professional-plumber-wearing-tool-belt-2022-02-22-05-13-25-utc-min.jpg') center/cover no-repeat;
+  display: flex; align-items: center;
+}
+.hero-inner {
+  max-width: 1200px; margin: 0 auto; width: 100%;
+  padding: 60px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 60px; align-items: center;
+}
+.hero-left { color: #fff; }
+.hero-badge {
+  display: inline-block; background: var(--mint); color: #fff;
+  padding: 4px 14px; border-radius: 4px; font-size: 13px; font-weight: 600;
+  margin-bottom: 16px; font-family: 'Roboto Flex', sans-serif;
+}
+.hero h1 { color: #fff; margin-bottom: 16px; }
+.hero-sub { font-size: 15px; line-height: 1.65; color: rgba(255,255,255,0.85); margin-bottom: 20px; }
+.hero-checks { margin-bottom: 28px; }
+.hero-checks li {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 15px; color: #fff; padding: 5px 0;
+}
+.hero-checks li svg { width: 24px; height: 24px; flex-shrink: 0; }
+
+/* Hero form card */
+.hero-form {
+  background: #fff; border-radius: 12px; padding: 30px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+}
+.hero-form h3 {
+  font-size: 22px; text-align: center; margin-bottom: 20px; color: var(--heading);
+}
+.hero-form input, .hero-form select, .hero-form textarea {
+  width: 100%; padding: 14px 16px;
+  border: 1px solid #e0e0e0; border-radius: 8px;
+  font-size: 14px; font-family: 'Roboto Flex', sans-serif;
+  color: var(--body); background: #fff;
+  margin-bottom: 12px; outline: none;
+}
+.hero-form input:focus, .hero-form select:focus { border-color: var(--mint); }
+
+/* ===== SERVICE STRIP ===== */
+.service-strip {
+  background: var(--teal);
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  max-width: 1200px; margin: 0 auto;
+}
+.service-strip-wrap { background: var(--teal); }
+.service-strip a {
+  padding: 24px 10px; text-align: center;
+  color: #fff; font-size: 14px; font-weight: 600;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  transition: background 0.2s;
+  font-family: 'Roboto Flex', sans-serif;
+}
+.service-strip a:hover { background: rgba(255,255,255,0.1); }
+.service-strip svg { width: 50px; height: 50px; fill: rgba(255,255,255,0.7); }
+
+/* ===== SECTION LAYOUTS ===== */
+.section-wrap { max-width: 1200px; margin: 0 auto; padding: 60px 20px; }
+.section-teal { background: var(--teal); color: #fff; }
+.section-gray { background: var(--gray-bg); }
+.section-white { background: #fff; }
+.text-center { text-align: center; }
+
+/* ===== TOP SERVICE IN DEMAND ===== */
+.top-service { max-width: 1200px; margin: 0 auto; padding: 60px 20px; }
+.top-service h2 { font-size: 25px; margin-bottom: 8px; }
+.top-service p.body { margin-bottom: 14px; }
+.landscape-img {
+  width: 100%; height: 300px; margin-top: 30px;
+  background: #e5eaf0; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: #bbb; font-size: 14px;
+}
+
+/* ===== CTA BAR ===== */
+.cta-bar {
+  background: var(--teal); padding: 28px 60px;
+  display: flex; align-items: center; gap: 20px;
+}
+.cta-phone-icon {
+  width: 54px; height: 54px; border: 2px solid rgba(255,255,255,0.4);
+  border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.cta-phone-icon svg { width: 22px; height: 22px; fill: #fff; }
+.cta-text { color: #fff; }
+.cta-text .small { font-size: 14px; opacity: 0.8; }
+.cta-text .bold { font-size: 15px; font-weight: 700; font-family: 'Familjen Grotesk', sans-serif; }
+.cta-text .big { font-size: 28px; font-weight: 700; color: #fff; font-family: 'Familjen Grotesk', sans-serif; }
+
+/* ===== SERVICE BLOCKS (alternating) ===== */
+.service-block {
+  max-width: 1200px; margin: 0 auto; padding: 50px 20px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 50px; align-items: center;
+}
+.service-block.reverse { direction: rtl; }
+.service-block.reverse > * { direction: ltr; }
+.service-block h2 { font-size: 25px; margin-bottom: 14px; }
+.service-block p { margin-bottom: 12px; }
+.service-img {
+  width: 100%; height: 280px; background: #e5eaf0; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 14px;
+}
+
+/* ===== WHY CHOOSE US ===== */
+.why-choose {
+  max-width: 1200px; margin: 0 auto; padding: 60px 20px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 50px; align-items: center;
+}
+.why-choose .badge {
+  display: inline-block; background: var(--mint); color: #fff;
+  padding: 4px 14px; border-radius: 4px; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px;
+  font-family: 'Roboto Flex', sans-serif;
+}
+.why-choose h2 { font-size: 25px; margin-bottom: 14px; }
+.why-choose p { margin-bottom: 12px; }
+.why-choose .check-list li {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 15px; color: var(--heading); font-weight: 500;
+  padding: 4px 0;
+}
+.why-choose .check-list li::before {
+  content: ''; width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid var(--mint); flex-shrink: 0;
+}
+.why-img {
+  width: 100%; height: 360px; background: #e5eaf0; border-radius: 16px;
+  display: flex; align-items: center; justify-content: center; color: #bbb;
+}
+/* Teal callout box */
+.teal-callout {
+  background: var(--mint); border-radius: 12px; padding: 20px 24px;
+  color: #fff; font-size: 14px; line-height: 1.6; margin-top: 20px;
+}
+
+/* ===== BRANDS STRIP ===== */
+.brands-strip {
+  padding: 30px 20px; background: #fff;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 30px; align-items: center;
+  border-top: 1px solid #eee;
+}
+.brand-logo {
+  width: 120px; height: 40px; background: #f0f0f0; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: #999; font-weight: 600;
+}
+
+/* ===== COMPANY DIFFERENCES (4-column cards) ===== */
+.differences { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+.diff-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+  border-radius: 12px; overflow: hidden;
+}
+.diff-card {
+  padding: 40px 24px; text-align: center;
+}
+.diff-card:nth-child(odd) { background: #fff; }
+.diff-card:nth-child(even) { background: var(--mint); color: #fff; }
+.diff-card .icon { margin-bottom: 16px; }
+.diff-card .icon svg { width: 48px; height: 48px; opacity: 0.7; }
+.diff-card:nth-child(odd) .icon svg { fill: var(--teal); }
+.diff-card:nth-child(even) .icon svg { fill: #fff; }
+.diff-card h3 {
+  font-size: 18px; margin-bottom: 10px;
+}
+.diff-card:nth-child(odd) h3 { color: var(--heading); }
+.diff-card:nth-child(even) h3 { color: #fff; }
+.diff-card p { font-size: 14px; line-height: 1.6; }
+.diff-card:nth-child(even) p { color: rgba(255,255,255,0.85); }
+
+/* ===== ASSURANCE / WHY DIFFERENT ===== */
+.assurance-section { position: relative; padding: 80px 20px; }
+.assurance-watermark {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  font-family: 'Familjen Grotesk', sans-serif; font-size: 140px; font-weight: 700;
+  color: rgba(0,0,0,0.04); white-space: nowrap; pointer-events: none;
+}
+.assurance-inner {
+  max-width: 1200px; margin: 0 auto;
+  display: grid; grid-template-columns: 1fr 1.2fr; gap: 40px; align-items: center;
+  position: relative; z-index: 1;
+}
+.assurance-img {
+  width: 100%; height: 400px; background: #e5eaf0; border-radius: 16px;
+  display: flex; align-items: center; justify-content: center; color: #bbb;
+}
+.assurance-card {
+  background: var(--teal); border-radius: 20px; padding: 50px 40px; color: #fff;
+}
+.assurance-card h2 { color: #fff; font-size: 25px; margin-bottom: 14px; }
+.assurance-card p { color: rgba(255,255,255,0.85); margin-bottom: 16px; }
+.assurance-card .check-list li {
+  display: flex; align-items: center; gap: 10px;
+  color: #fff; font-size: 15px; font-weight: 500; padding: 5px 0;
+}
+.assurance-card .check-list li svg { width: 18px; height: 18px; fill: var(--mint); flex-shrink: 0; }
+.progress-bar { margin-top: 20px; }
+.progress-bar .label { font-size: 14px; color: #fff; font-weight: 600; margin-bottom: 4px; }
+.progress-bar .bar { height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin-bottom: 12px; }
+.progress-bar .bar-fill { height: 100%; background: var(--mint); border-radius: 2px; }
+
+/* ===== SERVICE AREA ===== */
+.service-area { padding: 60px 20px; }
+.service-area .wrap { max-width: 1200px; margin: 0 auto; }
+.service-area h2 { font-size: 25px; text-align: center; margin-bottom: 8px; }
+.service-area .subtitle { text-align: center; margin-bottom: 30px; }
+.area-layout { display: grid; grid-template-columns: 240px 1fr; gap: 0; border-radius: 12px; overflow: hidden; border: 1px solid #e0e0e0; }
+.area-sidebar { background: #fff; }
+.area-tab {
+  padding: 14px 20px; font-size: 15px; font-weight: 600; color: var(--teal);
+  cursor: pointer; border-bottom: 1px solid #f0f0f0;
+  font-family: 'Roboto Flex', sans-serif; transition: all 0.2s;
+}
+.area-tab:first-child {
+  background: var(--teal); color: #fff; border-radius: 100px;
+  margin: 10px; border: none; text-align: center;
+}
+.area-tab:hover:not(:first-child) { background: var(--gray-bg); }
+.area-suburbs {
+  background: var(--gray-bg); padding: 30px 40px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 40px;
+}
+.area-suburbs li {
+  font-size: 14px; color: var(--body); padding: 5px 0;
+  display: flex; align-items: center; gap: 6px;
+}
+.area-suburbs li::before { content: '•'; color: var(--body); }
+
+/* ===== FAQ ACCORDION ===== */
+.faq-section { background: var(--gray-bg); padding: 60px 20px; }
+.faq-section .wrap { max-width: 900px; margin: 0 auto; }
+.faq-section h2 { text-align: center; margin-bottom: 30px; }
+.faq-item {
+  background: var(--teal); border-radius: 8px; margin-bottom: 8px;
+  padding: 16px 24px; color: #fff; font-size: 15px; font-weight: 500;
+  display: flex; align-items: center; gap: 12px; cursor: pointer;
+  font-family: 'Roboto Flex', sans-serif;
+}
+.faq-item .plus { font-size: 18px; font-weight: 700; }
+
+/* ===== FOOTER ===== */
+.footer {
+  background: var(--teal); padding: 50px 60px 20px; color: #fff;
+}
+.footer-inner {
+  max-width: 1200px; margin: 0 auto;
+  display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr; gap: 30px;
+}
+.footer h4 {
+  font-family: 'Familjen Grotesk', sans-serif;
+  font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 16px;
+}
+.footer p { font-size: 14px; color: rgba(255,255,255,0.7); line-height: 1.6; }
+.footer-links a {
+  display: block; font-size: 14px; color: rgba(255,255,255,0.7);
+  padding: 4px 0; transition: color 0.2s;
+}
+.footer-links a:hover { color: #fff; }
+.footer-contact a {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; color: rgba(255,255,255,0.7); padding: 4px 0;
+}
+.footer-contact svg { width: 16px; height: 16px; fill: rgba(255,255,255,0.7); flex-shrink: 0; }
+.footer-about-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: #fff; font-size: 14px; font-weight: 500; margin-top: 12px;
+}
+.footer-bottom {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; justify-content: space-between; align-items: center;
+  padding-top: 20px; margin-top: 30px; border-top: 1px solid rgba(255,255,255,0.15);
+}
+.footer-bottom-logo { display: flex; align-items: center; gap: 8px; }
+.footer-bottom-logo svg { width: 36px; height: 36px; }
+.footer-bottom-logo span { font-family: 'Familjen Grotesk', sans-serif; font-size: 16px; font-weight: 700; color: #fff; }
+.footer-bottom-logo .sub { font-size: 9px; color: rgba(255,255,255,0.6); letter-spacing: 2px; display: block; }
+.footer-copyright { font-size: 13px; color: rgba(255,255,255,0.5); }
+</style>
+</head>
+<body>
+
+<!-- SOCIAL SIDEBAR -->
+<div class="social-sidebar">
+  <a href="#">Facebook</a>
+  <a href="#">Instagram</a>
+  <a href="#">LinkedIn</a>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 1: TOP BAR + HEADER + HERO                           -->
+<!-- ============================================================ -->
+
+<!-- TOP BAR -->
+<div class="top-bar">
+  <span class="item">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+    info@sureflow.com.au
+  </span>
+  <span class="sep">|</span>
+  <span class="item">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+    Servicing The Northern Perth Metro Area
+  </span>
+  <span class="sep">|</span>
+  <span class="item">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    Mon - Fri 6:30AM - 7:30AM
+  </span>
+</div>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="logo">
+    <img src="https://sureflow.seoroom.au/wp-content/uploads/2026/04/sureflow20logo20light20bg-scaled.png" alt="Sureflow Plumbing & Gas" style="height: 60px; width: auto;">
+  </div>
+  <nav>
+    <a href="#">Home</a>
+    <a href="#">About Us</a>
+    <a href="#">Service ▾</a>
+    <a href="#">Blog</a>
+    <a href="#">Contact Us</a>
+  </nav>
+  <div class="header-phone">
+    <div class="phone-circle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+    </div>
+    <div>
+      <div class="label">Plumbing Emergency?</div>
+      <div class="number">0400 838 622</div>
+    </div>
+  </div>
+</div>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-inner">
+    <div class="hero-left">
+      <div class="hero-badge">Lorem Ipsum Dolor Sit Amet</div>
+      <h1>Lorem Ipsum Dolor Sit Amet</h1>
+      <p class="hero-sub">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+      <ul class="hero-checks">
+        <li>
+          <svg viewBox="0 0 512 512" fill="#81C2B2" width="24" height="24" xmlns="http://www.w3.org/2000/svg"><path d="M505 174.8l-39.6-39.8c-9.4-9.4-24.6-9.4-33.9 0L192 374.5 80.6 263.1c-9.4-9.4-24.6-9.4-33.9 0L7 302.9c-9.4 9.4-9.4 24.6 0 34L175 505c9.4 9.4 24.6 9.4 33.9 0l296-296.2c9.4-9.5 9.4-24.7.1-34zm-324.3 106c6.2 6.3 16.4 6.3 22.6 0l208-208.2c6.2-6.3 6.2-16.4 0-22.6L373.5 11.4c-6.2-6.3-16.4-6.3-22.6 0L192 170.2 131.1 109c-6.2-6.3-16.4-6.3-22.6 0L69.8 147.6c-6.2 6.3-6.2 16.4 0 22.6l110.9 110.6z"/></svg>
+          Lorem ipsum dolor sit amet, consectetur adipiscing elit
+        </li>
+        <li>
+          <svg viewBox="0 0 512 512" fill="#81C2B2" width="24" height="24" xmlns="http://www.w3.org/2000/svg"><path d="M505 174.8l-39.6-39.8c-9.4-9.4-24.6-9.4-33.9 0L192 374.5 80.6 263.1c-9.4-9.4-24.6-9.4-33.9 0L7 302.9c-9.4 9.4-9.4 24.6 0 34L175 505c9.4 9.4 24.6 9.4 33.9 0l296-296.2c9.4-9.5 9.4-24.7.1-34zm-324.3 106c6.2 6.3 16.4 6.3 22.6 0l208-208.2c6.2-6.3 6.2-16.4 0-22.6L373.5 11.4c-6.2-6.3-16.4-6.3-22.6 0L192 170.2 131.1 109c-6.2-6.3-16.4-6.3-22.6 0L69.8 147.6c-6.2 6.3-6.2 16.4 0 22.6l110.9 110.6z"/></svg>
+          Lorem ipsum dolor sit amet, consectetur adipiscing elit
+        </li>
+      </ul>
+      <button class="btn-cta">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+        Call Us Now!
+      </button>
+    </div>
+    <div class="hero-form">
+      <h3>Excepteur sint occaecat cupidatat non proident</h3>
+      <input type="text" placeholder="Your Name">
+      <input type="email" placeholder="Your Email">
+      <select><option>Gas Line Services</option></select>
+      <input type="tel" placeholder="Your Phone">
+      <button class="btn-quote">Get A Quote</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 2: SERVICE STRIP (6 services)                        -->
+<!-- ============================================================ -->
+<div class="service-strip-wrap">
+<div class="service-strip">
+  <a href="#">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73zM64 472c-13.25 0-24-10.75-24-24 0-13.26 10.75-24 24-24s24 10.74 24 24c0 13.25-10.75 24-24 24z"/></svg>
+    Service 1
+  </a>
+  <a href="#">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73zM64 472c-13.25 0-24-10.75-24-24 0-13.26 10.75-24 24-24s24 10.74 24 24c0 13.25-10.75 24-24 24z"/></svg>
+    Service 1
+  </a>
+  <a href="#">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73zM64 472c-13.25 0-24-10.75-24-24 0-13.26 10.75-24 24-24s24 10.74 24 24c0 13.25-10.75 24-24 24z"/></svg>
+    Service 1
+  </a>
+  <a href="#">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73zM64 472c-13.25 0-24-10.75-24-24 0-13.26 10.75-24 24-24s24 10.74 24 24c0 13.25-10.75 24-24 24z"/></svg>
+    Service 1
+  </a>
+  <a href="#">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73zM64 472c-13.25 0-24-10.75-24-24 0-13.26 10.75-24 24-24s24 10.74 24 24c0 13.25-10.75 24-24 24z"/></svg>
+    Service 1
+  </a>
+  <a href="#">
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73zM64 472c-13.25 0-24-10.75-24-24 0-13.26 10.75-24 24-24s24 10.74 24 24c0 13.25-10.75 24-24 24z"/></svg>
+    Service 1
+  </a>
+</div>
+
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 3: TOP SERVICE IN DEMAND                              -->
+<!-- ============================================================ -->
+<div class="top-service">
+  <h2>Top Service in Demand in Kingsley</h2>
+  <p class="body" style="color:var(--body); margin-bottom:10px;">Lorem ipsum dolor sit amet, consectetur adipiscing elit</p>
+  <p class="body" style="color:var(--body);">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.</p>
+  <p class="body" style="color:var(--body);">Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam.</p>
+  <p class="body" style="color:var(--body);">Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
+  <p class="body" style="color:var(--body);">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip.</p>
+  <p class="body" style="color:var(--body);">Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident.</p>
+  <div class="landscape-img">Landscape Image Placeholder</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: CTA CALL BAR                                       -->
+<!-- ============================================================ -->
+<div class="cta-bar">
+  <div class="cta-phone-icon">
+    <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+  </div>
+  <div class="cta-text">
+    <div class="small">Need a plumber in Kingsley right now?</div>
+    <div class="bold">CALL US NOW!</div>
+    <div class="big">0400 838 622</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 5: SERVICE BLOCKS (alternating layout)                -->
+<!-- ============================================================ -->
+
+<!-- Block 1: text left, image right -->
+<div class="service-block">
+  <div>
+    <h2>Service KW + Kingsley</h2>
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p>
+    <p>Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.</p>
+    <br><button class="btn-service">SERVICE NAME</button>
+  </div>
+  <div class="service-img">Service Image</div>
+</div>
+
+<!-- Block 2: image left, text right -->
+<div class="service-block reverse">
+  <div>
+    <h2>Service KW + Kingsley</h2>
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p>
+    <p>Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.</p>
+    <br><button class="btn-service">SERVICE NAME</button>
+  </div>
+  <div class="service-img">Service Image</div>
+</div>
+
+<!-- Block 3: text left, image right -->
+<div class="service-block">
+  <div>
+    <h2>Service KW + Kingsley</h2>
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+    <p>Quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit.</p>
+    <br><button class="btn-service">SERVICE NAME</button>
+  </div>
+  <div class="service-img">Service Image</div>
+</div>
+
+<!-- CTA BAR 2 -->
+<div class="cta-bar">
+  <div class="cta-phone-icon">
+    <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+  </div>
+  <div class="cta-text">
+    <div class="small">Looking for a reliable plumber in Kingsley?</div>
+    <div class="bold">CALL US NOW!</div>
+    <div class="big">0400 838 622</div>
+  </div>
+</div>
+
+<!-- Block 4: image left, text right -->
+<div class="service-block reverse">
+  <div>
+    <h2>Service KW + Kingsley</h2>
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+    <p>Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+    <br><button class="btn-service">SERVICE NAME</button>
+  </div>
+  <div class="service-img">Service Image</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 6: WHY CHOOSE US                                      -->
+<!-- ============================================================ -->
+<div class="section-white">
+  <div class="why-choose">
+    <div class="why-img">Company Image Collage</div>
+    <div>
+      <div class="badge">ABOUT US</div>
+      <h2>Lorem Ipsum Dolor</h2>
+      <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Ut elit tellus, luctus nec ullamcorper mattis, pulvinar dapibus leo.</p>
+      <ul class="check-list" style="margin-top:16px;">
+        <li>A Proficient Team</li>
+        <li>Reasonable Cost</li>
+        <li>Speedy Assistance</li>
+      </ul>
+      <ul class="check-list" style="margin-top:8px; padding-left:20px;">
+        <li>Supplies &amp; Equipment</li>
+        <li>Projects (Big And Small)</li>
+        <li>Emergency Support</li>
+      </ul>
+      <div class="teal-callout">
+        Phasellus vestibulum lorem sed risus ultricies tristique. At in tellus integer feugiat scelerisque varius morbi enim nunc. Facilisi morbi tempus iaculis urna id volutpat lacus laoreet.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 7: COMPANY'S DIFFERENCES (4-column alternating cards) -->
+<!-- ============================================================ -->
+<div class="section-white" style="padding: 60px 0;">
+  <div class="differences">
+    <div class="diff-grid">
+      <div class="diff-card">
+        <div class="icon"><svg viewBox="0 0 48 48"><rect x="6" y="6" width="14" height="14" rx="2" fill="currentColor"/><rect x="6" y="28" width="14" height="14" rx="2" fill="currentColor"/><rect x="28" y="6" width="14" height="14" rx="2" fill="currentColor"/><rect x="28" y="28" width="14" height="14" rx="2" fill="currentColor"/></svg></div>
+        <h3>Lorem Ipsum Consectetur Adipiscing</h3>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+      </div>
+      <div class="diff-card">
+        <div class="icon"><svg viewBox="0 0 48 48"><circle cx="24" cy="18" r="10" fill="currentColor"/><path d="M8 42c0-8 7-14 16-14s16 6 16 14" fill="currentColor"/></svg></div>
+        <h3>Lorem Ipsum Consectetur Adipiscing</h3>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+      </div>
+      <div class="diff-card">
+        <div class="icon"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 14v10l7 7" fill="none" stroke="currentColor" stroke-width="3"/></svg></div>
+        <h3>Lorem Ipsum Consectetur Adipiscing</h3>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+      </div>
+      <div class="diff-card">
+        <div class="icon"><svg viewBox="0 0 48 48"><rect x="4" y="8" width="40" height="28" rx="3" fill="none" stroke="currentColor" stroke-width="3"/><line x1="4" y1="16" x2="44" y2="16" stroke="currentColor" stroke-width="3"/></svg></div>
+        <h3>Lorem Ipsum Consectetur Adipiscing</h3>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 7b: ASSURANCE / PROMISE SECTION                       -->
+<!-- ============================================================ -->
+<div class="assurance-section">
+  <div class="assurance-watermark">ASSURANCE</div>
+  <div class="assurance-inner">
+    <div class="assurance-img">Plumber Photo</div>
+    <div class="assurance-card">
+      <h2>Lorem Ipsum Dolor</h2>
+      <p>Vel quam elementum pulvinar etiam non. Pretium fusce id velit ut tortor pretium. Urna condimentum mattis pellentesque id nibh tortor id. Vel orci porta non pulvinar neque.</p>
+      <ul class="check-list">
+        <li><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg> Deliver Top-Notch Plumbing Service</li>
+        <li><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg> Provide Excellent Plumbing Service</li>
+        <li><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg> We Ensure Your Full Satisfaction</li>
+      </ul>
+      <div class="progress-bar">
+        <div class="label">Satisfaction</div>
+        <div class="bar"><div class="bar-fill" style="width: 92%"></div></div>
+        <div class="label">Working hard to ensure</div>
+        <div class="bar"><div class="bar-fill" style="width: 85%"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 8: SERVICE AREA LIST                                  -->
+<!-- ============================================================ -->
+<div class="service-area section-white">
+  <div class="wrap">
+    <h2>Service Area List</h2>
+    <p class="subtitle">Lorem ipsum dolor sit amet, consectetur adipiscing elit</p>
+    <div class="area-layout">
+      <div class="area-sidebar">
+        <div class="area-tab">Group Of Suburb</div>
+        <div class="area-tab">Group Of Suburb</div>
+        <div class="area-tab">Group Of Suburb</div>
+        <div class="area-tab">Group Of Suburb</div>
+        <div class="area-tab">Group Of Suburb</div>
+        <div class="area-tab">Group Of Suburb</div>
+      </div>
+      <ul class="area-suburbs">
+        <li>Suburb</li><li>Suburb</li>
+        <li>Suburb</li><li>Suburb</li>
+        <li>Suburb</li><li>Suburb</li>
+        <li>Suburb</li><li>Suburb</li>
+        <li>Suburb</li><li>Suburb</li>
+        <li>Suburb</li><li>Suburb</li>
+        <li>Suburb</li><li>Suburb</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 8b: BRANDS STRIP                                      -->
+<!-- ============================================================ -->
+<div class="brands-strip">
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+  <div class="brand-logo">Logoipsum</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 9: FOOTER                                             -->
+<!-- ============================================================ -->
+<div class="footer">
+  <div class="footer-inner">
+    <div>
+      <h4>Our team has 25+ years of skilled experience</h4>
+      <p>Ut elit tellus, luctus nec ullamcorper mattis, pulvinar dapibus leo.</p>
+      <a class="footer-about-link" href="#">About Us &rarr;</a>
+    </div>
+    <div class="footer-links">
+      <h4>Services</h4>
+      <a href="#">Gas Line Services</a>
+      <a href="#">Basement Plumbing</a>
+      <a href="#">Kitchen Plumbing</a>
+      <a href="#">Remodeling Service</a>
+      <a href="#">Bathroom Plumbing</a>
+    </div>
+    <div class="footer-links">
+      <h4>Utility pages</h4>
+      <a href="#">About Us</a>
+      <a href="#">Faq</a>
+      <a href="#">Testimonials</a>
+      <a href="#">Shop</a>
+      <a href="#">Contact Us</a>
+    </div>
+    <div class="footer-contact">
+      <h4>Contact</h4>
+      <a href="#">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        Email@Domain.Com
+      </a>
+      <a href="#">
+        <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+        +(123) 4567 8900
+      </a>
+      <a href="#">Instagram</a>
+      <a href="#">Youtube</a>
+      <a href="#">Linkdin</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div class="footer-bottom-logo">
+      <img src="https://sureflow.seoroom.au/wp-content/uploads/2026/04/sureflow20logo20light20bg-scaled.png" alt="Sureflow" style="height: 40px; width: auto; filter: brightness(0) invert(1);">
+    </div>
+    <div class="footer-copyright">&copy;2026 &ndash; Sureflow Plumbing &amp; Gas</div>
+  </div>
+</div>
+
+</body>
+</html>

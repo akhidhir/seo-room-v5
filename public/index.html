@@ -32604,6 +32604,7 @@
         clarityApiToken: '',
         cloudflareZoneId: '',
         phone: '',
+        seoroomApiKey: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
       const [newDistance, setNewDistance] = useState(20);
@@ -32612,6 +32613,9 @@
       const [loadingGsc, setLoadingGsc] = useState(false);
       const [loadingGbp, setLoadingGbp] = useState(false);
       const [newCompetitor, setNewCompetitor] = useState('');
+      const [extractingDesign, setExtractingDesign] = useState(false);
+      const [creatingTemplate, setCreatingTemplate] = useState(false);
+      const [designExtracted, setDesignExtracted] = useState(false);
 
       // Page Templates state
       const [templates, setTemplates] = useState([]);
@@ -32661,7 +32665,9 @@
               pluginLicenseKey: data.project.plugin_license_key || '',
               pluginLicenseExpires: data.project.plugin_license_expires || '',
               pluginLicenseActive: data.project.plugin_license_active !== false,
+              seoroomApiKey: data.project.seoroom_api_key || '',
             });
+            if (data.project.elementor_globals && Object.keys(data.project.elementor_globals).length > 0) setDesignExtracted(true);
           }
           // Load available GSC sites and GBP locations
           loadGscSites();
@@ -33011,6 +33017,53 @@
                     placeholder="xxxx xxxx xxxx xxxx" style={{ fontSize: 12 }} />
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* SEO Room API — Suburb Template System */}
+          <div className="card">
+            <div className="card-title" style={{ marginBottom: '16px' }}>
+              <i className="fas fa-puzzle-piece" style={{ marginRight: 8, color: '#8b5cf6' }} />SEO Room API (Suburb Templates)
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+              Install the <strong>seoroom-api</strong> plugin on the client's WordPress site, then enter the API key here. This enables automated suburb page creation using Elementor templates that match the homepage design.
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>API Key</label>
+              <input type="text" className="form-input" value={formData.seoroomApiKey}
+                onChange={(e) => setFormData(prev => ({ ...prev, seoroomApiKey: e.target.value }))}
+                placeholder="sr_2026_..." style={{ fontSize: 12, maxWidth: 400 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button className="btn btn-sm" style={{ background: '#6366f1', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 6, fontSize: 11, cursor: 'pointer', opacity: extractingDesign ? 0.6 : 1 }}
+                disabled={extractingDesign || !formData.wordpressUrl}
+                onClick={async () => {
+                  setExtractingDesign(true);
+                  try {
+                    const d = await api(`/projects/${currentProject?.id}/extract-design`, { method: 'POST' });
+                    setDesignExtracted(true);
+                    alert('Design extracted! Found ' + (d.colors_count || 0) + ' colors and ' + (d.typography_count || 0) + ' typography styles.');
+                  } catch (err) { alert('Extract failed: ' + err.message); }
+                  setExtractingDesign(false);
+                }}>
+                {extractingDesign ? 'Extracting...' : '1. Extract Design'}
+              </button>
+              <button className="btn btn-sm" style={{ background: '#14b8a6', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 6, fontSize: 11, cursor: 'pointer', opacity: creatingTemplate ? 0.6 : 1 }}
+                disabled={creatingTemplate || !designExtracted || !formData.seoroomApiKey}
+                onClick={async () => {
+                  const suburb = prompt('Enter suburb name for the template page:');
+                  if (!suburb) return;
+                  setCreatingTemplate(true);
+                  try {
+                    const d = await api(`/projects/${currentProject?.id}/create-suburb-template`, { method: 'POST', body: { suburb } });
+                    alert('Template page created! ID: ' + d.id + ', slug: ' + d.slug);
+                  } catch (err) { alert('Create failed: ' + err.message); }
+                  setCreatingTemplate(false);
+                }}>
+                {creatingTemplate ? 'Creating...' : '2. Create Suburb Page'}
+              </button>
+              {designExtracted && <span style={{ fontSize: 10, color: '#22c55e' }}><i className="fas fa-check-circle" /> Design extracted</span>}
+              {!formData.wordpressUrl && <span style={{ fontSize: 10, color: '#ef4444' }}>Set WordPress URL first</span>}
             </div>
           </div>
 
