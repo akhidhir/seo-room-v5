@@ -22104,6 +22104,83 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
           // Add <base> tag for any remaining relative resources
           if (!$('base').length) $('head').prepend(`<base href="${wfOrigin}/">`);
 
+          // === REPLACE {{TEMPLATE VARIABLES}} in wireframe HTML ===
+          // Extract suburb name from page slug/name (e.g., "plumber-darch" → "Darch")
+          const _slugParts = (item.slug || item.page_name || '').toLowerCase().replace(/[^a-z0-9-\s]/g, '').split(/[-\s]+/);
+          let _suburb = '';
+          for (let i = _slugParts.length - 1; i >= 0; i--) {
+            if (typeof SUBURB_GPS !== 'undefined' && SUBURB_GPS[_slugParts[i]]) { _suburb = _slugParts[i].charAt(0).toUpperCase() + _slugParts[i].slice(1); break; }
+          }
+          if (!_suburb && _slugParts.length > 1) _suburb = _slugParts[_slugParts.length - 1].charAt(0).toUpperCase() + _slugParts[_slugParts.length - 1].slice(1);
+
+          // Build nearby suburbs list from service_areas or SUBURB_GPS
+          let _nearbySuburbs = '';
+          if (project?.service_areas && Array.isArray(project.service_areas)) {
+            const nearby = project.service_areas.filter(s => s.toLowerCase() !== _suburb.toLowerCase()).slice(0, 6);
+            _nearbySuburbs = nearby.join(', ');
+          }
+          if (!_nearbySuburbs && _suburb && typeof SUBURB_GPS !== 'undefined') {
+            const center = SUBURB_GPS[_suburb.toLowerCase()];
+            if (center) {
+              const nearList = [];
+              for (const [name, coords] of Object.entries(SUBURB_GPS)) {
+                if (name === _suburb.toLowerCase()) continue;
+                const dlat = (coords.lat - center.lat) * 111;
+                const dlng = (coords.lng - center.lng) * 111 * Math.cos(center.lat * Math.PI / 180);
+                const dist = Math.sqrt(dlat * dlat + dlng * dlng);
+                if (dist < 8) nearList.push({ name: name.charAt(0).toUpperCase() + name.slice(1), dist });
+              }
+              nearList.sort((a, b) => a.dist - b.dist);
+              _nearbySuburbs = nearList.slice(0, 6).map(s => s.name).join(', ');
+            }
+          }
+
+          const _company = project?.business_name || project?.name || '';
+          const _industry = project?.industry || 'services';
+          const _service = _industry.replace(/s$/, ''); // "plumbing" → "plumbing", "plumbers" → "plumber"
+          const _tradesPeople = _industry; // "plumbers", "electricians"
+
+          // Global HTML replacement of {{variables}}
+          let wfBody = $('body').html();
+          const templateVars = {
+            'suburb': _suburb,
+            'company': _company,
+            'service': _service,
+            'offered service': _service,
+            'offered_service': _service,
+            'tradies': _tradesPeople,
+            'tradies services': _service,
+            'tradies_services': _service,
+            'surrounding suburbs': _nearbySuburbs || 'surrounding suburbs',
+            'surrounding_suburbs': _nearbySuburbs || 'surrounding suburbs',
+            'location': _suburb || project?.location || '',
+            'city': project?.location || '',
+            'phone': project?.phone || '',
+          };
+          for (const [key, val] of Object.entries(templateVars)) {
+            if (val) {
+              const regex = new RegExp(`\\{\\{\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`, 'gi');
+              wfBody = wfBody.replace(regex, val);
+            }
+          }
+          $('body').html(wfBody);
+
+          // Hide sections that are wireframe INSTRUCTIONS (not content)
+          // Detect patterns like "Write a description about", "On the 1st paragraph", "On the 2nd paragraph"
+          $('p').each((_, p) => {
+            const text = $(p).text().trim();
+            if (/^(Write a description|On the \d|On the first|On the last paragraph)/i.test(text)) {
+              $(p).css('display', 'none');
+            }
+          });
+          // Hide bullet points that are wireframe instructions
+          $('li').each((_, li) => {
+            const text = $(li).text().trim();
+            if (/^(What are the problems|How can the .+ help|How can we provide)/i.test(text)) {
+              $(li).css('display', 'none');
+            }
+          });
+
           // Get wireframe template sections to know which Elementor sections are locked
           let wfSections = [];
           try {
@@ -22306,11 +22383,45 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
             }
           });
 
-          // 4. Dim suburb placeholder sections ("Group Of Suburb" / "Suburb" repeated)
-          topSections.each((_, s) => {
-            const text = $(s).text();
-            if (/Group Of Suburb/i.test(text) && (text.match(/\bSuburb\b/g) || []).length > 3) {
-              $(s).css('opacity', '0.15');
+          // 4. Replace suburb placeholders with real suburb data
+          // Replace "Group Of Suburb" buttons/tabs with actual service area groups
+          const _saGroups = (project?.service_areas || []);
+          const _saGroupNames = [];
+          // Group suburbs by first letter or region
+          if (_saGroups.length > 0) {
+            const regionSize = Math.ceil(_saGroups.length / 4);
+            for (let gi = 0; gi < 4; gi++) {
+              const chunk = _saGroups.slice(gi * regionSize, (gi + 1) * regionSize);
+              if (chunk.length > 0) _saGroupNames.push(chunk[0] + ' Area');
+            }
+          }
+          let _groupIdx = 0;
+          $('a, span, p, button, div').each((_, el) => {
+            const $el = $(el);
+            const text = $el.text().trim();
+            if (/^Group Of Suburb$/i.test(text)) {
+              if (_saGroupNames.length > 0) {
+                $el.text(_saGroupNames[_groupIdx % _saGroupNames.length] || 'Service Area');
+                _groupIdx++;
+              } else {
+                $el.text(_suburb ? _suburb + ' Area' : 'Service Area');
+              }
+            }
+          });
+          // Replace standalone "Suburb" list items with actual suburbs
+          let _subIdx = 0;
+          const _allSuburbs = _saGroups.length > 0 ? _saGroups : (_nearbySuburbs ? _nearbySuburbs.split(', ') : []);
+          $('li, span').each((_, el) => {
+            const $el = $(el);
+            if ($el.children().length > 0) return; // skip if has child elements
+            const text = $el.text().trim();
+            if (/^Suburb$/i.test(text)) {
+              if (_allSuburbs.length > 0) {
+                $el.text(_allSuburbs[_subIdx % _allSuburbs.length]);
+                _subIdx++;
+              } else {
+                $el.css('opacity', '0.2');
+              }
             }
           });
 
