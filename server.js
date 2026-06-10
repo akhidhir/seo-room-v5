@@ -22147,8 +22147,11 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
           }
           console.log(`[preview-sp] Draft split into ${draftBlocks.length} blocks (hasCommentMarkers: ${hasCommentMarkers})`);
 
-          // Find top-level Elementor sections
-          const topSections = $('section.elementor-top-section, .elementor-top-section[data-element_type="section"]');
+          // Find top-level Elementor sections AND containers
+          const topSections = $('[data-element_type="section"], [data-element_type="container"]').filter((_, el) => {
+            // Only top-level (not nested inside another section/container)
+            return !$(el).parents('[data-element_type="section"], [data-element_type="container"]').length;
+          });
           console.log(`[preview-sp] Found ${topSections.length} Elementor sections, ${wfSections.length} wireframe sections, ${draftBlocks.length} draft blocks`);
 
           // Map: iterate through Elementor sections, skip locked ones, inject draft blocks sequentially
@@ -22158,95 +22161,108 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
           topSections.each((idx, section) => {
             const $section = $(section);
 
-            // Detect section content type for smart skipping
+            // Detect section content type for smart skipping — use GENERIC selectors (not Elementor classes)
             const headingTexts = [];
-            $section.find('.elementor-heading-title').each((_, h) => { headingTexts.push($(h).text().trim().toUpperCase()); });
+            $section.find('h1, h2, h3, h4, h5, h6').each((_, h) => { headingTexts.push($(h).text().trim().toUpperCase()); });
             const allHeadingText = headingTexts.join(' ');
-            const hasForm = $section.find('form, .elementor-widget-form').length > 0;
-            const hasMap = $section.find('iframe[src*="maps"], .elementor-widget-google_maps').length > 0;
-            const hasTextEditor = $section.find('.elementor-widget-text-editor').length > 0;
+            const hasForm = $section.find('form, [data-widget_type*="form"]').length > 0;
+            const hasMap = $section.find('iframe[src*="maps"], [data-widget_type*="google_maps"]').length > 0;
+            const hasParagraph = $section.find('p').length > 0;
             const hasHeading = headingTexts.length > 0;
-            const hasImageCarousel = $section.find('.elementor-widget-image-carousel, .elementor-widget-media-carousel').length > 0;
+            const hasImageCarousel = $section.find('[data-widget_type*="carousel"], [data-widget_type*="slides"]').length > 0;
 
             // SKIP: CTA bars — identified by "CALL US NOW" / "PHONE NUMBER" / phone-like patterns
             const isCta = /CALL US|PHONE NUMBER|CALL NOW|GET A QUOTE|BOOK NOW|CONTACT US TODAY|FREE QUOTE|REQUEST A QUOTE/.test(allHeadingText);
             if (isCta) { debugLog.push(`#${idx}: SKIP CTA "${allHeadingText.slice(0,30)}"`); return; }
 
             // SKIP: Map-only sections
-            if (hasMap && !hasTextEditor) { debugLog.push(`#${idx}: SKIP map-only`); return; }
+            if (hasMap && !hasParagraph) { debugLog.push(`#${idx}: SKIP map-only`); return; }
 
-            // SKIP: Form-only sections (no text-editor alongside the form)
-            if (hasForm && !hasTextEditor && headingTexts.length <= 1) { debugLog.push(`#${idx}: SKIP form-only`); return; }
+            // SKIP: Form-only sections (no paragraph text alongside the form)
+            if (hasForm && !hasParagraph && headingTexts.length <= 1) { debugLog.push(`#${idx}: SKIP form-only`); return; }
 
             // SKIP: Image carousel / accreditation sections (no text content)
-            if (hasImageCarousel && !hasTextEditor) { debugLog.push(`#${idx}: SKIP carousel`); return; }
+            if (hasImageCarousel && !hasParagraph) { debugLog.push(`#${idx}: SKIP carousel`); return; }
 
-            // SKIP: Services strip — sections with only icon-boxes and no text-editor
-            if ($section.find('.elementor-widget-icon-box').length >= 3 && !hasTextEditor) { debugLog.push(`#${idx}: SKIP icon-boxes`); return; }
+            // SKIP: Services strip — sections with only icon-boxes and no paragraphs
+            if ($section.find('[data-widget_type*="icon-box"]').length >= 3 && !hasParagraph) { debugLog.push(`#${idx}: SKIP icon-boxes`); return; }
 
-            // SKIP: Sections with no heading AND no text-editor (pure visual sections)
-            if (!hasHeading && !hasTextEditor) { debugLog.push(`#${idx}: SKIP no-text`); return; }
+            // SKIP: Sections with no heading AND no paragraph (pure visual sections)
+            if (!hasHeading && !hasParagraph) { debugLog.push(`#${idx}: SKIP no-text`); return; }
 
-            // Get next draft block
+            // Get next draft block — skip blocks with no heading if this section has a heading
             if (draftIdx >= draftBlocks.length) { debugLog.push(`#${idx}: NO MORE DRAFT BLOCKS`); return; }
-            const draftHtml = draftBlocks[draftIdx];
+            let draftHtml = draftBlocks[draftIdx];
+            let tempDiv = cheerio.load(`<div>${draftHtml}</div>`);
+            let draftH = tempDiv('h1, h2, h3').first();
+            // If section has headings but draft block has none, skip to next draft block that has a heading
+            if (hasHeading && !draftH.length && draftIdx + 1 < draftBlocks.length) {
+              debugLog.push(`#${idx}: skip draft[${draftIdx}] (no heading, section has headings)`);
+              draftIdx++;
+              draftHtml = draftBlocks[draftIdx];
+              tempDiv = cheerio.load(`<div>${draftHtml}</div>`);
+              draftH = tempDiv('h1, h2, h3').first();
+            }
             draftIdx++;
-
-            // Parse draft HTML into heading + body
-            const tempDiv = cheerio.load(`<div>${draftHtml}</div>`);
-            const draftH = tempDiv('h1, h2, h3').first();
             const draftHText = draftH.length ? draftH.text().trim().slice(0, 40) : '(no heading)';
 
-            // For sections with forms (like hero), target ONLY widgets NOT inside the form column
+            // For sections with forms (like hero), target ONLY the column WITHOUT the form
             let $scope = $section;
             let scopeNote = 'full-section';
             if (hasForm) {
-              // Find DIRECT child columns only (not nested inner columns)
-              const $container = $section.find('.elementor-container').first();
-              const $directCols = $container.length ? $container.children('.elementor-column') : $section.children('.elementor-row').children('.elementor-column');
-              if ($directCols.length > 1) {
-                const $nonFormCols = $directCols.filter((_, col) => $(col).find('form, .elementor-widget-form').length === 0);
+              // Find columns that don't contain a form
+              const $allCols = $section.find('[class*="elementor-col"], [class*="e-col"]');
+              if ($allCols.length > 1) {
+                const $nonFormCols = $allCols.filter((_, col) => $(col).find('form, [data-widget_type*="form"]').length === 0);
                 if ($nonFormCols.length > 0) {
                   $scope = $nonFormCols;
-                  scopeNote = `non-form-cols(${$nonFormCols.length}/${$directCols.length})`;
-                } else {
-                  scopeNote = `all-cols-have-form(${$directCols.length})`;
+                  scopeNote = `non-form-cols(${$nonFormCols.length})`;
                 }
-              } else {
-                scopeNote = `single-col(${$directCols.length})`;
               }
             }
 
-            // Find heading and text widgets in scope
-            const headingWidget = $scope.find('.elementor-heading-title').first();
-            const textEditors = $scope.find('.elementor-widget-text-editor .elementor-widget-container');
+            // Find heading and text elements using GENERIC HTML selectors
+            // Skip the first heading if it's a small breadcrumb/tag (less than 60 chars in parent with small font)
+            const allHeadings = $scope.find('h1, h2, h3');
+            let mainHeading = null;
+            // Find the MAIN heading (largest heading tag, prefer h1 > h2 > h3)
+            for (const tag of ['h1', 'h2', 'h3']) {
+              const found = $scope.find(tag).first();
+              if (found.length) { mainHeading = found; break; }
+            }
+            const paragraphs = $scope.find('p');
 
-            // Replace heading widget
+            // Replace main heading
             let headingReplaced = false;
-            if (draftH.length && headingWidget.length) {
-              headingWidget.html(draftH.html());
-              headingWidget.css('border-left', '3px solid #22c55e');
-              headingWidget.css('padding-left', '8px');
+            if (draftH.length && mainHeading) {
+              mainHeading.html(draftH.html());
+              mainHeading.css('border-left', '3px solid #22c55e');
+              mainHeading.css('padding-left', '8px');
               draftH.remove();
               headingReplaced = true;
             }
 
-            // Replace text-editor widget content with remaining body
-            const bodyEls = tempDiv('p, ul, ol, blockquote, h3, h4, h5, h6, details, div');
+            // Replace paragraph content
+            const bodyEls = tempDiv('p, ul, ol, blockquote, h3, h4, h5, h6, details');
             let bodyReplaced = false;
-            if (textEditors.length && bodyEls.length) {
+            if (paragraphs.length && bodyEls.length) {
               let bodyHtml = '';
               bodyEls.each((_, el) => { bodyHtml += tempDiv.html(el); });
               if (bodyHtml.trim()) {
-                textEditors.first().html(bodyHtml);
-                textEditors.first().css('border-left', '3px solid #22c55e');
-                textEditors.first().css('padding-left', '12px');
-                textEditors.first().css('background', 'rgba(34,197,94,0.05)');
-                bodyReplaced = true;
+                // Find the first paragraph's parent container and replace its content
+                const firstP = paragraphs.first();
+                const parentContainer = firstP.parent();
+                if (parentContainer.length) {
+                  parentContainer.html(bodyHtml);
+                  parentContainer.css('border-left', '3px solid #22c55e');
+                  parentContainer.css('padding-left', '12px');
+                  parentContainer.css('background', 'rgba(34,197,94,0.05)');
+                  bodyReplaced = true;
+                }
               }
             }
 
-            debugLog.push(`#${idx}: INJECT scope:${scopeNote} draft:"${draftHText}" h:${headingWidget.length}→${headingReplaced} t:${textEditors.length}→${bodyReplaced} headings:[${headingTexts.slice(0,2).join('|')}]`);
+            debugLog.push(`#${idx}: INJECT scope:${scopeNote} draft:"${draftHText}" h:${allHeadings.length}→${headingReplaced} p:${paragraphs.length}→${bodyReplaced} headings:[${headingTexts.slice(0,2).join('|')}]`);
             injected++;
           });
           console.log(`[preview-sp] Injected draft into ${injected}/${topSections.length} sections (used ${draftIdx}/${draftBlocks.length} draft blocks)`);
