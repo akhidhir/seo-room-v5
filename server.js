@@ -29,6 +29,8 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'https://seo-room
 const GSC_SCOPES = 'https://www.googleapis.com/auth/webmasters.readonly';
 const GBP_SCOPES = 'https://www.googleapis.com/auth/business.manage';
 const GBP_REDIRECT_URI = process.env.GBP_REDIRECT_URI || 'https://seo-room-v5-production.up.railway.app/api/gbp/callback';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_REDIRECT_URI = process.env.DRIVE_REDIRECT_URI || 'https://seo-room-v5-production.up.railway.app/api/drive/callback';
 
 // External APIs
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN;
@@ -568,6 +570,11 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS seoroom_api_key TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS elementor_globals JSONB DEFAULT '{}'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wireframe_templates JSONB DEFAULT '{}'`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS drive_folder_id TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS drive_folder_id TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS drive_doc_id TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT 'draft'`).catch(() => {});
+    await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS optimise_round INTEGER DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -4509,6 +4516,266 @@ IMPORTANT:
     res.json({ ok: true, page_type, sections: wireframeSections, section_count: wireframeSections.length });
   } catch (e) {
     console.error('[parse-wireframe-build]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Google Drive Integration for Copywriter Review Loop ──
+
+// Create Drive folder for a project
+app.post('/api/projects/:id/drive/create-folder', async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected. Go to Settings → Agency Integrations → Connect Google Drive.' });
+
+    if (project.drive_folder_id) {
+      return res.json({ ok: true, folder_id: project.drive_folder_id, message: 'Folder already exists' });
+    }
+
+    const folderName = `SEO Room — ${project.business_name || project.name}`;
+    const folder = await driveCreateFolder(accessToken, folderName);
+    if (folder.error) return res.status(500).json({ error: folder.error.message || 'Failed to create folder' });
+
+    await pool.query('UPDATE projects SET drive_folder_id=$1 WHERE id=$2', [folder.id, projectId]);
+    console.log(`[drive] Created folder "${folderName}" (${folder.id}) for project ${projectId}`);
+    res.json({ ok: true, folder_id: folder.id, folder_name: folderName });
+  } catch (e) {
+    console.error('[drive] Create folder error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create Drive folder for a build
+app.post('/api/builds/:id/drive/create-folder', async (req, res) => {
+  try {
+    const buildId = parseInt(req.params.id);
+    const build = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [buildId])).rows[0];
+    if (!build) return res.status(404).json({ error: 'Build not found' });
+
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+
+    if (build.drive_folder_id) {
+      return res.json({ ok: true, folder_id: build.drive_folder_id, message: 'Folder already exists' });
+    }
+
+    const folderName = `SEO Room — ${build.business_name || build.name}`;
+    const folder = await driveCreateFolder(accessToken, folderName);
+    if (folder.error) return res.status(500).json({ error: folder.error.message || 'Failed to create folder' });
+
+    await pool.query('UPDATE website_builds SET drive_folder_id=$1 WHERE id=$2', [folder.id, buildId]);
+    console.log(`[drive] Created folder "${folderName}" (${folder.id}) for build ${buildId}`);
+    res.json({ ok: true, folder_id: folder.id, folder_name: folderName });
+  } catch (e) {
+    console.error('[drive] Create folder error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Push a site page draft to Google Drive as a Doc
+app.post(['/api/projects/:projectId/site-pages/:pageId/push-to-drive', '/api/builds/:buildId/site-pages/:pageId/push-to-drive'], async (req, res) => {
+  try {
+    const { projectId, buildId, pageId } = req.params;
+    const page = (await pool.query(
+      projectId ? 'SELECT * FROM site_pages WHERE id=$1 AND project_id=$2' : 'SELECT * FROM site_pages WHERE id=$1 AND build_id=$2',
+      [pageId, projectId || buildId]
+    )).rows[0];
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (!page.draft_content) return res.status(400).json({ error: 'No draft content to push' });
+
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+
+    // Get folder ID from project or build
+    let folderId;
+    if (projectId) {
+      const proj = (await pool.query('SELECT drive_folder_id FROM projects WHERE id=$1', [projectId])).rows[0];
+      folderId = proj?.drive_folder_id;
+    } else {
+      const bld = (await pool.query('SELECT drive_folder_id FROM website_builds WHERE id=$1', [buildId])).rows[0];
+      folderId = bld?.drive_folder_id;
+    }
+    if (!folderId) return res.status(400).json({ error: 'No Drive folder created yet. Create the folder first.' });
+
+    const docTitle = page.page_name + (page.optimise_round > 0 ? ` (v${page.optimise_round + 1})` : '');
+    let result;
+
+    if (page.drive_doc_id) {
+      // Update existing doc
+      result = await driveUpdateDoc(accessToken, page.drive_doc_id, page.draft_content);
+      if (result.error) return res.status(500).json({ error: result.error.message || 'Failed to update doc' });
+      console.log(`[drive] Updated doc ${page.drive_doc_id} for page "${page.page_name}"`);
+    } else {
+      // Create new doc
+      result = await driveCreateDoc(accessToken, docTitle, page.draft_content, folderId);
+      if (result.error) return res.status(500).json({ error: result.error.message || 'Failed to create doc' });
+      await pool.query('UPDATE site_pages SET drive_doc_id=$1 WHERE id=$2', [result.id, pageId]);
+      console.log(`[drive] Created doc "${docTitle}" (${result.id}) for page "${page.page_name}"`);
+    }
+
+    // Update review status to internal_review
+    await pool.query('UPDATE site_pages SET review_status=$1, updated_at=NOW() WHERE id=$2', ['internal_review', pageId]);
+
+    res.json({ ok: true, doc_id: result.id || page.drive_doc_id, doc_url: `https://docs.google.com/document/d/${result.id || page.drive_doc_id}/edit` });
+  } catch (e) {
+    console.error('[drive] Push to Drive error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Read feedback from a Drive Doc (comments + content changes)
+app.get(['/api/projects/:projectId/site-pages/:pageId/drive-feedback', '/api/builds/:buildId/site-pages/:pageId/drive-feedback'], async (req, res) => {
+  try {
+    const { projectId, buildId, pageId } = req.params;
+    const page = (await pool.query(
+      projectId ? 'SELECT * FROM site_pages WHERE id=$1 AND project_id=$2' : 'SELECT * FROM site_pages WHERE id=$1 AND build_id=$2',
+      [pageId, projectId || buildId]
+    )).rows[0];
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (!page.drive_doc_id) return res.status(400).json({ error: 'Page not pushed to Drive yet' });
+
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+
+    const [docText, comments] = await Promise.all([
+      driveReadDoc(accessToken, page.drive_doc_id),
+      driveListComments(accessToken, page.drive_doc_id)
+    ]);
+
+    res.json({
+      ok: true,
+      doc_id: page.drive_doc_id,
+      doc_text: docText,
+      comments,
+      comment_count: comments.length,
+      review_status: page.review_status,
+      optimise_round: page.optimise_round
+    });
+  } catch (e) {
+    console.error('[drive] Read feedback error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Optimise — AI reads Drive feedback and rewrites the draft
+app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:buildId/site-pages/:pageId/optimise'], async (req, res) => {
+  try {
+    const { projectId, buildId, pageId } = req.params;
+    const page = (await pool.query(
+      projectId ? 'SELECT * FROM site_pages WHERE id=$1 AND project_id=$2' : 'SELECT * FROM site_pages WHERE id=$1 AND build_id=$2',
+      [pageId, projectId || buildId]
+    )).rows[0];
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    if (!page.drive_doc_id) return res.status(400).json({ error: 'Page not pushed to Drive yet' });
+    if (!page.draft_content) return res.status(400).json({ error: 'No draft content to optimise' });
+
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+
+    // Read feedback from Drive
+    const [docText, comments] = await Promise.all([
+      driveReadDoc(accessToken, page.drive_doc_id),
+      driveListComments(accessToken, page.drive_doc_id)
+    ]);
+
+    if (!comments.length && docText === page.draft_content?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) {
+      return res.status(400).json({ error: 'No feedback found. Add comments or edit the doc in Google Drive first.' });
+    }
+
+    // Build feedback context for AI
+    let feedbackContext = '';
+    if (comments.length) {
+      feedbackContext += '\n\nFEEDBACK COMMENTS (from Google Drive):\n';
+      comments.forEach((c, i) => {
+        feedbackContext += `${i + 1}. ${c.author}: "${c.content}"`;
+        if (c.quotedText) feedbackContext += ` [regarding: "${c.quotedText}"]`;
+        feedbackContext += '\n';
+        c.replies.forEach(r => { feedbackContext += `   → ${r.author}: "${r.content}"\n`; });
+      });
+    }
+
+    // Get project/build context
+    let businessName = '', industry = '', location = '';
+    if (projectId) {
+      const proj = (await pool.query('SELECT business_name, name, industry, location FROM projects WHERE id=$1', [projectId])).rows[0];
+      if (proj) { businessName = proj.business_name || proj.name; industry = proj.industry; location = proj.location; }
+    } else if (buildId) {
+      const bld = (await pool.query('SELECT business_name, name, industry, location FROM website_builds WHERE id=$1', [buildId])).rows[0];
+      if (bld) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; }
+    }
+
+    const roundNum = (page.optimise_round || 0) + 1;
+    const reviewType = page.review_status === 'client_review' ? 'CLIENT' : 'INTERNAL TEAM';
+
+    console.log(`[optimise] Round ${roundNum} for "${page.page_name}", ${comments.length} comments, review by: ${reviewType}`);
+
+    const aiResponse = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: `You are optimising a webpage draft for ${businessName} (${industry}, ${location}).
+
+This is OPTIMISATION ROUND ${roundNum}. The ${reviewType} reviewed the draft in Google Drive and left feedback.
+
+CURRENT DRAFT:
+${page.draft_content}
+${feedbackContext}
+
+${docText ? `\nCURRENT DOC TEXT (may have inline edits):\n${(docText || '').substring(0, 6000)}` : ''}
+
+INSTRUCTIONS:
+- Address EVERY piece of feedback from the comments above
+- If the reviewer asked to change specific wording, change it exactly as requested
+- If the reviewer suggested adding content, add it naturally
+- If the reviewer flagged issues, fix them
+- Preserve the overall page structure and SEO optimization
+- Keep the same HTML format (H1, H2, H3, p tags, etc.)
+- Do NOT add new sections unless the feedback specifically requests it
+- Do NOT remove content unless the feedback specifically requests it
+- Maintain the focus keyword: ${page.focus_keyword || 'N/A'}
+
+${HUMAN_WRITING_RULES}
+
+Return ONLY the updated HTML content, no markdown wrapping.`
+      }]
+    });
+
+    let content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+
+    // Save updated draft
+    await pool.query(
+      'UPDATE site_pages SET draft_content=$1, word_count=$2, optimise_round=$3, review_status=$4, updated_at=NOW() WHERE id=$5',
+      [content, wordCount, roundNum, 'internal_review', pageId]
+    );
+
+    // Update the Drive doc with new content
+    await driveUpdateDoc(accessToken, page.drive_doc_id, content);
+
+    console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, doc updated`);
+    res.json({ ok: true, content, word_count: wordCount, round: roundNum });
+  } catch (e) {
+    console.error('[optimise] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update review status (internal_approved → client_review, client_approved → ready_to_publish)
+app.post(['/api/projects/:projectId/site-pages/:pageId/review-status', '/api/builds/:buildId/site-pages/:pageId/review-status'], async (req, res) => {
+  try {
+    const { projectId, buildId, pageId } = req.params;
+    const { status } = req.body;
+    const validStatuses = ['draft', 'internal_review', 'internal_approved', 'client_review', 'client_approved', 'ready_to_publish', 'published'];
+    if (!validStatuses.includes(status)) return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+
+    await pool.query('UPDATE site_pages SET review_status=$1, updated_at=NOW() WHERE id=$2', [status, pageId]);
+    res.json({ ok: true, status });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
@@ -33531,6 +33798,152 @@ app.post('/api/user/gbp/disconnect', async (req, res) => {
     ['disconnected', '{}', req.auth.userId, 'gbp']);
   res.json({ ok: true });
 });
+
+// ── Google Drive OAuth ──
+app.get(['/api/drive/connect', '/api/user/google_drive/connect'], (req, res) => {
+  if (!GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google OAuth not configured' });
+  const state = Buffer.from(JSON.stringify({
+    token: req.headers.authorization?.replace('Bearer ', '')
+  })).toString('base64url');
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(DRIVE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(DRIVE_SCOPES)}&access_type=offline&prompt=select_account%20consent&state=${state}`;
+  res.json({ url });
+});
+
+app.get('/api/drive/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    if (!code || !state) return res.status(400).send('Missing code or state');
+    const stateData = JSON.parse(Buffer.from(state, 'base64url').toString());
+    let userId;
+    try { userId = jwt.verify(stateData.token, JWT_SECRET).userId; } catch { return res.status(401).send('Invalid session'); }
+
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: DRIVE_REDIRECT_URI, grant_type: 'authorization_code'
+      })
+    });
+    const tokens = await tokenRes.json();
+    if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
+
+    await pool.query(
+      `INSERT INTO user_integrations (user_id, kind, config, status)
+       VALUES ($1, 'google_drive', $2, 'connected')
+       ON CONFLICT (user_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+      [userId, JSON.stringify({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: Date.now() + (tokens.expires_in * 1000)
+      })]
+    );
+    console.log(`[drive] OAuth tokens stored for user ${userId}`);
+    res.send('<html><body><script>window.close(); window.opener && window.opener.location.reload();</script><p>Google Drive connected! You can close this tab.</p></body></html>');
+  } catch (err) {
+    console.error('[drive] OAuth callback error:', err.message);
+    res.status(500).send('OAuth failed: ' + err.message);
+  }
+});
+
+app.get('/api/user/drive/status', async (req, res) => {
+  const r = await pool.query('SELECT status, updated_at FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth.userId, 'google_drive']);
+  if (r.rows.length === 0) return res.json({ connected: false });
+  res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at });
+});
+
+app.post(['/api/user/drive/disconnect', '/api/user/google_drive/disconnect'], async (req, res) => {
+  await pool.query('UPDATE user_integrations SET status=$1, config=$2, updated_at=NOW() WHERE user_id=$3 AND kind=$4',
+    ['disconnected', '{}', req.auth.userId, 'google_drive']);
+  res.json({ ok: true });
+});
+
+// Drive API helper — get access token with auto-refresh
+async function getDriveAccessToken(userId) {
+  const r = await pool.query('SELECT config FROM user_integrations WHERE user_id=$1 AND kind=$2 AND status=$3', [userId, 'google_drive', 'connected']);
+  if (!r.rows.length) return null;
+  const config = r.rows[0].config;
+  if (!config.access_token) return null;
+  if (config.expires_at && Date.now() > config.expires_at - 60000) {
+    // Refresh token
+    const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        refresh_token: config.refresh_token, client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET, grant_type: 'refresh_token'
+      })
+    });
+    const newTokens = await refreshRes.json();
+    if (newTokens.error) { console.error('[drive] Token refresh failed:', newTokens.error); return null; }
+    config.access_token = newTokens.access_token;
+    config.expires_at = Date.now() + (newTokens.expires_in * 1000);
+    await pool.query('UPDATE user_integrations SET config=$1, updated_at=NOW() WHERE user_id=$2 AND kind=$3',
+      [JSON.stringify(config), userId, 'google_drive']);
+  }
+  return config.access_token;
+}
+
+// Drive API helpers
+async function driveCreateFolder(accessToken, folderName, parentId) {
+  const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+      ...(parentId ? { parents: [parentId] } : {})
+    })
+  });
+  return res.json();
+}
+
+async function driveCreateDoc(accessToken, title, htmlContent, parentFolderId) {
+  // Upload HTML content as Google Doc
+  const metadata = { name: title, mimeType: 'application/vnd.google-apps.document', ...(parentFolderId ? { parents: [parentFolderId] } : {}) };
+  const boundary = '---seoroom---';
+  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: text/html\r\n\r\n${htmlContent}\r\n--${boundary}--`;
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body
+  });
+  return res.json();
+}
+
+async function driveUpdateDoc(accessToken, fileId, htmlContent) {
+  const boundary = '---seoroom---';
+  const body = `--${boundary}\r\nContent-Type: text/html\r\n\r\n${htmlContent}\r\n--${boundary}--`;
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body
+  });
+  return res.json();
+}
+
+async function driveReadDoc(accessToken, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!res.ok) return null;
+  return res.text();
+}
+
+async function driveListComments(accessToken, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/comments?fields=*&pageSize=100`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.comments || []).filter(c => !c.resolved).map(c => ({
+    author: c.author?.displayName || 'Unknown',
+    content: c.content,
+    quotedText: c.quotedFileContent?.value || '',
+    createdTime: c.createdTime,
+    replies: (c.replies || []).map(r => ({ author: r.author?.displayName || 'Unknown', content: r.content }))
+  }));
+}
 
 // User-level: get all Google integration statuses
 app.get('/api/user/integrations', async (req, res) => {
