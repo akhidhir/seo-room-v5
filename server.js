@@ -22154,6 +22154,7 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
           // Map: iterate through Elementor sections, skip locked ones, inject draft blocks sequentially
           let injected = 0;
           let draftIdx = 0;
+          const debugLog = [];
           topSections.each((idx, section) => {
             const $section = $(section);
 
@@ -22169,84 +22170,100 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
 
             // SKIP: CTA bars — identified by "CALL US NOW" / "PHONE NUMBER" / phone-like patterns
             const isCta = /CALL US|PHONE NUMBER|CALL NOW|GET A QUOTE|BOOK NOW|CONTACT US TODAY|FREE QUOTE|REQUEST A QUOTE/.test(allHeadingText);
-            if (isCta) { console.log(`[preview-sp] Section ${idx}: SKIP (CTA bar: "${allHeadingText.slice(0,40)}")`); return; }
+            if (isCta) { debugLog.push(`#${idx}: SKIP CTA "${allHeadingText.slice(0,30)}"`); return; }
 
             // SKIP: Map-only sections
-            if (hasMap && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (map-only)`); return; }
+            if (hasMap && !hasTextEditor) { debugLog.push(`#${idx}: SKIP map-only`); return; }
 
             // SKIP: Form-only sections (no text-editor alongside the form)
-            if (hasForm && !hasTextEditor && headingTexts.length <= 1) { console.log(`[preview-sp] Section ${idx}: SKIP (form-only)`); return; }
+            if (hasForm && !hasTextEditor && headingTexts.length <= 1) { debugLog.push(`#${idx}: SKIP form-only`); return; }
 
             // SKIP: Image carousel / accreditation sections (no text content)
-            if (hasImageCarousel && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (carousel)`); return; }
+            if (hasImageCarousel && !hasTextEditor) { debugLog.push(`#${idx}: SKIP carousel`); return; }
 
             // SKIP: Services strip — sections with only icon-boxes and no text-editor
-            if ($section.find('.elementor-widget-icon-box').length >= 3 && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (icon-boxes)`); return; }
+            if ($section.find('.elementor-widget-icon-box').length >= 3 && !hasTextEditor) { debugLog.push(`#${idx}: SKIP icon-boxes`); return; }
 
             // SKIP: Sections with no heading AND no text-editor (pure visual sections)
-            if (!hasHeading && !hasTextEditor) { console.log(`[preview-sp] Section ${idx}: SKIP (no text content)`); return; }
-
-            // Log which section is being injected into
-            const sectionPreview = headingTexts.slice(0, 2).join(' | ') || '(no heading)';
-            console.log(`[preview-sp] Section ${idx}: INJECT → "${sectionPreview}" (form:${hasForm}, textEd:${hasTextEditor})`);
+            if (!hasHeading && !hasTextEditor) { debugLog.push(`#${idx}: SKIP no-text`); return; }
 
             // Get next draft block
-            if (draftIdx >= draftBlocks.length) return;
+            if (draftIdx >= draftBlocks.length) { debugLog.push(`#${idx}: NO MORE DRAFT BLOCKS`); return; }
             const draftHtml = draftBlocks[draftIdx];
             draftIdx++;
 
             // Parse draft HTML into heading + body
             const tempDiv = cheerio.load(`<div>${draftHtml}</div>`);
             const draftH = tempDiv('h1, h2, h3').first();
+            const draftHText = draftH.length ? draftH.text().trim().slice(0, 40) : '(no heading)';
 
             // For sections with forms (like hero), target ONLY widgets NOT inside the form column
             let $scope = $section;
+            let scopeNote = 'full-section';
             if (hasForm) {
-              // Find columns that do NOT contain a form — inject into those only
-              const $columns = $section.find('.elementor-column');
-              if ($columns.length > 1) {
-                const $nonFormCols = $columns.filter((_, col) => $(col).find('form, .elementor-widget-form').length === 0);
+              // Find DIRECT child columns only (not nested inner columns)
+              const $container = $section.find('.elementor-container').first();
+              const $directCols = $container.length ? $container.children('.elementor-column') : $section.children('.elementor-row').children('.elementor-column');
+              if ($directCols.length > 1) {
+                const $nonFormCols = $directCols.filter((_, col) => $(col).find('form, .elementor-widget-form').length === 0);
                 if ($nonFormCols.length > 0) {
                   $scope = $nonFormCols;
+                  scopeNote = `non-form-cols(${$nonFormCols.length}/${$directCols.length})`;
+                } else {
+                  scopeNote = `all-cols-have-form(${$directCols.length})`;
                 }
+              } else {
+                scopeNote = `single-col(${$directCols.length})`;
               }
             }
+
+            // Find heading and text widgets in scope
+            const headingWidget = $scope.find('.elementor-heading-title').first();
+            const textEditors = $scope.find('.elementor-widget-text-editor .elementor-widget-container');
 
             // Replace heading widget
-            if (draftH.length) {
-              const headingWidget = $scope.find('.elementor-heading-title').first();
-              if (headingWidget.length) {
-                headingWidget.html(draftH.html());
-                headingWidget.css('border-left', '3px solid #22c55e');
-                headingWidget.css('padding-left', '8px');
-                draftH.remove(); // remove from temp so body doesn't include it
-              }
+            let headingReplaced = false;
+            if (draftH.length && headingWidget.length) {
+              headingWidget.html(draftH.html());
+              headingWidget.css('border-left', '3px solid #22c55e');
+              headingWidget.css('padding-left', '8px');
+              draftH.remove();
+              headingReplaced = true;
             }
 
-            // Replace ALL text-editor widgets in scope (not just first)
-            const textEditors = $scope.find('.elementor-widget-text-editor .elementor-widget-container');
+            // Replace text-editor widget content with remaining body
             const bodyEls = tempDiv('p, ul, ol, blockquote, h3, h4, h5, h6, details, div');
+            let bodyReplaced = false;
             if (textEditors.length && bodyEls.length) {
               let bodyHtml = '';
               bodyEls.each((_, el) => { bodyHtml += tempDiv.html(el); });
               if (bodyHtml.trim()) {
-                // Put all body content into the first text editor
                 textEditors.first().html(bodyHtml);
                 textEditors.first().css('border-left', '3px solid #22c55e');
                 textEditors.first().css('padding-left', '12px');
                 textEditors.first().css('background', 'rgba(34,197,94,0.05)');
+                bodyReplaced = true;
               }
             }
+
+            debugLog.push(`#${idx}: INJECT scope:${scopeNote} draft:"${draftHText}" h:${headingWidget.length}→${headingReplaced} t:${textEditors.length}→${bodyReplaced} headings:[${headingTexts.slice(0,2).join('|')}]`);
             injected++;
           });
           console.log(`[preview-sp] Injected draft into ${injected}/${topSections.length} sections (used ${draftIdx}/${draftBlocks.length} draft blocks)`);
+          console.log(`[preview-sp] Debug log:\n${debugLog.join('\n')}`);
 
-          // Add preview banner
+          // Add preview banner + debug panel
+          const debugHtml = debugLog.map(l => `<div style="padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.1)">${l.replace(/</g,'&lt;')}</div>`).join('');
           $('body').prepend(`<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#059669,#10b981);color:#fff;padding:10px 20px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 20px rgba(0,0,0,0.3)">
             <span>\u{1F3A8} WIREFRAME PREVIEW — Content injected into design template</span>
             <span style="opacity:0.8;font-size:12px">${item.page_name} • ${injected} sections updated</span>
           </div>
-          <div style="height:44px"></div>`);
+          <div id="preview-debug" style="position:fixed;top:44px;right:0;z-index:99998;background:rgba(0,0,0,0.9);color:#0f0;padding:12px;font-family:monospace;font-size:11px;max-width:600px;max-height:400px;overflow:auto;border-left:2px solid #22c55e;display:none">
+            <div style="margin-bottom:8px;color:#fff;font-weight:bold">DEBUG: ${topSections.length} top-sections, ${draftBlocks.length} draft blocks, ${injected} injected</div>
+            ${debugHtml}
+          </div>
+          <div style="height:44px"></div>
+          <script>document.querySelector('[style*="WIREFRAME PREVIEW"]').addEventListener('click',function(){var d=document.getElementById('preview-debug');d.style.display=d.style.display==='none'?'block':'none';});</script>`);
 
           // Replace page title
           $('title').text(`Preview: ${draftTitle}`);
