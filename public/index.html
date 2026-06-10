@@ -15467,7 +15467,7 @@
                 React.createElement('i', { className: 'fas fa-palette', style: { color: '#8b5cf6' } }), 'Brand Tone'
               ),
               briefExpanded.tone && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                (brief.brand_tone || []).map(function(t, i) {
+                (Array.isArray(brief.brand_tone) ? brief.brand_tone : []).map(function(t, i) {
                   return React.createElement('span', { key: i, style: { padding: '3px 10px', background: 'rgba(139,92,246,0.12)', color: '#8b5cf6', borderRadius: 12, fontSize: 12, fontWeight: 500 } }, t);
                 })
               )
@@ -15480,7 +15480,7 @@
                 React.createElement('i', { className: 'fas fa-ban', style: { color: '#ef4444' } }), 'Words to Avoid'
               ),
               briefExpanded.avoid && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, display: 'flex', gap: 6, flexWrap: 'wrap' } },
-                (brief.words_to_avoid || []).map(function(w, i) {
+                (Array.isArray(brief.words_to_avoid) ? brief.words_to_avoid : []).map(function(w, i) {
                   return React.createElement('span', { key: i, style: { padding: '3px 10px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 12, fontSize: 12, fontWeight: 500, textDecoration: 'line-through' } }, w);
                 })
               )
@@ -15493,7 +15493,7 @@
                 React.createElement('i', { className: 'fas fa-star', style: { color: '#f59e0b' } }), 'Differentiators'
               ),
               briefExpanded.diff && React.createElement('div', { style: { marginTop: 6, marginLeft: 24 } },
-                (brief.differentiators || []).map(function(d, i) {
+                (Array.isArray(brief.differentiators) ? brief.differentiators : []).map(function(d, i) {
                   return React.createElement('div', { key: i, style: { fontSize: 13, color: 'var(--text)', marginBottom: 4 } },
                     React.createElement('i', { className: 'fas fa-check', style: { color: '#22c55e', marginRight: 6, fontSize: 10 } }), d
                   );
@@ -15505,10 +15505,10 @@
             React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('comp'); } },
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
                 React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.comp ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
-                React.createElement('i', { className: 'fas fa-users', style: { color: '#3b82f6' } }), 'Competitors (' + (brief.competitors || []).length + ')'
+                React.createElement('i', { className: 'fas fa-users', style: { color: '#3b82f6' } }), 'Competitors (' + (Array.isArray(brief.competitors) ? brief.competitors.length : 0) + ')'
               ),
               briefExpanded.comp && React.createElement('div', { style: { marginTop: 6, marginLeft: 24 } },
-                (brief.competitors || []).map(function(c, i) {
+                (Array.isArray(brief.competitors) ? brief.competitors : []).map(function(c, i) {
                   return React.createElement('div', { key: i, style: { fontSize: 13, color: 'var(--text)', marginBottom: 4 } },
                     c.name, c.url && React.createElement('a', { href: c.url, target: '_blank', style: { marginLeft: 6, color: 'var(--accent)', fontSize: 11 } }, c.url)
                   );
@@ -15520,14 +15520,14 @@
             React.createElement('div', { style: { marginBottom: 8, cursor: 'pointer' }, onClick: function() { toggleBriefSection('services'); } },
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--text2)' } },
                 React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.services ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
-                React.createElement('i', { className: 'fas fa-file-alt', style: { color: '#14b8a6' } }), 'Service Pages (' + (brief.service_pages || []).length + ')'
+                React.createElement('i', { className: 'fas fa-file-alt', style: { color: '#14b8a6' } }), 'Service Pages (' + (Array.isArray(brief.service_pages) ? brief.service_pages.length : 0) + ')'
               ),
               briefExpanded.services && React.createElement('div', { style: { marginTop: 6, marginLeft: 24 } },
-                (brief.service_pages || []).map(function(sp, i) {
+                (Array.isArray(brief.service_pages) ? brief.service_pages : []).map(function(sp, i) {
                   return React.createElement('div', { key: i, style: { marginBottom: 8, padding: '8px 10px', background: 'rgba(20,184,166,0.06)', borderRadius: 6, border: '1px solid rgba(20,184,166,0.15)' } },
                     React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 } }, sp.page_name),
                     sp.description && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', lineHeight: 1.4 } }, sp.description.substring(0, 200) + (sp.description.length > 200 ? '...' : '')),
-                    sp.types_or_styles && sp.types_or_styles.length > 0 && React.createElement('div', { style: { marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' } },
+                    Array.isArray(sp.types_or_styles) && sp.types_or_styles.length > 0 && React.createElement('div', { style: { marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' } },
                       sp.types_or_styles.map(function(t, j) {
                         return React.createElement('span', { key: j, style: { padding: '1px 6px', background: 'rgba(20,184,166,0.1)', color: '#14b8a6', borderRadius: 4, fontSize: 10 } }, t);
                       })
@@ -15543,7 +15543,7 @@
                 React.createElement('i', { className: 'fas fa-chevron-' + (briefExpanded.notes ? 'down' : 'right'), style: { fontSize: 10, width: 12 } }),
                 React.createElement('i', { className: 'fas fa-sticky-note', style: { color: '#6b7280' } }), 'Additional Notes'
               ),
-              briefExpanded.notes && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, fontSize: 13, color: 'var(--text3)', lineHeight: 1.5 } }, brief.additional_notes)
+              briefExpanded.notes && React.createElement('div', { style: { marginTop: 6, marginLeft: 24, fontSize: 13, color: 'var(--text3)', lineHeight: 1.5 } }, typeof brief.additional_notes === 'string' ? brief.additional_notes : JSON.stringify(brief.additional_notes, null, 2))
             ),
 
             // Re-upload + Delete brief buttons
@@ -36336,11 +36336,12 @@
           // Load projects — a failure here must not log the user out
           try {
             const projData = await api('/projects');
-            if (projData?.projects?.length > 0) {
-              setAllProjects(projData.projects);
+            const projArr = Array.isArray(projData?.projects) ? projData.projects : [];
+            if (projArr.length > 0) {
+              setAllProjects(projArr);
               const savedId = localStorage.getItem('currentProject');
-              const found = projData.projects.find(p => String(p.id) === savedId);
-              setProject(found || projData.projects[0]);
+              const found = projArr.find(p => String(p.id) === savedId);
+              setProject(found || projArr[0]);
             }
           } catch (e) { /* keep session; projects can load on next interaction */ }
           setAppLoading(false);
@@ -36357,10 +36358,11 @@
         // Load projects after login
         try {
           const projData = await api('/projects');
-          if (projData?.projects?.length > 0) {
-            setAllProjects(projData.projects);
-            setProject(projData.projects[0]);
-            localStorage.setItem('currentProject', projData.projects[0].id);
+          const projArr2 = Array.isArray(projData?.projects) ? projData.projects : [];
+          if (projArr2.length > 0) {
+            setAllProjects(projArr2);
+            setProject(projArr2[0]);
+            localStorage.setItem('currentProject', projArr2[0].id);
           } else {
             // Create default project
             const newProj = await api('/projects', { method: 'POST', body: { name: 'My First Project', domain: 'example.com' } });
