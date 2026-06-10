@@ -2271,7 +2271,7 @@ app.post('/api/builds/:buildId/site-pages', async (req, res) => {
 
 app.put('/api/builds/:buildId/site-pages/:pageId', async (req, res) => {
   try {
-    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name, page_url, page_sections, target_keywords, internal_links } = req.body;
+    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name, page_url, page_sections, target_keywords, internal_links, wireframe_image, wireframe_mime, page_wireframe } = req.body;
     const result = await pool.query(
       `UPDATE site_pages SET
         meta_title=COALESCE($3, meta_title), meta_description=COALESCE($4, meta_description),
@@ -2279,11 +2279,13 @@ app.put('/api/builds/:buildId/site-pages/:pageId', async (req, res) => {
         word_count=COALESCE($7, word_count), stage=COALESCE($8, stage), slug=COALESCE($9, slug),
         is_cornerstone=COALESCE($10, is_cornerstone), page_name=COALESCE($11, page_name),
         page_url=COALESCE($12, page_url), page_sections=COALESCE($13, page_sections),
-        target_keywords=COALESCE($14, target_keywords), internal_links=COALESCE($15, internal_links), updated_at=NOW()
+        target_keywords=COALESCE($14, target_keywords), internal_links=COALESCE($15, internal_links),
+        wireframe_image=COALESCE($16, wireframe_image), wireframe_mime=COALESCE($17, wireframe_mime),
+        page_wireframe=COALESCE($18, page_wireframe), updated_at=NOW()
        WHERE id=$1 AND build_id=$2 RETURNING *`,
       [req.params.pageId, req.params.buildId, meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name,
        page_url || null, page_sections ? JSON.stringify(page_sections) : null, target_keywords ? JSON.stringify(target_keywords) : null,
-       internal_links ? JSON.stringify(internal_links) : null]
+       internal_links ? JSON.stringify(internal_links) : null, wireframe_image || null, wireframe_mime || null, page_wireframe || null]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
@@ -25971,10 +25973,10 @@ app.get('/api/projects/:projectId/site-pages', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Update a site page (edit meta, content, stage)
+// Update a site page (edit meta, content, stage, wireframe)
 app.put('/api/projects/:projectId/site-pages/:pageId', async (req, res) => {
   try {
-    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name, page_url, page_sections, target_keywords, internal_links } = req.body;
+    const { meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name, page_url, page_sections, target_keywords, internal_links, wireframe_image, wireframe_mime, page_wireframe } = req.body;
     const result = await pool.query(
       `UPDATE site_pages SET
         meta_title=COALESCE($3, meta_title), meta_description=COALESCE($4, meta_description),
@@ -25984,11 +25986,13 @@ app.put('/api/projects/:projectId/site-pages/:pageId', async (req, res) => {
         page_url=COALESCE($12, page_url), page_sections=COALESCE($13, page_sections),
         target_keywords=COALESCE($14, target_keywords),
         internal_links=COALESCE($15, internal_links),
+        wireframe_image=COALESCE($16, wireframe_image), wireframe_mime=COALESCE($17, wireframe_mime),
+        page_wireframe=COALESCE($18, page_wireframe),
         updated_at=NOW()
        WHERE id=$1 AND project_id=$2 RETURNING *`,
       [req.params.pageId, req.params.projectId, meta_title, meta_description, focus_keyword, draft_content, word_count, stage, slug, is_cornerstone, page_name,
        page_url || null, page_sections ? JSON.stringify(page_sections) : null, target_keywords ? JSON.stringify(target_keywords) : null,
-       internal_links ? JSON.stringify(internal_links) : null]
+       internal_links ? JSON.stringify(internal_links) : null, wireframe_image || null, wireframe_mime || null, page_wireframe || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Page not found' });
     res.json(result.rows[0]);

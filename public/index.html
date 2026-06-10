@@ -17803,15 +17803,19 @@
         if (!pid && !project?.build_id) return;
         setSavingMeta(true);
         try {
+          var body = {
+            draft_content: editContent,
+            meta_title: editMeta.meta_title,
+            meta_description: editMeta.meta_desc,
+            focus_keyword: editMeta.focus_keyword,
+            target_keywords: targetKeywords
+          };
+          // Include wireframe fields if present
+          if (page.wireframe_image) body.wireframe_image = page.wireframe_image;
+          if (page.wireframe_mime) body.wireframe_mime = page.wireframe_mime;
+          if (page.page_wireframe) body.page_wireframe = page.page_wireframe;
           var result = await api(apiPrefix + '/site-pages/' + page.id, {
-            method: 'PUT',
-            body: {
-              draft_content: editContent,
-              meta_title: editMeta.meta_title,
-              meta_description: editMeta.meta_desc,
-              focus_keyword: editMeta.focus_keyword,
-              target_keywords: targetKeywords
-            }
+            method: 'PUT', body: body
           });
           if (result && result.error) { alert('Save failed: ' + result.error); setSavingMeta(false); return; }
           onUpdate(Object.assign({}, page, {
@@ -18330,6 +18334,13 @@
                   var file = e.target.files[0];
                   if (!file) return;
                   if (file.size > 20 * 1024 * 1024) { alert('File too large (max 20MB)'); return; }
+                  var saveWireframe = function(base64, mime) {
+                    onUpdate(Object.assign({}, page, { wireframe_image: base64, wireframe_mime: mime }));
+                    // Auto-save to DB immediately
+                    api(apiPrefix + '/site-pages/' + page.id, {
+                      method: 'PUT', body: { wireframe_image: base64, wireframe_mime: mime }
+                    }).then(function() { console.log('[wireframe] Saved to DB'); }).catch(function(e) { console.error('[wireframe] Save error:', e); });
+                  };
                   if (file.type.startsWith('image/')) {
                     var img = new Image();
                     img.onload = async function() {
@@ -18341,14 +18352,14 @@
                       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
                       var compressed = canvas.toDataURL('image/jpeg', 0.8);
                       var base64 = compressed.split(',')[1];
-                      onUpdate(Object.assign({}, page, { wireframe_image: base64, wireframe_mime: 'image/jpeg' }));
+                      saveWireframe(base64, 'image/jpeg');
                     };
                     img.src = URL.createObjectURL(file);
                   } else {
                     var reader = new FileReader();
                     reader.onload = async function() {
                       var base64 = reader.result.split(',')[1];
-                      onUpdate(Object.assign({}, page, { wireframe_image: base64, wireframe_mime: file.type || 'application/pdf' }));
+                      saveWireframe(base64, file.type || 'application/pdf');
                     };
                     reader.readAsDataURL(file);
                   }
@@ -18405,6 +18416,12 @@
           React.createElement('textarea', {
             value: page.page_wireframe || '',
             onChange: function(e) { onUpdate(Object.assign({}, page, { page_wireframe: e.target.value })); },
+            onBlur: function(e) {
+              var val = e.target.value;
+              if (val && page.id) {
+                api(apiPrefix + '/site-pages/' + page.id, { method: 'PUT', body: { page_wireframe: val } }).catch(function() {});
+              }
+            },
             placeholder: page.wireframe_image
               ? 'Optional — add notes about the wireframe design above'
               : 'Describe the page design layout, or upload a wireframe image/PDF above',
