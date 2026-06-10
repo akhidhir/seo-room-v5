@@ -567,6 +567,7 @@ async function initDb() {
     // Suburb template system — generic per-project
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS seoroom_api_key TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS elementor_globals JSONB DEFAULT '{}'`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wireframe_templates JSONB DEFAULT '{}'`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS category TEXT`).catch(() => {});
     await client.query(`UPDATE action_items SET category = type WHERE category IS NULL AND type IS NOT NULL`).catch(() => {});
     await client.query(`ALTER TABLE action_items ADD COLUMN IF NOT EXISTS pages_affected TEXT DEFAULT ''`).catch(() => {});
@@ -886,9 +887,10 @@ async function initDb() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `).catch(() => {});
-    // Copywriting brief storage on website_builds
+    // Copywriting brief + wireframe templates on website_builds
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS copywriting_brief JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS brief_raw_text TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS wireframe_templates JSONB DEFAULT '{}'`).catch(() => {});
     // Add optional build_id to site_pages and content_keywords
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
     await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
@@ -4311,6 +4313,205 @@ function hexLuminance(hex) {
   const b = parseInt(hex.substr(4,2),16)/255;
   return 0.2126*r + 0.7152*g + 0.0722*b;
 }
+
+// Parse a wireframe template page and store its section structure per page type
+// page_type: suburb | service | about | contact
+app.post('/api/projects/:id/parse-wireframe', async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const { page_type, url } = req.body;
+    if (!page_type || !url) return res.status(400).json({ error: 'page_type and url required' });
+    const validTypes = ['suburb', 'service', 'about', 'contact', 'home', 'blog'];
+    if (!validTypes.includes(page_type)) return res.status(400).json({ error: `page_type must be one of: ${validTypes.join(', ')}` });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    console.log(`[parse-wireframe] Fetching ${url} for project ${projectId}, type: ${page_type}`);
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(20000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch wireframe: ${resp.status}` });
+    const fullHtml = await resp.text();
+
+    // Extract content between </header> and <footer>
+    const headerEnd = fullHtml.search(/<\/header>/i);
+    const footerStart = fullHtml.search(/<footer[\s>]/i);
+    const contentHtml = fullHtml.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : fullHtml.length
+    );
+
+    // Send to Claude to identify sections and extract content prompts
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 6000,
+      system: `You are analysing a WIREFRAME TEMPLATE page for a website. This is NOT a live page with real content — it contains placeholder text, content prompts, and instructions for a copywriter.
+
+Your job is to identify every section on the page and extract:
+1. The section TYPE (hero, services-strip, reviews, content-with-map, cta-bar, service-block, why-choose-us, accreditations, company-differences, faq, service-area-list, footer-cta, or other)
+2. The HEADING text (as-is from the wireframe, e.g. "H1(KEYWORD + SUBURB)", "SERVICE KW + SUBURB", "TOP SERVICE IN DEMAND IN THE SUBURB + SUBURB")
+3. The CONTENT PROMPT — the copywriting instructions embedded in the wireframe (e.g. "Write a description about the plumbers in {{suburb}}. On the first part talk about how {{tradies}} and {{tradies services}} are essential in that {{suburb}}.")
+4. WIDGET TYPES present (heading, text-editor, form, icon-list, icon-box, image, button, toggle/accordion, google-maps, image-carousel)
+5. Whether the section is LOCKED (forms, maps, image carousels — copywriter should NOT rewrite these)
+6. LAYOUT — column split (e.g. "50/50", "60/40", "100") and whether image is left or right
+
+Return JSON array ordered by page position:
+[{
+  "type": "hero",
+  "heading": "H1(KEYWORD + SUBURB)",
+  "content_prompt": "Short blurb appealing to customers + 3 selling points",
+  "widgets": ["heading", "text-editor", "icon-list", "button", "form"],
+  "locked": false,
+  "layout": "60/40",
+  "word_estimate": 80,
+  "notes": "Left side: tag + H1 + paragraph + selling points + CTA button. Right side: quote form (locked)."
+}, ...]
+
+IMPORTANT:
+- Preserve ALL placeholder text and {{variable}} markers exactly as they appear
+- If the wireframe has content writing instructions (like "On the 1st paragraph write about..."), include the FULL instruction in content_prompt
+- Mark forms, maps, and carousels as locked:true
+- Estimate word count needed for each section`,
+      messages: [{ role: 'user', content: `Analyse this wireframe template HTML and identify all sections:\n\n${contentHtml.slice(0, 40000)}` }]
+    });
+
+    let aiText = aiResp.content[0].text;
+    let sections;
+    try {
+      aiText = aiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) throw new Error('No JSON array found');
+      sections = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      console.error('[parse-wireframe] JSON parse failed:', parseErr.message);
+      return res.status(500).json({ error: 'AI returned invalid JSON during wireframe parsing' });
+    }
+
+    // Enrich with IDs
+    const wireframeSections = sections.map((s, i) => ({
+      id: `wf_${page_type}_${i + 1}`,
+      order: i + 1,
+      ...s,
+    }));
+
+    // Merge into existing wireframe_templates
+    const existing = project.wireframe_templates || {};
+    existing[page_type] = {
+      url,
+      sections: wireframeSections,
+      parsed_at: new Date().toISOString(),
+      section_count: wireframeSections.length,
+      total_word_estimate: wireframeSections.reduce((sum, s) => sum + (s.word_estimate || 0), 0),
+    };
+
+    await pool.query('UPDATE projects SET wireframe_templates=$1 WHERE id=$2', [JSON.stringify(existing), projectId]);
+
+    console.log(`[parse-wireframe] Parsed ${wireframeSections.length} sections for ${page_type} template, project ${projectId}`);
+    res.json({ ok: true, page_type, sections: wireframeSections, section_count: wireframeSections.length });
+  } catch (e) {
+    console.error('[parse-wireframe]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Parse wireframe for a BUILD (same logic, saves to website_builds.wireframe_templates)
+app.post('/api/builds/:id/parse-wireframe', async (req, res) => {
+  try {
+    const buildId = parseInt(req.params.id);
+    const { page_type, url } = req.body;
+    if (!page_type || !url) return res.status(400).json({ error: 'page_type and url required' });
+    const validTypes = ['suburb', 'service', 'about', 'contact', 'home', 'blog'];
+    if (!validTypes.includes(page_type)) return res.status(400).json({ error: `page_type must be one of: ${validTypes.join(', ')}` });
+
+    const build = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [buildId])).rows[0];
+    if (!build) return res.status(404).json({ error: 'Build not found' });
+
+    console.log(`[parse-wireframe-build] Fetching ${url} for build ${buildId}, type: ${page_type}`);
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(20000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    if (!resp.ok) return res.status(502).json({ error: `Failed to fetch wireframe: ${resp.status}` });
+    const fullHtml = await resp.text();
+
+    const headerEnd = fullHtml.search(/<\/header>/i);
+    const footerStart = fullHtml.search(/<footer[\s>]/i);
+    const contentHtml = fullHtml.slice(
+      headerEnd !== -1 ? headerEnd + '</header>'.length : 0,
+      footerStart !== -1 ? footerStart : fullHtml.length
+    );
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 6000,
+      system: `You are analysing a WIREFRAME TEMPLATE page for a website. This is NOT a live page with real content — it contains placeholder text, content prompts, and instructions for a copywriter.
+
+Your job is to identify every section on the page and extract:
+1. The section TYPE (hero, services-strip, reviews, content-with-map, cta-bar, service-block, why-choose-us, accreditations, company-differences, faq, service-area-list, footer-cta, or other)
+2. The HEADING text (as-is from the wireframe)
+3. The CONTENT PROMPT — the copywriting instructions embedded in the wireframe
+4. WIDGET TYPES present (heading, text-editor, form, icon-list, icon-box, image, button, toggle/accordion, google-maps, image-carousel)
+5. Whether the section is LOCKED (forms, maps, image carousels — copywriter should NOT rewrite these)
+6. LAYOUT — column split (e.g. "50/50", "60/40", "100") and whether image is left or right
+
+Return JSON array ordered by page position:
+[{
+  "type": "hero",
+  "heading": "H1(KEYWORD + SUBURB)",
+  "content_prompt": "Short blurb appealing to customers + 3 selling points",
+  "widgets": ["heading", "text-editor", "icon-list", "button", "form"],
+  "locked": false,
+  "layout": "60/40",
+  "word_estimate": 80,
+  "notes": "Left side: tag + H1 + paragraph + selling points + CTA button. Right side: quote form (locked)."
+}, ...]
+
+IMPORTANT:
+- Preserve ALL placeholder text and {{variable}} markers exactly as they appear
+- If the wireframe has content writing instructions, include the FULL instruction in content_prompt
+- Mark forms, maps, and carousels as locked:true
+- Estimate word count needed for each section`,
+      messages: [{ role: 'user', content: `Analyse this wireframe template HTML and identify all sections:\n\n${contentHtml.slice(0, 40000)}` }]
+    });
+
+    let aiText = aiResp.content[0].text;
+    let sections;
+    try {
+      aiText = aiText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      const jsonMatch = aiText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) throw new Error('No JSON array found');
+      sections = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      console.error('[parse-wireframe-build] JSON parse failed:', parseErr.message);
+      return res.status(500).json({ error: 'AI returned invalid JSON during wireframe parsing' });
+    }
+
+    const wireframeSections = sections.map((s, i) => ({
+      id: `wf_${page_type}_${i + 1}`,
+      order: i + 1,
+      ...s,
+    }));
+
+    const existing = build.wireframe_templates || {};
+    existing[page_type] = {
+      url,
+      sections: wireframeSections,
+      parsed_at: new Date().toISOString(),
+      section_count: wireframeSections.length,
+      total_word_estimate: wireframeSections.reduce((sum, s) => sum + (s.word_estimate || 0), 0),
+    };
+
+    await pool.query('UPDATE website_builds SET wireframe_templates=$1 WHERE id=$2', [JSON.stringify(existing), buildId]);
+
+    console.log(`[parse-wireframe-build] Parsed ${wireframeSections.length} sections for ${page_type}, build ${buildId}`);
+    res.json({ ok: true, page_type, sections: wireframeSections, section_count: wireframeSections.length });
+  } catch (e) {
+    console.error('[parse-wireframe-build]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Create suburb template for ANY project using stored globals
 app.post('/api/projects/:id/create-suburb-template', async (req, res) => {
@@ -17810,6 +18011,49 @@ AI detectors score text on predictability. Every word you write must SURPRISE th
    - No generic superlatives ("best in Perth"). Say what makes you different with evidence.
    - End naturally — no summary paragraph that restates everything.`;
 
+// Build wireframe template context for AI copywriter prompts
+// Returns a string to inject into the system/user prompt when a wireframe exists for the page type
+function buildWireframeContext(wireframeTemplates, pageType) {
+  if (!wireframeTemplates || !pageType) return '';
+  const wf = wireframeTemplates[pageType];
+  if (!wf || !wf.sections || !wf.sections.length) return '';
+
+  const sectionGuide = wf.sections.map((s, i) => {
+    let desc = `Section ${i + 1}: [${(s.type || 'content').toUpperCase()}]`;
+    if (s.heading) desc += `\n  Heading: "${s.heading}"`;
+    if (s.content_prompt) desc += `\n  Content prompt: ${s.content_prompt}`;
+    if (s.widgets) desc += `\n  Widgets: ${Array.isArray(s.widgets) ? s.widgets.join(', ') : s.widgets}`;
+    if (s.locked) desc += `\n  ⚠️ LOCKED — Do NOT write content for this section (form/widget/map/carousel)`;
+    if (s.layout) desc += `\n  Layout: ${s.layout}`;
+    if (s.word_estimate) desc += `\n  Target words: ~${s.word_estimate}`;
+    if (s.notes) desc += `\n  Notes: ${s.notes}`;
+    return desc;
+  }).join('\n\n');
+
+  const totalWords = wf.total_word_estimate || wf.sections.reduce((sum, s) => sum + (s.word_estimate || 0), 0);
+
+  return `
+
+=== WIREFRAME TEMPLATE (DESIGN STRUCTURE — MUST FOLLOW EXACTLY) ===
+This page has a human-designed wireframe template with ${wf.sections.length} sections (total ~${totalWords} words).
+You MUST write content that matches this EXACT section structure. The design is already built — you are writing copy to FIT the design.
+
+${sectionGuide}
+
+WIREFRAME RULES (NON-NEGOTIABLE):
+- Write content for EACH section in the EXACT order shown above
+- Start each section with a comment: <!-- Section N: TYPE -->
+- Match the heading text/placeholders (replace {{suburb}}, {{company}}, {{service}} with real values)
+- Respect the word estimate per section — do not drastically exceed or undercut it
+- Do NOT skip any sections
+- Do NOT add sections that aren't in the wireframe
+- LOCKED sections = output ONLY the comment marker, no content (forms/widgets/maps stay as-is)
+- The content for each section must match what the content prompt describes
+- Total page word count should be approximately ${totalWords} words
+=== END WIREFRAME TEMPLATE ===
+`;
+}
+
 function buildCopywriterContext(project, item) {
   const parts = [];
   if (project.tone_of_voice) {
@@ -25063,6 +25307,14 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     if (build.brief_raw_text) fullBriefText = build.brief_raw_text;
     else if (build.copywriting_brief) fullBriefText = JSON.stringify(build.copywriting_brief, null, 2);
 
+    // Check for wireframe template — first from build, then from project
+    let wireframeContext = buildWireframeContext(build.wireframe_templates, page.page_type);
+    if (!wireframeContext && page.project_id) {
+      const projRow = (await pool.query('SELECT wireframe_templates FROM projects WHERE id=$1', [page.project_id])).rows[0];
+      if (projRow) wireframeContext = buildWireframeContext(projRow.wireframe_templates, page.page_type);
+    }
+    if (wireframeContext) console.log(`[build-content-gen] Using wireframe template for page_type=${page.page_type}`);
+
     console.log(`[build-content-gen] Page: ${page.page_name}, briefRawText: ${build.brief_raw_text ? build.brief_raw_text.length + ' chars' : 'NULL'}, briefJSON: ${build.copywriting_brief ? 'YES' : 'NULL'}, fullBriefText: ${fullBriefText ? fullBriefText.length + ' chars' : 'EMPTY'}, briefContext: "${briefContext.substring(0, 100)}", briefPageContent: "${briefPageContent.substring(0, 100)}"`);
 
     const aiResponse = await anthropic.messages.create({
@@ -25082,7 +25334,7 @@ BRIEF COMPLIANCE (NON-NEGOTIABLE):
 - Use the brief's EXACT terminology — don't substitute (e.g., don't write "composite" if the brief says "Colorbond").
 - Include ALL specific details: years of experience, ALL service types, ALL process steps, ALL material types the brief lists.
 - NEVER invent numbers, timelines, team backgrounds, or suburb-specific claims not in the brief.
-
+${wireframeContext}
 CRITICAL: The page topic is "${page.page_name}". ALL content, H1, meta title, and meta description MUST be specifically about "${page.page_name}".
 
 PAGE TOPIC: "${page.page_name}" (${page.page_type})
@@ -25340,6 +25592,10 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
       return `Link to "${target.page_name}" (href="${href}") with anchor text "${l.anchor_text}" — ${l.context || 'naturally in context'}`;
     }).filter(Boolean).join('\n');
 
+    // Check for wireframe template matching this page type
+    const wireframeContext = buildWireframeContext(project.wireframe_templates, page.page_type);
+    if (wireframeContext) console.log(`[site-pages-gen] Using wireframe template for page_type=${page.page_type}, ${(project.wireframe_templates[page.page_type]?.sections || []).length} sections`);
+
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
@@ -25348,7 +25604,7 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
         content: `Write a complete webpage for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
 
 CRITICAL: The page topic is "${page.page_name}". ALL content, the H1, meta title, and meta description MUST be specifically about "${page.page_name}". Do NOT write generic content about the business — write specifically about this topic.
-
+${wireframeContext}
 PAGE TOPIC: "${page.page_name}" (${page.page_type})
 FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
 TARGET KEYWORDS: ${(page.keywords || []).map(k => k.keyword).join(', ')}

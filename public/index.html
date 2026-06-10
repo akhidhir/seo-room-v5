@@ -15237,6 +15237,12 @@
       var [briefError, setBriefError] = React.useState('');
       var [briefExpanded, setBriefExpanded] = React.useState({});
 
+      // Wireframe template state
+      var WIREFRAME_TYPES = ['suburb', 'service', 'about', 'contact', 'home', 'blog'];
+      var [wfUrls, setWfUrls] = React.useState({});
+      var [wfTemplates, setWfTemplates] = React.useState({});
+      var [wfParsing, setWfParsing] = React.useState({});
+
       // Load existing settings from project or build
       React.useEffect(function() {
         if (!project) return;
@@ -15254,6 +15260,13 @@
           api('/builds/' + project.build_id + '/brief').then(function(data) {
             if (data.brief) setBrief(data.brief);
           }).catch(function() {});
+          // Load wireframe templates from build
+          if (project.wireframe_templates) {
+            setWfTemplates(project.wireframe_templates);
+            var urls = {};
+            Object.keys(project.wireframe_templates).forEach(function(k) { if (project.wireframe_templates[k].url) urls[k] = project.wireframe_templates[k].url; });
+            setWfUrls(urls);
+          }
         } else {
           setForm({
             name: project.nw_name || project.business_name || '',
@@ -15264,6 +15277,13 @@
             nw_business_type: project.nw_business_type || '',
             nw_notes: project.nw_notes || '',
           });
+          // Load wireframe templates from project
+          if (project.wireframe_templates) {
+            setWfTemplates(project.wireframe_templates);
+            var urls = {};
+            Object.keys(project.wireframe_templates).forEach(function(k) { if (project.wireframe_templates[k].url) urls[k] = project.wireframe_templates[k].url; });
+            setWfUrls(urls);
+          }
         }
         setLoading(false);
       }, [project]);
@@ -15309,6 +15329,22 @@
 
       var updateField = function(field, value) {
         setForm(function(prev) { return Object.assign({}, prev, { [field]: value }); });
+      };
+
+      var handleParseWireframe = async function(pageType) {
+        var url = wfUrls[pageType];
+        if (!url) { alert('Enter a wireframe URL first'); return; }
+        setWfParsing(function(prev) { return Object.assign({}, prev, { [pageType]: true }); });
+        try {
+          var endpoint = isBuild ? '/builds/' + project.build_id + '/parse-wireframe' : '/projects/' + pid + '/parse-wireframe';
+          var result = await api(endpoint, { method: 'POST', body: { page_type: pageType, url: url } });
+          setWfTemplates(function(prev) {
+            var next = Object.assign({}, prev);
+            next[pageType] = { url: url, sections: result.sections, section_count: result.section_count, parsed_at: new Date().toISOString() };
+            return next;
+          });
+        } catch (e) { alert('Parse failed: ' + e.message); }
+        setWfParsing(function(prev) { return Object.assign({}, prev, { [pageType]: false }); });
       };
 
       var fieldStyle = { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14, boxSizing: 'border-box' };
@@ -15531,6 +15567,66 @@
               }, React.createElement('i', { className: 'fas fa-trash', style: { fontSize: 10 } }), 'Delete brief')
             )
           )
+        ),
+
+        // ===== Wireframe Templates Section =====
+        React.createElement('div', { style: { maxWidth: 600, marginTop: 24, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 } },
+          React.createElement('h3', { style: { fontSize: 18, fontWeight: 700, margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('i', { className: 'fas fa-drafting-compass', style: { color: '#8b5cf6' } }),
+            'Wireframe Templates'
+          ),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, margin: '0 0 16px' } },
+            'Link your human-designed wireframe pages. The AI copywriter will match the exact section structure when writing copy.'
+          ),
+
+          WIREFRAME_TYPES.map(function(wfType) {
+            var tmpl = wfTemplates[wfType];
+            var isParsing = wfParsing[wfType];
+            var typeLabels = { suburb: 'Suburb Page', service: 'Service Page', about: 'About Page', contact: 'Contact Page', home: 'Home Page', blog: 'Blog Post' };
+            var typeIcons = { suburb: 'fa-map-marker-alt', service: 'fa-wrench', about: 'fa-info-circle', contact: 'fa-envelope', home: 'fa-home', blog: 'fa-pen-nib' };
+            var typeColors = { suburb: '#14b8a6', service: '#3b82f6', about: '#f59e0b', contact: '#22c55e', home: '#8b5cf6', blog: '#ec4899' };
+
+            return React.createElement('div', { key: wfType, style: { marginBottom: 12, padding: '12px 14px', border: '1px solid var(--border)', borderRadius: 8, background: tmpl ? 'rgba(34,197,94,0.04)' : 'transparent' } },
+              // Header row: icon + label + status badge
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
+                React.createElement('i', { className: 'fas ' + typeIcons[wfType], style: { color: typeColors[wfType], width: 16, textAlign: 'center' } }),
+                React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1 } }, typeLabels[wfType]),
+                tmpl && React.createElement('span', { style: { fontSize: 10, padding: '2px 8px', background: 'rgba(34,197,94,0.15)', color: '#22c55e', borderRadius: 4, fontWeight: 600 } },
+                  tmpl.section_count + ' SECTIONS'
+                )
+              ),
+              // URL input + Parse button row
+              React.createElement('div', { style: { display: 'flex', gap: 8 } },
+                React.createElement('input', {
+                  type: 'text',
+                  value: wfUrls[wfType] || '',
+                  onChange: function(e) { setWfUrls(function(prev) { return Object.assign({}, prev, { [wfType]: e.target.value }); }); },
+                  placeholder: 'https://example.com/wireframe-' + wfType + '/',
+                  style: Object.assign({}, fieldStyle, { flex: 1, fontSize: 12, padding: '7px 10px' })
+                }),
+                React.createElement('button', {
+                  className: 'btn',
+                  onClick: function() { handleParseWireframe(wfType); },
+                  disabled: isParsing || !wfUrls[wfType],
+                  style: { fontSize: 11, padding: '6px 14px', whiteSpace: 'nowrap', background: isParsing ? 'var(--bg)' : 'var(--accent)', color: isParsing ? 'var(--text3)' : '#fff', border: 'none', borderRadius: 6, cursor: isParsing ? 'wait' : 'pointer' }
+                },
+                  isParsing ? React.createElement('span', null,
+                    React.createElement('div', { className: 'spinner-large', style: { width: 12, height: 12, display: 'inline-block', marginRight: 4 } }), 'Parsing...'
+                  ) : (tmpl ? 'Re-parse' : 'Parse')
+                )
+              ),
+              // Parsed sections summary (if parsed)
+              tmpl && tmpl.sections && React.createElement('div', { style: { marginTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' } },
+                tmpl.sections.map(function(s, si) {
+                  return React.createElement('span', { key: si, style: { padding: '2px 7px', fontSize: 10, borderRadius: 4, fontWeight: 500, background: s.locked ? 'rgba(239,68,68,0.1)' : 'rgba(99,102,241,0.08)', color: s.locked ? '#ef4444' : 'var(--text2)' } },
+                    (s.type || 'section').replace(/-/g, ' '),
+                    s.locked && ' (locked)',
+                    s.word_estimate ? ' ~' + s.word_estimate + 'w' : ''
+                  );
+                })
+              )
+            );
+          })
         )
       );
     }
