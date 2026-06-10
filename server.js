@@ -898,6 +898,8 @@ async function initDb() {
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS copywriting_brief JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS brief_raw_text TEXT`).catch(() => {});
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS wireframe_templates JSONB DEFAULT '{}'`).catch(() => {});
+    await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS nw_business_type TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS nw_notes TEXT`).catch(() => {});
     // Add optional build_id to site_pages and content_keywords
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
     await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
@@ -1928,12 +1930,13 @@ app.get('/api/website-builds/:id', async (req, res) => {
 
 app.put('/api/website-builds/:id', async (req, res) => {
   try {
-    const { name, domain, business_name, industry, location, status } = req.body;
+    const { name, domain, business_name, industry, location, status, nw_business_type, nw_notes } = req.body;
     const result = await pool.query(
       `UPDATE website_builds SET name=COALESCE($2,name), domain=COALESCE($3,domain), business_name=COALESCE($4,business_name),
-       industry=COALESCE($5,industry), location=COALESCE($6,location), status=COALESCE($7,status), updated_at=NOW()
+       industry=COALESCE($5,industry), location=COALESCE($6,location), status=COALESCE($7,status),
+       nw_business_type=COALESCE($8,nw_business_type), nw_notes=COALESCE($9,nw_notes), updated_at=NOW()
        WHERE id=$1 RETURNING *`,
-      [req.params.id, name, domain, business_name, industry, location, status]
+      [req.params.id, name, domain, business_name, industry, location, status, nw_business_type || null, nw_notes || null]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
