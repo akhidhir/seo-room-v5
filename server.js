@@ -2175,10 +2175,51 @@ function generateContentRecommendations(summary, grammarErrors, keyword) {
   return recs;
 }
 
-// Site pages and keywords for a build — auto-backfill meta from imported content_keywords
+// Site pages and keywords for a build — auto-create missing + auto-backfill meta from imported content_keywords
 app.get('/api/builds/:buildId/site-pages', async (req, res) => {
   try {
     const buildId = req.params.buildId;
+
+    // Auto-create: create site_pages for assigned keywords that don't have a corresponding page yet
+    const assignedKws = await pool.query(
+      `SELECT ck.page_type, ck.page_name, ck.keyword, ck.search_volume, ck.old_url, ck.meta_title, ck.meta_description, ck.h1
+       FROM content_keywords ck
+       WHERE ck.build_id = $1 AND ck.page_type IS NOT NULL AND ck.page_type != 'unassigned' AND ck.page_name IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM site_pages sp WHERE sp.build_id = ck.build_id AND sp.page_name = ck.page_name)`,
+      [buildId]
+    );
+    if (assignedKws.rows.length > 0) {
+      const missingPages = {};
+      assignedKws.rows.forEach(kw => {
+        if (!missingPages[kw.page_name]) missingPages[kw.page_name] = { page_type: kw.page_type, keywords: [], old_url: null, meta_title: null, meta_description: null, focus_keyword: null };
+        missingPages[kw.page_name].keywords.push({ keyword: kw.keyword, volume: kw.search_volume || 0 });
+        if (kw.old_url && !missingPages[kw.page_name].old_url) {
+          missingPages[kw.page_name].old_url = kw.old_url;
+          missingPages[kw.page_name].meta_title = kw.meta_title || '';
+          missingPages[kw.page_name].meta_description = kw.meta_description || '';
+          missingPages[kw.page_name].focus_keyword = kw.h1 || kw.keyword;
+        }
+      });
+      for (const [pageName, pg] of Object.entries(missingPages)) {
+        let slug;
+        if (pg.old_url) {
+          try { slug = new URL(pg.old_url).pathname.replace(/\/$/, '') || '/'; } catch(e) { slug = null; }
+        }
+        if (!slug) slug = '/' + pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        await pool.query(
+          `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, meta_title, meta_description, keywords, is_cornerstone, stage)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'draft')`,
+          [buildId, pg.page_type, pageName, slug,
+           pg.focus_keyword || pg.keywords[0]?.keyword || '',
+           pg.meta_title || pageName,
+           pg.meta_description || '',
+           JSON.stringify(pg.keywords),
+           pg.page_type === 'home']
+        );
+        console.log('[site-pages] Auto-created missing page (build):', pageName, 'type:', pg.page_type, 'slug:', slug);
+      }
+    }
+
     // Auto-backfill: update site_pages that have empty meta fields from imported content_keywords
     await pool.query(`
       UPDATE site_pages sp SET
