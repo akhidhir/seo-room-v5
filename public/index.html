@@ -16723,7 +16723,7 @@
     }
 
     // ============ NEW WEBSITE — PAGE SETUP ============
-    function NewWebsitePagesPage({ project }) {
+    function NewWebsitePagesPage({ project, setPage }) {
       var [keywords, setKeywords] = React.useState([]);
       var [loading, setLoading] = React.useState(true);
       var [assignModal, setAssignModal] = React.useState(null); // { keyword_ids: [], keyword_text }
@@ -17137,9 +17137,10 @@
                                   style: { fontSize: 13, fontWeight: 700, color: pt.color, background: 'var(--bg)', border: '1px solid ' + pt.color, borderRadius: 4, padding: '2px 6px', outline: 'none', width: 180 }
                                 })
                               : React.createElement('span', {
-                                  style: { fontSize: 13, fontWeight: 700, color: pt.color, cursor: 'text', borderBottom: '1px dashed transparent' },
+                                  style: { fontSize: 13, fontWeight: 700, color: pt.color, cursor: 'pointer', borderBottom: '1px dashed ' + pt.color + '40' },
+                                  onClick: function(e) { e.stopPropagation(); if (setPage) setPage('nw-queue'); },
                                   onDoubleClick: function(e) { e.stopPropagation(); setEditingPage({ type: pt.key, oldName: pageName }); setEditPageName(pageName); },
-                                  title: 'Double-click to rename'
+                                  title: 'Click to open in Draft Queue • Double-click to rename'
                                 }, pageName),
                             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
                               React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } },
@@ -36854,7 +36855,7 @@ case 'action-plan':
           case 'nw-keywords':
             return <ContentKeywordsPage project={buildMode ? buildProject : project} />;
           case 'nw-pages':
-            return <NewWebsitePagesPage project={buildMode ? buildProject : project} />;
+            return <NewWebsitePagesPage project={buildMode ? buildProject : project} setPage={setActiveTab} />;
           case 'nw-staging':
             return <SiteStagingPage project={buildMode ? buildProject : project} />;
           case 'nw-queue':
