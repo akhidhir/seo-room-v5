@@ -4702,13 +4702,13 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
     }
 
     // Get project/build context
-    let businessName = '', industry = '', location = '';
+    let businessName = '', industry = '', location = '', additionalNotes = '';
     if (projectId) {
-      const proj = (await pool.query('SELECT business_name, name, industry, location FROM projects WHERE id=$1', [projectId])).rows[0];
-      if (proj) { businessName = proj.business_name || proj.name; industry = proj.industry; location = proj.location; }
+      const proj = (await pool.query('SELECT business_name, name, industry, location, nw_notes FROM projects WHERE id=$1', [projectId])).rows[0];
+      if (proj) { businessName = proj.business_name || proj.name; industry = proj.industry; location = proj.location; additionalNotes = proj.nw_notes || ''; }
     } else if (buildId) {
-      const bld = (await pool.query('SELECT business_name, name, industry, location FROM website_builds WHERE id=$1', [buildId])).rows[0];
-      if (bld) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; }
+      const bld = (await pool.query('SELECT business_name, name, industry, location, nw_notes FROM website_builds WHERE id=$1', [buildId])).rows[0];
+      if (bld) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; additionalNotes = bld.nw_notes || ''; }
     }
 
     const roundNum = (page.optimise_round || 0) + 1;
@@ -4724,7 +4724,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
         content: `You are optimising a webpage draft for ${businessName} (${industry}, ${location}).
 
 This is OPTIMISATION ROUND ${roundNum}. The ${reviewType} reviewed the draft in Google Drive and left feedback.
-
+${additionalNotes ? '\nADDITIONAL CONTEXT FROM THE TEAM:\n' + additionalNotes + '\n' : ''}
 CURRENT DRAFT:
 ${page.draft_content}
 ${feedbackContext}
@@ -18352,6 +18352,12 @@ Adopt this writing style and perspective throughout. This defines HOW you write 
 ${project.customer_persona}
 Write directly to this persona. Address their pain points, needs, and language.`);
   }
+  // Additional info from project/build settings (existing copy, client feedback, team notes)
+  if (project.nw_notes) {
+    parts.push(`ADDITIONAL CONTEXT FROM THE TEAM (use this to inform your writing — existing copy, client feedback, requirements):
+${project.nw_notes}`);
+  }
+
   // Always add human writing rules — comprehensive anti-AI-detection
   parts.push(HUMAN_WRITING_RULES);
 
@@ -25572,6 +25578,9 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     // AI notes from brief upload
     const aiNotes = page.ai_notes ? `\nADDITIONAL NOTES:\n${page.ai_notes}` : '';
 
+    // Additional info from build settings (existing copy, client feedback, etc.)
+    const additionalInfo = build.nw_notes ? `\nADDITIONAL CONTEXT FROM THE TEAM:\n${build.nw_notes}` : '';
+
     // Build full brief text for strict compliance
     let fullBriefText = '';
     if (build.brief_raw_text) fullBriefText = build.brief_raw_text;
@@ -25612,6 +25621,7 @@ FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
 ${briefContext}
 ${briefPageContent}
 ${aiNotes}
+${additionalInfo}
 
 INTERNAL LINKS TO INCLUDE:
 ${linksContext || 'No internal links planned.'}
@@ -25866,6 +25876,9 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
     const wireframeContext = buildWireframeContext(project.wireframe_templates, page.page_type);
     if (wireframeContext) console.log(`[site-pages-gen] Using wireframe template for page_type=${page.page_type}, ${(project.wireframe_templates[page.page_type]?.sections || []).length} sections`);
 
+    // Additional info from project settings (existing copy, client feedback, etc.)
+    const projAdditionalInfo = project.nw_notes ? `\nADDITIONAL CONTEXT FROM THE TEAM:\n${project.nw_notes}` : '';
+
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
@@ -25874,6 +25887,7 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
         content: `Write a complete webpage for a ${project.industry || 'business'} website (${project.business_name || project.name}) in ${project.location || 'Australia'}.
 
 CRITICAL: The page topic is "${page.page_name}". ALL content, the H1, meta title, and meta description MUST be specifically about "${page.page_name}". Do NOT write generic content about the business — write specifically about this topic.
+${projAdditionalInfo}
 ${wireframeContext}
 PAGE TOPIC: "${page.page_name}" (${page.page_type})
 FOCUS KEYWORD: ${page.focus_keyword || 'N/A'}
@@ -26619,6 +26633,11 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
       } catch (e) {}
     }
     if (!briefText && page.ai_notes) briefText = page.ai_notes;
+
+    // Append additional info from build/project notes
+    if (project.nw_notes) {
+      briefText += (briefText ? '\n' : '') + 'Additional Context: ' + project.nw_notes;
+    }
 
     // Get all pages for internal linking
     const allPages = briefBuildId

@@ -15401,11 +15401,6 @@
               React.createElement('option', { value: 'other' }, 'Other')
             )
           ),
-          // Notes
-          React.createElement('div', { style: { marginBottom: 20 } },
-            React.createElement('label', { style: labelStyle }, 'Additional Notes'),
-            React.createElement('textarea', { value: form.nw_notes, onChange: function(e) { updateField('nw_notes', e.target.value); }, placeholder: 'Any specific requirements, USPs, or target audience info...', rows: 3, style: Object.assign({}, fieldStyle, { resize: 'vertical' }) })
-          ),
           // Save
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
             React.createElement('button', { className: 'btn btn-primary', onClick: handleSave, style: { fontSize: 14, padding: '10px 24px' } },
@@ -15565,6 +15560,39 @@
                 },
                 style: { fontSize: 12, color: '#ef4444', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: 0 }
               }, React.createElement('i', { className: 'fas fa-trash', style: { fontSize: 10 } }), 'Delete brief')
+            )
+          )
+        ),
+
+        // ===== Additional Info Card =====
+        React.createElement('div', { style: { maxWidth: 600, marginTop: 24, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 24 } },
+          React.createElement('h3', { style: { fontSize: 18, fontWeight: 700, margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('i', { className: 'fas fa-info-circle', style: { color: '#3b82f6' } }),
+            'Additional Info'
+          ),
+          React.createElement('p', { style: { color: 'var(--text3)', fontSize: 13, margin: '0 0 12px' } },
+            'Context that helps the AI write better copy. Paste existing approved copy, client feedback, preferences, or anything the writer should know.'
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 } },
+            ['Existing copy', 'Client feedback', 'Tone preferences', 'Things to mention', 'Things to avoid'].map(function(tag) {
+              return React.createElement('span', { key: tag, style: { padding: '3px 10px', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 12, fontSize: 11, fontWeight: 500 } }, tag);
+            })
+          ),
+          React.createElement('textarea', {
+            value: form.nw_notes,
+            onChange: function(e) { updateField('nw_notes', e.target.value); },
+            placeholder: 'Example:\n\nHome page copy (approved by client):\n"Your trusted Perth plumbing experts since 2005..."\n\nClient feedback:\n- Wants more emphasis on emergency services\n- Prefers "we" over "our team"\n- Likes short punchy sentences\n\nKey facts:\n- 20 years experience\n- Family-owned\n- Available 24/7',
+            rows: 12,
+            style: Object.assign({}, fieldStyle, { resize: 'vertical', fontSize: 13, lineHeight: '1.6' })
+          }),
+          React.createElement('div', { style: { marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            React.createElement('span', { style: { fontSize: 11, color: 'var(--text3)' } },
+              (form.nw_notes || '').length > 0
+                ? (form.nw_notes || '').length + ' chars — injected into all AI copy prompts'
+                : 'Not set — AI will use brief + keywords only'
+            ),
+            React.createElement('button', { className: 'btn btn-primary', onClick: handleSave, style: { fontSize: 12, padding: '6px 16px' } },
+              React.createElement('i', { className: 'fas fa-save', style: { marginRight: 4 } }), 'Save'
             )
           )
         ),
