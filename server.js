@@ -22104,46 +22104,78 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
           // Add <base> tag for any remaining relative resources
           if (!$('base').length) $('head').prepend(`<base href="${wfOrigin}/">`);
 
-          // Split draft content by <!-- Section N: TYPE --> markers
-          const sectionRegex = /<!--\s*Section\s+(\d+):\s*([^[>]+?)(?:\s*\[LOCKED[^\]]*\])?\s*-->/gi;
-          const draftSections = {};
-          let lastIdx = 0, lastNum = 0;
-          let match;
-          const allMatches = [];
-          const draftStr = draftContent;
-          while ((match = sectionRegex.exec(draftStr)) !== null) {
-            if (lastNum > 0) {
-              draftSections[lastNum] = draftStr.slice(lastIdx, match.index).trim();
+          // Get wireframe template sections to know which Elementor sections are locked
+          let wfSections = [];
+          try {
+            if (req.params.buildId) {
+              const buildWf = (await pool.query('SELECT wireframe_templates FROM website_builds WHERE id=$1', [req.params.buildId])).rows[0];
+              wfSections = buildWf?.wireframe_templates?.[item.page_type]?.sections || [];
             }
-            lastNum = parseInt(match[1]);
-            lastIdx = match.index + match[0].length;
-            allMatches.push({ num: lastNum, type: match[2].trim(), locked: /LOCKED/i.test(match[0]) });
+            if (!wfSections.length && project?.wireframe_templates?.[item.page_type]?.sections) {
+              wfSections = project.wireframe_templates[item.page_type].sections;
+            }
+          } catch(e) {}
+
+          // Split draft content into blocks by H2 headings
+          // Each block = one heading + its body paragraphs (maps to one unlocked wireframe section)
+          const draftBlocks = [];
+          const h2Regex = /<h[12][^>]*>/gi;
+          let h2Match;
+          const h2Positions = [];
+          const draftStr = draftContent;
+          while ((h2Match = h2Regex.exec(draftStr)) !== null) {
+            h2Positions.push(h2Match.index);
           }
-          if (lastNum > 0) draftSections[lastNum] = draftStr.slice(lastIdx).trim();
+          // Also check for <!-- Section N --> comment markers (if content was just generated and not yet edited in Quill)
+          const commentRegex = /<!--\s*Section\s+\d+/gi;
+          const hasCommentMarkers = commentRegex.test(draftStr);
+
+          if (h2Positions.length > 0) {
+            for (let i = 0; i < h2Positions.length; i++) {
+              const start = h2Positions[i];
+              const end = i + 1 < h2Positions.length ? h2Positions[i + 1] : draftStr.length;
+              draftBlocks.push(draftStr.slice(start, end).trim());
+            }
+            // Content before first H2 (if any — could be intro paragraph)
+            if (h2Positions[0] > 0) {
+              const preContent = draftStr.slice(0, h2Positions[0]).trim();
+              if (preContent.length > 20) draftBlocks.unshift(preContent);
+            }
+          } else {
+            // No H2s — treat entire content as one block
+            draftBlocks.push(draftStr);
+          }
+          console.log(`[preview-sp] Draft split into ${draftBlocks.length} blocks (hasCommentMarkers: ${hasCommentMarkers})`);
 
           // Find top-level Elementor sections
           const topSections = $('section.elementor-top-section, .elementor-top-section[data-element_type="section"]');
-          console.log(`[preview-sp] Found ${topSections.length} Elementor sections, ${Object.keys(draftSections).length} draft sections`);
+          console.log(`[preview-sp] Found ${topSections.length} Elementor sections, ${wfSections.length} wireframe sections, ${draftBlocks.length} draft blocks`);
 
+          // Map: iterate through Elementor sections, skip locked ones, inject draft blocks sequentially
           let injected = 0;
+          let draftIdx = 0;
           topSections.each((idx, section) => {
-            const sectionNum = idx + 1;
-            const draftHtml = draftSections[sectionNum];
-            const matchInfo = allMatches.find(m => m.num === sectionNum);
-
-            // Skip locked sections (forms, maps, CTA bars, carousels)
-            if (!draftHtml || (matchInfo && matchInfo.locked)) return;
-
-            // Find text widgets in this section (heading + text-editor)
             const $section = $(section);
-            const textWidgets = $section.find('.elementor-widget-heading .elementor-heading-title, .elementor-widget-text-editor .elementor-widget-container');
+            const wfInfo = wfSections[idx]; // wireframe metadata for this section
 
-            if (textWidgets.length === 0) return;
+            // Skip locked sections (forms, maps, CTA bars, carousels, accreditations)
+            if (wfInfo && wfInfo.locked) return;
+
+            // Also skip sections that have forms, iframes, or image carousels (auto-detect even without wireframe metadata)
+            if ($section.find('form, iframe, .elementor-widget-form, .elementor-widget-google_maps').length > 0) return;
+
+            // Check if this section has any text widgets to inject into
+            const hasTextWidget = $section.find('.elementor-heading-title, .elementor-widget-text-editor').length > 0;
+            if (!hasTextWidget) return;
+
+            // Get next draft block
+            if (draftIdx >= draftBlocks.length) return;
+            const draftHtml = draftBlocks[draftIdx];
+            draftIdx++;
 
             // Parse draft HTML into heading + body
             const tempDiv = cheerio.load(`<div>${draftHtml}</div>`);
             const draftH = tempDiv('h1, h2, h3').first();
-            const draftBody = tempDiv('p, ul, ol, li, blockquote, h4, h5, h6, details');
 
             // Replace heading widget
             if (draftH.length) {
@@ -22152,14 +22184,16 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
                 headingWidget.html(draftH.html());
                 headingWidget.css('border-left', '3px solid #22c55e');
                 headingWidget.css('padding-left', '8px');
+                draftH.remove(); // remove from temp so body doesn't include it
               }
             }
 
-            // Replace text-editor widget content
+            // Replace text-editor widget content with remaining body
             const textEditor = $section.find('.elementor-widget-text-editor .elementor-widget-container').first();
-            if (textEditor.length && draftBody.length) {
+            const bodyEls = tempDiv('p, ul, ol, blockquote, h3, h4, h5, h6, details, div');
+            if (textEditor.length && bodyEls.length) {
               let bodyHtml = '';
-              draftBody.each((_, el) => { bodyHtml += tempDiv.html(el); });
+              bodyEls.each((_, el) => { bodyHtml += tempDiv.html(el); });
               if (bodyHtml.trim()) {
                 textEditor.html(bodyHtml);
                 textEditor.css('border-left', '3px solid #22c55e');
@@ -22169,7 +22203,7 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
             }
             injected++;
           });
-          console.log(`[preview-sp] Injected draft into ${injected}/${topSections.length} sections`);
+          console.log(`[preview-sp] Injected draft into ${injected}/${topSections.length} sections (used ${draftIdx}/${draftBlocks.length} draft blocks)`);
 
           // Add preview banner
           $('body').prepend(`<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#059669,#10b981);color:#fff;padding:10px 20px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 20px rgba(0,0,0,0.3)">
