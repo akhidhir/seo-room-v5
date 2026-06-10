@@ -15237,6 +15237,13 @@
       var [briefError, setBriefError] = React.useState('');
       var [briefExpanded, setBriefExpanded] = React.useState({});
 
+      // Linked docs state
+      var [linkedDocs, setLinkedDocs] = React.useState([]);
+      var [docUrl, setDocUrl] = React.useState('');
+      var [docLabel, setDocLabel] = React.useState('');
+      var [addingDoc, setAddingDoc] = React.useState(false);
+      var [refreshingDoc, setRefreshingDoc] = React.useState(null);
+
       // Wireframe template state
       var WIREFRAME_TYPES = ['suburb', 'service', 'about', 'contact', 'home', 'blog'];
       var [wfUrls, setWfUrls] = React.useState({});
@@ -15260,6 +15267,8 @@
           api('/builds/' + project.build_id + '/brief').then(function(data) {
             if (data.brief) setBrief(data.brief);
           }).catch(function() {});
+          // Load linked docs from build
+          if (Array.isArray(project.linked_docs)) setLinkedDocs(project.linked_docs.map(function(d) { return { doc_id: d.doc_id, url: d.url, title: d.title, label: d.label, content_preview: d.content_preview, fetched_at: d.fetched_at, char_count: (d.content || '').length }; }));
           // Load wireframe templates from build
           if (project.wireframe_templates) {
             setWfTemplates(project.wireframe_templates);
@@ -15277,6 +15286,8 @@
             nw_business_type: project.nw_business_type || '',
             nw_notes: project.nw_notes || '',
           });
+          // Load linked docs from project
+          if (Array.isArray(project.linked_docs)) setLinkedDocs(project.linked_docs.map(function(d) { return { doc_id: d.doc_id, url: d.url, title: d.title, label: d.label, content_preview: d.content_preview, fetched_at: d.fetched_at, char_count: (d.content || '').length }; }));
           // Load wireframe templates from project
           if (project.wireframe_templates) {
             setWfTemplates(project.wireframe_templates);
@@ -15311,6 +15322,38 @@
 
       var toggleBriefSection = function(key) {
         setBriefExpanded(function(prev) { return Object.assign({}, prev, { [key]: !prev[key] }); });
+      };
+
+      var handleAddLinkedDoc = async function() {
+        if (!docUrl.trim() || addingDoc) return;
+        setAddingDoc(true);
+        try {
+          var endpoint = isBuild ? '/builds/' + project.build_id + '/linked-docs' : '/projects/' + pid + '/linked-docs';
+          var data = await api(endpoint, { method: 'POST', body: { url: docUrl.trim(), label: docLabel.trim() } });
+          setLinkedDocs(function(prev) { return prev.concat([data.doc]); });
+          setDocUrl('');
+          setDocLabel('');
+        } catch (e) { alert('Error: ' + (e.message || e)); }
+        setAddingDoc(false);
+      };
+
+      var handleRemoveLinkedDoc = async function(docId) {
+        if (!confirm('Remove this linked doc?')) return;
+        try {
+          var endpoint = isBuild ? '/builds/' + project.build_id + '/linked-docs/' + docId : '/projects/' + pid + '/linked-docs/' + docId;
+          await api(endpoint, { method: 'DELETE' });
+          setLinkedDocs(function(prev) { return prev.filter(function(d) { return d.doc_id !== docId; }); });
+        } catch (e) { alert('Error: ' + (e.message || e)); }
+      };
+
+      var handleRefreshLinkedDoc = async function(docId) {
+        setRefreshingDoc(docId);
+        try {
+          var endpoint = isBuild ? '/builds/' + project.build_id + '/linked-docs/' + docId + '/refresh' : '/projects/' + pid + '/linked-docs/' + docId + '/refresh';
+          var data = await api(endpoint, { method: 'POST' });
+          setLinkedDocs(function(prev) { return prev.map(function(d) { return d.doc_id === docId ? data.doc : d; }); });
+        } catch (e) { alert('Refresh failed: ' + (e.message || e)); }
+        setRefreshingDoc(null);
       };
 
       var handleSave = async function() {
@@ -15593,6 +15636,83 @@
             ),
             React.createElement('button', { className: 'btn btn-primary', onClick: handleSave, style: { fontSize: 12, padding: '6px 16px' } },
               React.createElement('i', { className: 'fas fa-save', style: { marginRight: 4 } }), 'Save'
+            )
+          ),
+
+          // Linked Google Docs
+          React.createElement('div', { style: { marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 } },
+              React.createElement('i', { className: 'fa-brands fa-google-drive', style: { color: '#4285f4', fontSize: 16 } }),
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: 'var(--text)' } }, 'Linked Docs'),
+              linkedDocs.length > 0 && React.createElement('span', { style: { fontSize: 11, padding: '2px 8px', background: 'rgba(66,133,244,0.15)', color: '#4285f4', borderRadius: 4, fontWeight: 600 } }, linkedDocs.length)
+            ),
+            React.createElement('p', { style: { color: 'var(--text3)', fontSize: 12, margin: '0 0 12px' } },
+              'Link Google Docs with existing copy, client feedback, or style guides. Content is fetched and injected into AI prompts.'
+            ),
+
+            // Add doc form
+            React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 12 } },
+              React.createElement('input', {
+                type: 'text', value: docUrl,
+                onChange: function(e) { setDocUrl(e.target.value); },
+                placeholder: 'Paste Google Doc URL...',
+                onKeyDown: function(e) { if (e.key === 'Enter') handleAddLinkedDoc(); },
+                style: Object.assign({}, fieldStyle, { flex: 1, fontSize: 12, padding: '7px 10px' })
+              }),
+              React.createElement('input', {
+                type: 'text', value: docLabel,
+                onChange: function(e) { setDocLabel(e.target.value); },
+                placeholder: 'Label (optional)',
+                style: Object.assign({}, fieldStyle, { width: 120, fontSize: 12, padding: '7px 10px' })
+              }),
+              React.createElement('button', {
+                onClick: handleAddLinkedDoc,
+                disabled: addingDoc || !docUrl.trim(),
+                style: { fontSize: 12, padding: '7px 14px', background: addingDoc ? 'var(--bg3)' : '#4285f4', color: '#fff', border: 'none', borderRadius: 6, cursor: addingDoc ? 'wait' : 'pointer', whiteSpace: 'nowrap', fontWeight: 600 }
+              }, addingDoc
+                ? React.createElement('i', { className: 'fas fa-spinner fa-spin' })
+                : React.createElement('span', null, React.createElement('i', { className: 'fas fa-plus', style: { marginRight: 4 } }), 'Add')
+              )
+            ),
+
+            // List of linked docs
+            linkedDocs.length > 0 && React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+              linkedDocs.map(function(doc) {
+                return React.createElement('div', { key: doc.doc_id, style: { display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', background: 'rgba(66,133,244,0.04)', borderRadius: 8, border: '1px solid rgba(66,133,244,0.15)' } },
+                  React.createElement('i', { className: 'fas fa-file-alt', style: { color: '#4285f4', marginTop: 2, fontSize: 14 } }),
+                  React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                      React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, doc.title),
+                      doc.label && React.createElement('span', { style: { fontSize: 10, padding: '1px 6px', background: 'rgba(99,102,241,0.1)', color: 'var(--accent)', borderRadius: 3, fontWeight: 500 } }, doc.label)
+                    ),
+                    React.createElement('div', { style: { fontSize: 11, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      (doc.content_preview || '').substring(0, 100) + ((doc.content_preview || '').length > 100 ? '...' : '')
+                    ),
+                    React.createElement('div', { style: { fontSize: 10, color: 'var(--text3)', marginTop: 3 } },
+                      (doc.char_count || 0) + ' chars fetched',
+                      doc.fetched_at && (' · ' + new Date(doc.fetched_at).toLocaleDateString())
+                    )
+                  ),
+                  React.createElement('div', { style: { display: 'flex', gap: 4, flexShrink: 0 } },
+                    React.createElement('button', {
+                      onClick: function() { handleRefreshLinkedDoc(doc.doc_id); },
+                      disabled: refreshingDoc === doc.doc_id,
+                      title: 'Refresh content',
+                      style: { padding: '4px 8px', background: 'transparent', color: 'var(--text3)', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', fontSize: 11 }
+                    }, refreshingDoc === doc.doc_id ? React.createElement('i', { className: 'fas fa-spinner fa-spin' }) : React.createElement('i', { className: 'fas fa-sync-alt' })),
+                    React.createElement('button', {
+                      onClick: function() { window.open(doc.url, '_blank'); },
+                      title: 'Open in Drive',
+                      style: { padding: '4px 8px', background: 'transparent', color: '#4285f4', border: '1px solid rgba(66,133,244,0.3)', borderRadius: 4, cursor: 'pointer', fontSize: 11 }
+                    }, React.createElement('i', { className: 'fas fa-external-link-alt' })),
+                    React.createElement('button', {
+                      onClick: function() { handleRemoveLinkedDoc(doc.doc_id); },
+                      title: 'Remove',
+                      style: { padding: '4px 8px', background: 'transparent', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 4, cursor: 'pointer', fontSize: 11 }
+                    }, React.createElement('i', { className: 'fas fa-trash' }))
+                  )
+                );
+              })
             )
           )
         ),

@@ -543,6 +543,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_location TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_business_type TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_notes TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS linked_docs JSONB DEFAULT '[]'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_page_labels JSONB DEFAULT '{}'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS tone_of_voice TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
@@ -900,6 +901,7 @@ async function initDb() {
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS wireframe_templates JSONB DEFAULT '{}'`).catch(() => {});
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS nw_business_type TEXT`).catch(() => {});
     await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS nw_notes TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE website_builds ADD COLUMN IF NOT EXISTS linked_docs JSONB DEFAULT '[]'`).catch(() => {});
     // Add optional build_id to site_pages and content_keywords
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
     await client.query(`ALTER TABLE content_keywords ADD COLUMN IF NOT EXISTS build_id INTEGER REFERENCES website_builds(id) ON DELETE CASCADE`).catch(() => {});
@@ -4577,6 +4579,141 @@ app.post('/api/builds/:id/drive/create-folder', async (req, res) => {
     console.error('[drive] Create folder error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ===== LINKED DOCS (Additional Info — Google Drive references) =====
+// Extract Google Doc ID from various URL formats
+function extractGoogleDocId(url) {
+  // https://docs.google.com/document/d/DOC_ID/edit
+  const m = url.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  // https://drive.google.com/file/d/FILE_ID/view
+  const m2 = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (m2) return m2[1];
+  // Plain doc ID
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) return url.trim();
+  return null;
+}
+
+// Add a linked doc — fetches title + content from Drive
+app.post(['/api/projects/:id/linked-docs', '/api/builds/:id/linked-docs'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const isProject = req.path.includes('/projects/');
+    const { url, label } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL required' });
+
+    const docId = extractGoogleDocId(url);
+    if (!docId) return res.status(400).json({ error: 'Could not extract Google Doc ID from URL' });
+
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected. Connect in Agency Integrations first.' });
+
+    // Fetch doc metadata + content
+    let title = label || 'Untitled';
+    let content = '';
+    try {
+      const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${docId}?fields=name,mimeType`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!metaRes.ok) {
+        const errText = await metaRes.text();
+        return res.status(400).json({ error: `Cannot access doc: ${metaRes.status} — make sure the doc is shared with your connected Google account` });
+      }
+      const meta = await metaRes.json();
+      title = meta.name || title;
+
+      // Export as plain text
+      const exportRes = await fetch(`https://www.googleapis.com/drive/v3/files/${docId}/export?mimeType=text/plain`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (exportRes.ok) {
+        content = await exportRes.text();
+        content = content.substring(0, 20000); // Cap at 20k chars
+      }
+    } catch (e) {
+      console.warn('[linked-docs] Fetch error:', e.message);
+    }
+
+    // Load existing linked_docs
+    const table = isProject ? 'projects' : 'website_builds';
+    const row = (await pool.query(`SELECT linked_docs FROM ${table} WHERE id=$1`, [id])).rows[0];
+    const docs = Array.isArray(row?.linked_docs) ? row.linked_docs : [];
+
+    // Check duplicate
+    if (docs.some(d => d.doc_id === docId)) return res.status(400).json({ error: 'This doc is already linked' });
+
+    const newDoc = {
+      doc_id: docId,
+      url: url,
+      title: title,
+      label: label || '',
+      content_preview: content.substring(0, 200),
+      content: content,
+      fetched_at: new Date().toISOString()
+    };
+    docs.push(newDoc);
+
+    await pool.query(`UPDATE ${table} SET linked_docs=$1 WHERE id=$2`, [JSON.stringify(docs), id]);
+    console.log(`[linked-docs] Added "${title}" (${docId}) to ${table} ${id}, content: ${content.length} chars`);
+
+    res.json({ doc: { doc_id: newDoc.doc_id, url: newDoc.url, title: newDoc.title, label: newDoc.label, content_preview: newDoc.content_preview, fetched_at: newDoc.fetched_at, char_count: content.length } });
+  } catch (e) {
+    console.error('[linked-docs] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Remove a linked doc
+app.delete(['/api/projects/:id/linked-docs/:docId', '/api/builds/:id/linked-docs/:docId'], async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const isProject = req.path.includes('/projects/');
+    const table = isProject ? 'projects' : 'website_builds';
+    const row = (await pool.query(`SELECT linked_docs FROM ${table} WHERE id=$1`, [id])).rows[0];
+    const docs = Array.isArray(row?.linked_docs) ? row.linked_docs.filter(d => d.doc_id !== docId) : [];
+    await pool.query(`UPDATE ${table} SET linked_docs=$1 WHERE id=$2`, [JSON.stringify(docs), id]);
+    res.json({ success: true, remaining: docs.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Refresh a linked doc — re-fetch content from Drive
+app.post(['/api/projects/:id/linked-docs/:docId/refresh', '/api/builds/:id/linked-docs/:docId/refresh'], async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const isProject = req.path.includes('/projects/');
+    const table = isProject ? 'projects' : 'website_builds';
+
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+
+    const row = (await pool.query(`SELECT linked_docs FROM ${table} WHERE id=$1`, [id])).rows[0];
+    const docs = Array.isArray(row?.linked_docs) ? row.linked_docs : [];
+    const idx = docs.findIndex(d => d.doc_id === docId);
+    if (idx === -1) return res.status(404).json({ error: 'Doc not found' });
+
+    // Re-fetch
+    let title = docs[idx].title;
+    let content = '';
+    try {
+      const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${docId}?fields=name`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (metaRes.ok) { const m = await metaRes.json(); title = m.name || title; }
+      const exportRes = await fetch(`https://www.googleapis.com/drive/v3/files/${docId}/export?mimeType=text/plain`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (exportRes.ok) { content = (await exportRes.text()).substring(0, 20000); }
+    } catch (e) { console.warn('[linked-docs] Refresh error:', e.message); }
+
+    docs[idx].title = title;
+    docs[idx].content = content;
+    docs[idx].content_preview = content.substring(0, 200);
+    docs[idx].fetched_at = new Date().toISOString();
+
+    await pool.query(`UPDATE ${table} SET linked_docs=$1 WHERE id=$2`, [JSON.stringify(docs), id]);
+    res.json({ doc: { doc_id: docId, title, content_preview: docs[idx].content_preview, fetched_at: docs[idx].fetched_at, char_count: content.length } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Push a site page draft to Google Drive as a Doc
@@ -18358,6 +18495,18 @@ Write directly to this persona. Address their pain points, needs, and language.`
 ${project.nw_notes}`);
   }
 
+  // Linked Google Docs content (existing copy, client feedback docs, style guides)
+  const linkedDocs = Array.isArray(project.linked_docs) ? project.linked_docs : [];
+  if (linkedDocs.length > 0) {
+    const docsContext = linkedDocs.map(d => {
+      const label = d.label ? ` (${d.label})` : '';
+      const text = (d.content || '').substring(0, 4000);
+      return `--- "${d.title}"${label} ---\n${text}${text.length >= 4000 ? '\n[...truncated]' : ''}`;
+    }).join('\n\n');
+    parts.push(`LINKED REFERENCE DOCUMENTS (existing copy, feedback, or guides the team shared — use as context and match their style/tone):
+${docsContext}`);
+  }
+
   // Always add human writing rules — comprehensive anti-AI-detection
   parts.push(HUMAN_WRITING_RULES);
 
@@ -25581,6 +25730,12 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
     // Additional info from build settings (existing copy, client feedback, etc.)
     const additionalInfo = build.nw_notes ? `\nADDITIONAL CONTEXT FROM THE TEAM:\n${build.nw_notes}` : '';
 
+    // Linked docs content
+    const buildLinkedDocs = Array.isArray(build.linked_docs) ? build.linked_docs : [];
+    const linkedDocsContext = buildLinkedDocs.length > 0
+      ? '\nLINKED REFERENCE DOCUMENTS:\n' + buildLinkedDocs.map(d => `--- "${d.title}"${d.label ? ' (' + d.label + ')' : ''} ---\n${(d.content || '').substring(0, 4000)}`).join('\n\n')
+      : '';
+
     // Build full brief text for strict compliance
     let fullBriefText = '';
     if (build.brief_raw_text) fullBriefText = build.brief_raw_text;
@@ -25622,6 +25777,7 @@ ${briefContext}
 ${briefPageContent}
 ${aiNotes}
 ${additionalInfo}
+${linkedDocsContext}
 
 INTERNAL LINKS TO INCLUDE:
 ${linksContext || 'No internal links planned.'}
