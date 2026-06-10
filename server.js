@@ -22060,7 +22060,139 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
 </body></html>`);
     }
 
-    // Try to fetch the live site for header/footer
+    // === WIREFRAME-AWARE PREVIEW ===
+    // If this page type has a wireframe template URL, fetch the wireframe page and inject draft content
+    // into the actual Elementor sections — preview looks like the real designed page
+    let wireframeUrl = null;
+    try {
+      // Check build wireframe_templates first, then project
+      if (req.params.buildId) {
+        const build = (await pool.query('SELECT wireframe_templates FROM website_builds WHERE id=$1', [req.params.buildId])).rows[0];
+        if (build?.wireframe_templates?.[item.page_type]?.url) wireframeUrl = build.wireframe_templates[item.page_type].url;
+      }
+      if (!wireframeUrl && project?.wireframe_templates?.[item.page_type]?.url) {
+        wireframeUrl = project.wireframe_templates[item.page_type].url;
+      }
+    } catch (e) { /* no wireframe */ }
+
+    if (wireframeUrl && draftContent) {
+      try {
+        console.log(`[preview-sp] Wireframe preview: fetching ${wireframeUrl}`);
+        const wfResp = await fetch(wireframeUrl, {
+          signal: AbortSignal.timeout(15000),
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+        });
+        if (wfResp.ok) {
+          const wfHtml = await wfResp.text();
+          const $ = cheerio.load(wfHtml);
+          const wfOrigin = new URL(wireframeUrl).origin;
+
+          // Fix relative URLs to absolute
+          $('[href]').each((_, el) => {
+            const h = $(el).attr('href');
+            if (h && h.startsWith('/')) $(el).attr('href', wfOrigin + h);
+          });
+          $('[src]').each((_, el) => {
+            const s = $(el).attr('src');
+            if (s && s.startsWith('/')) $(el).attr('src', wfOrigin + s);
+          });
+          $('[srcset]').each((_, el) => {
+            const ss = $(el).attr('srcset');
+            if (ss) $(el).attr('srcset', ss.replace(/(^|\s)\//g, '$1' + wfOrigin + '/'));
+          });
+
+          // Add <base> tag for any remaining relative resources
+          if (!$('base').length) $('head').prepend(`<base href="${wfOrigin}/">`);
+
+          // Split draft content by <!-- Section N: TYPE --> markers
+          const sectionRegex = /<!--\s*Section\s+(\d+):\s*([^[>]+?)(?:\s*\[LOCKED[^\]]*\])?\s*-->/gi;
+          const draftSections = {};
+          let lastIdx = 0, lastNum = 0;
+          let match;
+          const allMatches = [];
+          const draftStr = draftContent;
+          while ((match = sectionRegex.exec(draftStr)) !== null) {
+            if (lastNum > 0) {
+              draftSections[lastNum] = draftStr.slice(lastIdx, match.index).trim();
+            }
+            lastNum = parseInt(match[1]);
+            lastIdx = match.index + match[0].length;
+            allMatches.push({ num: lastNum, type: match[2].trim(), locked: /LOCKED/i.test(match[0]) });
+          }
+          if (lastNum > 0) draftSections[lastNum] = draftStr.slice(lastIdx).trim();
+
+          // Find top-level Elementor sections
+          const topSections = $('section.elementor-top-section, .elementor-top-section[data-element_type="section"]');
+          console.log(`[preview-sp] Found ${topSections.length} Elementor sections, ${Object.keys(draftSections).length} draft sections`);
+
+          let injected = 0;
+          topSections.each((idx, section) => {
+            const sectionNum = idx + 1;
+            const draftHtml = draftSections[sectionNum];
+            const matchInfo = allMatches.find(m => m.num === sectionNum);
+
+            // Skip locked sections (forms, maps, CTA bars, carousels)
+            if (!draftHtml || (matchInfo && matchInfo.locked)) return;
+
+            // Find text widgets in this section (heading + text-editor)
+            const $section = $(section);
+            const textWidgets = $section.find('.elementor-widget-heading .elementor-heading-title, .elementor-widget-text-editor .elementor-widget-container');
+
+            if (textWidgets.length === 0) return;
+
+            // Parse draft HTML into heading + body
+            const tempDiv = cheerio.load(`<div>${draftHtml}</div>`);
+            const draftH = tempDiv('h1, h2, h3').first();
+            const draftBody = tempDiv('p, ul, ol, li, blockquote, h4, h5, h6, details');
+
+            // Replace heading widget
+            if (draftH.length) {
+              const headingWidget = $section.find('.elementor-heading-title').first();
+              if (headingWidget.length) {
+                headingWidget.html(draftH.html());
+                headingWidget.css('border-left', '3px solid #22c55e');
+                headingWidget.css('padding-left', '8px');
+              }
+            }
+
+            // Replace text-editor widget content
+            const textEditor = $section.find('.elementor-widget-text-editor .elementor-widget-container').first();
+            if (textEditor.length && draftBody.length) {
+              let bodyHtml = '';
+              draftBody.each((_, el) => { bodyHtml += tempDiv.html(el); });
+              if (bodyHtml.trim()) {
+                textEditor.html(bodyHtml);
+                textEditor.css('border-left', '3px solid #22c55e');
+                textEditor.css('padding-left', '12px');
+                textEditor.css('background', 'rgba(34,197,94,0.05)');
+              }
+            }
+            injected++;
+          });
+          console.log(`[preview-sp] Injected draft into ${injected}/${topSections.length} sections`);
+
+          // Add preview banner
+          $('body').prepend(`<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#059669,#10b981);color:#fff;padding:10px 20px;font-family:-apple-system,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 20px rgba(0,0,0,0.3)">
+            <span>\u{1F3A8} WIREFRAME PREVIEW — Content injected into design template</span>
+            <span style="opacity:0.8;font-size:12px">${item.page_name} • ${injected} sections updated</span>
+          </div>
+          <div style="height:44px"></div>`);
+
+          // Replace page title
+          $('title').text(`Preview: ${draftTitle}`);
+
+          // Disable all links
+          $('body').append(`<script>document.addEventListener('click',function(e){if(e.target.closest('a')){e.preventDefault();e.stopPropagation();}},true);</script>`);
+
+          res.setHeader('Content-Type', 'text/html');
+          return res.send($.html());
+        }
+      } catch (wfErr) {
+        console.log(`[preview-sp] Wireframe fetch failed, falling back to standalone: ${wfErr.message}`);
+      }
+    }
+
+    // === FALLBACK: Standalone preview (no wireframe or wireframe fetch failed) ===
     let headerBlock = '', footerBlock = '', headContent = '', bodyClasses = '', base = '';
     try {
       const siteUrl = domain.startsWith('http') ? domain : ('https://' + domain);
@@ -22076,7 +22208,6 @@ document.addEventListener('mouseup', () => { dragging = false; document.body.sty
         if (footerMatch) footerBlock = footerMatch[0];
         const bodyClassMatch = html.match(/<body[^>]*class="([^"]*)"/i);
         bodyClasses = bodyClassMatch ? bodyClassMatch[1] : '';
-        // Replace meta title
         if (draftTitle) headContent = headContent.replace(/<title>[^<]*<\/title>/i, '<title>' + draftTitle + '</title>');
         const fixUrls = (s) => s.replace(/(href|src|action)=["']\//g, '$1="' + base + '/');
         headContent = fixUrls(headContent);
