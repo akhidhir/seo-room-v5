@@ -2364,23 +2364,49 @@ app.post('/api/builds/:buildId/site-pages/generate', async (req, res) => {
     const pageMap = {};
     keywords.rows.forEach(kw => {
       const key = kw.page_type + '::' + (kw.page_name || 'default');
-      if (!pageMap[key]) pageMap[key] = { page_type: kw.page_type, page_name: kw.page_name, keywords: [] };
+      if (!pageMap[key]) pageMap[key] = { page_type: kw.page_type, page_name: kw.page_name, keywords: [], old_url: null, meta_title: null, meta_description: null, focus_keyword: null };
       pageMap[key].keywords.push({ keyword: kw.keyword, search_volume: kw.search_volume });
+      // Capture old site data from imported keywords (first one with data wins)
+      if (kw.old_url && !pageMap[key].old_url) {
+        pageMap[key].old_url = kw.old_url;
+        pageMap[key].meta_title = kw.meta_title || null;
+        pageMap[key].meta_description = kw.meta_description || null;
+        pageMap[key].focus_keyword = kw.h1 || kw.keyword; // h1 stored the focus keyword from import
+      }
     });
     const pages = [];
     for (const key of Object.keys(pageMap)) {
       const p = pageMap[key];
       const existing = await pool.query('SELECT id FROM site_pages WHERE build_id=$1 AND page_type=$2 AND page_name=$3', [buildId, p.page_type, p.page_name]);
       if (existing.rows.length > 0) {
-        await pool.query('UPDATE site_pages SET keywords=$1 WHERE id=$2', [JSON.stringify(p.keywords), existing.rows[0].id]);
+        // Also update meta from imports if available
+        const updates = [JSON.stringify(p.keywords), existing.rows[0].id];
+        let updateSql = 'UPDATE site_pages SET keywords=$1';
+        if (p.old_url) {
+          const oldPath = new URL(p.old_url).pathname.replace(/\/$/, '') || '/';
+          updateSql += `, slug=COALESCE(NULLIF(slug,''), '${oldPath.replace(/'/g, "''")}')`;
+        }
+        if (p.meta_title) updateSql += `, meta_title=COALESCE(NULLIF(meta_title,''), '${p.meta_title.replace(/'/g, "''")}')`;
+        if (p.meta_description) updateSql += `, meta_description=COALESCE(NULLIF(meta_description,''), '${p.meta_description.replace(/'/g, "''")}')`;
+        if (p.focus_keyword) updateSql += `, focus_keyword=COALESCE(NULLIF(focus_keyword,''), '${p.focus_keyword.replace(/'/g, "''")}')`;
+        updateSql += ' WHERE id=$2';
+        await pool.query(updateSql, updates);
         const r2 = await pool.query('SELECT * FROM site_pages WHERE id=$1', [existing.rows[0].id]);
         pages.push(r2.rows[0]);
       } else {
-        const slug = (p.page_name || p.page_type).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        // For imported keywords: use old URL slug, meta title, meta description
+        let slug, metaTitle, metaDesc, focusKw;
+        if (p.old_url) {
+          try { slug = new URL(p.old_url).pathname.replace(/\/$/, '') || '/'; } catch(e) { slug = null; }
+          metaTitle = p.meta_title || '';
+          metaDesc = p.meta_description || '';
+          focusKw = p.focus_keyword || p.keywords[0]?.keyword || '';
+        }
+        if (!slug) slug = (p.page_name || p.page_type).toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const r = await pool.query(
-          `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, keywords, is_cornerstone)
-           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-          [buildId, p.page_type, p.page_name, slug, p.keywords[0]?.keyword || '', JSON.stringify(p.keywords), p.page_type === 'home']
+          `INSERT INTO site_pages (build_id, page_type, page_name, slug, focus_keyword, meta_title, meta_description, keywords, is_cornerstone)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [buildId, p.page_type, p.page_name, slug, focusKw || p.keywords[0]?.keyword || '', metaTitle || '', metaDesc || '', JSON.stringify(p.keywords), p.page_type === 'home']
         );
         pages.push(r.rows[0]);
       }
@@ -18542,7 +18568,21 @@ ${docsContext}`);
 
   // Old site content (imported URLs) — passed in by caller
   if (oldSiteContent) {
-    parts.push(`OLD WEBSITE CONTENT (use as reference — preserve key messaging, improve SEO and readability):
+    parts.push(`OLD WEBSITE CONTENT — SEO MIGRATION (CRITICAL RULES):
+This is a website redevelopment. The old pages have existing rankings we MUST preserve.
+
+MANDATORY — DO NOT CHANGE THESE (copy them exactly as-is):
+- Meta Title: keep the EXACT old meta title (do NOT rewrite it)
+- Meta Description: keep the EXACT old meta description (do NOT rewrite it)
+- Focus Keyword: keep the EXACT old focus keyword
+- URL slug: the page MUST use the same URL path as the old page
+
+WHAT TO REWRITE:
+- Body content ONLY — write fresh, better copy
+- Use the old content as reference for tone, key messaging, and services mentioned
+- Preserve any important claims, phone numbers, and calls-to-action from the old page
+- Improve readability, SEO structure (H2/H3), and engagement
+
 ${oldSiteContent}`);
   }
 
@@ -25333,12 +25373,19 @@ app.post('/api/projects/:projectId/site-pages/generate', async (req, res) => {
     const project = projResult.rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    // Group keywords by page_type + page_name
+    // Group keywords by page_type + page_name, capturing old site data from imports
     const pageMap = {};
     keywords.forEach(kw => {
       const key = kw.page_type + '::' + (kw.page_name || 'unnamed');
-      if (!pageMap[key]) pageMap[key] = { type: kw.page_type, name: kw.page_name || 'unnamed', keywords: [] };
+      if (!pageMap[key]) pageMap[key] = { type: kw.page_type, name: kw.page_name || 'unnamed', keywords: [], old_url: null, imported_meta_title: null, imported_meta_description: null, imported_focus_keyword: null };
       pageMap[key].keywords.push({ keyword: kw.keyword, volume: kw.search_volume || 0 });
+      // Capture old site data from imported keywords (first one with data wins)
+      if (kw.old_url && !pageMap[key].old_url) {
+        pageMap[key].old_url = kw.old_url;
+        pageMap[key].imported_meta_title = kw.meta_title || null;
+        pageMap[key].imported_meta_description = kw.meta_description || null;
+        pageMap[key].imported_focus_keyword = kw.h1 || kw.keyword;
+      }
     });
     const pages = Object.values(pageMap);
 
@@ -25406,25 +25453,37 @@ Rules:
     // Delete existing site_pages for this project
     await pool.query('DELETE FROM site_pages WHERE project_id=$1', [projectId]);
 
-    // Insert pages from AI plan
+    // Insert pages from AI plan — imported old site data takes priority over AI-generated values
     const insertedPages = [];
     for (let i = 0; i < pages.length; i++) {
       const page = pages[i];
       const plan = aiPlan.pages[i] || {};
+      // SEO migration: if page has imported data, preserve old slug/meta/focus keyword exactly
+      let pageSlug, pageMetaTitle, pageMetaDesc, pageFocusKw;
+      if (page.old_url) {
+        try { pageSlug = new URL(page.old_url).pathname.replace(/\/$/, '') || '/'; } catch(e) { pageSlug = null; }
+        pageMetaTitle = page.imported_meta_title || plan.suggested_meta_title || page.name;
+        pageMetaDesc = page.imported_meta_description || plan.suggested_meta_description || '';
+        pageFocusKw = page.imported_focus_keyword || plan.focus_keyword || (page.keywords[0] ? page.keywords[0].keyword : '');
+      }
+      if (!pageSlug) pageSlug = plan.suggested_slug || '/' + page.name.toLowerCase().replace(/\s+/g, '-');
+      if (!pageMetaTitle) pageMetaTitle = plan.suggested_meta_title || page.name;
+      if (!pageMetaDesc) pageMetaDesc = plan.suggested_meta_description || '';
+      if (!pageFocusKw) pageFocusKw = plan.focus_keyword || (page.keywords[0] ? page.keywords[0].keyword : '');
       const result = await pool.query(
         `INSERT INTO site_pages (project_id, page_type, page_name, slug, is_cornerstone, cluster_id, keywords, internal_links, meta_title, meta_description, focus_keyword, stage)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft')
          RETURNING *`,
         [
           projectId, page.type, page.name,
-          plan.suggested_slug || '/' + page.name.toLowerCase().replace(/\s+/g, '-'),
+          pageSlug,
           plan.is_cornerstone || false,
           plan.cluster_id || null,
           JSON.stringify(page.keywords),
           JSON.stringify(plan.internal_links || []),
-          plan.suggested_meta_title || page.name,
-          plan.suggested_meta_description || '',
-          plan.focus_keyword || (page.keywords[0] ? page.keywords[0].keyword : '')
+          pageMetaTitle,
+          pageMetaDesc,
+          pageFocusKw
         ]
       );
       insertedPages.push(result.rows[0]);
@@ -25895,14 +25954,20 @@ app.post('/api/builds/:buildId/site-pages/:pageId/generate-content', async (req,
         // Find best match: same page_name, else same page_type, else include all
         const exactMatch = oldKws.rows.filter(k => k.keyword && page.page_name && k.keyword.toLowerCase().includes(page.page_name.toLowerCase()));
         const relevantOld = exactMatch.length > 0 ? exactMatch : oldKws.rows;
-        oldSiteContext = '\nOLD WEBSITE CONTENT (use as reference — preserve key messaging, improve SEO and readability):\n' +
-          relevantOld.slice(0, 3).map(k => {
+        const oldPage = relevantOld[0];
+        oldSiteContext = `\nOLD WEBSITE — SEO MIGRATION (CRITICAL):
+This is a website redevelopment. The old page has existing rankings we MUST preserve.
+
+MANDATORY — KEEP THESE EXACTLY AS-IS (copy verbatim into your response):
+- meta_title: "${oldPage.meta_title || ''}"
+- meta_description: "${oldPage.meta_description || ''}"
+- focus_keyword: "${oldPage.h1 || oldPage.keyword || ''}"
+
+REWRITE BODY CONTENT ONLY — use old content as reference for tone and key messaging:
+` + relevantOld.slice(0, 3).map(k => {
             let parts = [`--- Old Page: "${k.meta_title || k.keyword}" ---`];
-            if (k.old_url) parts.push(`URL: ${k.old_url}`);
-            if (k.meta_title) parts.push(`Meta Title: ${k.meta_title}`);
-            if (k.meta_description) parts.push(`Meta Description: ${k.meta_description}`);
-            if (k.h1) parts.push(`H1: ${k.h1}`);
-            if (k.old_content) parts.push(`Content:\n${k.old_content.substring(0, 5000)}`);
+            if (k.old_url) parts.push(`URL slug to preserve: ${new URL(k.old_url).pathname}`);
+            if (k.old_content) parts.push(`Old content:\n${k.old_content.substring(0, 5000)}`);
             return parts.join('\n');
           }).join('\n\n');
       }
@@ -26218,14 +26283,20 @@ app.post('/api/projects/:projectId/site-pages/:pageId/generate-content', async (
       if (oldKws.rows.length > 0) {
         const exactMatch = oldKws.rows.filter(k => k.keyword && page.page_name && k.keyword.toLowerCase().includes(page.page_name.toLowerCase()));
         const relevantOld = exactMatch.length > 0 ? exactMatch : oldKws.rows;
-        projOldSiteContext = '\nOLD WEBSITE CONTENT (use as reference — preserve key messaging, improve SEO and readability):\n' +
-          relevantOld.slice(0, 3).map(k => {
+        const oldPage = relevantOld[0];
+        projOldSiteContext = `\nOLD WEBSITE — SEO MIGRATION (CRITICAL):
+This is a website redevelopment. The old page has existing rankings we MUST preserve.
+
+MANDATORY — KEEP THESE EXACTLY AS-IS (copy verbatim into your response):
+- meta_title: "${oldPage.meta_title || ''}"
+- meta_description: "${oldPage.meta_description || ''}"
+- focus_keyword: "${oldPage.h1 || oldPage.keyword || ''}"
+
+REWRITE BODY CONTENT ONLY — use old content as reference for tone and key messaging:
+` + relevantOld.slice(0, 3).map(k => {
             let parts = [`--- Old Page: "${k.meta_title || k.keyword}" ---`];
-            if (k.old_url) parts.push(`URL: ${k.old_url}`);
-            if (k.meta_title) parts.push(`Meta Title: ${k.meta_title}`);
-            if (k.meta_description) parts.push(`Meta Description: ${k.meta_description}`);
-            if (k.h1) parts.push(`H1: ${k.h1}`);
-            if (k.old_content) parts.push(`Content:\n${k.old_content.substring(0, 5000)}`);
+            if (k.old_url) parts.push(`URL slug to preserve: ${new URL(k.old_url).pathname}`);
+            if (k.old_content) parts.push(`Old content:\n${k.old_content.substring(0, 5000)}`);
             return parts.join('\n');
           }).join('\n\n');
       }
