@@ -16636,11 +16636,26 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
     const authHeaders = getWpAuthHeaders(project);
     if (!authHeaders) return res.status(400).json({ error: 'WordPress Application Password not configured. Go to Settings → WordPress Auth.' });
 
+    // Retry-once helper for flaky WP hosts: 20s first try, 45s second try
+    const wpFetch = async (url, opts) => {
+      try {
+        return await fetch(url, { ...opts, signal: AbortSignal.timeout(20000) });
+      } catch (e) {
+        if (e.name === 'TimeoutError' || e.name === 'AbortError' || /abort|timeout/i.test(String(e.message || ''))) {
+          console.log('[onpage-fix] WP request timed out, retrying with 45s timeout…');
+          return await fetch(url, { ...opts, signal: AbortSignal.timeout(45000) });
+        }
+        throw e;
+      }
+    };
+
     const results = [];
     for (const fix of fixes) {
       try {
-        // 1. Read current values from WordPress (before snapshot)
-        const current = await readWpYoastMeta(wpBase, fix.id, authHeaders);
+        // 1. Read current values from WordPress (before snapshot) — retry once on timeout
+        let current = null;
+        try { current = await readWpYoastMeta(wpBase, fix.id, authHeaders); }
+        catch (e) { current = await readWpYoastMeta(wpBase, fix.id, authHeaders).catch(() => null); }
         if (!current) {
           results.push({ id: fix.id, success: false, error: 'Page not found in WordPress' });
           continue;
@@ -16676,11 +16691,10 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
 
           console.log(`[onpage-fix] Writing to ${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId} meta:`, JSON.stringify(meta));
 
-          let writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+          let writeResp = await wpFetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
             method: 'POST',
             headers: authHeaders,
-            body: JSON.stringify({ meta }),
-            signal: AbortSignal.timeout(15000)
+            body: JSON.stringify({ meta })
           });
 
           // If meta write fails with 401/403, try yoast_meta wrapper (some Yoast versions expose this)
@@ -16691,11 +16705,10 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
             if (fix.new_meta_desc) yoastPayload.yoast_wpseo_metadesc = fix.new_meta_desc;
             if (fix.new_focus_keyword) yoastPayload.yoast_wpseo_focuskw = fix.new_focus_keyword;
 
-            writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+            writeResp = await wpFetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
               method: 'POST',
               headers: authHeaders,
-              body: JSON.stringify({ yoast_meta: yoastPayload }),
-              signal: AbortSignal.timeout(15000)
+              body: JSON.stringify({ yoast_meta: yoastPayload })
             });
           }
 
