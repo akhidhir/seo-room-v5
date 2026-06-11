@@ -17660,8 +17660,8 @@
           });
           if (data.gpthuman_credits != null) setGpthumanCredits(data.gpthuman_credits);
           if (data.error) { alert('Optimise failed: ' + data.error); }
-          else if (data.preview || data.content_html) {
-            var html = data.content_html || (data.proposed && data.proposed.content_html);
+          else if (data.preview || data.content_html || data.content || data.ok) {
+            var html = data.content_html || data.content || (data.proposed && data.proposed.content_html);
             if (html) {
               var plain = html.replace(/<[^>]+>/g, '');
               var proposedWords = plain.trim() ? plain.trim().split(/\s+/).length : 0;
@@ -17727,7 +17727,7 @@
         var data = await api(apiPrefix + '/site-pages/' + page.id + '/optimise', { method:'POST', body:{ tips:tips, missing_keywords: missingKws.map(function(k){return k.keyword;}), target_keywords: targetKeywords.map(function(k){return typeof k==='string'?{keyword:k}:k;}), content_score: scoreData?scoreData.score:0, stats: scoreData?scoreData.stats:{}, focus_keyword: editMeta.focus_keyword, current_meta:{ meta_title: editMeta.meta_title||'', meta_desc: editMeta.meta_desc||'', focus_keyword: editMeta.focus_keyword||'' }, topic_gaps: topicGaps } });
         if (data.gpthuman_credits != null) setGpthumanCredits(data.gpthuman_credits);
         if (data.error) throw new Error(data.error);
-        var html = data.content_html || (data.proposed && data.proposed.content_html);
+        var html = data.content_html || data.content || (data.proposed && data.proposed.content_html);
         if (!html) return null;
         var mt = data.meta_title || (data.proposed && data.proposed.meta_title) || editMeta.meta_title;
         var md = data.meta_description || (data.proposed && data.proposed.meta_description) || editMeta.meta_desc;
