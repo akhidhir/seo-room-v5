@@ -5052,15 +5052,16 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
           for (const d of docs) {
             let docContent = d.content || '';
             let docComments = [];
-            if (driveToken && d.drive_id) {
+            const dDriveId = d.drive_id || d.doc_id;
+            if (driveToken && dDriveId) {
               try {
-                const [freshText, freshComments] = await Promise.all([
-                  driveReadDoc(driveToken, d.drive_id),
-                  driveListComments(driveToken, d.drive_id)
-                ]);
+                const freshText = await driveReadDoc(driveToken, dDriveId);
                 if (freshText && freshText.length > 0) docContent = freshText;
-                if (freshComments && freshComments.length > 0) docComments = freshComments;
               } catch(e) { /* use cached content */ }
+              try {
+                const freshComments = await driveListComments(driveToken, dDriveId);
+                if (freshComments && freshComments.length > 0) docComments = freshComments;
+              } catch(e) { console.warn('[optimise] linked doc comments error:', e.message); }
             }
             if (docContent || docComments.length) {
               let entry = { title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments };
@@ -27863,18 +27864,21 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
           for (const d of docs) {
             let docContent = d.content || '';
             let docComments = [];
-            if (driveToken && d.drive_id) {
+            const dDriveId = d.drive_id || d.doc_id;
+            if (driveToken && dDriveId) {
               try {
-                const freshText = await driveReadDoc(driveToken, d.drive_id);
+                const freshText = await driveReadDoc(driveToken, dDriveId);
                 if (freshText && freshText.length > 0) docContent = freshText;
               } catch(e) { /* use cached content */ }
               try {
-                const freshComments = await driveListComments(driveToken, d.drive_id);
+                const freshComments = await driveListComments(driveToken, dDriveId);
                 if (freshComments && freshComments.length > 0) docComments = freshComments;
               } catch(e) {
                 commentErrors.push((d.title || d.label || 'Reference Doc') + ': ' + e.message);
                 console.warn('[light-optimise] linked doc comments error:', e.message);
               }
+            } else if (!dDriveId) {
+              commentErrors.push((d.title || d.label || 'Reference Doc') + ': no Drive doc ID stored — comments not checked');
             }
             if (docContent || docComments.length) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments });
             if (docContent || docComments.length) linkedDocTitles.push((d.title || d.label || 'Reference Doc') + ' (' + (docContent || '').length + ' chars, ' + docComments.length + ' comments)');
