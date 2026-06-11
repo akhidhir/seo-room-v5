@@ -28023,44 +28023,84 @@ CRITICAL RULES:
     let appliedCount = 0;
     let skippedCount = 0;
     const appliedFinds = [];
+    // Normalized fuzzy locator: handles whitespace differences, curly quotes, HTML entities
+    const normChar = (s, i) => {
+      if (s.startsWith('&amp;', i)) return ['&', 5];
+      if (s.startsWith('&nbsp;', i)) return [' ', 6];
+      if (s.startsWith('&#39;', i) || s.startsWith('&apos;', i)) return ["'", s.startsWith('&#39;', i) ? 5 : 6];
+      if (s.startsWith('&quot;', i)) return ['"', 6];
+      const ch = s[i];
+      if (ch === '‘' || ch === '’') return ["'", 1];
+      if (ch === '“' || ch === '”') return ['"', 1];
+      if (ch === '—' || ch === '–') return ['-', 1];
+      return [ch, 1];
+    };
+    const normalizeStr = (s) => {
+      let out = ''; let i = 0;
+      while (i < s.length) {
+        let [ch, adv] = normChar(s, i);
+        if (/\s/.test(ch)) { if (out && out[out.length - 1] !== ' ') out += ' '; }
+        else out += ch.toLowerCase();
+        i += adv;
+      }
+      return out.trim();
+    };
+    const buildNormMap = (s) => {
+      const map = []; let norm = ''; let i = 0;
+      while (i < s.length) {
+        let [ch, adv] = normChar(s, i);
+        if (/\s/.test(ch)) {
+          if (norm && norm[norm.length - 1] !== ' ') { norm += ' '; map.push(i); }
+        } else { norm += ch.toLowerCase(); map.push(i); }
+        i += adv;
+      }
+      return { norm, map };
+    };
+    const locateSpan = (html, find) => {
+      let idx = html.indexOf(find);
+      if (idx !== -1) return [idx, idx + find.length];
+      idx = html.toLowerCase().indexOf(find.toLowerCase());
+      if (idx !== -1) return [idx, idx + find.length];
+      // Fuzzy: normalized match mapped back to original positions
+      const { norm, map } = buildNormMap(html);
+      let nfind = normalizeStr(find);
+      let nidx = norm.indexOf(nfind);
+      if (nidx === -1) {
+        const trimmed = nfind.replace(/^["'\s]+/, '').replace(/["'\s.]+$/, '');
+        if (trimmed.length >= 20) { nfind = trimmed; nidx = norm.indexOf(nfind); }
+      }
+      if (nidx === -1) return null;
+      const start = map[nidx];
+      const end = (nidx + nfind.length < map.length) ? map[nidx + nfind.length] : html.length;
+      return [start, end];
+    };
     // Design constraint: a patch must not bloat its containing paragraph past 150 words
-    const paragraphTooLong = (html, findText, replaceText) => {
-      const idx = html.indexOf(findText);
-      if (idx === -1) return false;
-      const pStart = html.lastIndexOf('<p', idx);
-      const pEnd = html.indexOf('</p>', idx);
+    const paragraphTooLongAt = (html, start, end, replaceText) => {
+      const pStart = html.lastIndexOf('<p', start);
+      const pEnd = html.indexOf('</p>', start);
       if (pStart === -1 || pEnd === -1) return false;
-      const paraText = html.substring(pStart, pEnd).replace(/<[^>]+>/g, ' ');
-      const newLen = paraText.replace(findText, replaceText).trim().split(/\s+/).filter(Boolean).length;
-      return newLen > 150;
+      const newPara = (html.substring(pStart, start) + replaceText + html.substring(end, Math.max(end, pEnd))).replace(/<[^>]+>/g, ' ');
+      return newPara.trim().split(/\s+/).filter(Boolean).length > 150;
     };
     for (const patch of patches) {
       if (!patch.find || !patch.replace || patch.find === patch.replace) {
         skippedCount++;
         continue;
       }
-      if (patch.replace.split(/\s+/).length > patch.find.split(/\s+/).length && paragraphTooLong(optimisedHtml, patch.find, patch.replace)) {
+      const span = locateSpan(optimisedHtml, patch.find);
+      if (!span) {
+        skippedCount++;
+        console.log('[light-optimise] Patch not found (even fuzzy):', patch.find.substring(0, 80) + '...');
+        continue;
+      }
+      if (patch.replace.split(/\s+/).length > patch.find.split(/\s+/).length && paragraphTooLongAt(optimisedHtml, span[0], span[1], patch.replace)) {
         skippedCount++;
         console.log('[light-optimise] Patch skipped (paragraph would exceed 150 words):', patch.find.substring(0, 60) + '...');
         continue;
       }
-      // Check if the find text exists in the HTML (could be inside tags)
-      if (optimisedHtml.includes(patch.find)) {
-        optimisedHtml = optimisedHtml.replace(patch.find, patch.replace);
-        appliedCount++;
-        appliedFinds.push(patch.find);
-      } else {
-        // Try case-insensitive match as fallback
-        const idx = optimisedHtml.toLowerCase().indexOf(patch.find.toLowerCase());
-        if (idx !== -1) {
-          optimisedHtml = optimisedHtml.substring(0, idx) + patch.replace + optimisedHtml.substring(idx + patch.find.length);
-          appliedCount++;
-          appliedFinds.push(patch.find);
-        } else {
-          skippedCount++;
-          console.log('[light-optimise] Patch not found:', patch.find.substring(0, 80) + '...');
-        }
-      }
+      optimisedHtml = optimisedHtml.substring(0, span[0]) + patch.replace + optimisedHtml.substring(span[1]);
+      appliedCount++;
+      appliedFinds.push(patch.find);
     }
 
     // Ensure meta title and desc include focus keyword and are correct length
