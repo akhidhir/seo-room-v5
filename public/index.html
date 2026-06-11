@@ -26172,8 +26172,14 @@
               const rows = [];
               // Client comments — the critical one
               if (r.client_comments) {
+                (r.client_comments.fetch_errors || []).forEach((err, i) => {
+                  rows.push(React.createElement('div', { key: 'fberr' + i, style: { fontSize: 12, color: '#ef4444', padding: '2px 0', lineHeight: 1.4, fontWeight: 600 } },
+                    React.createElement('span', { style: { marginRight: 6 } }, '✗'),
+                    'Comments could NOT be checked — ' + err
+                  ));
+                });
                 if (r.client_comments.found === 0) {
-                  rows.push(row(false, 'Client feedback', 'No comments found (' + (r.client_comments.source || '') + ')'));
+                  if (!(r.client_comments.fetch_errors || []).length) rows.push(row(false, 'Client feedback', 'No comments found (' + (r.client_comments.source || '') + ')'));
                 } else {
                   rows.push(row(true, 'Client feedback', r.client_comments.found + ' comment(s) read from ' + (r.client_comments.source || 'Drive')));
                   (r.client_comments.items || []).forEach((c, i) => {
@@ -26181,6 +26187,7 @@
                       React.createElement('span', { style: { color: c.patch_applied ? '#22c55e' : '#ef4444', marginRight: 6, fontWeight: 600 } }, c.patch_applied ? '✓' : '✗'),
                       React.createElement('span', { style: { color: 'var(--text3)' } }, (c.author || 'Client') + ': '),
                       '"' + (c.comment || '').substring(0, 120) + '"',
+                      c.resolved && React.createElement('span', { style: { color: 'var(--text3)', marginLeft: 6, fontSize: 11 } }, '[resolved in Drive]'),
                       React.createElement('span', { style: { color: c.patch_applied ? '#22c55e' : '#ef4444', marginLeft: 6 } },
                         c.patch_applied ? '→ patch applied: ' + (c.action || '') : '→ ' + (c.action || 'NOT addressed'))
                     ));

@@ -27835,18 +27835,23 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
     let linkedDocsText = '';
     let allDocComments = [];
     let linkedDocTitles = [];
+    let commentErrors = [];
     let driveToken = null;
-    try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) {}
+    try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) { commentErrors.push('Drive token: ' + e.message); }
+    if (!driveToken) commentErrors.push('No Google Drive access token — comments could NOT be checked');
 
     // Page's OWN Drive doc (created by Push to Drive) — this is where the client leaves comments
     if (driveToken && page.drive_doc_id) {
       try {
         const pageComments = await driveListComments(driveToken, page.drive_doc_id);
         if (pageComments && pageComments.length) {
-          allDocComments.push(...pageComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText })));
+          allDocComments.push(...pageComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
           console.log('[light-optimise] Found ' + pageComments.length + ' comment(s) on page Drive doc');
         }
-      } catch(e) { console.warn('[light-optimise] page doc comments error:', e.message); }
+      } catch(e) {
+        commentErrors.push('Page doc: ' + e.message);
+        console.warn('[light-optimise] page doc comments error:', e.message);
+      }
     }
 
     if (briefBuildId) {
@@ -27860,17 +27865,20 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
             let docComments = [];
             if (driveToken && d.drive_id) {
               try {
-                const [freshText, freshComments] = await Promise.all([
-                  driveReadDoc(driveToken, d.drive_id),
-                  driveListComments(driveToken, d.drive_id)
-                ]);
+                const freshText = await driveReadDoc(driveToken, d.drive_id);
                 if (freshText && freshText.length > 0) docContent = freshText;
+              } catch(e) { /* use cached content */ }
+              try {
+                const freshComments = await driveListComments(driveToken, d.drive_id);
                 if (freshComments && freshComments.length > 0) docComments = freshComments;
-              } catch(e) { /* use cached */ }
+              } catch(e) {
+                commentErrors.push((d.title || d.label || 'Reference Doc') + ': ' + e.message);
+                console.warn('[light-optimise] linked doc comments error:', e.message);
+              }
             }
             if (docContent || docComments.length) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments });
             if (docContent || docComments.length) linkedDocTitles.push((d.title || d.label || 'Reference Doc') + ' (' + (docContent || '').length + ' chars, ' + docComments.length + ' comments)');
-            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText })));
+            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
           }
           if (freshDocs.length > 0) {
             linkedDocsText = '\nLINKED REFERENCE DOCUMENTS (follow these guidelines):\n' +
@@ -27926,7 +27934,7 @@ ${linkedDocsText}
 ${allDocComments.length > 0 ? `
 CLIENT FEEDBACK — ${allDocComments.length} comment(s) found on linked Drive docs. MANDATORY:
 For EVERY comment below, create at least one patch addressing it, AND add an entry to changes_summary that starts EXACTLY with: Client feedback: "<short quote of the comment>" → <what you changed>. If a comment cannot be actioned in this page's content, still add a changes_summary entry: Client feedback: "<quote>" → not applicable to this page because <reason>.
-${allDocComments.map((c, i) => `${i + 1}. ${c.author}: "${c.content}"${c.quotedText ? ` [on: "${String(c.quotedText).substring(0, 120)}"]` : ''}`).join('\n')}
+${allDocComments.map((c, i) => `${i + 1}. ${c.author}: "${c.content}"${c.quotedText ? ` [on: "${String(c.quotedText).substring(0, 120)}"]` : ''}${c.resolved ? ' [RESOLVED in Drive — verify it is reflected in the content, action it if not]' : ''}`).join('\n')}
 ` : ''}
 CURRENT STATS:
 - Content Score: ${content_score || 0}/100
@@ -28143,10 +28151,10 @@ CRITICAL RULES:
         const pf = String(fa.patch_find).substring(0, 60).toLowerCase();
         verified = appliedFinds.some(f => f.toLowerCase().includes(pf) || pf.includes(f.toLowerCase().substring(0, 60)));
       }
-      return { author: c.author, comment: c.content, action: fa ? (fa.action || '') : 'NOT addressed by AI', patch_applied: verified };
+      return { author: c.author, comment: c.content, resolved: !!c.resolved, action: fa ? (fa.action || '') : 'NOT addressed by AI', patch_applied: verified };
     });
     const inputsReport = {
-      client_comments: { found: allDocComments.length, source: page.drive_doc_id ? 'page Drive doc + linked docs' : 'linked docs only (page not pushed to Drive)', items: verifiedFeedback },
+      client_comments: { found: allDocComments.length, source: page.drive_doc_id ? 'page Drive doc + linked docs' : 'linked docs only (page not pushed to Drive)', items: verifiedFeedback, fetch_errors: commentErrors },
       linked_docs: { count: linkedDocTitles.length, titles: linkedDocTitles },
       brief: { loaded: !!briefText, chars: (briefText || '').length },
       brief_gaps: (() => { try { const bg = Array.isArray(page.brief_gaps) ? page.brief_gaps : (typeof page.brief_gaps === 'string' ? JSON.parse(page.brief_gaps) : []); return bg.length; } catch(e) { return 0; } })(),
@@ -35298,13 +35306,17 @@ async function driveListComments(accessToken, fileId) {
   const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/comments?fields=*&pageSize=100`, {
     headers: { Authorization: `Bearer ${accessToken}` }
   });
-  if (!res.ok) return [];
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error('Drive comments fetch failed (HTTP ' + res.status + '): ' + errText.substring(0, 200));
+  }
   const data = await res.json();
-  return (data.comments || []).filter(c => !c.resolved).map(c => ({
+  return (data.comments || []).filter(c => !c.deleted).map(c => ({
     author: c.author?.displayName || 'Unknown',
     content: c.content,
     quotedText: c.quotedFileContent?.value || '',
     createdTime: c.createdTime,
+    resolved: !!c.resolved,
     replies: (c.replies || []).map(r => ({ author: r.author?.displayName || 'Unknown', content: r.content }))
   }));
 }
