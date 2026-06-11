@@ -11716,11 +11716,13 @@ async function checkMonthlyAuditLimit(projectId, pillar, force = false) {
 // Run speed audit on ALL pages (via Google PageSpeed Insights) — async background job
 app.post('/api/speed-audit/:projectId/run', async (req, res) => {
   try {
+    const lockedSpeed = acquireHeavyLock(req.params.projectId, 'PageSpeed / Core Web Vitals scan');
+    if (lockedSpeed) return heavyLockResponse(res, lockedSpeed);
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId]);
-    if (projRes.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    if (projRes.rows.length === 0) { releaseHeavyLock(req.params.projectId); return res.status(404).json({ error: 'Project not found' }); }
     const project = projRes.rows[0];
     const siteUrl = project.wordpress_url || (project.domain ? `https://${project.domain.replace(/^https?:\/\//, '')}` : null);
-    if (!siteUrl) return res.status(400).json({ error: 'Website URL or domain not configured. Set it in Project Settings.' });
+    if (!siteUrl) { releaseHeavyLock(req.params.projectId); return res.status(400).json({ error: 'Website URL or domain not configured. Set it in Project Settings.' }); }
 
     // Cancel any running speed audits
     await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE project_id=$1 AND pillar='speed' AND status='running'`, [req.params.projectId]);
@@ -11920,9 +11922,12 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         console.error('[speed-audit] Background error:', bgErr.message);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
+      } finally {
+        releaseHeavyLock(req.params.projectId);
       }
     })();
   } catch (e) {
+    releaseHeavyLock(req.params.projectId);
     res.status(500).json({ error: e.message });
   }
 });
@@ -15733,6 +15738,9 @@ Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics
 app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
   const { projectId } = req.params;
   try {
+    const lockedOA = acquireHeavyLock(projectId, 'On-Page Audit');
+    if (lockedOA) return heavyLockResponse(res, lockedOA);
+    res.on('finish', () => releaseHeavyLock(projectId));
     const force = req.body?.force === true;
     const limit = await checkMonthlyAuditLimit(projectId, 'onpage', force);
     if (limit.limited) return res.status(429).json({ error: `On-Page audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.`, canForce: true });
@@ -18129,6 +18137,22 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
 
 const UTILITY_PAGE_RE = /thank[-_]?you|privacy|terms|conditions|contact|checkout|cart|my-account|sitemap|search|404/i;
 
+// ===== Heavy-job lock: one heavy WP-hitting job per project at a time =====
+// Prevents e.g. Fix Everything + PageSpeed scan + audit crawl hammering the same WP server
+// simultaneously (causes Lighthouse net::ERR_TIMED_OUT and WP write timeouts).
+const heavyJobLocks = {};
+function acquireHeavyLock(projectId, type) {
+  const key = String(projectId);
+  const ex = heavyJobLocks[key];
+  if (ex && (Date.now() - ex.ms) < 60 * 60 * 1000) return ex; // stale locks auto-expire after 60 min
+  heavyJobLocks[key] = { type, ms: Date.now(), started_at: new Date().toISOString() };
+  return null;
+}
+function releaseHeavyLock(projectId) { delete heavyJobLocks[String(projectId)]; }
+function heavyLockResponse(res, locked) {
+  return res.status(409).json({ error: 'Another heavy job ("' + locked.type + '") is already running on this project (started ' + locked.started_at + '). Running both would overload the WordPress server — wait for it to finish.', locked: true, job_type: locked.type });
+}
+
 // ===== FIX EVERYTHING — one-click pipeline: keywords → metas → keyword-in-content → orphan links =====
 const fixEverythingJobs = {};
 
@@ -18293,6 +18317,8 @@ app.post('/api/projects/:projectId/onpage-audit/fix-everything/run', async (req,
     const { projectId } = req.params;
     const existing = fixEverythingJobs[projectId];
     if (existing && existing.running) return res.json({ ok: true, already_running: true });
+    const locked = acquireHeavyLock(projectId, 'Fix Everything');
+    if (locked) return heavyLockResponse(res, locked);
     const job = { running: true, phase: 'Starting…', done: 0, total: 0, metas_fixed: 0, content_fixed: 0, orphans_linked: 0, errors: 0, started_at: new Date().toISOString() };
     fixEverythingJobs[projectId] = job;
     (async () => {
@@ -18301,6 +18327,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix-everything/run', async (req,
       job.running = false;
       job.phase = 'Done';
       job.finished_at = new Date().toISOString();
+      releaseHeavyLock(projectId);
       console.log(`[fix-everything] Done for project ${projectId}: metas ${job.metas_fixed}, content ${job.content_fixed}, orphans ${job.orphans_linked}, errors ${job.errors}`);
     })();
     res.json({ ok: true, started: true });
@@ -18512,6 +18539,8 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
     if (!Array.isArray(page_ids) || page_ids.length === 0) return res.status(400).json({ error: 'page_ids required' });
     const existing = orphanLinkJobs[projectId];
     if (existing && existing.running) return res.json({ ok: true, already_running: true, total: existing.total, done: existing.done });
+    const locked = acquireHeavyLock(projectId, 'Fix Orphans');
+    if (locked) return heavyLockResponse(res, locked);
     const job = { running: true, total: page_ids.length, done: 0, linked: 0, no_links: 0, errors: 0, current: '', results: [], started_at: new Date().toISOString() };
     orphanLinkJobs[projectId] = job;
     (async () => {
@@ -18524,6 +18553,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
       job.running = false;
       job.current = '';
       job.finished_at = new Date().toISOString();
+      releaseHeavyLock(projectId);
       console.log(`[fix-orphans] Done for project ${projectId}: ${job.linked} linked, ${job.no_links} no-links, ${job.errors} errors of ${job.total}`);
     })();
     res.json({ ok: true, started: true, total: job.total });
@@ -31622,6 +31652,9 @@ app.get('/api/connector-push/:projectId/status', async (req, res) => {
 app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
   const { projectId } = req.params;
   try {
+    const lockedWA = acquireHeavyLock(projectId, 'Website Audit');
+    if (lockedWA) return heavyLockResponse(res, lockedWA);
+    res.on('finish', () => releaseHeavyLock(projectId));
     // Rule-based audit is free — 5 min buffer to prevent accidental double-clicks
     const { rows: recentAudits } = await pool.query(
       `SELECT completed_at FROM audits WHERE project_id=$1 AND pillar='website' AND status='completed' AND completed_at >= NOW() - INTERVAL '5 minutes' ORDER BY completed_at DESC LIMIT 1`,

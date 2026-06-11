@@ -13159,7 +13159,10 @@
       const handleFixEverything = async () => {
         if (fixEverything && fixEverything.running) return;
         if (!confirm('Fix Everything runs the full pipeline on the server:\n\n1. AI keywords + meta titles/descriptions for every page that needs them\n2. Weave missing focus keywords into page content (one natural sentence edit per page)\n3. Add inbound internal links to every orphan page\n4. Re-run the audit\n\nAll changes are logged for rollback. This can take 20-40 minutes — you can navigate away. Proceed?')) return;
-        await api('/projects/' + project.id + '/onpage-audit/fix-everything/run', { method: 'POST' });
+        try {
+          const r = await api('/projects/' + project.id + '/onpage-audit/fix-everything/run', { method: 'POST' });
+          if (r && r.error) { alert(r.error); return; }
+        } catch (e) { alert(e.message || 'Failed to start'); return; }
         setFixEverything({ running: true, phase: 'Starting…', done: 0, total: 0 });
         pollFixEverything();
       };
@@ -13190,7 +13193,10 @@
         const orphans = pages.filter(p => (p.inboundLinks || 0) === 0);
         if (orphans.length === 0) return;
         if (!confirm('Auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nRuns on the server in parallel (≈ ' + Math.max(2, Math.ceil(orphans.length / 8)) + ' min). You can navigate away — it keeps going. AI picks 3-6 relevant pages per orphan and inserts a natural link, logged for rollback.')) return;
-        await api('/projects/' + project.id + '/onpage-audit/fix-orphans/run', { method: 'POST', body: { page_ids: orphans.map(o => o.id) } });
+        try {
+          const r = await api('/projects/' + project.id + '/onpage-audit/fix-orphans/run', { method: 'POST', body: { page_ids: orphans.map(o => o.id) } });
+          if (r && r.error) { alert(r.error); return; }
+        } catch (e) { alert(e.message || 'Failed to start'); return; }
         pollOrphanJob();
       };
       // Resume progress display if an orphan job is already running (e.g. after navigating away)
