@@ -15984,9 +15984,16 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       }
 
       // Final LIVE score from actual checks: fixes show up on the very next audit run
-      const problems = result.issues.filter(i => i.type === 'problem').length;
-      const warnings = result.issues.filter(i => i.type === 'warning').length;
-      result.yoastScore = problems >= 2 ? 'red' : (problems === 1 || warnings >= 4) ? 'orange' : 'green';
+      if (UTILITY_PAGE_RE.test(result.url || '')) {
+        // Utility pages (thank-you, privacy, contact…) are not content pages — don't score them
+        result.yoastScore = 'gray';
+        result.issues = result.issues.filter(i => i.type !== 'problem');
+        result.issues.unshift({ type: 'good', text: 'Utility page — excluded from content scoring' });
+      } else {
+        const problems = result.issues.filter(i => i.type === 'problem').length;
+        const warnings = result.issues.filter(i => i.type === 'warning').length;
+        result.yoastScore = problems >= 2 ? 'red' : (problems === 1 || warnings >= 4) ? 'orange' : 'green';
+      }
     }
 
     // Sort: red first, then orange, then green
@@ -18120,6 +18127,190 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
   }
 });
 
+const UTILITY_PAGE_RE = /thank[-_]?you|privacy|terms|conditions|contact|checkout|cart|my-account|sitemap|search|404/i;
+
+// ===== FIX EVERYTHING — one-click pipeline: keywords → metas → keyword-in-content → orphan links =====
+const fixEverythingJobs = {};
+
+async function runFixEverything(projectId, job) {
+  const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+  if (!project) throw new Error('Project not found');
+  const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+  const authHeaders = getWpAuthHeaders(project);
+  if (!wpUrl || !authHeaders) throw new Error('WordPress credentials not configured');
+
+  const cacheR = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+  let pages = cacheR.rows[0]?.results;
+  if (typeof pages === 'string') { try { pages = JSON.parse(pages); } catch { pages = null; } }
+  if (pages && !Array.isArray(pages)) pages = pages.pages || pages.results || [];
+  if (!Array.isArray(pages) || pages.length === 0) throw new Error('No audit results — run the audit first');
+  const contentPages = pages.filter(p => !UTILITY_PAGE_RE.test(p.url || ''));
+
+  // ---- Phase 1: AI suggests keyword + metas for every page that needs them ----
+  job.phase = 'Suggesting keywords & metas';
+  const needsMeta = contentPages.filter(p => {
+    const kw = (p.focusKeyword || '').toLowerCase();
+    const badTitle = !p.metaTitle || p.metaTitle.length < 40 || p.metaTitle.length > 60 || (kw && !p.metaTitle.toLowerCase().includes(kw));
+    const badDesc = !p.metaDesc || p.metaDesc.length < 120 || p.metaDesc.length > 155 || (kw && !p.metaDesc.toLowerCase().includes(kw));
+    return !p.focusKeyword || badTitle || badDesc;
+  });
+  job.total = needsMeta.length; job.done = 0;
+  const suggestions = {};
+  for (let i = 0; i < needsMeta.length; i += 10) {
+    const batch = needsMeta.slice(i, i + 10);
+    try {
+      const resp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 4000,
+        messages: [{ role: 'user', content: `For each page suggest: focus_keyword (lowercase 2-5 words, local SEO style, include location where sensible; KEEP the current keyword if one is given), meta_title (50-60 chars, MUST contain the focus_keyword), meta_desc (120-155 chars, MUST contain the focus_keyword). Business: ${project.business_name || project.name} (${project.industry || 'services'}) in ${project.location || 'Perth'}.
+Pages:
+${batch.map(p => `- id ${p.id}: "${p.title}" url ${p.url} currentKw "${p.focusKeyword || ''}"`).join('\n')}
+Return ONLY JSON: {"pages":[{"id":123,"focus_keyword":"...","meta_title":"...","meta_desc":"..."}]}` }]
+      });
+      const parsed = JSON.parse(resp.content[0].text.match(/\{[\s\S]*\}/)[0]);
+      for (const s of (parsed.pages || [])) suggestions[s.id] = s;
+    } catch (e) { console.warn('[fix-everything] suggest batch error:', e.message); }
+    job.done = Math.min(needsMeta.length, i + 10);
+  }
+
+  job.phase = 'Writing metas to WordPress';
+  job.total = needsMeta.length; job.done = 0;
+  for (const p of needsMeta) {
+    const s = suggestions[p.id];
+    if (!s) { job.done++; continue; }
+    const meta = {};
+    if (s.focus_keyword && s.focus_keyword !== p.focusKeyword) meta._yoast_wpseo_focuskw = s.focus_keyword;
+    if (s.meta_title && s.meta_title !== p.metaTitle) meta._yoast_wpseo_title = s.meta_title;
+    if (s.meta_desc && s.meta_desc !== p.metaDesc) meta._yoast_wpseo_metadesc = s.meta_desc;
+    if (Object.keys(meta).length === 0) { job.done++; continue; }
+    try {
+      for (const [f, v] of Object.entries(meta)) {
+        const oldVal = f === '_yoast_wpseo_focuskw' ? p.focusKeyword : f === '_yoast_wpseo_title' ? p.metaTitle : p.metaDesc;
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'onpage-fix',$5,$6,$7)`,
+          [projectId, p.id, p.url, p.title, f, oldVal || '', v]
+        );
+      }
+      const w = await fetch(`${wpUrl}/wp-json/wp/v2/${p.wpType === 'post' ? 'posts' : 'pages'}/${p.id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta }), signal: AbortSignal.timeout(30000)
+      });
+      if (w.ok) { job.metas_fixed++; if (meta._yoast_wpseo_focuskw) p.focusKeyword = meta._yoast_wpseo_focuskw; }
+      else job.errors++;
+    } catch (e) { job.errors++; }
+    job.done++;
+  }
+
+  // ---- Phase 2: weave the focus keyword into content where the exact phrase is missing ----
+  job.phase = 'Checking keyword in content';
+  const allWp = [];
+  for (const type of ['pages', 'posts']) {
+    let pg = 1;
+    while (true) {
+      try {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(20000) });
+        if (!r.ok) break;
+        const items = await r.json();
+        if (!Array.isArray(items) || items.length === 0) break;
+        allWp.push(...items.map(x => ({ ...x, _type: type })));
+        if (items.length < 50) break;
+        pg++;
+      } catch { break; }
+    }
+  }
+  const missingKwContent = [];
+  for (const p of contentPages) {
+    if (!p.focusKeyword) continue;
+    const wp = allWp.find(w => String(w.id) === String(p.id));
+    if (!wp) continue;
+    const content = wp.content?.raw || wp.content?.rendered || '';
+    if (!content || content.replace(/<[^>]+>/g, ' ').length < 200) continue; // page-builder pages without editable text — skip
+    if (!content.replace(/<[^>]+>/g, ' ').toLowerCase().includes(p.focusKeyword.toLowerCase())) missingKwContent.push({ p, wp, content });
+  }
+  job.phase = 'Weaving keywords into content';
+  job.total = missingKwContent.length; job.done = 0;
+  let kwIdx = 0;
+  const kwPatches = [];
+  const kwWorker = async () => {
+    while (kwIdx < missingKwContent.length) {
+      const idx = kwIdx++;
+      const m = missingKwContent[idx];
+      try {
+        const plain = m.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 2000);
+        const resp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 600,
+          messages: [{ role: 'user', content: `Rewrite ONE sentence from this page so it naturally contains the exact phrase "${m.p.focusKeyword}". Pick a sentence from the first half of the text. The rewrite must read naturally, not stuffed. Return ONLY JSON: {"find":"the exact original sentence copied character-for-character","replace":"the rewritten sentence containing the exact phrase"}
+
+PAGE TEXT:
+${plain}` }]
+        });
+        kwPatches[idx] = JSON.parse(resp.content[0].text.match(/\{[\s\S]*\}/)[0]);
+      } catch (e) { kwPatches[idx] = null; }
+      job.done++;
+    }
+  };
+  await Promise.all([kwWorker(), kwWorker(), kwWorker(), kwWorker(), kwWorker()]);
+  job.phase = 'Writing content updates';
+  job.total = missingKwContent.length; job.done = 0;
+  for (let i = 0; i < missingKwContent.length; i++) {
+    const m = missingKwContent[i];
+    const r = kwPatches[i];
+    if (!r || !r.find || !r.replace) { job.errors++; job.done++; continue; }
+    const content = m.content;
+    let idx2 = content.indexOf(r.find);
+    if (idx2 === -1) idx2 = content.toLowerCase().indexOf(String(r.find).toLowerCase());
+    if (idx2 === -1) { job.errors++; job.done++; continue; }
+    const newContent = content.substring(0, idx2) + r.replace + content.substring(idx2 + r.find.length);
+    try {
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'keyword-content',$5,$6,$7)`,
+        [projectId, m.p.id, m.p.url, m.p.title, 'content', content, newContent]
+      );
+      const w = await fetch(`${wpUrl}/wp-json/wp/v2/${m.wp._type}/${m.wp.id}`, {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(30000)
+      });
+      if (w.ok) job.content_fixed++;
+      else job.errors++;
+    } catch (e) { job.errors++; }
+    job.done++;
+  }
+
+  // ---- Phase 3: orphan inbound links ----
+  const orphanIds = contentPages.filter(p => (p.inboundLinks || 0) === 0).map(p => p.id);
+  if (orphanIds.length > 0) {
+    job.phase = 'Linking orphan pages';
+    const sub = { running: true, total: orphanIds.length, done: 0, linked: 0, no_links: 0, errors: 0, current: '', results: [] };
+    const tick = setInterval(() => { job.done = sub.done; job.total = sub.total; }, 2000);
+    try { await runBulkOrphanLinks(projectId, orphanIds, sub); } finally { clearInterval(tick); }
+    job.orphans_linked = sub.linked;
+    job.errors += sub.errors;
+    job.done = sub.done; job.total = sub.total;
+  }
+}
+
+app.post('/api/projects/:projectId/onpage-audit/fix-everything/run', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const existing = fixEverythingJobs[projectId];
+    if (existing && existing.running) return res.json({ ok: true, already_running: true });
+    const job = { running: true, phase: 'Starting…', done: 0, total: 0, metas_fixed: 0, content_fixed: 0, orphans_linked: 0, errors: 0, started_at: new Date().toISOString() };
+    fixEverythingJobs[projectId] = job;
+    (async () => {
+      try { await runFixEverything(projectId, job); }
+      catch (e) { job.error = e.message; console.error('[fix-everything] Job error:', e.message); }
+      job.running = false;
+      job.phase = 'Done';
+      job.finished_at = new Date().toISOString();
+      console.log(`[fix-everything] Done for project ${projectId}: metas ${job.metas_fixed}, content ${job.content_fixed}, orphans ${job.orphans_linked}, errors ${job.errors}`);
+    })();
+    res.json({ ok: true, started: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/onpage-audit/fix-everything/status', (req, res) => {
+  res.json(fixEverythingJobs[req.params.projectId] || { running: false, phase: '', done: 0, total: 0 });
+});
+
 // Bulk orphan fix — optimised: fetch site ONCE, AI picks in parallel, writes serialised against cache
 async function runBulkOrphanLinks(projectId, pageIds, job) {
   const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
@@ -18195,65 +18386,120 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
 
   // 3. Apply writes SEQUENTIALLY using the cache (no lost updates)
   job.current = 'Applying links…';
+
+  // Is this HTML position safe to wrap in <a>? (not inside a tag/attribute, no tags in span)
+  const safePos = (html, idx, len) => {
+    if (idx < 0) return false;
+    const lastOpen = html.lastIndexOf('<', idx);
+    const lastClose = html.lastIndexOf('>', idx);
+    if (lastOpen > lastClose) return false;
+    if (html.substring(idx, idx + len).includes('<')) return false;
+    return true;
+  };
+  const findAnchorPos = (html, anchor) => {
+    if (!anchor) return -1;
+    let idx = html.indexOf(anchor);
+    if (idx !== -1 && safePos(html, idx, anchor.length)) return idx;
+    idx = html.toLowerCase().indexOf(anchor.toLowerCase());
+    if (idx !== -1 && safePos(html, idx, anchor.length)) return idx;
+    return -1;
+  };
+
+  // Write a link into one source page. anchor=null + fallbackTitle => append "See also" paragraph.
+  const applyLinkToSource = async (source, anchor, targetUrl, fallbackTitle) => {
+    const elData = isElementor && getElementor(source);
+    if (elData) {
+      let parsed;
+      try { parsed = typeof elData === 'string' ? JSON.parse(elData) : JSON.parse(JSON.stringify(elData)); } catch { return false; }
+      const originalJson = typeof elData === 'string' ? elData : JSON.stringify(elData);
+      if (originalJson.includes(targetUrl)) return false;
+      let modified = false;
+      let lastTextEl = null;
+      const walk = (els) => {
+        if (!Array.isArray(els)) return;
+        for (const el of els) {
+          if (el.widgetType === 'text-editor' && el.settings?.editor) {
+            lastTextEl = el;
+            if (!modified && anchor) {
+              const ed = el.settings.editor;
+              const idx = findAnchorPos(ed, anchor);
+              if (idx !== -1) {
+                const actual = ed.substring(idx, idx + anchor.length);
+                el.settings.editor = ed.substring(0, idx) + `<a href="${targetUrl}">${actual}</a>` + ed.substring(idx + anchor.length);
+                modified = true;
+              }
+            }
+          }
+          if (el.elements) walk(el.elements);
+        }
+      };
+      walk(parsed);
+      if (!modified && !anchor && fallbackTitle && lastTextEl) {
+        lastTextEl.settings.editor += `<p>See also: <a href="${targetUrl}">${fallbackTitle}</a>.</p>`;
+        modified = true;
+      }
+      if (!modified) return false;
+      const newJson = JSON.stringify(parsed);
+      try {
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', '_elementor_data', originalJson, newJson]
+        );
+        const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
+          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ meta: { _elementor_data: newJson, _elementor_css: '' } }), signal: AbortSignal.timeout(20000),
+        });
+        if (w.ok) { source._cachedElementor = newJson; return true; }
+      } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
+      return false;
+    } else {
+      const content = getContent(source);
+      if (!content || content.includes(targetUrl)) return false;
+      let newContent = null;
+      if (anchor) {
+        const idx = findAnchorPos(content, anchor);
+        if (idx !== -1) {
+          const actual = content.substring(idx, idx + anchor.length);
+          newContent = content.substring(0, idx) + `<a href="${targetUrl}">${actual}</a>` + content.substring(idx + anchor.length);
+        }
+      } else if (fallbackTitle) {
+        newContent = content + `\n<p>See also: <a href="${targetUrl}">${fallbackTitle}</a>.</p>`;
+      }
+      if (!newContent) return false;
+      try {
+        await pool.query(
+          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', 'content', content, newContent]
+        );
+        const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
+          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000),
+        });
+        if (w.ok) { source._cachedContent = newContent; return true; }
+      } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
+      return false;
+    }
+  };
+
   for (const pr of pickResults) {
     if (!pr) continue;
     const targetUrl = pr.target.link || '';
     if (pr.error) { job.errors++; job.results.push({ page_id: pr.target.id, error: pr.error }); continue; }
     let added = 0;
+    let firstSource = null;
     for (const pick of (pr.picks || [])) {
       const source = allWp.find(p => p.id === pick.id);
-      if (!source || !pick.anchor) continue;
-      const elData = isElementor && getElementor(source);
-      if (elData) {
-        let parsed;
-        try { parsed = typeof elData === 'string' ? JSON.parse(elData) : JSON.parse(JSON.stringify(elData)); } catch { continue; }
-        const originalJson = typeof elData === 'string' ? elData : JSON.stringify(elData);
-        if (originalJson.includes(targetUrl)) continue;
-        let modified = false;
-        const walk = (els) => {
-          if (!Array.isArray(els) || modified) return;
-          for (const el of els) {
-            if (modified) break;
-            if (el.widgetType === 'text-editor' && el.settings?.editor && el.settings.editor.includes(pick.anchor) && !el.settings.editor.includes(targetUrl)) {
-              el.settings.editor = el.settings.editor.replace(pick.anchor, `<a href="${targetUrl}">${pick.anchor}</a>`);
-              modified = true;
-            }
-            if (el.elements) walk(el.elements);
-          }
-        };
-        walk(parsed);
-        if (!modified) continue;
-        const newJson = JSON.stringify(parsed);
-        try {
-          await pool.query(
-            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', '_elementor_data', originalJson, newJson]
-          );
-          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
-            method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ meta: { _elementor_data: newJson, _elementor_css: '' } }), signal: AbortSignal.timeout(20000),
-          });
-          if (w.ok) { source._cachedElementor = newJson; added++; }
-        } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
-      } else {
-        const content = getContent(source);
-        if (!content.includes(pick.anchor) || content.includes(targetUrl)) continue;
-        const newContent = content.replace(pick.anchor, `<a href="${targetUrl}">${pick.anchor}</a>`);
-        try {
-          await pool.query(
-            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', 'content', content, newContent]
-          );
-          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
-            method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000),
-          });
-          if (w.ok) { source._cachedContent = newContent; added++; }
-        } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
-      }
+      if (!source) continue;
+      if (!firstSource) firstSource = source;
+      if (pick.anchor && await applyLinkToSource(source, pick.anchor, targetUrl, null)) added++;
+    }
+    // Guarantee: if no anchors matched anywhere, append a "See also" link to the most relevant source
+    if (added === 0 && firstSource) {
+      const fallbackTitle = ((pr.target.title?.rendered || pr.target.title?.raw || '').replace(/<[^>]+>/g, '').trim()) || targetUrl;
+      if (await applyLinkToSource(firstSource, null, targetUrl, fallbackTitle)) added++;
     }
     if (added > 0) { job.linked++; job.results.push({ page_id: pr.target.id, added }); }
-    else { job.no_links++; job.results.push({ page_id: pr.target.id, added: 0, message: pr.message || 'no anchors matched' }); }
+    else { job.no_links++; job.results.push({ page_id: pr.target.id, added: 0, message: pr.message || 'no anchors matched and no fallback target' }); }
   }
 }
 

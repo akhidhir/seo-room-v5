@@ -13141,6 +13141,35 @@
         loadHistory();
       };
 
+      // ---- FIX EVERYTHING: one-click server-side pipeline ----
+      const [fixEverything, setFixEverything] = React.useState(null);
+      const pollFixEverything = () => {
+        const poll = setInterval(async () => {
+          try {
+            const st = await api('/projects/' + project.id + '/onpage-audit/fix-everything/status');
+            if (!st) return;
+            setFixEverything(st);
+            if (!st.running) {
+              clearInterval(poll);
+              runAudit(true); // re-crawl so all scores reflect the fixes
+            }
+          } catch (e) {}
+        }, 5000);
+      };
+      const handleFixEverything = async () => {
+        if (fixEverything && fixEverything.running) return;
+        if (!confirm('Fix Everything runs the full pipeline on the server:\n\n1. AI keywords + meta titles/descriptions for every page that needs them\n2. Weave missing focus keywords into page content (one natural sentence edit per page)\n3. Add inbound internal links to every orphan page\n4. Re-run the audit\n\nAll changes are logged for rollback. This can take 20-40 minutes — you can navigate away. Proceed?')) return;
+        await api('/projects/' + project.id + '/onpage-audit/fix-everything/run', { method: 'POST' });
+        setFixEverything({ running: true, phase: 'Starting…', done: 0, total: 0 });
+        pollFixEverything();
+      };
+      React.useEffect(() => {
+        if (!project?.id) return;
+        api('/projects/' + project.id + '/onpage-audit/fix-everything/status')
+          .then(st => { if (st && st.running) { setFixEverything(st); pollFixEverything(); } })
+          .catch(() => {});
+      }, [project?.id]);
+
       // ---- Fix Orphans directly (skip metas) — server-side background job ----
       const pollOrphanJob = () => {
         setFixAllState({ phase: 'links', current: 0, total: 0, currentTitle: 'Running on server…', suggestions: [], applied: 0, errors: 0 });
@@ -13453,6 +13482,13 @@
                   <i className="fas fa-link" style={{ marginRight: 4 }} />Fix Orphans ({pages.filter(p => (p.inboundLinks || 0) === 0).length})
                 </button>
               )}
+              {pages.length > 0 && (
+                <button className="btn btn-primary" onClick={handleFixEverything} disabled={fixEverything && fixEverything.running}
+                  style={{ fontSize: 13, padding: '6px 14px', background: (fixEverything && fixEverything.running) ? 'var(--bg3)' : 'linear-gradient(135deg, #22c55e, #14b8a6)', color: '#fff', border: 'none', fontWeight: 700 }}>
+                  <i className={(fixEverything && fixEverything.running) ? 'fas fa-spinner fa-spin' : 'fas fa-bolt'} style={{ marginRight: 5 }} />
+                  {(fixEverything && fixEverything.running) ? 'Fixing Everything…' : 'Fix Everything'}
+                </button>
+              )}
               <button className="btn btn-primary" onClick={() => runAudit()} disabled={loading} style={{ fontSize: 13 }}>
                 {loading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run Audit</>}
               </button>
@@ -13468,6 +13504,41 @@
           )}
 
           {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
+
+          {/* Fix Everything progress banner */}
+          {fixEverything && (
+            <div style={{ padding: 16, background: fixEverything.running ? 'rgba(34,197,94,0.08)' : 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', borderRadius: 10, marginBottom: 16 }}>
+              {fixEverything.running ? (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span className="spinner" style={{ width: 14, height: 14 }}></span>
+                    <span style={{ fontWeight: 700, color: 'var(--text)' }}>Fix Everything — {fixEverything.phase}</span>
+                    {fixEverything.total > 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{fixEverything.done}/{fixEverything.total}</span>}
+                    <span style={{ fontSize: 12, color: 'var(--text2)', marginLeft: 'auto' }}>
+                      metas {fixEverything.metas_fixed || 0} · content {fixEverything.content_fixed || 0} · orphans {fixEverything.orphans_linked || 0}{(fixEverything.errors || 0) > 0 ? ' · errors ' + fixEverything.errors : ''}
+                    </span>
+                  </div>
+                  {fixEverything.total > 0 && (
+                    <div style={{ height: 4, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${(fixEverything.done / fixEverything.total) * 100}%`, background: '#22c55e', borderRadius: 2, transition: 'width 0.3s' }} />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <i className="fas fa-check-circle" style={{ color: '#22c55e', marginRight: 8 }} />
+                    <span style={{ fontWeight: 700, color: '#22c55e' }}>Fix Everything complete</span>
+                    <span style={{ color: 'var(--text2)', marginLeft: 10, fontSize: 13 }}>
+                      {(fixEverything.metas_fixed || 0)} metas · {(fixEverything.content_fixed || 0)} content keyword fixes · {(fixEverything.orphans_linked || 0)} orphans linked{(fixEverything.errors || 0) > 0 ? ' · ' + fixEverything.errors + ' errors' : ''}
+                    </span>
+                    {fixEverything.error && <span style={{ color: '#ef4444', marginLeft: 8 }}>{fixEverything.error}</span>}
+                  </div>
+                  <button onClick={() => setFixEverything(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}><i className="fas fa-times" /></button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Fix All / Suggest Keywords progress banner */}
           {fixAllState && (
