@@ -11445,9 +11445,11 @@ async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
       const data = await resp.json();
       // Check for Lighthouse errors in the response body (API returns 200 but Lighthouse failed)
       const runtimeErr = data.lighthouseResult?.runtimeError;
-      if (runtimeErr && (runtimeErr.code === 'ERRORED_DOCUMENT_REQUEST' || runtimeErr.code === 'UNKNOWN_ERROR')) {
+      if (runtimeErr && (runtimeErr.code === 'ERRORED_DOCUMENT_REQUEST' || runtimeErr.code === 'FAILED_DOCUMENT_REQUEST' || runtimeErr.code === 'UNKNOWN_ERROR')) {
         if (attempt < retries) {
-          const delay = 5000 + attempt * 5000;
+          // FAILED_DOCUMENT_REQUEST = the target site couldn't even serve the page — it's overloaded.
+          // Back off HARD so we're not piling on while it recovers.
+          const delay = runtimeErr.code === 'FAILED_DOCUMENT_REQUEST' ? (20000 + attempt * 20000) : (5000 + attempt * 5000);
           console.log(`[pagespeed] ${strategy} ${url}: Lighthouse ${runtimeErr.code} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
           await new Promise(r => setTimeout(r, delay));
           continue;
@@ -18119,6 +18121,23 @@ function acquireHeavyLock(projectId, type) {
 }
 function releaseHeavyLock(projectId) { delete heavyJobLocks[String(projectId)]; }
 
+// Cache warmer: after bulk content writes, BerqWP purges its optimised cache for every
+// changed page and only regenerates on the next visit. Visiting each page once (gently,
+// 1/sec) triggers regeneration immediately — so the site isn't slow until random traffic
+// rebuilds it, and CWV scans don't hit uncached pages.
+async function warmCache(urls, job, label) {
+  const uniq = [...new Set((urls || []).filter(Boolean))];
+  if (uniq.length === 0) return;
+  if (job) { job.phase = label || 'Warming site cache'; job.total = uniq.length; job.done = 0; }
+  console.log(`[cache-warm] Warming ${uniq.length} pages…`);
+  for (const u of uniq) {
+    try { await fetch(u, { signal: AbortSignal.timeout(30000), headers: { 'User-Agent': 'SEORoom-CacheWarmer' } }); } catch (e) {}
+    if (job) job.done++;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  console.log(`[cache-warm] Done (${uniq.length} pages)`);
+}
+
 // Reliable WP pagination: retries each page 3x with backoff, verifies against X-WP-TotalPages,
 // and THROWS on persistent failure instead of silently returning a partial site
 // (partial crawls made audit counts swing between runs: 284 → 150 → 188 → 100 pages).
@@ -18227,7 +18246,11 @@ Return ONLY JSON: {"pages":[{"id":123,"focus_keyword":"...","meta_title":"...","
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ meta }), signal: AbortSignal.timeout(30000)
       });
-      if (w.ok) { job.metas_fixed++; if (meta._yoast_wpseo_focuskw) p.focusKeyword = meta._yoast_wpseo_focuskw; }
+      if (w.ok) {
+        job.metas_fixed++;
+        if (meta._yoast_wpseo_focuskw) p.focusKeyword = meta._yoast_wpseo_focuskw;
+        (job.changed_urls = job.changed_urls || []).push(String(p.url || '').startsWith('http') ? p.url : wpUrl + p.url);
+      }
       else job.errors++;
     } catch (e) { job.errors++; }
     job.done++;
@@ -18292,7 +18315,10 @@ ${plain}` }]
         method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(30000)
       });
-      if (w.ok) job.content_fixed++;
+      if (w.ok) {
+        job.content_fixed++;
+        (job.changed_urls = job.changed_urls || []).push(m.wp.link || (String(m.p.url || '').startsWith('http') ? m.p.url : wpUrl + m.p.url));
+      }
       else job.errors++;
     } catch (e) { job.errors++; }
     job.done++;
@@ -18308,7 +18334,11 @@ ${plain}` }]
     job.orphans_linked = sub.linked;
     job.errors += sub.errors;
     job.done = sub.done; job.total = sub.total;
+    if (sub.changed_urls) (job.changed_urls = job.changed_urls || []).push(...sub.changed_urls);
   }
+
+  // ---- Phase 4: warm the cache so BerqWP regenerates changed pages immediately ----
+  await warmCache(job.changed_urls, job, 'Warming site cache (BerqWP regeneration)');
 }
 
 app.post('/api/projects/:projectId/onpage-audit/fix-everything/run', async (req, res) => {
@@ -18465,7 +18495,7 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
           method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
           body: JSON.stringify({ meta: { _elementor_data: newJson, _elementor_css: '' } }), signal: AbortSignal.timeout(20000),
         });
-        if (w.ok) { source._cachedElementor = newJson; return true; }
+        if (w.ok) { source._cachedElementor = newJson; (job.changed_urls = job.changed_urls || []).push(source.link); return true; }
       } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
       return false;
     } else {
@@ -18491,7 +18521,7 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
           method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000),
         });
-        if (w.ok) { source._cachedContent = newContent; return true; }
+        if (w.ok) { source._cachedContent = newContent; (job.changed_urls = job.changed_urls || []).push(source.link); return true; }
       } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
       return false;
     }
@@ -18535,6 +18565,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
     (async () => {
       try {
         await runBulkOrphanLinks(projectId, page_ids, job);
+        await warmCache(job.changed_urls, job, 'Warming cache for changed pages');
       } catch (e) {
         job.error = e.message;
         console.error('[fix-orphans] Job error:', e.message);
