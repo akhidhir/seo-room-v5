@@ -4922,6 +4922,17 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/push-to-drive', '/api/bui
     }
     if (!folderId) return res.status(400).json({ error: 'No Drive folder created yet. Create the folder first.' });
 
+    // Organise into a subfolder by page type (created on demand inside the main folder)
+    const SUBFOLDER_NAMES = { home: 'Home', service: 'Service Pages', suburb: 'Suburb Pages', blog: 'Blog Posts' };
+    const subfolderName = SUBFOLDER_NAMES[page.page_type] || 'Pages';
+    try {
+      const subId = await driveFindOrCreateFolder(accessToken, subfolderName, folderId);
+      if (subId) {
+        folderId = subId;
+        console.log(`[drive] Using subfolder "${subfolderName}" (${subId})`);
+      }
+    } catch(e) { console.warn('[drive] Subfolder skipped, using main folder:', e.message); }
+
     const docTitle = page.page_name + (page.optimise_round > 0 ? ` (v${page.optimise_round + 1})` : '');
     let result;
 
@@ -35431,6 +35442,20 @@ async function driveCreateFolder(accessToken, folderName, parentId) {
     })
   });
   return res.json();
+}
+
+// Find a folder by name inside a parent; create it if it doesn't exist. Returns folder ID or null.
+async function driveFindOrCreateFolder(accessToken, folderName, parentId) {
+  const q = encodeURIComponent(`name='${folderName.replace(/'/g, "\\'")}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const listRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=5`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (listRes.ok) {
+    const data = await listRes.json();
+    if (data.files && data.files.length > 0) return data.files[0].id;
+  }
+  const created = await driveCreateFolder(accessToken, folderName, parentId);
+  return created && created.id ? created.id : null;
 }
 
 async function driveCreateDoc(accessToken, title, htmlContent, parentFolderId) {
