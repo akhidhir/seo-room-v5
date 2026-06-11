@@ -5028,14 +5028,53 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
       }
     }
 
-    // Get project/build context
+    // Get project/build context + linked docs
     let businessName = '', industry = '', location = '', additionalNotes = '';
+    let linkedDocsContext = '';
+    let briefContext = '';
     if (projectId) {
       const proj = (await pool.query('SELECT business_name, name, industry, location, nw_notes FROM projects WHERE id=$1', [projectId])).rows[0];
       if (proj) { businessName = proj.business_name || proj.name; industry = proj.industry; location = proj.location; additionalNotes = proj.nw_notes || ''; }
+    }
+    // Always fetch build data for linked_docs + brief
+    const bid = buildId || page.build_id;
+    if (bid) {
+      const bld = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [bid])).rows[0];
+      if (bld) {
+        if (!businessName) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; additionalNotes = bld.nw_notes || ''; }
+        // Linked reference docs (e.g., "SUREFLOW WEB COPY V2") — always fetch latest content
+        const docs = Array.isArray(bld.linked_docs) ? bld.linked_docs : [];
+        if (docs.length > 0) {
+          // Re-fetch each doc from Drive to get latest content
+          let driveToken = accessToken;
+          if (!driveToken) try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) {}
+          const freshDocs = [];
+          for (const d of docs) {
+            let docContent = d.content || '';
+            if (driveToken && d.drive_id) {
+              try {
+                const freshText = await driveReadDoc(driveToken, d.drive_id);
+                if (freshText && freshText.length > 0) docContent = freshText;
+              } catch(e) { /* use cached content */ }
+            }
+            if (docContent) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent });
+          }
+          if (freshDocs.length > 0) {
+            linkedDocsContext = '\n\nLINKED REFERENCE DOCUMENTS (MUST follow these guidelines):\n' +
+              freshDocs.map(d => `--- "${d.title}" ---\n${d.content.substring(0, 6000)}`).join('\n\n');
+          }
+        }
+        // Brief
+        const brief = bld.copywriting_brief || {};
+        const briefParts = [];
+        if (brief.brand_tone) briefParts.push('Brand Tone: ' + (Array.isArray(brief.brand_tone) ? brief.brand_tone.join(', ') : brief.brand_tone));
+        if (brief.words_to_avoid && brief.words_to_avoid.length) briefParts.push('Words to AVOID: ' + brief.words_to_avoid.join(', '));
+        if (brief.differentiators && brief.differentiators.length) briefParts.push('Key Differentiators: ' + brief.differentiators.join('; '));
+        if (briefParts.length) briefContext = '\nBRIEF GUIDELINES:\n' + briefParts.join('\n');
+      }
     } else if (buildId) {
       const bld = (await pool.query('SELECT business_name, name, industry, location, nw_notes FROM website_builds WHERE id=$1', [buildId])).rows[0];
-      if (bld) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; additionalNotes = bld.nw_notes || ''; }
+      if (bld && !businessName) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; additionalNotes = bld.nw_notes || ''; }
     }
 
     const roundNum = (page.optimise_round || 0) + 1;
@@ -5043,7 +5082,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
     const hasFeedback = comments.length > 0 || feedbackContext;
     const hasGaps = gapsContext.length > 0;
 
-    console.log(`[optimise] Round ${roundNum} for "${page.page_name}", drive:${hasDrive}, ${comments.length} comments, ${hasGaps ? 'has gaps' : 'no gaps'}, review by: ${reviewType}`);
+    console.log(`[optimise] Round ${roundNum} for "${page.page_name}", drive:${hasDrive}, ${comments.length} comments, ${hasGaps ? 'has gaps' : 'no gaps'}, linkedDocs:${linkedDocsContext ? 'YES' : 'NONE'}, review by: ${reviewType}`);
 
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -5054,6 +5093,9 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
 
 This is OPTIMISATION ROUND ${roundNum}.${hasFeedback ? ` The ${reviewType} reviewed the draft and left feedback.` : ' Fixing content gaps and issues.'}
 ${additionalNotes ? '\nADDITIONAL CONTEXT FROM THE TEAM:\n' + additionalNotes + '\n' : ''}
+${briefContext}
+${linkedDocsContext}
+
 CURRENT DRAFT:
 ${page.draft_content}
 ${feedbackContext}
@@ -27737,6 +27779,34 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
       briefText += (briefText ? '\n' : '') + 'Additional Context: ' + project.nw_notes;
     }
 
+    // Fetch linked reference docs (always latest from Drive)
+    let linkedDocsText = '';
+    if (briefBuildId) {
+      try {
+        const bldDocs = (await pool.query('SELECT linked_docs FROM website_builds WHERE id=$1', [briefBuildId])).rows[0];
+        const docs = Array.isArray(bldDocs?.linked_docs) ? bldDocs.linked_docs : [];
+        if (docs.length > 0) {
+          let driveToken = null;
+          try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) {}
+          const freshDocs = [];
+          for (const d of docs) {
+            let docContent = d.content || '';
+            if (driveToken && d.drive_id) {
+              try {
+                const freshText = await driveReadDoc(driveToken, d.drive_id);
+                if (freshText && freshText.length > 0) docContent = freshText;
+              } catch(e) { /* use cached */ }
+            }
+            if (docContent) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent });
+          }
+          if (freshDocs.length > 0) {
+            linkedDocsText = '\nLINKED REFERENCE DOCUMENTS (follow these guidelines):\n' +
+              freshDocs.map(d => `--- "${d.title}" ---\n${d.content.substring(0, 6000)}`).join('\n\n');
+          }
+        }
+      } catch(e) { console.warn('[light-optimise] linked docs error:', e.message); }
+    }
+
     // Get all pages for internal linking
     const allPages = briefBuildId
       ? await pool.query('SELECT page_name, slug FROM site_pages WHERE build_id=$1 AND id != $2', [briefBuildId, pageId])
@@ -27767,6 +27837,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
 
 BUSINESS: ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}
 ${briefText ? '\nBRIEF:\n' + briefText + '\n' : ''}
+${linkedDocsText}
 
 CURRENT STATS:
 - Content Score: ${content_score || 0}/100
