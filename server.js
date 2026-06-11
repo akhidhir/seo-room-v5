@@ -27968,7 +27968,8 @@ CRITICAL RULES:
 9. ALWAYS return meta_title and meta_description — never null
 10. ANTI-STUFFING: NEVER repeat any keyword phrase more than 3 times total. Use natural variations instead.
 11. ANTI-DUPLICATE: Before writing any "replace" text, check the ENTIRE existing content. NEVER add a sentence that says the same thing as another sentence already in the content, even in different words. If a point is already made, do NOT rephrase it — add a DIFFERENT point instead.
-12. Each "replace" must contain ZERO overlap with surrounding sentences. If the paragraph already mentions soil types, your patch must NOT mention soil types again — add something new like drainage, post depth, or bracing instead.`
+12. Each "replace" must contain ZERO overlap with surrounding sentences. If the paragraph already mentions soil types, your patch must NOT mention soil types again — add something new like drainage, post depth, or bracing instead.
+13. PARAGRAPH LENGTH CAP (design constraint — pages break if violated): apply at most ONE expansion patch per paragraph, and NEVER let any single paragraph exceed 120 words after your patch. If a paragraph is already 100+ words, do NOT expand it — pick a shorter paragraph elsewhere. Spread expansion EVENLY across the whole page, never concentrated in one section.`
       }]
     });
 
@@ -27993,9 +27994,25 @@ CRITICAL RULES:
     let optimisedHtml = originalHtml;
     let appliedCount = 0;
     let skippedCount = 0;
+    // Design constraint: a patch must not bloat its containing paragraph past 150 words
+    const paragraphTooLong = (html, findText, replaceText) => {
+      const idx = html.indexOf(findText);
+      if (idx === -1) return false;
+      const pStart = html.lastIndexOf('<p', idx);
+      const pEnd = html.indexOf('</p>', idx);
+      if (pStart === -1 || pEnd === -1) return false;
+      const paraText = html.substring(pStart, pEnd).replace(/<[^>]+>/g, ' ');
+      const newLen = paraText.replace(findText, replaceText).trim().split(/\s+/).filter(Boolean).length;
+      return newLen > 150;
+    };
     for (const patch of patches) {
       if (!patch.find || !patch.replace || patch.find === patch.replace) {
         skippedCount++;
+        continue;
+      }
+      if (patch.replace.split(/\s+/).length > patch.find.split(/\s+/).length && paragraphTooLong(optimisedHtml, patch.find, patch.replace)) {
+        skippedCount++;
+        console.log('[light-optimise] Patch skipped (paragraph would exceed 150 words):', patch.find.substring(0, 60) + '...');
         continue;
       }
       // Check if the find text exists in the HTML (could be inside tags)
