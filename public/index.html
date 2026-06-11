@@ -13118,7 +13118,7 @@
 
         // Phase 4 (optional): auto-add inbound internal links for orphan pages — SERVER-SIDE background job
         const orphans = pages.filter(p => (p.inboundLinks || 0) === 0);
-        if (orphans.length > 0 && confirm('Metas done (' + applied + ' fixed). Also auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nThis runs on the server in the background (~1 min per page, so ' + orphans.length + ' pages ≈ ' + Math.ceil(orphans.length / 60 * 60) + ' min). You can navigate away — progress keeps going. AI picks 3-6 relevant pages per orphan and inserts a natural link, logged for rollback.')) {
+        if (orphans.length > 0 && confirm('Metas done (' + applied + ' fixed). Also auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nRuns on the server in parallel (' + orphans.length + ' pages ≈ ' + Math.max(2, Math.ceil(orphans.length / 8)) + ' min). You can navigate away — it keeps going. AI picks 3-6 relevant pages per orphan and inserts a natural link, logged for rollback.')) {
           await api('/projects/' + project.id + '/onpage-audit/fix-orphans/run', { method: 'POST', body: { page_ids: orphans.map(o => o.id) } });
           setFixAllState({ phase: 'links', current: 0, total: orphans.length, currentTitle: 'Running on server…', suggestions: [], applied, errors });
           // Poll until done

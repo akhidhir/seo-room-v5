@@ -18098,6 +18098,143 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
   }
 });
 
+// Bulk orphan fix — optimised: fetch site ONCE, AI picks in parallel, writes serialised against cache
+async function runBulkOrphanLinks(projectId, pageIds, job) {
+  const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+  if (!project) throw new Error('Project not found');
+  const wpUrl = project.wordpress_url?.replace(/\/$/, '');
+  const authHeaders = getWpAuthHeaders(project);
+  if (!wpUrl || !authHeaders) throw new Error('WordPress credentials not configured');
+  const isElementor = project.is_elementor_site;
+
+  // 1. Fetch ALL pages + posts once
+  job.current = 'Fetching site pages…';
+  const allWp = [];
+  for (const type of ['pages', 'posts']) {
+    let pg = 1;
+    while (true) {
+      try {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(20000) });
+        if (!r.ok) break;
+        const items = await r.json();
+        if (!Array.isArray(items) || items.length === 0) break;
+        allWp.push(...items.map(p => ({ ...p, _type: type })));
+        if (items.length < 50) break;
+        pg++;
+      } catch { break; }
+    }
+  }
+  if (allWp.length === 0) throw new Error('No pages fetched from WordPress');
+  // Mutable content cache so sequential writes never clobber each other
+  const getContent = (p) => (p._cachedContent != null) ? p._cachedContent : (p.content?.raw || p.content?.rendered || '');
+  const getElementor = (p) => (p._cachedElementor != null) ? p._cachedElementor : p.meta?._elementor_data;
+
+  // 2. AI picks in parallel (5 workers) — read-only, safe to parallelise
+  const targets = pageIds.map(pid => allWp.find(p => String(p.id) === String(pid))).filter(Boolean);
+  job.total = targets.length;
+  const pickResults = [];
+  let pickIdx = 0;
+  const pickWorker = async () => {
+    while (pickIdx < targets.length) {
+      const idx = pickIdx++;
+      const target = targets[idx];
+      const targetUrl = target.link || '';
+      const targetTitle = target.title?.rendered || target.title?.raw || '';
+      try {
+        const candidates = allWp
+          .filter(p => p.id !== target.id)
+          .map(p => {
+            const plain = getContent(p).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            return { id: p.id, title: p.title?.rendered || p.title?.raw || '', snippet: plain.slice(0, 150), alreadyLinks: getContent(p).toLowerCase().includes(targetUrl.toLowerCase().replace(/\/$/, '')) };
+          })
+          .filter(p => !p.alreadyLinks);
+        if (candidates.length === 0) { pickResults[idx] = { target, picks: [], message: 'all pages already link' }; job.done++; continue; }
+        const pickResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 2000,
+          system: `You are an SEO expert. Pick the most relevant pages that should link to a target page.
+For each selected page, identify a natural phrase in that page's content that can be wrapped in an <a> tag linking to the target.
+Pick 3-6 pages maximum. Only pick pages where a link would be genuinely relevant and natural.
+
+Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "reason": "why this link makes sense"}]}`,
+          messages: [{ role: 'user', content: `Target page to link TO:\nTitle: "${targetTitle}"\nURL: ${targetUrl}\n\nCandidate pages (pick which ones should link to the target):\n${candidates.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n')}` }],
+        });
+        let picks = [];
+        try { picks = (JSON.parse(pickResp.content[0].text.match(/\{[\s\S]*\}/)[0]).pages) || []; } catch {}
+        pickResults[idx] = { target, picks };
+      } catch (e) {
+        pickResults[idx] = { target, picks: [], error: e.message };
+      }
+      job.done++;
+      job.current = 'Picking links: ' + job.done + '/' + job.total;
+    }
+  };
+  await Promise.all([pickWorker(), pickWorker(), pickWorker(), pickWorker(), pickWorker()]);
+
+  // 3. Apply writes SEQUENTIALLY using the cache (no lost updates)
+  job.current = 'Applying links…';
+  for (const pr of pickResults) {
+    if (!pr) continue;
+    const targetUrl = pr.target.link || '';
+    if (pr.error) { job.errors++; job.results.push({ page_id: pr.target.id, error: pr.error }); continue; }
+    let added = 0;
+    for (const pick of (pr.picks || [])) {
+      const source = allWp.find(p => p.id === pick.id);
+      if (!source || !pick.anchor) continue;
+      const elData = isElementor && getElementor(source);
+      if (elData) {
+        let parsed;
+        try { parsed = typeof elData === 'string' ? JSON.parse(elData) : JSON.parse(JSON.stringify(elData)); } catch { continue; }
+        const originalJson = typeof elData === 'string' ? elData : JSON.stringify(elData);
+        if (originalJson.includes(targetUrl)) continue;
+        let modified = false;
+        const walk = (els) => {
+          if (!Array.isArray(els) || modified) return;
+          for (const el of els) {
+            if (modified) break;
+            if (el.widgetType === 'text-editor' && el.settings?.editor && el.settings.editor.includes(pick.anchor) && !el.settings.editor.includes(targetUrl)) {
+              el.settings.editor = el.settings.editor.replace(pick.anchor, `<a href="${targetUrl}">${pick.anchor}</a>`);
+              modified = true;
+            }
+            if (el.elements) walk(el.elements);
+          }
+        };
+        walk(parsed);
+        if (!modified) continue;
+        const newJson = JSON.stringify(parsed);
+        try {
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', '_elementor_data', originalJson, newJson]
+          );
+          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
+            method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ meta: { _elementor_data: newJson, _elementor_css: '' } }), signal: AbortSignal.timeout(20000),
+          });
+          if (w.ok) { source._cachedElementor = newJson; added++; }
+        } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
+      } else {
+        const content = getContent(source);
+        if (!content.includes(pick.anchor) || content.includes(targetUrl)) continue;
+        const newContent = content.replace(pick.anchor, `<a href="${targetUrl}">${pick.anchor}</a>`);
+        try {
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', 'content', content, newContent]
+          );
+          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
+            method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000),
+          });
+          if (w.ok) { source._cachedContent = newContent; added++; }
+        } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
+      }
+    }
+    if (added > 0) { job.linked++; job.results.push({ page_id: pr.target.id, added }); }
+    else { job.no_links++; job.results.push({ page_id: pr.target.id, added: 0, message: pr.message || 'no anchors matched' }); }
+  }
+}
+
 // Bulk orphan fix — server-side background job (survives navigation/reload)
 const orphanLinkJobs = {};
 app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, res) => {
@@ -18110,23 +18247,11 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
     const job = { running: true, total: page_ids.length, done: 0, linked: 0, no_links: 0, errors: 0, current: '', results: [], started_at: new Date().toISOString() };
     orphanLinkJobs[projectId] = job;
     (async () => {
-      for (const pid of page_ids) {
-        job.current = String(pid);
-        try {
-          const r = await runAddInboundLinks(projectId, pid, {});
-          if (r.links_added && r.links_added.length > 0) {
-            job.linked++;
-            job.results.push({ page_id: pid, added: r.links_added.length });
-          } else {
-            job.no_links++;
-            job.results.push({ page_id: pid, added: 0, message: r.message || 'no suitable links' });
-          }
-        } catch (e) {
-          job.errors++;
-          job.results.push({ page_id: pid, error: e.message });
-          console.error('[fix-orphans] Page ' + pid + ' error:', e.message);
-        }
-        job.done++;
+      try {
+        await runBulkOrphanLinks(projectId, page_ids, job);
+      } catch (e) {
+        job.error = e.message;
+        console.error('[fix-orphans] Job error:', e.message);
       }
       job.running = false;
       job.current = '';
