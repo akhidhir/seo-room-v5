@@ -4902,9 +4902,13 @@ app.get('/api/drive/folders', async (req, res) => {
   try {
     const accessToken = await getDriveAccessToken(req.auth.userId);
     if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
-    const parent = req.query.parent || 'root';
-    const q = encodeURIComponent(`'${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
-    const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&orderBy=name&pageSize=200`, {
+    const parent = req.query.parent || 'top';
+    // Virtual top level: My Drive + Shared with me
+    if (parent === 'top') return res.json({ folders: [{ id: 'root', name: 'My Drive', virtual: true }, { id: 'shared', name: 'Shared with me', virtual: true }] });
+    const q = parent === 'shared'
+      ? encodeURIComponent(`sharedWithMe and mimeType='application/vnd.google-apps.folder' and trashed=false`)
+      : encodeURIComponent(`'${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&orderBy=name&pageSize=200&includeItemsFromAllDrives=true&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     if (!r.ok) return res.status(500).json({ error: 'Drive list failed (HTTP ' + r.status + ')' });
