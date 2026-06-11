@@ -13105,9 +13105,7 @@
           } catch (e) { errors += batch.length; console.error('Fix All apply batch error:', e); }
         }
 
-        // Phase 3: Done — update pages with new values
-        setFixAllState(prev => ({ ...prev, phase: 'done', applied, errors }));
-        // Update local page data with applied suggestions
+        // Phase 3: update pages with new values
         setPages(prev => prev.map(p => {
           const s = allSuggestions.find(sg => String(sg.id) === String(p.id));
           if (!s) return p;
@@ -13117,6 +13115,29 @@
             focusKeyword: s.suggested_keyword || p.focusKeyword,
           });
         }));
+
+        // Phase 4 (optional): auto-add inbound internal links for orphan pages
+        let linked = 0, linkErrors = 0;
+        const orphans = pages.filter(p => (p.inboundLinks || 0) === 0);
+        if (orphans.length > 0 && confirm('Metas done (' + applied + ' fixed). Also auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nAI picks 3-6 relevant pages per orphan and inserts a natural link into their content. All changes are logged for rollback.')) {
+          setFixAllState({ phase: 'links', current: 0, total: orphans.length, currentTitle: '', suggestions: [], applied, errors });
+          for (let i = 0; i < orphans.length; i++) {
+            const op = orphans[i];
+            setFixAllState(prev => ({ ...prev, current: i + 1, currentTitle: op.title }));
+            try {
+              const r = await api(`/projects/${project.id}/onpage-audit/add-inbound-links`, { method: 'POST', body: { page_id: op.id } });
+              if (r.success && r.links_added && r.links_added.length > 0) {
+                linked++;
+                const added = r.links_added.length;
+                setPages(prev => prev.map(p => p.id === op.id ? Object.assign({}, p, { inboundLinks: (p.inboundLinks || 0) + added }) : p));
+              } else {
+                linkErrors++;
+              }
+            } catch (e) { linkErrors++; console.error('Fix All orphan link error:', e); }
+          }
+        }
+
+        setFixAllState(prev => ({ ...prev, phase: 'done', applied, errors, linked, linkErrors }));
         loadHistory();
       };
 
@@ -13422,6 +13443,8 @@
                     <span style={{ fontWeight: 600, color: '#22c55e' }}>
                       {fixAllState.applied} page{fixAllState.applied !== 1 ? 's' : ''} fixed
                     </span>
+                    {fixAllState.linked > 0 && <span style={{ color: '#22c55e', marginLeft: 8 }}>· {fixAllState.linked} orphan{fixAllState.linked !== 1 ? 's' : ''} linked</span>}
+                    {fixAllState.linkErrors > 0 && <span style={{ color: '#f59e0b', marginLeft: 8 }}>{fixAllState.linkErrors} orphan{fixAllState.linkErrors !== 1 ? 's' : ''} skipped (no suitable links)</span>}
                     {fixAllState.errors > 0 && <span style={{ color: '#ef4444', marginLeft: 8 }}>{fixAllState.errors} error{fixAllState.errors !== 1 ? 's' : ''}</span>}
                   </div>
                   <button onClick={() => setFixAllState(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}><i className="fas fa-times" /></button>
@@ -13435,6 +13458,7 @@
                       {fixAllState.phase === 'applying' && 'Applying fixes to WordPress...'}
                       {fixAllState.phase === 'keywords' && 'Generating focus keywords...'}
                       {fixAllState.phase === 'applying-kw' && 'Saving keywords to WordPress...'}
+                      {fixAllState.phase === 'links' && 'Adding inbound links to orphan pages...'}
                     </span>
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{fixAllState.current}/{fixAllState.total}</span>
                   </div>
