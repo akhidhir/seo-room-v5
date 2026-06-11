@@ -5133,14 +5133,27 @@ ${hasGaps ? '- Fix ALL content score issues listed above\n- Add ALL missing keyw
 
 ${HUMAN_WRITING_RULES}
 
-Return ONLY the updated HTML content, no markdown wrapping.`
+Return a JSON object with two fields:
+1. "content" — the updated HTML content (no markdown wrapping)
+2. "changes_summary" — an array of strings, each one briefly describing a change you made and WHY (e.g. "Added suburb-specific intro paragraph — client requested more local focus", "Replaced generic CTA — feedback from Natalie asked for phone number in CTA"). Include what feedback/gap triggered each change. If no feedback was available, describe what gaps you fixed.
+
+Return ONLY valid JSON, no markdown wrapping.`
       }]
     });
 
-    let content = aiResponse.content[0].text.trim().replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    let raw = aiResponse.content[0].text.trim().replace(/^```json?\n?/, '').replace(/\n?```$/, '');
+    let content, changesSummary = [];
+    try {
+      const parsed = JSON.parse(raw);
+      content = (parsed.content || '').trim();
+      changesSummary = parsed.changes_summary || [];
+    } catch (e) {
+      // Fallback: AI returned plain HTML (no JSON wrapper)
+      content = raw.replace(/^```html?\n?/, '').replace(/\n?```$/, '');
+    }
     const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
 
-    // Save updated draft
+    // Save updated draft + changes summary
     await pool.query(
       'UPDATE site_pages SET draft_content=$1, word_count=$2, optimise_round=$3, review_status=$4, updated_at=NOW() WHERE id=$5',
       [content, wordCount, roundNum, 'internal_review', pageId]
@@ -5151,8 +5164,8 @@ Return ONLY the updated HTML content, no markdown wrapping.`
       try { await driveUpdateDoc(accessToken, page.drive_doc_id, content); } catch (e) { console.warn('[optimise] Drive update skipped:', e.message); }
     }
 
-    console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, drive:${hasDrive && accessToken ? 'updated' : 'skipped'}`);
-    res.json({ ok: true, content, word_count: wordCount, round: roundNum });
+    console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, ${changesSummary.length} changes, drive:${hasDrive && accessToken ? 'updated' : 'skipped'}`);
+    res.json({ ok: true, content, word_count: wordCount, round: roundNum, changes_summary: changesSummary });
   } catch (e) {
     console.error('[optimise] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -27905,7 +27918,8 @@ Return ONLY a JSON object:
   ],
   "meta_title": "new title with focus keyword, 50-60 chars" or null,
   "meta_description": "new desc with focus keyword, 120-155 chars" or null,
-  "ai_notes": "brief summary"
+  "ai_notes": "brief summary",
+  "changes_summary": ["brief description of each change and what triggered it (feedback, gap, or keyword)"]
 }
 
 PRIORITY ORDER — fix ALL of these:
@@ -27943,6 +27957,7 @@ CRITICAL RULES:
       metaTitle = parsed.meta_title || null;
       metaDesc = parsed.meta_description || null;
       aiNotes = parsed.ai_notes || '';
+      var changesSummary = parsed.changes_summary || [];
     } catch (e) {
       console.error('[light-optimise] Failed to parse AI patches:', e.message);
       return res.status(500).json({ error: 'AI returned invalid patch format' });
@@ -28043,7 +28058,8 @@ CRITICAL RULES:
       proposed: { content_html: dedupHtml, meta_title: finalMetaTitle, meta_description: finalMetaDesc, ai_notes: aiNotes },
       patches_applied: appliedCount,
       patches_skipped: skippedCount,
-      patches_total: patches.length
+      patches_total: patches.length,
+      changes_summary: changesSummary
     });
   } catch (err) {
     console.error('[light-optimise] Error:', err.message);
@@ -28194,7 +28210,7 @@ ${HUMAN_WRITING_RULES}
 ${target_keywords && target_keywords.length > 0 ? 'TARGET KEYWORDS (MUST appear at least once each in the content):\n' + target_keywords.map(k => '- "' + (typeof k === 'string' ? k : k.keyword || k) + '"').join('\n') + '\n' : ''}
 ${topic_gaps && topic_gaps.missing_topics && topic_gaps.missing_topics.length > 0 ? 'MANDATORY NEW SECTIONS — The user has ACCEPTED these topics. You MUST add a dedicated H2 or H3 section for EACH one:\n' + topic_gaps.missing_topics.map((t, i) => (i + 1) + '. ADD NEW SECTION: "' + t + '" — write 80-150 words about this topic').join('\n') + '\nFAILURE TO ADD THESE SECTIONS MEANS THE REWRITE IS REJECTED.\n' : ''}
 ${topic_gaps && topic_gaps.missing_keywords && topic_gaps.missing_keywords.length > 0 ? 'MANDATORY KEYWORDS — The user has ACCEPTED these keywords. Each MUST appear at least once:\n' + topic_gaps.missing_keywords.map(k => '- "' + k + '"').join('\n') + '\n' : ''}
-Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed" }`
+Return JSON: { "content_html": "...", "meta_title": "...", "meta_description": "...", "ai_notes": "what was changed", "changes_summary": ["brief description of each change and what triggered it (feedback, gap, or keyword)"] }`
       }]
     });
 

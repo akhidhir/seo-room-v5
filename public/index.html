@@ -17673,6 +17673,7 @@
                   meta_description: data.meta_description || (data.proposed && data.proposed.meta_description) || editMeta.meta_desc,
                   ai_notes: data.ai_notes || null
                 },
+                changes_summary: data.changes_summary || [],
                 stats: {
                   current: { words: scoreData ? scoreData.stats.words : 0 },
                   proposed: { words: proposedWords, h1s: (html.match(/<h1/gi) || []).length, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
@@ -26148,6 +26149,22 @@
               ),
               React.createElement('input', { value: metaDesc, onChange: e => setMetaDesc(e.target.value),
                 style: { width: '100%', padding: '8px 10px', background: 'var(--card)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 } })
+            )
+          ),
+
+          // ── Changes Summary (what feedback was addressed) ──
+          preview.changes_summary && preview.changes_summary.length > 0 && React.createElement('div', {
+            style: { padding: '10px 24px', borderBottom: '1px solid var(--border)', background: 'rgba(34,197,94,0.06)', flexShrink: 0, maxHeight: 120, overflowY: 'auto' }
+          },
+            React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 } },
+              React.createElement('i', { className: 'fa-solid fa-clipboard-check', style: { fontSize: 12 } }),
+              'Changes Made (' + preview.changes_summary.length + ')'
+            ),
+            preview.changes_summary.map((change, i) =>
+              React.createElement('div', { key: i, style: { fontSize: 12, color: 'var(--text2)', padding: '2px 0', lineHeight: 1.4 } },
+                React.createElement('span', { style: { color: '#22c55e', marginRight: 6, fontWeight: 600 } }, '✓'),
+                change
+              )
             )
           ),
 
