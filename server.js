@@ -15874,20 +15874,10 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       const h1Match = content.match(/<h1[^>]*>(.*?)<\/h1>/i);
       const h1 = h1Match ? h1Match[1].replace(/<[^>]+>/g, '') : title;
 
-      // Determine Yoast score
+      // SEO score: computed LIVE from the checks below (after all issues are built).
+      // We deliberately IGNORE Yoast's stored linkdex score — it only updates when the
+      // page is opened in the WP editor, so it goes stale and hides applied fixes.
       let yoastScore = 'gray';
-      const rawSeoScore = pluginData?.seo_score || srYoast.seo_score || pgMeta._yoast_wpseo_linkdex || 0;
-      if (rawSeoScore) {
-        const seoScore = parseInt(rawSeoScore) || 0;
-        yoastScore = seoScore >= 70 ? 'green' : seoScore >= 40 ? 'orange' : 'red';
-      } else {
-        // Heuristic based on meta completeness (Yoast only updates linkdex when page is opened in editor)
-        const hasGoodTitle = metaTitle.length >= 30 && metaTitle.length <= 60;
-        const hasGoodDesc = metaDesc.length >= 120 && metaDesc.length <= 155;
-        const hasFocus = !!focusKeyword;
-        const goodCount = [hasGoodTitle, hasGoodDesc, hasFocus, wordCount >= 500].filter(Boolean).length;
-        yoastScore = goodCount >= 3 ? 'green' : goodCount >= 1 ? 'orange' : 'red';
-      }
 
       // Build issues
       const issues = [];
@@ -15922,6 +15912,20 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       else if (images > 0) issues.push({ type: 'good', text: 'All images have alt text' });
 
       if (externalLinks === 0) issues.push({ type: 'warning', text: 'No external links' });
+
+      // Keyword-in-content checks (the part Yoast scores that meta fixes alone can't satisfy)
+      if (kwLower) {
+        const kwEsc = kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const exactCount = (plainText.toLowerCase().match(new RegExp(kwEsc, 'g')) || []).length;
+        const kwWords = kwLower.split(/\s+/).filter(w => w.length > 2);
+        const allWordsPresent = kwWords.length > 0 && kwWords.every(w => plainText.toLowerCase().includes(w));
+        if (exactCount > 0) issues.push({ type: 'good', text: `Focus keyword appears ${exactCount}x in content` });
+        else if (allWordsPresent) issues.push({ type: 'warning', text: 'Focus keyword words present in content but not as exact phrase' });
+        else issues.push({ type: 'problem', text: 'Focus keyword not found in content' });
+        const h1Lower = (h1 || '').toLowerCase();
+        if (h1Lower.includes(kwLower) || (kwWords.length > 0 && kwWords.every(w => h1Lower.includes(w)))) issues.push({ type: 'good', text: 'H1 contains focus keyword' });
+        else issues.push({ type: 'warning', text: 'Focus keyword not in H1' });
+      }
 
       results.push({
         id: pg.id,
@@ -15978,6 +15982,11 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       } else {
         result.issues.push({ type: 'good', text: `Good inbound linking (${inbound} pages link here)` });
       }
+
+      // Final LIVE score from actual checks: fixes show up on the very next audit run
+      const problems = result.issues.filter(i => i.type === 'problem').length;
+      const warnings = result.issues.filter(i => i.type === 'warning').length;
+      result.yoastScore = problems >= 2 ? 'red' : (problems === 1 || warnings >= 4) ? 'orange' : 'green';
     }
 
     // Sort: red first, then orange, then green
