@@ -27988,7 +27988,7 @@ CRITICAL RULES:
 2. Each "find" should be a COMPLETE sentence ending with a period, question mark, or exclamation mark
 3. The "replace" REPLACES the found text — the original "find" text is DELETED and only the "replace" text remains. So "replace" must be a COMPLETE rewrite of the sentence, not an addition to it.
 4. Do NOT touch headings (H1, H2, H3) — only modify paragraph text
-5. Use 10 to 20 patches to expand content toward 1500 words
+5. Use 10 to 20 patches to expand content toward 1500 words — BUT if the word count target is already met AND the feedback/gaps are already reflected in the content, return an EMPTY patches array with ai_notes explaining the content is already compliant. NEVER invent no-op patches or patches with made-up find text just to fill the quota.
 6. Do NOT add new sections. Expand EXISTING paragraphs.
 7. Each patch should ADD 20-40 words of GENUINELY NEW information: specific materials, process steps, suburb names, timeframes, or customer scenarios NOT already in the content
 8. NEVER include HTML tags in "find" — only the text between tags
