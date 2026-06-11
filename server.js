@@ -5042,6 +5042,41 @@ app.get(['/api/projects/:projectId/site-pages/:pageId/feedback-status', '/api/bu
   }
 });
 
+// Mark all current Drive comments as seen/handled for this page (without running optimise)
+app.post(['/api/projects/:projectId/site-pages/:pageId/feedback-seen', '/api/builds/:buildId/site-pages/:pageId/feedback-seen'], async (req, res) => {
+  try {
+    const { projectId, buildId, pageId } = req.params;
+    const page = (await pool.query(
+      projectId ? 'SELECT * FROM site_pages WHERE id=$1 AND project_id=$2' : 'SELECT * FROM site_pages WHERE id=$1 AND build_id=$2',
+      [pageId, projectId || buildId]
+    )).rows[0];
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    const token = await getDriveAccessToken(req.auth.userId);
+    if (!token) return res.status(401).json({ error: 'Google Drive not connected.' });
+    const all = [];
+    if (page.drive_doc_id) { try { all.push(...await driveListComments(token, page.drive_doc_id)); } catch(e) {} }
+    const bid = buildId || page.build_id;
+    if (bid) {
+      const bld = (await pool.query('SELECT linked_docs FROM website_builds WHERE id=$1', [bid])).rows[0];
+      for (const d of (Array.isArray(bld?.linked_docs) ? bld.linked_docs : [])) {
+        const did = d.drive_id || d.doc_id;
+        if (did) { try { all.push(...await driveListComments(token, did)); } catch(e) {} }
+      }
+    }
+    let marked = 0;
+    for (const c of all) {
+      if (c.id) {
+        await pool.query(
+          'INSERT INTO handled_doc_comments (page_id, comment_id, comment_author, comment_excerpt) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+          [pageId, c.id, c.author || '', String(c.content || '').substring(0, 200)]
+        );
+        marked++;
+      }
+    }
+    res.json({ ok: true, marked });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Read feedback from a Drive Doc (comments + content changes)
 app.get(['/api/projects/:projectId/site-pages/:pageId/drive-feedback', '/api/builds/:buildId/site-pages/:pageId/drive-feedback'], async (req, res) => {
   try {

@@ -18022,7 +18022,19 @@
             onClick: refreshFeedbackStatus,
             title: (newFeedback.latest || []).map(function(c){ return c.author + ': "' + c.comment + '"'; }).join('\n') + '\n\nClick to re-check Drive. Run Optimise or Auto-Fix to address them.',
             style: { padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.4)', cursor: 'pointer' }
-          }, React.createElement('i', { className: checkingFeedback ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-comment-dots', style: { marginRight: 5 } }), newFeedback.new_count + ' new client comment' + (newFeedback.new_count === 1 ? '' : 's')),
+          }, React.createElement('i', { className: checkingFeedback ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-comment-dots', style: { marginRight: 5 } }), newFeedback.new_count + ' new client comment' + (newFeedback.new_count === 1 ? '' : 's'),
+            React.createElement('i', {
+              className: 'fa-solid fa-xmark',
+              title: 'Mark all current comments as seen (badge resets; Optimise will skip them)',
+              onClick: function(e) {
+                e.stopPropagation();
+                if (!confirm('Mark all ' + newFeedback.new_count + ' comment(s) as seen? Optimise will treat them as already handled.')) return;
+                api(apiPrefix + '/site-pages/' + page.id + '/feedback-seen', { method: 'POST' })
+                  .then(function() { refreshFeedbackStatus(); })
+                  .catch(function(err) { alert('Failed: ' + (err.message || err)); });
+              },
+              style: { marginLeft: 8, cursor: 'pointer', opacity: 0.7 }
+            })),
           // AI Editor
           !isPublished && hasDraft && React.createElement('button', {
             onClick: function() {
