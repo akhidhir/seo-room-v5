@@ -11807,7 +11807,6 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ progress: 0, total: pages.length }), auditId]);
 
-        const BATCH_SIZE = 3; // 3 pages at a time — parallel mobile+desktop per page
         const results = [];
 
         function extractCwvAndOpps(psData) {
@@ -11858,18 +11857,14 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
 
         async function processPage(page) {
           try {
-            // Run mobile + desktop in parallel (retries handle failures)
-            const [mobileData, desktopData] = await Promise.allSettled([
-              runPageSpeedAudit(page.url, 'mobile'),
-              runPageSpeedAudit(page.url, 'desktop'),
-            ]);
-            if (mobileData.status === 'rejected') throw new Error(mobileData.reason?.message || 'Mobile audit failed');
-            const mobile = extractCwvAndOpps(mobileData.value);
+            // Render ONE strategy at a time — never two full renders of the same (heavy) site at once.
+            const mobile = extractCwvAndOpps(await runPageSpeedAudit(page.url, 'mobile'));
+            await new Promise(r => setTimeout(r, 1500));
             let desktop = { score: 0, cwv: {}, opportunities: [] };
-            if (desktopData.status === 'fulfilled') {
-              desktop = extractCwvAndOpps(desktopData.value);
-            } else {
-              console.warn(`[speed-audit] Desktop failed for ${page.url}: ${desktopData.reason?.message} — using mobile only`);
+            try {
+              desktop = extractCwvAndOpps(await runPageSpeedAudit(page.url, 'desktop'));
+            } catch (dErr) {
+              console.warn(`[speed-audit] Desktop failed for ${page.url}: ${dErr.message} — using mobile only`);
             }
 
             return {
@@ -11887,22 +11882,29 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           }
         }
 
-        for (let i = 0; i < pages.length; i += BATCH_SIZE) {
-          // Check if this audit was cancelled (new audit started)
+        // Fully sequential — one page (and one render) at a time so we never overload a heavy site.
+        // This is the fix for cascading FAILED_DOCUMENT_REQUEST / ERR_TIMED_OUT on large sites.
+        let consecutiveFails = 0;
+        for (let i = 0; i < pages.length; i++) {
+          // Stop if this audit was cancelled (a newer one started)
           const statusCheck = await pool.query('SELECT status FROM audits WHERE id=$1', [auditId]);
           if (!statusCheck.rows[0] || statusCheck.rows[0].status !== 'running') {
             console.log(`[speed-audit] Audit ${auditId} was cancelled — stopping background job`);
             return;
           }
-          const batch = pages.slice(i, i + BATCH_SIZE);
-          const batchResults = await Promise.all(batch.map(processPage));
-          results.push(...batchResults);
+          const result = await processPage(pages[i]);
+          results.push(result);
           console.log(`[speed-audit] Progress: ${results.length}/${pages.length} pages`);
-          // Save partial results so frontend can show them incrementally
+          // Save partial results so the frontend can show them incrementally
           await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
             [JSON.stringify({ progress: results.length, total: pages.length, results }), auditId]);
-          // Brief pause between batches
-          if (i + BATCH_SIZE < pages.length) await new Promise(r => setTimeout(r, 2000));
+          // If a page times out, ease off progressively before the next so the site can recover.
+          const docFail = result.error && /FAILED_DOCUMENT_REQUEST|ERRORED_DOCUMENT_REQUEST|TIMED_OUT/i.test(result.error);
+          consecutiveFails = docFail ? consecutiveFails + 1 : 0;
+          if (i < pages.length - 1) {
+            const gap = docFail ? Math.min(30000, 8000 + consecutiveFails * 6000) : 2000;
+            await new Promise(r => setTimeout(r, gap));
+          }
         }
 
         await pool.query(
