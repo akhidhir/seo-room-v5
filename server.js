@@ -5164,6 +5164,14 @@ Return ONLY valid JSON, no markdown wrapping.`
       try { await driveUpdateDoc(accessToken, page.drive_doc_id, content); } catch (e) { console.warn('[optimise] Drive update skipped:', e.message); }
     }
 
+    // Fallback summary if AI didn't return one
+    if (!changesSummary || changesSummary.length === 0) {
+      changesSummary = [];
+      if (hasFeedback && comments.length > 0) changesSummary.push('Addressed ' + comments.length + ' review comment(s) from Drive');
+      if (hasGaps) changesSummary.push('Fixed content gaps: ' + gapsContext.substring(0, 100));
+      if (linkedDocsContext) changesSummary.push('Incorporated linked reference doc feedback');
+      if (!hasFeedback && !hasGaps) changesSummary.push('General content optimization (round ' + roundNum + ')');
+    }
     console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, ${changesSummary.length} changes, drive:${hasDrive && accessToken ? 'updated' : 'skipped'}`);
     res.json({ ok: true, content, word_count: wordCount, round: roundNum, changes_summary: changesSummary });
   } catch (e) {
@@ -28048,7 +28056,17 @@ CRITICAL RULES:
       return result;
     })(optimisedHtml);
 
-    console.log('[light-optimise] Done for page ' + pageId + ' — applied: ' + appliedCount + ', skipped: ' + skippedCount + ' of ' + patches.length + ' patches');
+    // Build changes summary from what was actually done (don't rely on AI returning it)
+    const builtSummary = [];
+    if (finalMetaTitle !== (page.meta_title || '')) builtSummary.push('Updated meta title to include focus keyword (' + finalMetaTitle.length + ' chars)');
+    if (finalMetaDesc !== (page.meta_description || '')) builtSummary.push('Updated meta description to include focus keyword (' + finalMetaDesc.length + ' chars)');
+    if (appliedCount > 0) builtSummary.push('Applied ' + appliedCount + ' content patches (keywords, expansion, fixes)');
+    if (missingKwsText) builtSummary.push('Wove in missing keywords: ' + missingKwsText.substring(0, 100));
+    if (linkedDocsText) builtSummary.push('Incorporated linked reference doc feedback');
+    // Also include AI-returned summary if any
+    const finalSummary = (changesSummary && changesSummary.length > 0) ? changesSummary : builtSummary;
+
+    console.log('[light-optimise] Done for page ' + pageId + ' — applied: ' + appliedCount + ', skipped: ' + skippedCount + ' of ' + patches.length + ' patches, changes: ' + finalSummary.length);
     res.json({
       preview: true,
       content_html: dedupHtml,
@@ -28059,7 +28077,7 @@ CRITICAL RULES:
       patches_applied: appliedCount,
       patches_skipped: skippedCount,
       patches_total: patches.length,
-      changes_summary: changesSummary
+      changes_summary: finalSummary
     });
   } catch (err) {
     console.error('[light-optimise] Error:', err.message);
