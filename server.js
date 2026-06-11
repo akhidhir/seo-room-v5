@@ -4897,6 +4897,35 @@ app.post(['/api/projects/:id/linked-docs/:docId/refresh', '/api/builds/:id/linke
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Browse Drive folders (for the folder picker)
+app.get('/api/drive/folders', async (req, res) => {
+  try {
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+    const parent = req.query.parent || 'root';
+    const q = encodeURIComponent(`'${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&orderBy=name&pageSize=200`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!r.ok) return res.status(500).json({ error: 'Drive list failed (HTTP ' + r.status + ')' });
+    const data = await r.json();
+    res.json({ folders: (data.files || []).map(f => ({ id: f.id, name: f.name })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create a Drive folder (for the folder picker)
+app.post('/api/drive/folders', async (req, res) => {
+  try {
+    const accessToken = await getDriveAccessToken(req.auth.userId);
+    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+    const { name, parent } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Folder name required' });
+    const created = await driveCreateFolder(accessToken, String(name).trim(), parent || 'root');
+    if (!created || !created.id) return res.status(500).json({ error: (created && created.error && created.error.message) || 'Folder create failed' });
+    res.json({ id: created.id, name: created.name || name });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Push a site page draft to Google Drive as a Doc
 app.post(['/api/projects/:projectId/site-pages/:pageId/push-to-drive', '/api/builds/:buildId/site-pages/:pageId/push-to-drive'], async (req, res) => {
   try {
@@ -4911,44 +4940,38 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/push-to-drive', '/api/bui
     const accessToken = await getDriveAccessToken(req.auth.userId);
     if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
 
-    // Get folder ID from project or build
-    let folderId;
-    if (projectId) {
-      const proj = (await pool.query('SELECT drive_folder_id FROM projects WHERE id=$1', [projectId])).rows[0];
-      folderId = proj?.drive_folder_id;
-    } else {
-      const bld = (await pool.query('SELECT drive_folder_id FROM website_builds WHERE id=$1', [buildId])).rows[0];
-      folderId = bld?.drive_folder_id;
-    }
-    // Auto-create the main folder if it doesn't exist yet: SEO Room / <Business Name>
-    if (!folderId) {
-      const owner = projectId
-        ? (await pool.query('SELECT business_name, name FROM projects WHERE id=$1', [projectId])).rows[0]
-        : (await pool.query('SELECT business_name, name FROM website_builds WHERE id=$1', [buildId])).rows[0];
-      const folderName = (owner?.business_name || owner?.name || 'SEO Room Project').trim();
-      const rootId = await driveFindOrCreateFolder(accessToken, 'SEO Room', 'root');
-      folderId = await driveFindOrCreateFolder(accessToken, folderName, rootId || 'root');
-      if (!folderId) return res.status(500).json({ error: 'Could not create Drive folder' });
+    // Destination folder: explicit choice from the picker (body.folder_id) wins and is remembered;
+    // otherwise fall back to the saved folder for this build/project
+    let folderId = req.body && req.body.folder_id;
+    if (folderId) {
       if (projectId) await pool.query('UPDATE projects SET drive_folder_id=$1 WHERE id=$2', [folderId, projectId]);
       else await pool.query('UPDATE website_builds SET drive_folder_id=$1 WHERE id=$2', [folderId, buildId]);
-      console.log(`[drive] Auto-created main folder "SEO Room/${folderName}" (${folderId})`);
-    }
-
-    // Organise into a subfolder by page type (created on demand inside the main folder)
-    const SUBFOLDER_NAMES = { home: 'Home', service: 'Service Pages', suburb: 'Suburb Pages', blog: 'Blog Posts' };
-    const subfolderName = SUBFOLDER_NAMES[page.page_type] || 'Pages';
-    try {
-      const subId = await driveFindOrCreateFolder(accessToken, subfolderName, folderId);
-      if (subId) {
-        folderId = subId;
-        console.log(`[drive] Using subfolder "${subfolderName}" (${subId})`);
+    } else {
+      if (projectId) {
+        const proj = (await pool.query('SELECT drive_folder_id FROM projects WHERE id=$1', [projectId])).rows[0];
+        folderId = proj?.drive_folder_id;
+      } else {
+        const bld = (await pool.query('SELECT drive_folder_id FROM website_builds WHERE id=$1', [buildId])).rows[0];
+        folderId = bld?.drive_folder_id;
       }
-    } catch(e) { console.warn('[drive] Subfolder skipped, using main folder:', e.message); }
+    }
+    if (!folderId && !page.drive_doc_id) return res.json({ needs_folder: true });
 
     const docTitle = page.page_name + (page.optimise_round > 0 ? ` (v${page.optimise_round + 1})` : '');
     let result;
 
     if (page.drive_doc_id) {
+      // If an explicit folder was chosen, MOVE the existing doc there
+      if (req.body && req.body.folder_id) {
+        try {
+          const meta = await fetch(`https://www.googleapis.com/drive/v3/files/${page.drive_doc_id}?fields=parents`, { headers: { Authorization: `Bearer ${accessToken}` } }).then(r => r.json());
+          const prev = (meta.parents || []).join(',');
+          await fetch(`https://www.googleapis.com/drive/v3/files/${page.drive_doc_id}?addParents=${encodeURIComponent(req.body.folder_id)}${prev ? '&removeParents=' + encodeURIComponent(prev) : ''}`, {
+            method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }
+          });
+          console.log(`[drive] Moved doc ${page.drive_doc_id} to folder ${req.body.folder_id}`);
+        } catch(e) { console.warn('[drive] Move doc failed:', e.message); }
+      }
       // Update existing doc
       result = await driveUpdateDoc(accessToken, page.drive_doc_id, page.draft_content);
       if (result.error) return res.status(500).json({ error: result.error.message || 'Failed to update doc' });

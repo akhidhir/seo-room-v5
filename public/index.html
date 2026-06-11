@@ -17343,13 +17343,40 @@
       var [suggestedKws, setSuggestedKws] = React.useState([]);
 
       // Drive review loop handlers
-      var handlePushToDrive = async function() {
+      // ── Drive folder picker ──
+      var [drivePicker, setDrivePicker] = React.useState(null);
+      var openDrivePicker = async function(parentId, crumbs) {
+        var p = parentId || 'root';
+        var c = crumbs || [{ id: 'root', name: 'My Drive' }];
+        setDrivePicker({ parent: p, crumbs: c, folders: [], loading: true, newName: '' });
+        try {
+          var r = await api('/drive/folders?parent=' + encodeURIComponent(p));
+          if (r.error) { alert('Drive browse failed: ' + r.error); setDrivePicker(null); return; }
+          setDrivePicker({ parent: p, crumbs: c, folders: r.folders || [], loading: false, newName: '' });
+        } catch(e) { alert('Drive browse failed: ' + (e.message || e)); setDrivePicker(null); }
+      };
+      var createDriveFolder = async function() {
+        if (!drivePicker || !(drivePicker.newName || '').trim()) return;
+        try {
+          var r = await api('/drive/folders', { method: 'POST', body: { name: drivePicker.newName.trim(), parent: drivePicker.parent } });
+          if (r.error) { alert('Create folder failed: ' + r.error); return; }
+          openDrivePicker(r.id, drivePicker.crumbs.concat([{ id: r.id, name: r.name }]));
+        } catch(e) { alert('Create folder failed: ' + (e.message || e)); }
+      };
+
+      var handlePushToDrive = async function(folderId) {
+        if (typeof folderId !== 'string') folderId = null;
         if (pushingToDrive) return;
         // Save first
         await handleSaveEdit();
         setPushingToDrive(true);
         try {
-          var data = await api(apiPrefix + '/site-pages/' + page.id + '/push-to-drive', { method: 'POST' });
+          var data = await api(apiPrefix + '/site-pages/' + page.id + '/push-to-drive', { method: 'POST', body: folderId ? { folder_id: folderId } : {} });
+          if (data && data.needs_folder) {
+            setPushingToDrive(false);
+            openDrivePicker();
+            return;
+          }
           setReviewStatus(data.review_status || 'internal_review');
           if (data.drive_doc_id) page.drive_doc_id = data.drive_doc_id;
           alert('Pushed to Google Drive' + (data.doc_url ? '. Doc: ' + data.doc_url : ''));
@@ -18006,8 +18033,14 @@
           !isPublished && hasDraft && React.createElement('button', {
             onClick: handlePushToDrive, disabled: pushingToDrive,
             title: page.drive_doc_id ? 'Update existing Drive Doc' : 'Create new Drive Doc & start review',
-            style: { padding: '8px 16px', background: pushingToDrive ? 'var(--bg3)' : '#4285f4', color: '#fff', border: 'none', borderRadius: 8, cursor: pushingToDrive ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
+            style: { padding: '8px 16px', background: pushingToDrive ? 'var(--bg3)' : '#4285f4', color: '#fff', border: 'none', borderRadius: '8px 0 0 8px', cursor: pushingToDrive ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600 }
           }, React.createElement('i', { className: pushingToDrive ? 'fa-solid fa-spinner fa-spin' : 'fa-brands fa-google-drive', style: { marginRight: 6 } }), pushingToDrive ? 'Pushing...' : (page.drive_doc_id ? 'Update Drive' : 'Push to Drive')),
+          // Choose Drive folder (opens picker)
+          !isPublished && hasDraft && React.createElement('button', {
+            onClick: function() { openDrivePicker(); },
+            title: 'Choose which Drive folder to save into',
+            style: { padding: '8px 10px', background: '#3367d6', color: '#fff', border: 'none', borderLeft: '1px solid rgba(255,255,255,0.25)', borderRadius: '0 8px 8px 0', cursor: 'pointer', fontSize: 14, marginLeft: -10 }
+          }, React.createElement('i', { className: 'fa-solid fa-folder-open' })),
           // Read Feedback (only when in review)
           page.drive_doc_id && ['internal_review', 'client_review'].indexOf(reviewStatus) !== -1 && React.createElement('button', {
             onClick: handleReadFeedback, disabled: readingFeedback,
@@ -18142,6 +18175,77 @@
           page.stage === 'reviewed' && React.createElement('button', { onClick: handlePublish, disabled: publishing,
             style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
             React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), publishing ? 'Publishing...' : 'Publish'
+          )
+        ),
+
+        // Drive folder picker modal
+        drivePicker && React.createElement('div', {
+          style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+          onClick: function(e) { if (e.target === e.currentTarget) setDrivePicker(null); }
+        },
+          React.createElement('div', { style: { width: 520, maxWidth: '92vw', maxHeight: '80vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+            // Header
+            React.createElement('div', { style: { padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+              React.createElement('div', { style: { fontWeight: 700, color: 'var(--text)', fontSize: 15 } },
+                React.createElement('i', { className: 'fa-brands fa-google-drive', style: { marginRight: 8, color: '#4285f4' } }),
+                'Choose Drive folder'
+              ),
+              React.createElement('button', { onClick: function() { setDrivePicker(null); }, style: { background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 } }, '×')
+            ),
+            // Breadcrumbs
+            React.createElement('div', { style: { padding: '8px 18px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' } },
+              drivePicker.crumbs.map(function(c, i) {
+                return React.createElement(React.Fragment, { key: c.id },
+                  i > 0 && React.createElement('span', { style: { color: 'var(--text3)' } }, '/'),
+                  React.createElement('span', {
+                    onClick: function() { if (i < drivePicker.crumbs.length - 1) openDrivePicker(c.id, drivePicker.crumbs.slice(0, i + 1)); },
+                    style: { cursor: i < drivePicker.crumbs.length - 1 ? 'pointer' : 'default', color: i === drivePicker.crumbs.length - 1 ? 'var(--text)' : '#3b82f6', fontWeight: i === drivePicker.crumbs.length - 1 ? 700 : 400 }
+                  }, c.name)
+                );
+              })
+            ),
+            // Folder list
+            React.createElement('div', { style: { flex: 1, overflowY: 'auto', minHeight: 180, maxHeight: 320, padding: '6px 0' } },
+              drivePicker.loading
+                ? React.createElement('div', { style: { padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 } }, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 8 } }), 'Loading folders…')
+                : drivePicker.folders.length === 0
+                  ? React.createElement('div', { style: { padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 } }, 'No subfolders here')
+                  : drivePicker.folders.map(function(f) {
+                      return React.createElement('div', {
+                        key: f.id,
+                        onClick: function() { openDrivePicker(f.id, drivePicker.crumbs.concat([f])); },
+                        style: { padding: '9px 18px', cursor: 'pointer', fontSize: 14, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 10 },
+                        onMouseEnter: function(e) { e.currentTarget.style.background = 'var(--bg2)'; },
+                        onMouseLeave: function(e) { e.currentTarget.style.background = 'transparent'; }
+                      },
+                        React.createElement('i', { className: 'fa-solid fa-folder', style: { color: '#f59e0b' } }),
+                        f.name,
+                        React.createElement('i', { className: 'fa-solid fa-chevron-right', style: { marginLeft: 'auto', color: 'var(--text3)', fontSize: 11 } })
+                      );
+                    })
+            ),
+            // New folder
+            React.createElement('div', { style: { padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 } },
+              React.createElement('input', {
+                value: drivePicker.newName || '',
+                onChange: function(e) { setDrivePicker(Object.assign({}, drivePicker, { newName: e.target.value })); },
+                onKeyDown: function(e) { if (e.key === 'Enter') createDriveFolder(); },
+                placeholder: 'New folder name…',
+                style: { flex: 1, padding: '8px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }
+              }),
+              React.createElement('button', {
+                onClick: createDriveFolder, disabled: !(drivePicker.newName || '').trim(),
+                style: { padding: '8px 14px', background: (drivePicker.newName || '').trim() ? '#22c55e' : 'var(--bg3)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fa-solid fa-folder-plus', style: { marginRight: 5 } }), 'Create')
+            ),
+            // Footer
+            React.createElement('div', { style: { padding: '12px 18px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+              React.createElement('button', { onClick: function() { setDrivePicker(null); }, style: { padding: '8px 14px', background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontSize: 13 } }, 'Cancel'),
+              React.createElement('button', {
+                onClick: function() { var pid2 = drivePicker.parent; setDrivePicker(null); handlePushToDrive(pid2); },
+                style: { padding: '8px 18px', background: '#4285f4', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 700 }
+              }, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save here: ' + (drivePicker.crumbs[drivePicker.crumbs.length - 1] || {}).name)
+            )
           )
         ),
 
