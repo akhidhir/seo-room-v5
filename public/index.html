@@ -17755,11 +17755,20 @@
       var [autoFixStatus, setAutoFixStatus] = React.useState('');
       var [autoFixReport, setAutoFixReport] = React.useState(null);
       var [newFeedback, setNewFeedback] = React.useState(null);
-      React.useEffect(function() {
+      var [checkingFeedback, setCheckingFeedback] = React.useState(false);
+      var refreshFeedbackStatus = function() {
         if (!page || !page.id) return;
+        setCheckingFeedback(true);
         api(apiPrefix + '/site-pages/' + page.id + '/feedback-status')
-          .then(function(r) { if (r && r.checked) setNewFeedback(r); })
-          .catch(function() {});
+          .then(function(r) { if (r && r.checked) setNewFeedback(r); setCheckingFeedback(false); })
+          .catch(function() { setCheckingFeedback(false); });
+      };
+      React.useEffect(function() {
+        refreshFeedbackStatus();
+        // Re-check when the user comes back to this window (e.g. after commenting in Drive)
+        var onFocus = function() { refreshFeedbackStatus(); };
+        window.addEventListener('focus', onFocus);
+        return function() { window.removeEventListener('focus', onFocus); };
       }, [page && page.id]);
 
       // Optimise + auto-apply (no preview modal). Returns { html, meta_title, meta_desc } or null.
@@ -18008,11 +18017,12 @@
             title: 'One click: Brief Check → Optimise (fix gaps) → Humanize → re-verify, looping until it passes',
             style: { background: autoFixing ? 'var(--bg3)' : 'linear-gradient(135deg, #14b8a6, #0ea5e9)', fontSize: 14, padding: '8px 22px', fontWeight: 800, border: 'none', color: '#fff', borderRadius: 8, cursor: autoFixing ? 'wait' : 'pointer', boxShadow: autoFixing ? 'none' : '0 2px 12px rgba(20,184,166,0.35)' }
           }, React.createElement('i', { className: autoFixing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-bolt', style: { marginRight: 6 } }), autoFixing ? (autoFixStatus || 'Auto-Fixing…') : 'Auto-Fix All'),
-          // New client feedback badge
+          // New client feedback badge (click to re-check Drive)
           newFeedback && newFeedback.new_count > 0 && React.createElement('span', {
-            title: (newFeedback.latest || []).map(function(c){ return c.author + ': "' + c.comment + '"'; }).join('\n') + '\n\nRun Optimise or Auto-Fix to address them.',
-            style: { padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.4)', cursor: 'default' }
-          }, React.createElement('i', { className: 'fa-solid fa-comment-dots', style: { marginRight: 5 } }), newFeedback.new_count + ' new client comment' + (newFeedback.new_count === 1 ? '' : 's')),
+            onClick: refreshFeedbackStatus,
+            title: (newFeedback.latest || []).map(function(c){ return c.author + ': "' + c.comment + '"'; }).join('\n') + '\n\nClick to re-check Drive. Run Optimise or Auto-Fix to address them.',
+            style: { padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.4)', cursor: 'pointer' }
+          }, React.createElement('i', { className: checkingFeedback ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-comment-dots', style: { marginRight: 5 } }), newFeedback.new_count + ' new client comment' + (newFeedback.new_count === 1 ? '' : 's')),
           // AI Editor
           !isPublished && hasDraft && React.createElement('button', {
             onClick: function() {
