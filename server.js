@@ -17859,16 +17859,15 @@ app.post('/api/projects/:projectId/onpage-audit/update-keyword', async (req, res
 });
 
 // Add inbound links — find other pages and add links in them pointing TO this page
-app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    const { page_id, preview, selected_links } = req.body;
+async function runAddInboundLinks(projectId, page_id, opts = {}) {
+    const preview = opts.preview;
+    const selected_links = opts.selected_links;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
-    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!project) throw new Error('Project not found');
 
     const wpUrl = project.wordpress_url?.replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
-    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    if (!wpUrl || !authHeaders) throw new Error('WordPress credentials not configured');
 
     // Fetch target page info
     let targetPage, targetType = 'pages';
@@ -17878,7 +17877,7 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
       pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
       if (pageResp.ok) { targetPage = await pageResp.json(); targetType = 'posts'; }
     }
-    if (!targetPage) return res.status(404).json({ error: 'Page not found' });
+    if (!targetPage) throw new Error('Page not found');
 
     const targetUrl = targetPage.link || '';
     const targetTitle = targetPage.title?.rendered || targetPage.title?.raw || '';
@@ -17902,7 +17901,7 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
       }
     }
 
-    if (otherPages.length === 0) return res.json({ success: false, message: 'No other pages found', links_added: [] });
+    if (otherPages.length === 0) return { success: false, message: 'No other pages found', links_added: [] };
 
     const isElementor = project.is_elementor_site;
 
@@ -17923,7 +17922,7 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
       };
     }).filter(p => !p.alreadyLinks); // Exclude pages that already link to target
 
-    if (pageSummaries.length === 0) return res.json({ success: false, message: 'All pages already link to this page', links_added: [] });
+    if (pageSummaries.length === 0) return { success: false, message: 'All pages already link to this page', links_added: [] };
 
     console.log(`[add-inbound] Target: "${targetTitle}" (${page_id}), ${pageSummaries.length} candidate pages`);
 
@@ -17949,11 +17948,11 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
       const jsonMatch = pickResp.content[0].text.match(/\{[\s\S]*\}/);
       picks = JSON.parse(jsonMatch[0]);
     } catch {
-      return res.status(500).json({ error: 'AI returned invalid JSON for page selection' });
+      throw new Error('AI returned invalid JSON for page selection');
     }
 
     if (!picks.pages?.length) {
-      return res.json({ success: false, message: 'AI found no suitable pages for inbound links', links_added: [] });
+      return { success: false, message: 'AI found no suitable pages for inbound links', links_added: [] };
     }
 
     // If selected_links provided, filter picks to only those source page IDs
@@ -17975,7 +17974,7 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
           reason: p.reason,
         };
       });
-      return res.json({ success: true, preview: true, links_added: previewLinks, count: previewLinks.length });
+      return { success: true, preview: true, links_added: previewLinks, count: previewLinks.length };
     }
 
     // Now process each selected page — add the link
@@ -18081,16 +18080,67 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
     }
 
     console.log(`[add-inbound] Added ${linksAdded.length} inbound links to "${targetTitle}"`);
-    res.json({
+    return {
       success: linksAdded.length > 0,
       links_added: linksAdded,
       count: linksAdded.length,
       message: linksAdded.length === 0 ? 'Could not find matching anchor text in source pages' : undefined,
-    });
+    };
+}
+
+app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, res) => {
+  try {
+    const result = await runAddInboundLinks(req.params.projectId, req.body.page_id, { preview: req.body.preview, selected_links: req.body.selected_links });
+    res.json(result);
   } catch (e) {
     console.error('[add-inbound] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Bulk orphan fix — server-side background job (survives navigation/reload)
+const orphanLinkJobs = {};
+app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_ids } = req.body || {};
+    if (!Array.isArray(page_ids) || page_ids.length === 0) return res.status(400).json({ error: 'page_ids required' });
+    const existing = orphanLinkJobs[projectId];
+    if (existing && existing.running) return res.json({ ok: true, already_running: true, total: existing.total, done: existing.done });
+    const job = { running: true, total: page_ids.length, done: 0, linked: 0, no_links: 0, errors: 0, current: '', results: [], started_at: new Date().toISOString() };
+    orphanLinkJobs[projectId] = job;
+    (async () => {
+      for (const pid of page_ids) {
+        job.current = String(pid);
+        try {
+          const r = await runAddInboundLinks(projectId, pid, {});
+          if (r.links_added && r.links_added.length > 0) {
+            job.linked++;
+            job.results.push({ page_id: pid, added: r.links_added.length });
+          } else {
+            job.no_links++;
+            job.results.push({ page_id: pid, added: 0, message: r.message || 'no suitable links' });
+          }
+        } catch (e) {
+          job.errors++;
+          job.results.push({ page_id: pid, error: e.message });
+          console.error('[fix-orphans] Page ' + pid + ' error:', e.message);
+        }
+        job.done++;
+      }
+      job.running = false;
+      job.current = '';
+      job.finished_at = new Date().toISOString();
+      console.log(`[fix-orphans] Done for project ${projectId}: ${job.linked} linked, ${job.no_links} no-links, ${job.errors} errors of ${job.total}`);
+    })();
+    res.json({ ok: true, started: true, total: job.total });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/onpage-audit/fix-orphans/status', (req, res) => {
+  const job = orphanLinkJobs[req.params.projectId];
+  if (!job) return res.json({ running: false, total: 0, done: 0 });
+  res.json({ running: job.running, total: job.total, done: job.done, linked: job.linked, no_links: job.no_links, errors: job.errors, current: job.current, results: job.results.slice(-20) });
 });
 
 // Get change history for a project

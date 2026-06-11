@@ -13116,28 +13116,28 @@
           });
         }));
 
-        // Phase 4 (optional): auto-add inbound internal links for orphan pages
-        let linked = 0, linkErrors = 0;
+        // Phase 4 (optional): auto-add inbound internal links for orphan pages — SERVER-SIDE background job
         const orphans = pages.filter(p => (p.inboundLinks || 0) === 0);
-        if (orphans.length > 0 && confirm('Metas done (' + applied + ' fixed). Also auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nAI picks 3-6 relevant pages per orphan and inserts a natural link into their content. All changes are logged for rollback.')) {
-          setFixAllState({ phase: 'links', current: 0, total: orphans.length, currentTitle: '', suggestions: [], applied, errors });
-          for (let i = 0; i < orphans.length; i++) {
-            const op = orphans[i];
-            setFixAllState(prev => ({ ...prev, current: i + 1, currentTitle: op.title }));
+        if (orphans.length > 0 && confirm('Metas done (' + applied + ' fixed). Also auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nThis runs on the server in the background (~1 min per page, so ' + orphans.length + ' pages ≈ ' + Math.ceil(orphans.length / 60 * 60) + ' min). You can navigate away — progress keeps going. AI picks 3-6 relevant pages per orphan and inserts a natural link, logged for rollback.')) {
+          await api('/projects/' + project.id + '/onpage-audit/fix-orphans/run', { method: 'POST', body: { page_ids: orphans.map(o => o.id) } });
+          setFixAllState({ phase: 'links', current: 0, total: orphans.length, currentTitle: 'Running on server…', suggestions: [], applied, errors });
+          // Poll until done
+          const poll = setInterval(async () => {
             try {
-              const r = await api(`/projects/${project.id}/onpage-audit/add-inbound-links`, { method: 'POST', body: { page_id: op.id } });
-              if (r.success && r.links_added && r.links_added.length > 0) {
-                linked++;
-                const added = r.links_added.length;
-                setPages(prev => prev.map(p => p.id === op.id ? Object.assign({}, p, { inboundLinks: (p.inboundLinks || 0) + added }) : p));
-              } else {
-                linkErrors++;
+              const st = await api('/projects/' + project.id + '/onpage-audit/fix-orphans/status');
+              if (!st) return;
+              setFixAllState(prev => prev && prev.phase === 'links' ? Object.assign({}, prev, { current: st.done, total: st.total, currentTitle: st.running ? ('Linked ' + st.linked + ' · no-links ' + st.no_links + ' · errors ' + st.errors) : '' }) : prev);
+              if (!st.running) {
+                clearInterval(poll);
+                setFixAllState({ phase: 'done', applied, errors, linked: st.linked, linkErrors: st.errors + st.no_links, current: st.done, total: st.total });
+                loadHistory();
               }
-            } catch (e) { linkErrors++; console.error('Fix All orphan link error:', e); }
-          }
+            } catch (e) {}
+          }, 5000);
+          return;
         }
 
-        setFixAllState(prev => ({ ...prev, phase: 'done', applied, errors, linked, linkErrors }));
+        setFixAllState(prev => ({ ...prev, phase: 'done', applied, errors }));
         loadHistory();
       };
 
