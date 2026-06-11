@@ -4902,12 +4902,15 @@ app.get('/api/drive/folders', async (req, res) => {
   try {
     const accessToken = await getDriveAccessToken(req.auth.userId);
     if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+    const search = (req.query.search || '').trim();
     const parent = req.query.parent || 'top';
     // Virtual top level: My Drive + Shared with me
-    if (parent === 'top') return res.json({ folders: [{ id: 'root', name: 'My Drive', virtual: true }, { id: 'shared', name: 'Shared with me', virtual: true }] });
-    const q = parent === 'shared'
-      ? encodeURIComponent(`sharedWithMe and mimeType='application/vnd.google-apps.folder' and trashed=false`)
-      : encodeURIComponent(`'${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+    if (!search && parent === 'top') return res.json({ folders: [{ id: 'root', name: 'My Drive', virtual: true }, { id: 'shared', name: 'Shared with me', virtual: true }] });
+    const q = search
+      ? encodeURIComponent(`name contains '${search.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`)
+      : parent === 'shared'
+        ? encodeURIComponent(`sharedWithMe and mimeType='application/vnd.google-apps.folder' and trashed=false`)
+        : encodeURIComponent(`'${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
     const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&orderBy=name&pageSize=200&includeItemsFromAllDrives=true&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });

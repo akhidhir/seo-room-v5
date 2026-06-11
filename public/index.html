@@ -17346,14 +17346,26 @@
       // ── Drive folder picker ──
       var [drivePicker, setDrivePicker] = React.useState(null);
       var openDrivePicker = async function(parentId, crumbs) {
-        var p = parentId || 'root';
-        var c = crumbs || [{ id: 'root', name: 'My Drive' }];
-        setDrivePicker({ parent: p, crumbs: c, folders: [], loading: true, newName: '' });
+        var p = parentId || 'top';
+        var c = crumbs || [{ id: 'top', name: 'Drive' }];
+        setDrivePicker(function(prev) { return { parent: p, crumbs: c, folders: [], loading: true, newName: '', search: '', searchMode: false }; });
         try {
           var r = await api('/drive/folders?parent=' + encodeURIComponent(p));
           if (r.error) { alert('Drive browse failed: ' + r.error); setDrivePicker(null); return; }
-          setDrivePicker({ parent: p, crumbs: c, folders: r.folders || [], loading: false, newName: '' });
+          setDrivePicker({ parent: p, crumbs: c, folders: r.folders || [], loading: false, newName: '', search: '', searchMode: false });
         } catch(e) { alert('Drive browse failed: ' + (e.message || e)); setDrivePicker(null); }
+      };
+      var searchDrivePicker = async function(term) {
+        if (!term || !term.trim()) return;
+        setDrivePicker(function(prev) { return Object.assign({}, prev, { loading: true, searchMode: true }); });
+        try {
+          var r = await api('/drive/folders?search=' + encodeURIComponent(term.trim()));
+          if (r.error) { alert('Drive search failed: ' + r.error); return; }
+          setDrivePicker(function(prev) { return Object.assign({}, prev, {
+            loading: false, searchMode: true, folders: r.folders || [],
+            crumbs: [{ id: 'top', name: 'Drive' }, { id: 'top', name: 'Search: "' + term.trim() + '"' }]
+          }); });
+        } catch(e) { alert('Drive search failed: ' + (e.message || e)); }
       };
       var createDriveFolder = async function() {
         if (!drivePicker || !(drivePicker.newName || '').trim()) return;
@@ -17367,16 +17379,14 @@
       var handlePushToDrive = async function(folderId) {
         if (typeof folderId !== 'string') folderId = null;
         if (pushingToDrive) return;
+        // No folder chosen yet → always open the picker so the user decides where it goes
+        if (!folderId) { openDrivePicker(); return; }
         // Save first
         await handleSaveEdit();
         setPushingToDrive(true);
         try {
-          var data = await api(apiPrefix + '/site-pages/' + page.id + '/push-to-drive', { method: 'POST', body: folderId ? { folder_id: folderId } : {} });
-          if (data && data.needs_folder) {
-            setPushingToDrive(false);
-            openDrivePicker();
-            return;
-          }
+          var data = await api(apiPrefix + '/site-pages/' + page.id + '/push-to-drive', { method: 'POST', body: { folder_id: folderId } });
+          if (data && data.error) { alert('Push to Drive failed: ' + data.error); setPushingToDrive(false); return; }
           setReviewStatus(data.review_status || 'internal_review');
           if (data.drive_doc_id) page.drive_doc_id = data.drive_doc_id;
           alert('Pushed to Google Drive' + (data.doc_url ? '. Doc: ' + data.doc_url : ''));
@@ -18204,28 +18214,48 @@
                 );
               })
             ),
+            // Search
+            React.createElement('div', { style: { padding: '10px 18px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8 } },
+              React.createElement('input', {
+                value: drivePicker.search || '',
+                onChange: function(e) { setDrivePicker(Object.assign({}, drivePicker, { search: e.target.value })); },
+                onKeyDown: function(e) { if (e.key === 'Enter') searchDrivePicker(drivePicker.search); },
+                placeholder: 'Search all of Drive for a folder…',
+                style: { flex: 1, padding: '8px 12px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }
+              }),
+              React.createElement('button', {
+                onClick: function() { searchDrivePicker(drivePicker.search); }, disabled: !(drivePicker.search || '').trim(),
+                style: { padding: '8px 14px', background: (drivePicker.search || '').trim() ? '#3b82f6' : 'var(--bg3)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }
+              }, React.createElement('i', { className: 'fa-solid fa-magnifying-glass' }))
+            ),
             // Folder list
             React.createElement('div', { style: { flex: 1, overflowY: 'auto', minHeight: 180, maxHeight: 320, padding: '6px 0' } },
               drivePicker.loading
                 ? React.createElement('div', { style: { padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 } }, React.createElement('i', { className: 'fa-solid fa-spinner fa-spin', style: { marginRight: 8 } }), 'Loading folders…')
                 : drivePicker.folders.length === 0
-                  ? React.createElement('div', { style: { padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 } }, 'No subfolders here')
+                  ? React.createElement('div', { style: { padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 } }, drivePicker.searchMode ? 'No folders match that search' : 'No subfolders here')
                   : drivePicker.folders.map(function(f) {
+                      var isVirtual = f.id === 'root' || f.id === 'shared';
                       return React.createElement('div', {
                         key: f.id,
-                        onClick: function() { openDrivePicker(f.id, drivePicker.crumbs.concat([f])); },
+                        onClick: function() { openDrivePicker(f.id, (drivePicker.searchMode ? [{ id: 'top', name: 'Drive' }] : drivePicker.crumbs).concat([f])); },
                         style: { padding: '9px 18px', cursor: 'pointer', fontSize: 14, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 10 },
                         onMouseEnter: function(e) { e.currentTarget.style.background = 'var(--bg2)'; },
                         onMouseLeave: function(e) { e.currentTarget.style.background = 'transparent'; }
                       },
-                        React.createElement('i', { className: 'fa-solid fa-folder', style: { color: '#f59e0b' } }),
+                        React.createElement('i', { className: isVirtual ? 'fa-solid fa-hard-drive' : 'fa-solid fa-folder', style: { color: isVirtual ? '#3b82f6' : '#f59e0b' } }),
                         f.name,
-                        React.createElement('i', { className: 'fa-solid fa-chevron-right', style: { marginLeft: 'auto', color: 'var(--text3)', fontSize: 11 } })
+                        !isVirtual && React.createElement('button', {
+                          onClick: function(e) { e.stopPropagation(); var fid = f.id; setDrivePicker(null); handlePushToDrive(fid); },
+                          title: 'Save the doc in this folder',
+                          style: { marginLeft: 'auto', padding: '4px 12px', background: '#4285f4', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }
+                        }, 'Choose'),
+                        React.createElement('i', { className: 'fa-solid fa-chevron-right', style: { marginLeft: isVirtual ? 'auto' : 8, color: 'var(--text3)', fontSize: 11 } })
                       );
                     })
             ),
-            // New folder
-            React.createElement('div', { style: { padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 } },
+            // New folder (only inside a real folder)
+            drivePicker.parent !== 'top' && drivePicker.parent !== 'shared' && !drivePicker.searchMode && React.createElement('div', { style: { padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8 } },
               React.createElement('input', {
                 value: drivePicker.newName || '',
                 onChange: function(e) { setDrivePicker(Object.assign({}, drivePicker, { newName: e.target.value })); },
@@ -18241,7 +18271,7 @@
             // Footer
             React.createElement('div', { style: { padding: '12px 18px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
               React.createElement('button', { onClick: function() { setDrivePicker(null); }, style: { padding: '8px 14px', background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', fontSize: 13 } }, 'Cancel'),
-              React.createElement('button', {
+              (drivePicker.parent !== 'top' && drivePicker.parent !== 'shared' && !drivePicker.searchMode) && React.createElement('button', {
                 onClick: function() { var pid2 = drivePicker.parent; setDrivePicker(null); handlePushToDrive(pid2); },
                 style: { padding: '8px 18px', background: '#4285f4', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 700 }
               }, React.createElement('i', { className: 'fa-solid fa-check', style: { marginRight: 6 } }), 'Save here: ' + (drivePicker.crumbs[drivePicker.crumbs.length - 1] || {}).name)
