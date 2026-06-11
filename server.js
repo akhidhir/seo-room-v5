@@ -15773,32 +15773,13 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
 
     // 2. Fetch all published pages from WP REST API (with auth if available)
     const wpAuth = getWpAuthHeaders(project);
-    const wpFetchOpts = { signal: AbortSignal.timeout(30000), ...(wpAuth ? { headers: wpAuth } : {}) };
     let allPages = [];
-    let page = 1;
-    while (true) {
-      try {
-        const resp = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=50&page=${page}&status=publish`, wpFetchOpts);
-        if (!resp.ok) break;
-        const pages = await resp.json();
-        if (!Array.isArray(pages) || pages.length === 0) break;
-        allPages = allPages.concat(pages);
-        if (pages.length < 50) break;
-        page++;
-      } catch { break; }
-    }
-    // Also fetch posts
-    page = 1;
-    while (true) {
-      try {
-        const resp = await fetch(`${wpBase}/wp-json/wp/v2/posts?per_page=50&page=${page}&status=publish`, wpFetchOpts);
-        if (!resp.ok) break;
-        const posts = await resp.json();
-        if (!Array.isArray(posts) || posts.length === 0) break;
-        allPages = allPages.concat(posts);
-        if (posts.length < 50) break;
-        page++;
-      } catch { break; }
+    try {
+      allPages = await fetchAllWpItems(wpBase, wpAuth, 'pages');
+      allPages = allPages.concat(await fetchAllWpItems(wpBase, wpAuth, 'posts'));
+    } catch (crawlErr) {
+      console.error('[onpage-audit] Crawl aborted:', crawlErr.message);
+      return res.status(502).json({ error: 'WordPress crawl failed mid-way: ' + crawlErr.message + '. No partial audit was saved — run the audit again.' });
     }
 
     console.log(`[onpage-audit] Fetched ${allPages.length} pages/posts`);
@@ -17919,23 +17900,11 @@ async function runAddInboundLinks(projectId, page_id, opts = {}) {
     const targetUrl = targetPage.link || '';
     const targetTitle = targetPage.title?.rendered || targetPage.title?.raw || '';
 
-    // Fetch all other pages with content
+    // Fetch all other pages with content (reliable, retrying crawl)
     const otherPages = [];
     for (const type of ['pages', 'posts']) {
-      let pg = 1;
-      while (true) {
-        try {
-          const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&context=edit`, {
-            headers: authHeaders, signal: AbortSignal.timeout(15000)
-          });
-          if (!r.ok) break;
-          const items = await r.json();
-          if (!Array.isArray(items) || items.length === 0) break;
-          otherPages.push(...items.filter(p => p.id !== page_id).map(p => ({ ...p, _type: type })));
-          if (items.length < 50) break;
-          pg++;
-        } catch { break; }
-      }
+      const items = await fetchAllWpItems(wpUrl, authHeaders, type, '&context=edit');
+      otherPages.push(...items.filter(p => p.id !== page_id).map(p => ({ ...p, _type: type })));
     }
 
     if (otherPages.length === 0) return { success: false, message: 'No other pages found', links_added: [] };
@@ -18149,6 +18118,46 @@ function acquireHeavyLock(projectId, type) {
   return null;
 }
 function releaseHeavyLock(projectId) { delete heavyJobLocks[String(projectId)]; }
+
+// Reliable WP pagination: retries each page 3x with backoff, verifies against X-WP-TotalPages,
+// and THROWS on persistent failure instead of silently returning a partial site
+// (partial crawls made audit counts swing between runs: 284 → 150 → 188 → 100 pages).
+async function fetchAllWpItems(wpBase, headers, type, extraQuery = '') {
+  const items = [];
+  let pageNum = 1;
+  let totalPages = null;
+  while (true) {
+    let resp = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=50&page=${pageNum}&status=publish${extraQuery}`, {
+          ...(headers ? { headers } : {}),
+          signal: AbortSignal.timeout(attempt === 0 ? 30000 : 60000)
+        });
+        if (resp.ok || resp.status === 400) break; // 400 = requested past the last page
+        resp = null;
+      } catch (e) { resp = null; }
+      if (attempt < 2) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+    }
+    if (!resp) throw new Error(`WordPress crawl failed on ${type} page ${pageNum} after 3 attempts`);
+    if (resp.status === 400) break;
+    if (totalPages === null) {
+      const tp = parseInt(resp.headers.get('x-wp-totalpages') || '0', 10);
+      if (tp) totalPages = tp;
+    }
+    let batch;
+    try { batch = await resp.json(); } catch (e) { throw new Error(`WordPress returned invalid JSON for ${type} page ${pageNum}`); }
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    items.push(...batch);
+    if (batch.length < 50) break;
+    pageNum++;
+    if (totalPages && pageNum > totalPages) break;
+  }
+  if (totalPages && items.length < (totalPages - 1) * 50) {
+    throw new Error(`WordPress crawl incomplete for ${type}: got ${items.length} items but server reports ${totalPages} pages`);
+  }
+  return items;
+}
 function heavyLockResponse(res, locked) {
   return res.status(409).json({ error: 'Another heavy job ("' + locked.type + '") is already running on this project (started ' + locked.started_at + '). Running both would overload the WordPress server — wait for it to finish.', locked: true, job_type: locked.type });
 }
@@ -18228,18 +18237,8 @@ Return ONLY JSON: {"pages":[{"id":123,"focus_keyword":"...","meta_title":"...","
   job.phase = 'Checking keyword in content';
   const allWp = [];
   for (const type of ['pages', 'posts']) {
-    let pg = 1;
-    while (true) {
-      try {
-        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(20000) });
-        if (!r.ok) break;
-        const items = await r.json();
-        if (!Array.isArray(items) || items.length === 0) break;
-        allWp.push(...items.map(x => ({ ...x, _type: type })));
-        if (items.length < 50) break;
-        pg++;
-      } catch { break; }
-    }
+    const items = await fetchAllWpItems(wpUrl, authHeaders, type, '&context=edit');
+    allWp.push(...items.map(x => ({ ...x, _type: type })));
   }
   const missingKwContent = [];
   for (const p of contentPages) {
@@ -18347,22 +18346,12 @@ async function runBulkOrphanLinks(projectId, pageIds, job) {
   if (!wpUrl || !authHeaders) throw new Error('WordPress credentials not configured');
   const isElementor = project.is_elementor_site;
 
-  // 1. Fetch ALL pages + posts once
+  // 1. Fetch ALL pages + posts once (reliable, retrying crawl)
   job.current = 'Fetching site pages…';
   const allWp = [];
   for (const type of ['pages', 'posts']) {
-    let pg = 1;
-    while (true) {
-      try {
-        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${pg}&status=publish&context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(20000) });
-        if (!r.ok) break;
-        const items = await r.json();
-        if (!Array.isArray(items) || items.length === 0) break;
-        allWp.push(...items.map(p => ({ ...p, _type: type })));
-        if (items.length < 50) break;
-        pg++;
-      } catch { break; }
-    }
+    const items = await fetchAllWpItems(wpUrl, authHeaders, type, '&context=edit');
+    allWp.push(...items.map(p => ({ ...p, _type: type })));
   }
   if (allWp.length === 0) throw new Error('No pages fetched from WordPress');
   // Mutable content cache so sequential writes never clobber each other
