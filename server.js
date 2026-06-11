@@ -27834,13 +27834,25 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
     // Fetch linked reference docs + comments (always latest from Drive)
     let linkedDocsText = '';
     let allDocComments = [];
+    let driveToken = null;
+    try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) {}
+
+    // Page's OWN Drive doc (created by Push to Drive) — this is where the client leaves comments
+    if (driveToken && page.drive_doc_id) {
+      try {
+        const pageComments = await driveListComments(driveToken, page.drive_doc_id);
+        if (pageComments && pageComments.length) {
+          allDocComments.push(...pageComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText })));
+          console.log('[light-optimise] Found ' + pageComments.length + ' comment(s) on page Drive doc');
+        }
+      } catch(e) { console.warn('[light-optimise] page doc comments error:', e.message); }
+    }
+
     if (briefBuildId) {
       try {
         const bldDocs = (await pool.query('SELECT linked_docs FROM website_builds WHERE id=$1', [briefBuildId])).rows[0];
         const docs = Array.isArray(bldDocs?.linked_docs) ? bldDocs.linked_docs : [];
         if (docs.length > 0) {
-          let driveToken = null;
-          try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) {}
           const freshDocs = [];
           for (const d of docs) {
             let docContent = d.content || '';
@@ -28104,7 +28116,7 @@ CRITICAL RULES:
     // Client feedback accountability — always report what was found and addressed
     const clientFbAddressed = finalSummary.filter(s => /^client feedback/i.test(String(s))).length;
     if (allDocComments.length === 0) {
-      finalSummary.unshift('No client comments found on linked Drive docs');
+      finalSummary.unshift(page.drive_doc_id ? 'No client comments found on Drive (page doc or linked docs)' : 'Page not pushed to Drive yet — no client comments to read');
     } else {
       finalSummary.unshift(allDocComments.length + ' client comment(s) read from Drive — ' + clientFbAddressed + ' addressed (see "Client feedback" items below)');
       if (clientFbAddressed === 0) finalSummary.splice(1, 0, 'WARNING: AI did not report addressing any client comments — review the comments manually');
