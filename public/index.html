@@ -13141,6 +13141,37 @@
         loadHistory();
       };
 
+      // ---- Fix Orphans directly (skip metas) — server-side background job ----
+      const pollOrphanJob = () => {
+        setFixAllState({ phase: 'links', current: 0, total: 0, currentTitle: 'Running on server…', suggestions: [], applied: 0, errors: 0 });
+        const poll = setInterval(async () => {
+          try {
+            const st = await api('/projects/' + project.id + '/onpage-audit/fix-orphans/status');
+            if (!st) return;
+            setFixAllState(prev => prev && prev.phase === 'links' ? Object.assign({}, prev, { current: st.done, total: st.total, currentTitle: st.running ? ('Linked ' + st.linked + ' · no-links ' + st.no_links + ' · errors ' + st.errors) : '' }) : prev);
+            if (!st.running) {
+              clearInterval(poll);
+              setFixAllState({ phase: 'done', applied: 0, errors: st.errors, linked: st.linked, linkErrors: st.errors + st.no_links, current: st.done, total: st.total });
+              runAudit(true); // re-crawl so inbound counts + scores reflect the new links
+            }
+          } catch (e) {}
+        }, 5000);
+      };
+      const handleFixOrphans = async () => {
+        const orphans = pages.filter(p => (p.inboundLinks || 0) === 0);
+        if (orphans.length === 0) return;
+        if (!confirm('Auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nRuns on the server in parallel (≈ ' + Math.max(2, Math.ceil(orphans.length / 8)) + ' min). You can navigate away — it keeps going. AI picks 3-6 relevant pages per orphan and inserts a natural link, logged for rollback.')) return;
+        await api('/projects/' + project.id + '/onpage-audit/fix-orphans/run', { method: 'POST', body: { page_ids: orphans.map(o => o.id) } });
+        pollOrphanJob();
+      };
+      // Resume progress display if an orphan job is already running (e.g. after navigating away)
+      React.useEffect(() => {
+        if (!project?.id) return;
+        api('/projects/' + project.id + '/onpage-audit/fix-orphans/status')
+          .then(st => { if (st && st.running) pollOrphanJob(); })
+          .catch(() => {});
+      }, [project?.id]);
+
       // ---- Suggest Keywords Only: for pages missing focus keyword ----
       const handleSuggestKeywords = async () => {
         const noKw = pages.filter(p => !p.focusKeyword);
@@ -13415,6 +13446,11 @@
               {selected.size > 0 && (
                 <button className="btn btn-primary" onClick={handleFixBulk} style={{ fontSize: 12, padding: '6px 12px' }}>
                   <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix {selected.size} Selected Page{selected.size !== 1 ? 's' : ''}
+                </button>
+              )}
+              {pages.filter(p => (p.inboundLinks || 0) === 0).length > 0 && !fixAllState && (
+                <button className="btn btn-primary" onClick={handleFixOrphans} style={{ fontSize: 12, padding: '6px 12px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.4)' }}>
+                  <i className="fas fa-link" style={{ marginRight: 4 }} />Fix Orphans ({pages.filter(p => (p.inboundLinks || 0) === 0).length})
                 </button>
               )}
               <button className="btn btn-primary" onClick={() => runAudit()} disabled={loading} style={{ fontSize: 13 }}>
