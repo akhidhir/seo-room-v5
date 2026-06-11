@@ -880,6 +880,18 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS ai_detection_result JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS brief_gaps JSONB DEFAULT NULL`).catch(() => {});
 
+    // Handled Drive comments — tracks which client comments were already evaluated per page
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS handled_doc_comments (
+        page_id INTEGER NOT NULL,
+        comment_id TEXT NOT NULL,
+        comment_author TEXT,
+        comment_excerpt TEXT,
+        handled_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (page_id, comment_id)
+      )
+    `).catch(() => {});
+
     // Website builds — standalone new website projects (not tied to existing projects)
     await client.query(`
       CREATE TABLE IF NOT EXISTS website_builds (
@@ -4936,6 +4948,47 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/push-to-drive', '/api/bui
   }
 });
 
+// Feedback status — how many NEW (unhandled) client comments exist for this page
+app.get(['/api/projects/:projectId/site-pages/:pageId/feedback-status', '/api/builds/:buildId/site-pages/:pageId/feedback-status'], async (req, res) => {
+  try {
+    const { projectId, buildId, pageId } = req.params;
+    const page = (await pool.query(
+      projectId ? 'SELECT * FROM site_pages WHERE id=$1 AND project_id=$2' : 'SELECT * FROM site_pages WHERE id=$1 AND build_id=$2',
+      [pageId, projectId || buildId]
+    )).rows[0];
+    if (!page) return res.status(404).json({ error: 'Page not found' });
+    let token = null;
+    try { token = await getDriveAccessToken(req.auth.userId); } catch(e) {}
+    if (!token) return res.json({ checked: false, new_count: 0, reason: 'Drive not connected' });
+    const all = [];
+    if (page.drive_doc_id) {
+      try { all.push(...await driveListComments(token, page.drive_doc_id)); } catch(e) {}
+    }
+    const bid = buildId || page.build_id;
+    if (bid) {
+      try {
+        const bld = (await pool.query('SELECT linked_docs FROM website_builds WHERE id=$1', [bid])).rows[0];
+        for (const d of (Array.isArray(bld?.linked_docs) ? bld.linked_docs : [])) {
+          const did = d.drive_id || d.doc_id;
+          if (did) { try { all.push(...await driveListComments(token, did)); } catch(e) {} }
+        }
+      } catch(e) {}
+    }
+    const hr = await pool.query('SELECT comment_id FROM handled_doc_comments WHERE page_id=$1', [pageId]);
+    const handled = new Set(hr.rows.map(r => r.comment_id));
+    const fresh = all.filter(c => !handled.has(c.id));
+    res.json({
+      checked: true,
+      total: all.length,
+      handled: all.length - fresh.length,
+      new_count: fresh.length,
+      latest: fresh.slice(0, 5).map(c => ({ author: c.author, comment: (c.content || '').substring(0, 100) }))
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Read feedback from a Drive Doc (comments + content changes)
 app.get(['/api/projects/:projectId/site-pages/:pageId/drive-feedback', '/api/builds/:buildId/site-pages/:pageId/drive-feedback'], async (req, res) => {
   try {
@@ -4994,6 +5047,14 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
           ]);
         }
       } catch (e) { console.warn('[optimise] Drive read skipped:', e.message); }
+
+      // Filter out comments already handled in previous runs for this page
+      try {
+        const hr0 = await pool.query('SELECT comment_id FROM handled_doc_comments WHERE page_id=$1', [pageId]);
+        const handledIds0 = new Set(hr0.rows.map(r => r.comment_id));
+        var pageHandledComments = comments.filter(c => c.id && handledIds0.has(c.id));
+        comments = comments.filter(c => !(c.id && handledIds0.has(c.id)));
+      } catch(e) { var pageHandledComments = []; }
 
       if (comments.length) {
         feedbackContext += '\n\nFEEDBACK COMMENTS (from Google Drive):\n';
@@ -5069,7 +5130,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
               freshDocs.push(entry);
               linkedDocTitles.push((d.title || d.label || 'Reference Doc') + ' (' + (docContent || '').length + ' chars, ' + docComments.length + ' comments)');
             }
-            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
+            if (docComments.length) allDocComments.push(...docComments.map(c => ({ id: c.id, author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
           }
           if (freshDocs.length > 0) {
             linkedDocsContext = '\n\nLINKED REFERENCE DOCUMENTS (MUST follow these guidelines):\n' +
@@ -5100,6 +5161,15 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
       const bld = (await pool.query('SELECT business_name, name, industry, location, nw_notes FROM website_builds WHERE id=$1', [buildId])).rows[0];
       if (bld && !businessName) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; additionalNotes = bld.nw_notes || ''; }
     }
+
+    // Split linked-doc comments: NEW vs previously handled for this page
+    let previouslyHandled = (typeof pageHandledComments !== 'undefined' && pageHandledComments) ? pageHandledComments : [];
+    try {
+      const hr = await pool.query('SELECT comment_id FROM handled_doc_comments WHERE page_id=$1', [pageId]);
+      const handledIds = new Set(hr.rows.map(r => r.comment_id));
+      previouslyHandled = previouslyHandled.concat(allDocComments.filter(c => c.id && handledIds.has(c.id)));
+      allDocComments = allDocComments.filter(c => !(c.id && handledIds.has(c.id)));
+    } catch(e) { console.warn('[optimise] handled comments lookup error:', e.message); }
 
     const roundNum = (page.optimise_round || 0) + 1;
     const reviewType = page.review_status === 'client_review' ? 'CLIENT' : 'INTERNAL TEAM';
@@ -5182,15 +5252,27 @@ Return ONLY valid JSON, no markdown wrapping.`
     const totalComments = comments.length + allDocComments.length;
     const clientFbAddressed = changesSummary.filter(s => /^client feedback/i.test(String(s))).length;
     if (totalComments === 0) {
-      changesSummary.unshift('No client comments found on Drive (page doc or linked docs)');
+      if (previouslyHandled.length > 0) changesSummary.unshift('No NEW client comments — ' + previouslyHandled.length + ' older comment(s) already handled in previous runs');
+      else changesSummary.unshift('No client comments found on Drive (page doc or linked docs)');
     } else {
-      changesSummary.unshift(totalComments + ' client comment(s) read from Drive — ' + clientFbAddressed + ' addressed (see "Client feedback" items below)');
+      changesSummary.unshift(totalComments + ' NEW client comment(s) read from Drive — ' + clientFbAddressed + ' addressed' + (previouslyHandled.length > 0 ? ' (+' + previouslyHandled.length + ' older already handled)' : ''));
       if (clientFbAddressed === 0) changesSummary.splice(1, 0, 'WARNING: AI did not report addressing any client comments — review the comments manually');
     }
+
+    // Mark the new comments as handled for this page
+    try {
+      for (const c of [...comments, ...allDocComments]) {
+        if (c.id) await pool.query(
+          'INSERT INTO handled_doc_comments (page_id, comment_id, comment_author, comment_excerpt) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+          [pageId, c.id, c.author || '', String(c.content || '').substring(0, 200)]
+        );
+      }
+    } catch(e) { console.warn('[optimise] mark handled error:', e.message); }
     const beforePlain = (page.draft_content || '').replace(/<[^>]+>/g, ' ');
     const inputsReport = {
       client_comments: {
         found: totalComments,
+        previously_handled: previouslyHandled.length,
         source: hasDrive ? 'page Drive doc + linked docs' : 'linked docs only (page not pushed to Drive)',
         items: [
           ...comments.map(c => ({ author: c.author, comment: c.content, resolved: !!c.resolved })),
@@ -27863,7 +27945,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
       try {
         const pageComments = await driveListComments(driveToken, page.drive_doc_id);
         if (pageComments && pageComments.length) {
-          allDocComments.push(...pageComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
+          allDocComments.push(...pageComments.map(c => ({ id: c.id, author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
           console.log('[light-optimise] Found ' + pageComments.length + ' comment(s) on page Drive doc');
         }
       } catch(e) {
@@ -27899,7 +27981,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
             }
             if (docContent || docComments.length) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments });
             if (docContent || docComments.length) linkedDocTitles.push((d.title || d.label || 'Reference Doc') + ' (' + (docContent || '').length + ' chars, ' + docComments.length + ' comments)');
-            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
+            if (docComments.length) allDocComments.push(...docComments.map(c => ({ id: c.id, author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
           }
           if (freshDocs.length > 0) {
             linkedDocsText = '\nLINKED REFERENCE DOCUMENTS (follow these guidelines):\n' +
@@ -27920,6 +28002,15 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
         }
       } catch(e) { console.warn('[light-optimise] linked docs error:', e.message); }
     }
+
+    // Split comments: NEW vs previously handled for this page (avoid re-litigating old feedback)
+    let previouslyHandled = [];
+    try {
+      const hr = await pool.query('SELECT comment_id FROM handled_doc_comments WHERE page_id=$1', [pageId]);
+      const handledIds = new Set(hr.rows.map(r => r.comment_id));
+      previouslyHandled = allDocComments.filter(c => c.id && handledIds.has(c.id));
+      allDocComments = allDocComments.filter(c => !(c.id && handledIds.has(c.id)));
+    } catch(e) { console.warn('[light-optimise] handled comments lookup error:', e.message); }
 
     // Get all pages for internal linking
     const allPages = briefBuildId
@@ -27953,7 +28044,7 @@ BUSINESS: ${project.business_name || project.name} (${project.industry || 'busin
 ${briefText ? '\nBRIEF:\n' + briefText + '\n' : ''}
 ${linkedDocsText}
 ${allDocComments.length > 0 ? `
-CLIENT FEEDBACK — ${allDocComments.length} comment(s) found on linked Drive docs. MANDATORY:
+CLIENT FEEDBACK — ${allDocComments.length} NEW comment(s) found on linked Drive docs${previouslyHandled.length > 0 ? ' (' + previouslyHandled.length + ' older comments already handled in previous runs — do not re-action them)' : ''}. MANDATORY:
 For EVERY comment below, create at least one patch addressing it, AND add an entry to changes_summary that starts EXACTLY with: Client feedback: "<short quote of the comment>" → <what you changed>. If a comment cannot be actioned in this page's content, still add a changes_summary entry: Client feedback: "<quote>" → not applicable to this page because <reason>.
 ${allDocComments.map((c, i) => `${i + 1}. ${c.author}: "${c.content}"${c.quotedText ? ` [on: "${String(c.quotedText).substring(0, 120)}"]` : ''}${c.resolved ? ' [RESOLVED in Drive — verify it is reflected in the content, action it if not]' : ''}`).join('\n')}
 ` : ''}
@@ -28192,11 +28283,22 @@ CRITICAL RULES:
     // Client feedback accountability — always report what was found and addressed
     const clientFbAddressed = finalSummary.filter(s => /^client feedback/i.test(String(s))).length;
     if (allDocComments.length === 0) {
-      finalSummary.unshift(page.drive_doc_id ? 'No client comments found on Drive (page doc or linked docs)' : 'Page not pushed to Drive yet — no client comments to read');
+      if (previouslyHandled.length > 0) finalSummary.unshift('No NEW client comments — ' + previouslyHandled.length + ' older comment(s) already handled in previous runs');
+      else finalSummary.unshift(page.drive_doc_id ? 'No client comments found on Drive (page doc or linked docs)' : 'Page not pushed to Drive yet — no client comments to read');
     } else {
-      finalSummary.unshift(allDocComments.length + ' client comment(s) read from Drive — ' + clientFbAddressed + ' addressed (see "Client feedback" items below)');
+      finalSummary.unshift(allDocComments.length + ' NEW client comment(s) read from Drive — ' + clientFbAddressed + ' addressed' + (previouslyHandled.length > 0 ? ' (+' + previouslyHandled.length + ' older already handled)' : ''));
       if (clientFbAddressed === 0) finalSummary.splice(1, 0, 'WARNING: AI did not report addressing any client comments — review the comments manually');
     }
+
+    // Mark the new comments as handled for this page (they were evaluated this run)
+    try {
+      for (const c of allDocComments) {
+        if (c.id) await pool.query(
+          'INSERT INTO handled_doc_comments (page_id, comment_id, comment_author, comment_excerpt) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+          [pageId, c.id, c.author || '', String(c.content || '').substring(0, 200)]
+        );
+      }
+    } catch(e) { console.warn('[light-optimise] mark handled error:', e.message); }
 
     // INPUTS CHECKED report — server-verified evidence, not AI claims
     const finalPlain = dedupHtml.replace(/<[^>]+>/g, ' ');
@@ -28215,7 +28317,7 @@ CRITICAL RULES:
       return { author: c.author, comment: c.content, resolved: !!c.resolved, action: fa ? (fa.action || '') : 'NOT addressed by AI', patch_applied: verified };
     });
     const inputsReport = {
-      client_comments: { found: allDocComments.length, source: page.drive_doc_id ? 'page Drive doc + linked docs' : 'linked docs only (page not pushed to Drive)', items: verifiedFeedback, fetch_errors: commentErrors },
+      client_comments: { found: allDocComments.length, previously_handled: previouslyHandled.length, source: page.drive_doc_id ? 'page Drive doc + linked docs' : 'linked docs only (page not pushed to Drive)', items: verifiedFeedback, fetch_errors: commentErrors },
       linked_docs: { count: linkedDocTitles.length, titles: linkedDocTitles },
       brief: { loaded: !!briefText, chars: (briefText || '').length },
       brief_gaps: (() => { try { const bg = Array.isArray(page.brief_gaps) ? page.brief_gaps : (typeof page.brief_gaps === 'string' ? JSON.parse(page.brief_gaps) : []); return bg.length; } catch(e) { return 0; } })(),
@@ -35373,6 +35475,7 @@ async function driveListComments(accessToken, fileId) {
   }
   const data = await res.json();
   return (data.comments || []).filter(c => !c.deleted).map(c => ({
+    id: c.id || require('crypto').createHash('md5').update((c.author?.displayName || '') + '|' + (c.content || '')).digest('hex'),
     author: c.author?.displayName || 'Unknown',
     content: c.content,
     quotedText: c.quotedFileContent?.value || '',
