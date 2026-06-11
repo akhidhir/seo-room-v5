@@ -2197,7 +2197,7 @@ app.get('/api/builds/:buildId/site-pages', async (req, res) => {
           missingPages[kw.page_name].old_url = kw.old_url;
           missingPages[kw.page_name].meta_title = kw.meta_title || '';
           missingPages[kw.page_name].meta_description = kw.meta_description || '';
-          missingPages[kw.page_name].focus_keyword = kw.h1 || kw.keyword;
+          missingPages[kw.page_name].focus_keyword = kw.keyword || kw.h1;
         }
       });
       for (const [pageName, pg] of Object.entries(missingPages)) {
@@ -2240,7 +2240,7 @@ app.get('/api/builds/:buildId/site-pages', async (req, res) => {
           LIMIT 1
         ), sp.meta_description),
         focus_keyword = COALESCE(NULLIF(sp.focus_keyword, ''), (
-          SELECT COALESCE(ck.h1, ck.keyword) FROM content_keywords ck
+          SELECT COALESCE(ck.keyword, ck.h1) FROM content_keywords ck
           WHERE ck.build_id = sp.build_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
           LIMIT 1
         ), sp.focus_keyword)
@@ -2447,7 +2447,7 @@ app.post('/api/builds/:buildId/site-pages/generate', async (req, res) => {
         pageMap[key].old_url = kw.old_url;
         pageMap[key].meta_title = kw.meta_title || null;
         pageMap[key].meta_description = kw.meta_description || null;
-        pageMap[key].focus_keyword = kw.h1 || kw.keyword; // h1 stored the focus keyword from import
+        pageMap[key].focus_keyword = kw.keyword || kw.h1;
       }
     });
     const pages = [];
@@ -25940,7 +25940,7 @@ app.post('/api/projects/:projectId/site-pages/generate', async (req, res) => {
         pageMap[key].old_url = kw.old_url;
         pageMap[key].imported_meta_title = kw.meta_title || null;
         pageMap[key].imported_meta_description = kw.meta_description || null;
-        pageMap[key].imported_focus_keyword = kw.h1 || kw.keyword;
+        pageMap[key].imported_focus_keyword = kw.keyword || kw.h1;
       }
     });
     const pages = Object.values(pageMap);
@@ -26390,7 +26390,7 @@ app.get('/api/projects/:projectId/site-pages', async (req, res) => {
           missingPages[kw.page_name].old_url = kw.old_url;
           missingPages[kw.page_name].meta_title = kw.meta_title || '';
           missingPages[kw.page_name].meta_description = kw.meta_description || '';
-          missingPages[kw.page_name].focus_keyword = kw.h1 || kw.keyword;
+          missingPages[kw.page_name].focus_keyword = kw.keyword || kw.h1;
         }
       });
       for (const [pageName, pg] of Object.entries(missingPages)) {
@@ -26433,7 +26433,7 @@ app.get('/api/projects/:projectId/site-pages', async (req, res) => {
           LIMIT 1
         ), sp.meta_description),
         focus_keyword = COALESCE(NULLIF(sp.focus_keyword, ''), (
-          SELECT COALESCE(ck.h1, ck.keyword) FROM content_keywords ck
+          SELECT COALESCE(ck.keyword, ck.h1) FROM content_keywords ck
           WHERE ck.project_id = sp.project_id AND ck.page_name = sp.page_name AND ck.old_url IS NOT NULL
           LIMIT 1
         ), sp.focus_keyword)
@@ -26594,7 +26594,7 @@ This is a website redevelopment. The old page has existing rankings we MUST pres
 MANDATORY — KEEP THESE EXACTLY AS-IS (copy verbatim into your response):
 - meta_title: "${oldPage.meta_title || ''}"
 - meta_description: "${oldPage.meta_description || ''}"
-- focus_keyword: "${oldPage.h1 || oldPage.keyword || ''}"
+- focus_keyword: "${oldPage.keyword || ''}"
 
 REWRITE BODY CONTENT ONLY — use old content as reference for tone and key messaging:
 ` + relevantOld.slice(0, 3).map(k => {
@@ -26931,7 +26931,7 @@ This is a website redevelopment. The old page has existing rankings we MUST pres
 MANDATORY — KEEP THESE EXACTLY AS-IS (copy verbatim into your response):
 - meta_title: "${oldPage.meta_title || ''}"
 - meta_description: "${oldPage.meta_description || ''}"
-- focus_keyword: "${oldPage.h1 || oldPage.keyword || ''}"
+- focus_keyword: "${oldPage.keyword || ''}"
 
 REWRITE BODY CONTENT ONLY — use old content as reference for tone and key messaging:
 ` + relevantOld.slice(0, 3).map(k => {
