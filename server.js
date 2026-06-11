@@ -4979,32 +4979,53 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
       [pageId, projectId || buildId]
     )).rows[0];
     if (!page) return res.status(404).json({ error: 'Page not found' });
-    if (!page.drive_doc_id) return res.status(400).json({ error: 'Page not pushed to Drive yet' });
     if (!page.draft_content) return res.status(400).json({ error: 'No draft content to optimise' });
 
-    const accessToken = await getDriveAccessToken(req.auth.userId);
-    if (!accessToken) return res.status(401).json({ error: 'Google Drive not connected.' });
+    // Drive feedback is OPTIONAL — read if available, skip if not pushed yet
+    let accessToken = null, docText = '', comments = [], feedbackContext = '';
+    const hasDrive = !!page.drive_doc_id;
+    if (hasDrive) {
+      try {
+        accessToken = await getDriveAccessToken(req.auth.userId);
+        if (accessToken) {
+          [docText, comments] = await Promise.all([
+            driveReadDoc(accessToken, page.drive_doc_id),
+            driveListComments(accessToken, page.drive_doc_id)
+          ]);
+        }
+      } catch (e) { console.warn('[optimise] Drive read skipped:', e.message); }
 
-    // Read feedback from Drive
-    const [docText, comments] = await Promise.all([
-      driveReadDoc(accessToken, page.drive_doc_id),
-      driveListComments(accessToken, page.drive_doc_id)
-    ]);
-
-    if (!comments.length && docText === page.draft_content?.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) {
-      return res.status(400).json({ error: 'No feedback found. Add comments or edit the doc in Google Drive first.' });
+      if (comments.length) {
+        feedbackContext += '\n\nFEEDBACK COMMENTS (from Google Drive):\n';
+        comments.forEach((c, i) => {
+          feedbackContext += `${i + 1}. ${c.author}: "${c.content}"`;
+          if (c.quotedText) feedbackContext += ` [regarding: "${c.quotedText}"]`;
+          feedbackContext += '\n';
+          c.replies.forEach(r => { feedbackContext += `   → ${r.author}: "${r.content}"\n`; });
+        });
+      }
     }
 
-    // Build feedback context for AI
-    let feedbackContext = '';
-    if (comments.length) {
-      feedbackContext += '\n\nFEEDBACK COMMENTS (from Google Drive):\n';
-      comments.forEach((c, i) => {
-        feedbackContext += `${i + 1}. ${c.author}: "${c.content}"`;
-        if (c.quotedText) feedbackContext += ` [regarding: "${c.quotedText}"]`;
-        feedbackContext += '\n';
-        c.replies.forEach(r => { feedbackContext += `   → ${r.author}: "${r.content}"\n`; });
-      });
+    // Also incorporate brief check gaps from request body
+    const { tips, missing_keywords, target_keywords, content_score, stats, focus_keyword, current_meta, topic_gaps } = req.body;
+    let gapsContext = '';
+    if (tips && tips.length) {
+      gapsContext += '\n\nCONTENT SCORE ISSUES TO FIX:\n';
+      tips.filter(t => t.type === 'error' || t.type === 'warn').forEach(t => { gapsContext += '- ' + (t.msg || t.text || '') + '\n'; });
+    }
+    if (missing_keywords && missing_keywords.length) {
+      gapsContext += '\nMISSING KEYWORDS (must add each at least once):\n';
+      missing_keywords.forEach(k => { gapsContext += '- "' + (typeof k === 'object' ? k.keyword : k) + '"\n'; });
+    }
+    if (topic_gaps) {
+      if (topic_gaps.missing_topics && topic_gaps.missing_topics.length) {
+        gapsContext += '\nMISSING TOPICS (weave into content naturally):\n';
+        topic_gaps.missing_topics.forEach(t => { gapsContext += '- ' + (typeof t === 'object' ? t.text : t) + '\n'; });
+      }
+      if (topic_gaps.missing_keywords && topic_gaps.missing_keywords.length) {
+        gapsContext += '\nTOPIC KEYWORDS TO ADD:\n';
+        topic_gaps.missing_keywords.forEach(k => { gapsContext += '- "' + (typeof k === 'object' ? k.text : k) + '"\n'; });
+      }
     }
 
     // Get project/build context
@@ -5019,8 +5040,10 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
 
     const roundNum = (page.optimise_round || 0) + 1;
     const reviewType = page.review_status === 'client_review' ? 'CLIENT' : 'INTERNAL TEAM';
+    const hasFeedback = comments.length > 0 || feedbackContext;
+    const hasGaps = gapsContext.length > 0;
 
-    console.log(`[optimise] Round ${roundNum} for "${page.page_name}", ${comments.length} comments, review by: ${reviewType}`);
+    console.log(`[optimise] Round ${roundNum} for "${page.page_name}", drive:${hasDrive}, ${comments.length} comments, ${hasGaps ? 'has gaps' : 'no gaps'}, review by: ${reviewType}`);
 
     const aiResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -5029,24 +5052,23 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
         role: 'user',
         content: `You are optimising a webpage draft for ${businessName} (${industry}, ${location}).
 
-This is OPTIMISATION ROUND ${roundNum}. The ${reviewType} reviewed the draft in Google Drive and left feedback.
+This is OPTIMISATION ROUND ${roundNum}.${hasFeedback ? ` The ${reviewType} reviewed the draft and left feedback.` : ' Fixing content gaps and issues.'}
 ${additionalNotes ? '\nADDITIONAL CONTEXT FROM THE TEAM:\n' + additionalNotes + '\n' : ''}
 CURRENT DRAFT:
 ${page.draft_content}
 ${feedbackContext}
+${gapsContext}
 
 ${docText ? `\nCURRENT DOC TEXT (may have inline edits):\n${(docText || '').substring(0, 6000)}` : ''}
 
 INSTRUCTIONS:
-- Address EVERY piece of feedback from the comments above
-- If the reviewer asked to change specific wording, change it exactly as requested
-- If the reviewer suggested adding content, add it naturally
-- If the reviewer flagged issues, fix them
+${hasFeedback ? '- Address EVERY piece of feedback from the comments above\n- If the reviewer asked to change specific wording, change it exactly as requested\n- If the reviewer suggested adding content, add it naturally\n- If the reviewer flagged issues, fix them' : ''}
+${hasGaps ? '- Fix ALL content score issues listed above\n- Add ALL missing keywords naturally into existing paragraphs\n- Weave missing topics into appropriate sections' : ''}
 - Preserve the overall page structure and SEO optimization
 - Keep the same HTML format (H1, H2, H3, p tags, etc.)
 - Do NOT add new sections unless the feedback specifically requests it
 - Do NOT remove content unless the feedback specifically requests it
-- Maintain the focus keyword: ${page.focus_keyword || 'N/A'}
+- Maintain the focus keyword: ${focus_keyword || page.focus_keyword || 'N/A'}
 
 ${HUMAN_WRITING_RULES}
 
@@ -5063,10 +5085,12 @@ Return ONLY the updated HTML content, no markdown wrapping.`
       [content, wordCount, roundNum, 'internal_review', pageId]
     );
 
-    // Update the Drive doc with new content
-    await driveUpdateDoc(accessToken, page.drive_doc_id, content);
+    // Update Drive doc if available
+    if (hasDrive && accessToken) {
+      try { await driveUpdateDoc(accessToken, page.drive_doc_id, content); } catch (e) { console.warn('[optimise] Drive update skipped:', e.message); }
+    }
 
-    console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, doc updated`);
+    console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, drive:${hasDrive && accessToken ? 'updated' : 'skipped'}`);
     res.json({ ok: true, content, word_count: wordCount, round: roundNum });
   } catch (e) {
     console.error('[optimise] Error:', e.message);
