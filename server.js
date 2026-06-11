@@ -5032,6 +5032,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
     let businessName = '', industry = '', location = '', additionalNotes = '';
     let linkedDocsContext = '';
     let briefContext = '';
+    let allDocComments = [];
     if (projectId) {
       const proj = (await pool.query('SELECT business_name, name, industry, location, nw_notes FROM projects WHERE id=$1', [projectId])).rows[0];
       if (proj) { businessName = proj.business_name || proj.name; industry = proj.industry; location = proj.location; additionalNotes = proj.nw_notes || ''; }
@@ -5065,6 +5066,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
               let entry = { title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments };
               freshDocs.push(entry);
             }
+            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText })));
           }
           if (freshDocs.length > 0) {
             linkedDocsContext = '\n\nLINKED REFERENCE DOCUMENTS (MUST follow these guidelines):\n' +
@@ -5124,6 +5126,7 @@ ${docText ? `\nCURRENT DOC TEXT (may have inline edits):\n${(docText || '').subs
 
 INSTRUCTIONS:
 ${hasFeedback ? '- Address EVERY piece of feedback from the comments above\n- If the reviewer asked to change specific wording, change it exactly as requested\n- If the reviewer suggested adding content, add it naturally\n- If the reviewer flagged issues, fix them' : ''}
+${(comments.length + allDocComments.length) > 0 ? `- MANDATORY ACCOUNTABILITY: There are ${comments.length + allDocComments.length} comment(s) total (page comments + linked doc comments). For EVERY single comment, add an entry to changes_summary that starts EXACTLY with: Client feedback: "<short quote of the comment>" → <what you changed>. If a comment cannot be actioned, the entry must say: Client feedback: "<quote>" → not applicable because <reason>.` : ''}
 ${hasGaps ? '- Fix ALL content score issues listed above\n- Add ALL missing keywords naturally into existing paragraphs\n- Weave missing topics into appropriate sections' : ''}
 - Preserve the overall page structure and SEO optimization
 - Keep the same HTML format (H1, H2, H3, p tags, etc.)
@@ -5172,8 +5175,17 @@ Return ONLY valid JSON, no markdown wrapping.`
       if (linkedDocsContext) changesSummary.push('Incorporated linked reference doc feedback');
       if (!hasFeedback && !hasGaps) changesSummary.push('General content optimization (round ' + roundNum + ')');
     }
-    console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, ${changesSummary.length} changes, drive:${hasDrive && accessToken ? 'updated' : 'skipped'}`);
-    res.json({ ok: true, content, word_count: wordCount, round: roundNum, changes_summary: changesSummary });
+    // Client feedback accountability — always report what was found and addressed
+    const totalComments = comments.length + allDocComments.length;
+    const clientFbAddressed = changesSummary.filter(s => /^client feedback/i.test(String(s))).length;
+    if (totalComments === 0) {
+      changesSummary.unshift('No client comments found on Drive (page doc or linked docs)');
+    } else {
+      changesSummary.unshift(totalComments + ' client comment(s) read from Drive — ' + clientFbAddressed + ' addressed (see "Client feedback" items below)');
+      if (clientFbAddressed === 0) changesSummary.splice(1, 0, 'WARNING: AI did not report addressing any client comments — review the comments manually');
+    }
+    console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, ${changesSummary.length} changes, comments:${totalComments}/${clientFbAddressed} addressed, drive:${hasDrive && accessToken ? 'updated' : 'skipped'}`);
+    res.json({ ok: true, content, word_count: wordCount, round: roundNum, changes_summary: changesSummary, client_comments_found: totalComments });
   } catch (e) {
     console.error('[optimise] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -27821,6 +27833,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
 
     // Fetch linked reference docs + comments (always latest from Drive)
     let linkedDocsText = '';
+    let allDocComments = [];
     if (briefBuildId) {
       try {
         const bldDocs = (await pool.query('SELECT linked_docs FROM website_builds WHERE id=$1', [briefBuildId])).rows[0];
@@ -27843,6 +27856,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
               } catch(e) { /* use cached */ }
             }
             if (docContent || docComments.length) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments });
+            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText })));
           }
           if (freshDocs.length > 0) {
             linkedDocsText = '\nLINKED REFERENCE DOCUMENTS (follow these guidelines):\n' +
@@ -27895,7 +27909,11 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
 BUSINESS: ${project.business_name || project.name} (${project.industry || 'business'}) in ${project.location || 'Australia'}
 ${briefText ? '\nBRIEF:\n' + briefText + '\n' : ''}
 ${linkedDocsText}
-
+${allDocComments.length > 0 ? `
+CLIENT FEEDBACK — ${allDocComments.length} comment(s) found on linked Drive docs. MANDATORY:
+For EVERY comment below, create at least one patch addressing it, AND add an entry to changes_summary that starts EXACTLY with: Client feedback: "<short quote of the comment>" → <what you changed>. If a comment cannot be actioned in this page's content, still add a changes_summary entry: Client feedback: "<quote>" → not applicable to this page because <reason>.
+${allDocComments.map((c, i) => `${i + 1}. ${c.author}: "${c.content}"${c.quotedText ? ` [on: "${String(c.quotedText).substring(0, 120)}"]` : ''}`).join('\n')}
+` : ''}
 CURRENT STATS:
 - Content Score: ${content_score || 0}/100
 - Word count: ${currentWords} (target: 1500)
@@ -28066,6 +28084,15 @@ CRITICAL RULES:
     // Also include AI-returned summary if any
     const finalSummary = (changesSummary && changesSummary.length > 0) ? changesSummary : builtSummary;
 
+    // Client feedback accountability — always report what was found and addressed
+    const clientFbAddressed = finalSummary.filter(s => /^client feedback/i.test(String(s))).length;
+    if (allDocComments.length === 0) {
+      finalSummary.unshift('No client comments found on linked Drive docs');
+    } else {
+      finalSummary.unshift(allDocComments.length + ' client comment(s) read from Drive — ' + clientFbAddressed + ' addressed (see "Client feedback" items below)');
+      if (clientFbAddressed === 0) finalSummary.splice(1, 0, 'WARNING: AI did not report addressing any client comments — review the comments manually');
+    }
+
     console.log('[light-optimise] Done for page ' + pageId + ' — applied: ' + appliedCount + ', skipped: ' + skippedCount + ' of ' + patches.length + ' patches, changes: ' + finalSummary.length);
     res.json({
       preview: true,
@@ -28077,7 +28104,8 @@ CRITICAL RULES:
       patches_applied: appliedCount,
       patches_skipped: skippedCount,
       patches_total: patches.length,
-      changes_summary: finalSummary
+      changes_summary: finalSummary,
+      client_comments_found: allDocComments.length
     });
   } catch (err) {
     console.error('[light-optimise] Error:', err.message);
