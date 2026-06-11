@@ -4920,7 +4920,19 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/push-to-drive', '/api/bui
       const bld = (await pool.query('SELECT drive_folder_id FROM website_builds WHERE id=$1', [buildId])).rows[0];
       folderId = bld?.drive_folder_id;
     }
-    if (!folderId) return res.status(400).json({ error: 'No Drive folder created yet. Create the folder first.' });
+    // Auto-create the main folder if it doesn't exist yet: SEO Room / <Business Name>
+    if (!folderId) {
+      const owner = projectId
+        ? (await pool.query('SELECT business_name, name FROM projects WHERE id=$1', [projectId])).rows[0]
+        : (await pool.query('SELECT business_name, name FROM website_builds WHERE id=$1', [buildId])).rows[0];
+      const folderName = (owner?.business_name || owner?.name || 'SEO Room Project').trim();
+      const rootId = await driveFindOrCreateFolder(accessToken, 'SEO Room', 'root');
+      folderId = await driveFindOrCreateFolder(accessToken, folderName, rootId || 'root');
+      if (!folderId) return res.status(500).json({ error: 'Could not create Drive folder' });
+      if (projectId) await pool.query('UPDATE projects SET drive_folder_id=$1 WHERE id=$2', [folderId, projectId]);
+      else await pool.query('UPDATE website_builds SET drive_folder_id=$1 WHERE id=$2', [folderId, buildId]);
+      console.log(`[drive] Auto-created main folder "SEO Room/${folderName}" (${folderId})`);
+    }
 
     // Organise into a subfolder by page type (created on demand inside the main folder)
     const SUBFOLDER_NAMES = { home: 'Home', service: 'Service Pages', suburb: 'Suburb Pages', blog: 'Blog Posts' };
