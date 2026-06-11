@@ -17522,6 +17522,7 @@
                 ai_notes: data.ai_notes || (data.proposed && data.proposed.ai_notes) || null
               },
               changes_summary: data.changes_summary || [],
+              inputs_report: data.inputs_report || null,
               stats: {
                 current: { words: scoreData ? scoreData.stats.words : 0 },
                 proposed: { words: newHtml.replace(/<[^>]+>/g, '').trim().split(/\s+/).length, h2s: (newHtml.match(/<h2/gi) || []).length, h3s: (newHtml.match(/<h3/gi) || []).length, links: (newHtml.match(/<a[\s>]/gi) || []).length }
@@ -17675,6 +17676,7 @@
                   ai_notes: data.ai_notes || null
                 },
                 changes_summary: data.changes_summary || [],
+                inputs_report: data.inputs_report || null,
                 stats: {
                   current: { words: scoreData ? scoreData.stats.words : 0 },
                   proposed: { words: proposedWords, h1s: (html.match(/<h1/gi) || []).length, h2s: (html.match(/<h2/gi) || []).length, h3s: (html.match(/<h3/gi) || []).length, links: (html.match(/<a[\s>]/gi) || []).length }
@@ -26151,6 +26153,54 @@
               React.createElement('input', { value: metaDesc, onChange: e => setMetaDesc(e.target.value),
                 style: { width: '100%', padding: '8px 10px', background: 'var(--card)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 14 } })
             )
+          ),
+
+          // ── Inputs Checked (server-verified evidence) ──
+          preview.inputs_report && React.createElement('div', {
+            style: { padding: '10px 24px', borderBottom: '1px solid var(--border)', background: 'rgba(59,130,246,0.06)', flexShrink: 0, maxHeight: 160, overflowY: 'auto' }
+          },
+            React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 } },
+              React.createElement('i', { className: 'fa-solid fa-list-check', style: { fontSize: 12 } }),
+              'Inputs Checked (server-verified)'
+            ),
+            (() => {
+              const r = preview.inputs_report;
+              const row = (ok, label, detail) => React.createElement('div', { key: label, style: { fontSize: 12, color: 'var(--text2)', padding: '2px 0', lineHeight: 1.4 } },
+                React.createElement('span', { style: { color: ok ? '#22c55e' : '#f59e0b', marginRight: 6, fontWeight: 600 } }, ok ? '✓' : '⚠'),
+                React.createElement('strong', { style: { color: 'var(--text)' } }, label + ': '), detail
+              );
+              const rows = [];
+              // Client comments — the critical one
+              if (r.client_comments) {
+                if (r.client_comments.found === 0) {
+                  rows.push(row(false, 'Client feedback', 'No comments found (' + (r.client_comments.source || '') + ')'));
+                } else {
+                  rows.push(row(true, 'Client feedback', r.client_comments.found + ' comment(s) read from ' + (r.client_comments.source || 'Drive')));
+                  (r.client_comments.items || []).forEach((c, i) => {
+                    rows.push(React.createElement('div', { key: 'fb' + i, style: { fontSize: 12, color: 'var(--text2)', padding: '2px 0 2px 18px', lineHeight: 1.4 } },
+                      React.createElement('span', { style: { color: c.patch_applied ? '#22c55e' : '#ef4444', marginRight: 6, fontWeight: 600 } }, c.patch_applied ? '✓' : '✗'),
+                      React.createElement('span', { style: { color: 'var(--text3)' } }, (c.author || 'Client') + ': '),
+                      '"' + (c.comment || '').substring(0, 120) + '"',
+                      React.createElement('span', { style: { color: c.patch_applied ? '#22c55e' : '#ef4444', marginLeft: 6 } },
+                        c.patch_applied ? '→ patch applied: ' + (c.action || '') : '→ ' + (c.action || 'NOT addressed'))
+                    ));
+                  });
+                }
+              }
+              if (r.linked_docs) rows.push(row(r.linked_docs.count > 0, 'Linked docs', r.linked_docs.count > 0 ? r.linked_docs.titles.join('; ') : 'none'));
+              if (r.brief) rows.push(row(r.brief.loaded, 'Brief', r.brief.loaded ? 'loaded (' + r.brief.chars + ' chars)' : 'not found'));
+              rows.push(row(true, 'Brief gaps', (r.brief_gaps || 0) + ' fed to AI'));
+              rows.push(row(true, 'Score issues', (r.score_issues || 0) + ' fed to AI'));
+              if (r.missing_keywords && r.missing_keywords.length > 0) {
+                const present = r.missing_keywords.filter(k => k.now_present).length;
+                rows.push(row(present === r.missing_keywords.length, 'Missing keywords', present + '/' + r.missing_keywords.length + ' now in content — ' +
+                  r.missing_keywords.map(k => (k.now_present ? '✓' : '✗') + ' ' + k.keyword).join(', ')));
+              }
+              if (r.focus_keyword && r.focus_keyword.keyword) rows.push(row(r.focus_keyword.after >= 3 && r.focus_keyword.after <= 8, 'Focus keyword', '"' + r.focus_keyword.keyword + '" ' + r.focus_keyword.before + 'x → ' + r.focus_keyword.after + 'x (target 3-8)'));
+              if (r.words) rows.push(row(true, 'Words', r.words.before + ' → ' + r.words.after));
+              if (r.patches) rows.push(row(r.patches.skipped === 0, 'Patches', r.patches.applied + ' applied, ' + r.patches.skipped + ' skipped of ' + r.patches.returned));
+              return rows;
+            })()
           ),
 
           // ── Changes Summary (what feedback was addressed) ──

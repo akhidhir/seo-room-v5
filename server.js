@@ -27834,6 +27834,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
     // Fetch linked reference docs + comments (always latest from Drive)
     let linkedDocsText = '';
     let allDocComments = [];
+    let linkedDocTitles = [];
     let driveToken = null;
     try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) {}
 
@@ -27868,6 +27869,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
               } catch(e) { /* use cached */ }
             }
             if (docContent || docComments.length) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments });
+            if (docContent || docComments.length) linkedDocTitles.push((d.title || d.label || 'Reference Doc') + ' (' + (docContent || '').length + ' chars, ' + docComments.length + ' comments)');
             if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText })));
           }
           if (freshDocs.length > 0) {
@@ -27957,7 +27959,8 @@ Return ONLY a JSON object:
   "meta_title": "new title with focus keyword, 50-60 chars" or null,
   "meta_description": "new desc with focus keyword, 120-155 chars" or null,
   "ai_notes": "brief summary",
-  "changes_summary": ["brief description of each change and what triggered it (feedback, gap, or keyword)"]
+  "changes_summary": ["brief description of each change and what triggered it (feedback, gap, or keyword)"]${allDocComments.length > 0 ? `,
+  "feedback_actions": [{ "comment": "short quote of the client comment", "patch_find": "the exact find text of the patch that addresses it (copy it exactly)", "action": "what you changed" }] — one entry PER client comment. If not actionable, set patch_find to null and explain in action.` : ''}
 }
 
 PRIORITY ORDER — fix ALL of these:
@@ -27997,6 +28000,7 @@ CRITICAL RULES:
       metaDesc = parsed.meta_description || null;
       aiNotes = parsed.ai_notes || '';
       var changesSummary = parsed.changes_summary || [];
+      var feedbackActions = parsed.feedback_actions || [];
     } catch (e) {
       console.error('[light-optimise] Failed to parse AI patches:', e.message);
       return res.status(500).json({ error: 'AI returned invalid patch format' });
@@ -28006,6 +28010,7 @@ CRITICAL RULES:
     let optimisedHtml = originalHtml;
     let appliedCount = 0;
     let skippedCount = 0;
+    const appliedFinds = [];
     // Design constraint: a patch must not bloat its containing paragraph past 150 words
     const paragraphTooLong = (html, findText, replaceText) => {
       const idx = html.indexOf(findText);
@@ -28031,12 +28036,14 @@ CRITICAL RULES:
       if (optimisedHtml.includes(patch.find)) {
         optimisedHtml = optimisedHtml.replace(patch.find, patch.replace);
         appliedCount++;
+        appliedFinds.push(patch.find);
       } else {
         // Try case-insensitive match as fallback
         const idx = optimisedHtml.toLowerCase().indexOf(patch.find.toLowerCase());
         if (idx !== -1) {
           optimisedHtml = optimisedHtml.substring(0, idx) + patch.replace + optimisedHtml.substring(idx + patch.find.length);
           appliedCount++;
+          appliedFinds.push(patch.find);
         } else {
           skippedCount++;
           console.log('[light-optimise] Patch not found:', patch.find.substring(0, 80) + '...');
@@ -28122,6 +28129,34 @@ CRITICAL RULES:
       if (clientFbAddressed === 0) finalSummary.splice(1, 0, 'WARNING: AI did not report addressing any client comments — review the comments manually');
     }
 
+    // INPUTS CHECKED report — server-verified evidence, not AI claims
+    const finalPlain = dedupHtml.replace(/<[^>]+>/g, ' ');
+    const finalWords = finalPlain.trim().split(/\s+/).filter(Boolean).length;
+    const fkCountAfter = fkRegex ? (finalPlain.match(fkRegex) || []).length : 0;
+    const missingKwList = (missing_keywords || []).map(k => typeof k === 'object' ? k.keyword : k).filter(Boolean);
+    const verifiedFeedback = allDocComments.map((c, i) => {
+      const fa = (typeof feedbackActions !== 'undefined' ? feedbackActions : []).find(f =>
+        f && f.comment && (String(f.comment).toLowerCase().includes(String(c.content).toLowerCase().substring(0, 30)) || String(c.content).toLowerCase().includes(String(f.comment).toLowerCase().substring(0, 30)))
+      ) || (typeof feedbackActions !== 'undefined' ? feedbackActions : [])[i];
+      let verified = false;
+      if (fa && fa.patch_find) {
+        const pf = String(fa.patch_find).substring(0, 60).toLowerCase();
+        verified = appliedFinds.some(f => f.toLowerCase().includes(pf) || pf.includes(f.toLowerCase().substring(0, 60)));
+      }
+      return { author: c.author, comment: c.content, action: fa ? (fa.action || '') : 'NOT addressed by AI', patch_applied: verified };
+    });
+    const inputsReport = {
+      client_comments: { found: allDocComments.length, source: page.drive_doc_id ? 'page Drive doc + linked docs' : 'linked docs only (page not pushed to Drive)', items: verifiedFeedback },
+      linked_docs: { count: linkedDocTitles.length, titles: linkedDocTitles },
+      brief: { loaded: !!briefText, chars: (briefText || '').length },
+      brief_gaps: (() => { try { const bg = Array.isArray(page.brief_gaps) ? page.brief_gaps : (typeof page.brief_gaps === 'string' ? JSON.parse(page.brief_gaps) : []); return bg.length; } catch(e) { return 0; } })(),
+      score_issues: (issuesText || '').split('\n').filter(Boolean).length,
+      missing_keywords: missingKwList.map(k => ({ keyword: k, now_present: finalPlain.toLowerCase().includes(String(k).toLowerCase()) })),
+      focus_keyword: { keyword: fk, before: fkCount, after: fkCountAfter },
+      words: { before: currentWords, after: finalWords },
+      patches: { returned: patches.length, applied: appliedCount, skipped: skippedCount }
+    };
+
     console.log('[light-optimise] Done for page ' + pageId + ' — applied: ' + appliedCount + ', skipped: ' + skippedCount + ' of ' + patches.length + ' patches, changes: ' + finalSummary.length);
     res.json({
       preview: true,
@@ -28134,7 +28169,8 @@ CRITICAL RULES:
       patches_skipped: skippedCount,
       patches_total: patches.length,
       changes_summary: finalSummary,
-      client_comments_found: allDocComments.length
+      client_comments_found: allDocComments.length,
+      inputs_report: inputsReport
     });
   } catch (err) {
     console.error('[light-optimise] Error:', err.message);
