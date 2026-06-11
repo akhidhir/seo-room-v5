@@ -5042,26 +5042,45 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
       const bld = (await pool.query('SELECT * FROM website_builds WHERE id=$1', [bid])).rows[0];
       if (bld) {
         if (!businessName) { businessName = bld.business_name || bld.name; industry = bld.industry; location = bld.location; additionalNotes = bld.nw_notes || ''; }
-        // Linked reference docs (e.g., "SUREFLOW WEB COPY V2") — always fetch latest content
+        // Linked reference docs (e.g., "SUREFLOW WEB COPY V2") — always fetch latest content + comments
         const docs = Array.isArray(bld.linked_docs) ? bld.linked_docs : [];
         if (docs.length > 0) {
-          // Re-fetch each doc from Drive to get latest content
           let driveToken = accessToken;
           if (!driveToken) try { driveToken = await getDriveAccessToken(req.auth.userId); } catch(e) {}
           const freshDocs = [];
           for (const d of docs) {
             let docContent = d.content || '';
+            let docComments = [];
             if (driveToken && d.drive_id) {
               try {
-                const freshText = await driveReadDoc(driveToken, d.drive_id);
+                const [freshText, freshComments] = await Promise.all([
+                  driveReadDoc(driveToken, d.drive_id),
+                  driveListComments(driveToken, d.drive_id)
+                ]);
                 if (freshText && freshText.length > 0) docContent = freshText;
+                if (freshComments && freshComments.length > 0) docComments = freshComments;
               } catch(e) { /* use cached content */ }
             }
-            if (docContent) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent });
+            if (docContent || docComments.length) {
+              let entry = { title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments };
+              freshDocs.push(entry);
+            }
           }
           if (freshDocs.length > 0) {
             linkedDocsContext = '\n\nLINKED REFERENCE DOCUMENTS (MUST follow these guidelines):\n' +
-              freshDocs.map(d => `--- "${d.title}" ---\n${d.content.substring(0, 6000)}`).join('\n\n');
+              freshDocs.map(d => {
+                let out = `--- "${d.title}" ---\n${d.content.substring(0, 6000)}`;
+                if (d.comments.length > 0) {
+                  out += `\n\nCOMMENTS ON THIS DOC:\nThe client is "${businessName || 'the business owner'}". Anyone NOT from the SEO/agency team is the client — their feedback is MANDATORY.\n`;
+                  d.comments.forEach((c, i) => {
+                    out += `${i + 1}. ${c.author}: "${c.content}"`;
+                    if (c.quotedText) out += ` [regarding: "${c.quotedText}"]`;
+                    out += '\n';
+                    if (c.replies) c.replies.forEach(r => { out += `   → ${r.author}: "${r.content}"\n`; });
+                  });
+                }
+                return out;
+              }).join('\n\n');
           }
         }
         // Brief
@@ -27779,7 +27798,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
       briefText += (briefText ? '\n' : '') + 'Additional Context: ' + project.nw_notes;
     }
 
-    // Fetch linked reference docs (always latest from Drive)
+    // Fetch linked reference docs + comments (always latest from Drive)
     let linkedDocsText = '';
     if (briefBuildId) {
       try {
@@ -27791,17 +27810,34 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/light-optimise', '/api/bu
           const freshDocs = [];
           for (const d of docs) {
             let docContent = d.content || '';
+            let docComments = [];
             if (driveToken && d.drive_id) {
               try {
-                const freshText = await driveReadDoc(driveToken, d.drive_id);
+                const [freshText, freshComments] = await Promise.all([
+                  driveReadDoc(driveToken, d.drive_id),
+                  driveListComments(driveToken, d.drive_id)
+                ]);
                 if (freshText && freshText.length > 0) docContent = freshText;
+                if (freshComments && freshComments.length > 0) docComments = freshComments;
               } catch(e) { /* use cached */ }
             }
-            if (docContent) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent });
+            if (docContent || docComments.length) freshDocs.push({ title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments });
           }
           if (freshDocs.length > 0) {
             linkedDocsText = '\nLINKED REFERENCE DOCUMENTS (follow these guidelines):\n' +
-              freshDocs.map(d => `--- "${d.title}" ---\n${d.content.substring(0, 6000)}`).join('\n\n');
+              freshDocs.map(d => {
+                let out = `--- "${d.title}" ---\n${d.content.substring(0, 6000)}`;
+                if (d.comments.length > 0) {
+                  out += `\n\nCOMMENTS ON THIS DOC:\nThe client is "${project?.business_name || project?.name || 'the business owner'}". Anyone NOT from the SEO/agency team is the client — their feedback is MANDATORY.\n`;
+                  d.comments.forEach((c, i) => {
+                    out += `${i + 1}. ${c.author}: "${c.content}"`;
+                    if (c.quotedText) out += ` [regarding: "${c.quotedText}"]`;
+                    out += '\n';
+                    if (c.replies) c.replies.forEach(r => { out += `   → ${r.author}: "${r.content}"\n`; });
+                  });
+                }
+                return out;
+              }).join('\n\n');
           }
         }
       } catch(e) { console.warn('[light-optimise] linked docs error:', e.message); }
