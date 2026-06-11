@@ -17716,6 +17716,7 @@
       // ── ONE-BUTTON AUTO-FIX: runs Brief Check → Optimise → Humanize → re-verify, looping until it passes ──
       var [autoFixing, setAutoFixing] = React.useState(false);
       var [autoFixStatus, setAutoFixStatus] = React.useState('');
+      var [autoFixReport, setAutoFixReport] = React.useState(null);
 
       // Optimise + auto-apply (no preview modal). Returns { html, meta_title, meta_desc } or null.
       var runOptimiseAuto = async function() {
@@ -17730,6 +17731,7 @@
         var data = await api(apiPrefix + '/site-pages/' + page.id + '/optimise', { method:'POST', body:{ tips:tips, missing_keywords: missingKws.map(function(k){return k.keyword;}), target_keywords: targetKeywords.map(function(k){return typeof k==='string'?{keyword:k}:k;}), content_score: scoreData?scoreData.score:0, stats: scoreData?scoreData.stats:{}, focus_keyword: editMeta.focus_keyword, current_meta:{ meta_title: editMeta.meta_title||'', meta_desc: editMeta.meta_desc||'', focus_keyword: editMeta.focus_keyword||'' }, topic_gaps: topicGaps } });
         if (data.gpthuman_credits != null) setGpthumanCredits(data.gpthuman_credits);
         if (data.error) throw new Error(data.error);
+        if (data.changes_summary || data.inputs_report) setAutoFixReport({ changes_summary: data.changes_summary || [], inputs_report: data.inputs_report || null });
         var html = data.content_html || data.content || (data.proposed && data.proposed.content_html);
         if (!html) return null;
         var mt = data.meta_title || (data.proposed && data.proposed.meta_title) || editMeta.meta_title;
@@ -17744,6 +17746,7 @@
       var handleAutoFix = async function() {
         if (!editContent || autoFixing) return;
         if (!confirm('Auto-Fix runs the whole pipeline for you:\n\n1. Brief Check\n2. Optimise (fixes the gaps)\n3. Humanize\n4. Re-check Brief + AI score\n\nIt repeats until it passes (max 2 passes) and applies changes automatically. Use Reset to undo. Continue?')) return;
+        setAutoFixReport(null);
         setAutoFixing(true);
         var summary = '';
         var briefScore = 0, humanScore = 0, gapsLeft = 0;
@@ -18127,6 +18130,51 @@
           page.stage === 'reviewed' && React.createElement('button', { onClick: handlePublish, disabled: publishing,
             style: { padding: '8px 16px', background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 } },
             React.createElement('i', { className: 'fas fa-rocket', style: { marginRight: 6 } }), publishing ? 'Publishing...' : 'Publish'
+          )
+        ),
+
+        // Auto-Fix Report — evidence of what the silent pipeline read and changed
+        autoFixReport && React.createElement('div', {
+          style: { margin: '12px 0', padding: 16, background: 'var(--bg2)', borderRadius: 10, border: '1px solid rgba(20,184,166,0.35)' }
+        },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 } },
+            React.createElement('h4', { style: { margin: 0, color: '#14b8a6', fontSize: 14, fontWeight: 700 } },
+              React.createElement('i', { className: 'fa-solid fa-list-check', style: { marginRight: 8 } }),
+              'Auto-Fix Report — Inputs & Changes'
+            ),
+            React.createElement('button', { onClick: function() { setAutoFixReport(null); },
+              style: { background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: 16 } }, '×')
+          ),
+          autoFixReport.inputs_report && (function() {
+            var r = autoFixReport.inputs_report;
+            var rows = [];
+            var row = function(ok, label, detail) {
+              return React.createElement('div', { key: label, style: { fontSize: 12, color: 'var(--text2)', padding: '2px 0', lineHeight: 1.4 } },
+                React.createElement('span', { style: { color: ok ? '#22c55e' : '#f59e0b', marginRight: 6, fontWeight: 600 } }, ok ? '✓' : '⚠'),
+                React.createElement('strong', { style: { color: 'var(--text)' } }, label + ': '), detail);
+            };
+            if (r.client_comments) {
+              rows.push(row(r.client_comments.found > 0, 'Client feedback', r.client_comments.found + ' comment(s) read from ' + (r.client_comments.source || 'Drive')));
+              (r.client_comments.items || []).slice(0, 40).forEach(function(c, i) {
+                rows.push(React.createElement('div', { key: 'fb' + i, style: { fontSize: 12, color: 'var(--text2)', padding: '1px 0 1px 18px', lineHeight: 1.4 } },
+                  React.createElement('span', { style: { color: 'var(--text3)' } }, (c.author || 'Client') + ': '),
+                  '"' + (c.comment || '').substring(0, 110) + '"',
+                  c.resolved && React.createElement('span', { style: { color: 'var(--text3)', marginLeft: 6, fontSize: 11 } }, '[resolved in Drive]')
+                ));
+              });
+            }
+            if (r.linked_docs) rows.push(row(r.linked_docs.count > 0, 'Linked docs', r.linked_docs.count > 0 ? r.linked_docs.titles.join('; ') : 'none'));
+            if (r.brief) rows.push(row(r.brief.loaded, 'Brief', r.brief.loaded ? 'loaded (' + r.brief.chars + ' chars)' : 'not found'));
+            if (r.score_issues != null) rows.push(row(true, 'Score issues', r.score_issues + ' fed to AI'));
+            if (r.words) rows.push(row(true, 'Words', r.words.before + ' → ' + r.words.after));
+            return React.createElement('div', { style: { marginBottom: 10, maxHeight: 180, overflowY: 'auto' } }, rows);
+          })(),
+          autoFixReport.changes_summary && autoFixReport.changes_summary.length > 0 && React.createElement('div', { style: { maxHeight: 180, overflowY: 'auto', borderTop: '1px solid var(--border)', paddingTop: 8 } },
+            React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 } }, 'Changes Made (' + autoFixReport.changes_summary.length + ')'),
+            autoFixReport.changes_summary.map(function(change, i) {
+              return React.createElement('div', { key: i, style: { fontSize: 12, color: 'var(--text2)', padding: '2px 0', lineHeight: 1.4 } },
+                React.createElement('span', { style: { color: '#22c55e', marginRight: 6, fontWeight: 600 } }, '✓'), change);
+            })
           )
         ),
 

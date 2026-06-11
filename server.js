@@ -5033,6 +5033,7 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
     let linkedDocsContext = '';
     let briefContext = '';
     let allDocComments = [];
+    let linkedDocTitles = [];
     if (projectId) {
       const proj = (await pool.query('SELECT business_name, name, industry, location, nw_notes FROM projects WHERE id=$1', [projectId])).rows[0];
       if (proj) { businessName = proj.business_name || proj.name; industry = proj.industry; location = proj.location; additionalNotes = proj.nw_notes || ''; }
@@ -5066,8 +5067,9 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
             if (docContent || docComments.length) {
               let entry = { title: d.title || d.label || 'Reference Doc', content: docContent, comments: docComments };
               freshDocs.push(entry);
+              linkedDocTitles.push((d.title || d.label || 'Reference Doc') + ' (' + (docContent || '').length + ' chars, ' + docComments.length + ' comments)');
             }
-            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText })));
+            if (docComments.length) allDocComments.push(...docComments.map(c => ({ author: c.author, content: c.content, quotedText: c.quotedText, resolved: c.resolved })));
           }
           if (freshDocs.length > 0) {
             linkedDocsContext = '\n\nLINKED REFERENCE DOCUMENTS (MUST follow these guidelines):\n' +
@@ -5185,8 +5187,23 @@ Return ONLY valid JSON, no markdown wrapping.`
       changesSummary.unshift(totalComments + ' client comment(s) read from Drive — ' + clientFbAddressed + ' addressed (see "Client feedback" items below)');
       if (clientFbAddressed === 0) changesSummary.splice(1, 0, 'WARNING: AI did not report addressing any client comments — review the comments manually');
     }
+    const beforePlain = (page.draft_content || '').replace(/<[^>]+>/g, ' ');
+    const inputsReport = {
+      client_comments: {
+        found: totalComments,
+        source: hasDrive ? 'page Drive doc + linked docs' : 'linked docs only (page not pushed to Drive)',
+        items: [
+          ...comments.map(c => ({ author: c.author, comment: c.content, resolved: !!c.resolved })),
+          ...allDocComments.map(c => ({ author: c.author, comment: c.content, resolved: !!c.resolved }))
+        ]
+      },
+      linked_docs: { count: linkedDocTitles.length, titles: linkedDocTitles },
+      brief: { loaded: !!briefContext, chars: (briefContext || '').length },
+      score_issues: (gapsContext.match(/^- /gm) || []).length,
+      words: { before: beforePlain.trim().split(/\s+/).filter(Boolean).length, after: wordCount }
+    };
     console.log(`[optimise] Round ${roundNum} complete for "${page.page_name}", ${wordCount} words, ${changesSummary.length} changes, comments:${totalComments}/${clientFbAddressed} addressed, drive:${hasDrive && accessToken ? 'updated' : 'skipped'}`);
-    res.json({ ok: true, content, word_count: wordCount, round: roundNum, changes_summary: changesSummary, client_comments_found: totalComments });
+    res.json({ ok: true, content, word_count: wordCount, round: roundNum, changes_summary: changesSummary, client_comments_found: totalComments, inputs_report: inputsReport });
   } catch (e) {
     console.error('[optimise] Error:', e.message);
     res.status(500).json({ error: e.message });
