@@ -35511,12 +35511,11 @@ async function driveCreateDoc(accessToken, title, htmlContent, parentFolderId) {
 }
 
 async function driveUpdateDoc(accessToken, fileId, htmlContent) {
-  const boundary = '---seoroom---';
-  const body = `--${boundary}\r\nContent-Type: text/html\r\n\r\n${htmlContent}\r\n--${boundary}--`;
-  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
+  // Media upload: replaces the Google Doc's content with the new HTML (converted by Drive)
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
     method: 'PATCH',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
-    body
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'text/html' },
+    body: htmlContent
   });
   return res.json();
 }
