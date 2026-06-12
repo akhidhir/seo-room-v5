@@ -18195,7 +18195,7 @@ async function runHealthChecks() {
   for (const [pid, l] of staleLocks) { releaseHeavyLock(pid); recordSystemIssue('medium', 'watchdog', `Stale heavy lock "${l.type}" released`, parseInt(pid) || null); }
   // 5. Google OAuth tokens refresh (Drive/GSC) — try for the first user with an integration
   try {
-    const ui = await pool.query(`SELECT user_id FROM user_integrations WHERE provider IN ('google','gsc','drive') LIMIT 1`);
+    const ui = await pool.query(`SELECT user_id FROM user_integrations WHERE kind IN ('gsc','gbp','google_drive') AND status='connected' LIMIT 1`);
     if (ui.rows[0]) {
       try { const t = await getGscAccessToken(ui.rows[0].user_id).catch(() => null) || await getDriveAccessToken(ui.rows[0].user_id).catch(() => null); checks.google_oauth = { ok: !!t, error: t ? undefined : 'token refresh failed' }; if (!t) recordSystemIssue('high', 'health-check', 'Google OAuth token refresh failing — GSC/Drive features down'); }
       catch (e) { checks.google_oauth = { ok: false, error: e.message }; }
