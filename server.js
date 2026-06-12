@@ -891,6 +891,26 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS ai_detection_result JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS brief_gaps JSONB DEFAULT NULL`).catch(() => {});
 
+    // QA gate — AI content changes queue here for human review before touching WordPress
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS pending_changes (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL,
+        page_id INTEGER NOT NULL,
+        page_url TEXT DEFAULT '',
+        page_title TEXT DEFAULT '',
+        change_type TEXT NOT NULL DEFAULT 'keyword-content',
+        find_text TEXT NOT NULL,
+        replace_text TEXT NOT NULL,
+        reason TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        error TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        reviewed_at TIMESTAMPTZ,
+        applied_at TIMESTAMPTZ
+      )
+    `).catch(() => {});
+
     // Background jobs — DB-backed so they survive redeploys and report status afterwards
     await client.query(`
       CREATE TABLE IF NOT EXISTS background_jobs (
@@ -18253,6 +18273,102 @@ app.get('/api/system/health', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===== QA GATE — pending AI content changes =====
+async function applyPendingChange(project, ch) {
+  const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+  const auth = getWpAuthHeaders(project);
+  if (!wpUrl || !auth) throw new Error('WordPress credentials not configured');
+  let page = null, type = 'pages';
+  let r = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${ch.page_id}?context=edit`, { headers: auth, signal: AbortSignal.timeout(30000) });
+  if (r.ok) page = await r.json();
+  else {
+    r = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${ch.page_id}?context=edit`, { headers: auth, signal: AbortSignal.timeout(30000) });
+    if (r.ok) { page = await r.json(); type = 'posts'; }
+  }
+  if (!page) throw new Error('Page not found in WordPress');
+  const content = page.content?.raw || page.content?.rendered || '';
+  let idx = content.indexOf(ch.find_text);
+  if (idx === -1) {
+    const ci = content.toLowerCase().indexOf(String(ch.find_text).toLowerCase());
+    if (ci !== -1) idx = ci;
+  }
+  if (idx === -1) throw new Error('Original text no longer found — page content changed since this was queued');
+  const newContent = content.substring(0, idx) + ch.replace_text + content.substring(idx + ch.find_text.length);
+  await pool.query(
+    `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'keyword-content','content',$5,$6)`,
+    [ch.project_id, ch.page_id, ch.page_url, ch.page_title, content, newContent]
+  );
+  const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${ch.page_id}`, {
+    method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(45000)
+  });
+  if (!w.ok) throw new Error('WordPress write failed (HTTP ' + w.status + ')');
+}
+
+app.get('/api/projects/:projectId/pending-changes', async (req, res) => {
+  try {
+    const status = req.query.status || 'pending';
+    const rows = await pool.query(
+      `SELECT * FROM pending_changes WHERE project_id=$1 AND status=$2 ORDER BY page_title, id LIMIT 500`,
+      [req.params.projectId, status]
+    );
+    const count = await pool.query(`SELECT COUNT(*)::int AS n FROM pending_changes WHERE project_id=$1 AND status='pending'`, [req.params.projectId]);
+    res.json({ changes: rows.rows, pending_count: count.rows[0].n });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/projects/:projectId/pending-changes/:changeId/approve', async (req, res) => {
+  try {
+    const ch = (await pool.query(`SELECT * FROM pending_changes WHERE id=$1 AND project_id=$2 AND status='pending'`, [req.params.changeId, req.params.projectId])).rows[0];
+    if (!ch) return res.status(404).json({ error: 'Change not found or already reviewed' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    try {
+      await applyPendingChange(project, ch);
+      await pool.query(`UPDATE pending_changes SET status='applied', reviewed_at=NOW(), applied_at=NOW() WHERE id=$1`, [ch.id]);
+      res.json({ ok: true, applied: true });
+    } catch (e) {
+      await pool.query(`UPDATE pending_changes SET status='failed', reviewed_at=NOW(), error=$2 WHERE id=$1`, [ch.id, e.message]);
+      res.status(500).json({ error: e.message });
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/projects/:projectId/pending-changes/:changeId/reject', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `UPDATE pending_changes SET status='rejected', reviewed_at=NOW() WHERE id=$1 AND project_id=$2 AND status='pending' RETURNING id`,
+      [req.params.changeId, req.params.projectId]
+    );
+    res.json({ ok: true, rejected: r.rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/projects/:projectId/pending-changes/approve-all', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : null;
+    const rows = (await pool.query(
+      ids ? `SELECT * FROM pending_changes WHERE project_id=$1 AND status='pending' AND id = ANY($2::int[]) ORDER BY id`
+          : `SELECT * FROM pending_changes WHERE project_id=$1 AND status='pending' ORDER BY id`,
+      ids ? [projectId, ids] : [projectId]
+    )).rows;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    let applied = 0, failed = 0;
+    for (const ch of rows) {
+      try {
+        await applyPendingChange(project, ch);
+        await pool.query(`UPDATE pending_changes SET status='applied', reviewed_at=NOW(), applied_at=NOW() WHERE id=$1`, [ch.id]);
+        applied++;
+      } catch (e) {
+        await pool.query(`UPDATE pending_changes SET status='failed', reviewed_at=NOW(), error=$2 WHERE id=$1`, [ch.id, e.message]);
+        failed++;
+      }
+      await new Promise(r2 => setTimeout(r2, 1000)); // gentle on the WP host
+    }
+    res.json({ ok: true, applied, failed, total: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== DB-BACKED BACKGROUND JOBS =====
 // In-memory job objects stay (fast live updates) but every job is mirrored to Postgres,
 // so a Railway redeploy can't silently lose progress — interrupted jobs are flagged
@@ -18283,7 +18399,7 @@ function bgSaver(jobId) {
         [jobId, status, String(job.phase || job.current || '').substring(0, 200), job.done | 0, job.total | 0,
          JSON.stringify({
            linked: job.linked | 0, no_links: job.no_links | 0, errors: job.errors | 0,
-           metas_fixed: job.metas_fixed | 0, content_fixed: job.content_fixed | 0, orphans_linked: job.orphans_linked | 0
+           metas_fixed: job.metas_fixed | 0, content_fixed: job.content_fixed | 0, content_queued: job.content_queued | 0, orphans_linked: job.orphans_linked | 0
          }),
          JSON.stringify((job.results || []).slice(-100)),
          job.error || null]
@@ -18309,7 +18425,7 @@ function bgRowToStatus(row) {
     current: row.phase || '',
     done: row.done, total: row.total,
     linked: c.linked, no_links: c.no_links, errors: c.errors,
-    metas_fixed: c.metas_fixed, content_fixed: c.content_fixed, orphans_linked: c.orphans_linked,
+    metas_fixed: c.metas_fixed, content_fixed: c.content_fixed, content_queued: c.content_queued, orphans_linked: c.orphans_linked,
     results: (typeof row.results === 'string' ? JSON.parse(row.results || '[]') : row.results) || [],
     error: row.status === 'interrupted' ? 'Interrupted by a server restart — run it again' : (row.error || undefined),
     started_at: row.started_at, finished_at: row.finished_at
@@ -18645,31 +18761,24 @@ ${plain}` }]
     }
   };
   await Promise.all([kwWorker(), kwWorker(), kwWorker(), kwWorker(), kwWorker()]);
-  job.phase = 'Writing content updates';
+  // QA GATE: content changes are NOT written directly — they queue for human review
+  job.phase = 'Queueing content changes for review';
   job.total = missingKwContent.length; job.done = 0;
   for (let i = 0; i < missingKwContent.length; i++) {
     const m = missingKwContent[i];
     const r = kwPatches[i];
     if (!r || !r.find || !r.replace) { job.errors++; job.done++; continue; }
+    // Sanity: the find text must exist in the current content, or the patch is junk
     const content = m.content;
     let idx2 = content.indexOf(r.find);
     if (idx2 === -1) idx2 = content.toLowerCase().indexOf(String(r.find).toLowerCase());
     if (idx2 === -1) { job.errors++; job.done++; continue; }
-    const newContent = content.substring(0, idx2) + r.replace + content.substring(idx2 + r.find.length);
     try {
       await pool.query(
-        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'keyword-content',$5,$6,$7)`,
-        [projectId, m.p.id, m.p.url, m.p.title, 'content', content, newContent]
+        `INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,'keyword-content',$5,$6,$7)`,
+        [projectId, m.p.id, m.p.url || '', m.p.title || '', r.find, r.replace, 'Weave focus keyword "' + (m.p.focusKeyword || '') + '" into content']
       );
-      const w = await fetch(`${wpUrl}/wp-json/wp/v2/${m.wp._type}/${m.wp.id}`, {
-        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(30000)
-      });
-      if (w.ok) {
-        job.content_fixed++;
-        (job.changed_urls = job.changed_urls || []).push(m.wp.link || (String(m.p.url || '').startsWith('http') ? m.p.url : wpUrl + m.p.url));
-      }
-      else job.errors++;
+      job.content_queued = (job.content_queued || 0) + 1;
     } catch (e) { job.errors++; }
     job.done++;
   }

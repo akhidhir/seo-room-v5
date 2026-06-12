@@ -13313,6 +13313,34 @@
         loadHistory();
       };
 
+      // ---- QA GATE: pending AI content changes ----
+      const [pendingChanges, setPendingChanges] = React.useState({ count: 0, items: [], open: false, busy: null });
+      const loadPendingChanges = () => {
+        api('/projects/' + project.id + '/pending-changes')
+          .then(r => setPendingChanges(p => ({ ...p, count: r.pending_count || 0, items: r.changes || [] })))
+          .catch(() => {});
+      };
+      React.useEffect(() => { if (project?.id) loadPendingChanges(); }, [project?.id]);
+      const reviewChange = async (id, action) => {
+        setPendingChanges(p => ({ ...p, busy: id }));
+        try {
+          const r = await api('/projects/' + project.id + '/pending-changes/' + id + '/' + action, { method: 'POST' });
+          if (r.error) alert(r.error);
+        } catch (e) { alert(e.message); }
+        setPendingChanges(p => ({ ...p, busy: null }));
+        loadPendingChanges();
+      };
+      const approveAllChanges = async () => {
+        if (!confirm('Apply ALL ' + pendingChanges.count + ' pending content change(s) to the live site? Each is snapshotted for rollback.')) return;
+        setPendingChanges(p => ({ ...p, busy: 'all' }));
+        try {
+          const r = await api('/projects/' + project.id + '/pending-changes/approve-all', { method: 'POST' });
+          alert('Applied ' + r.applied + ' of ' + r.total + (r.failed ? ' (' + r.failed + ' failed — see list)' : ''));
+        } catch (e) { alert(e.message); }
+        setPendingChanges(p => ({ ...p, busy: null }));
+        loadPendingChanges();
+      };
+
       // ---- FIX EVERYTHING: one-click server-side pipeline ----
       const [fixEverything, setFixEverything] = React.useState(null);
       const pollAliveRef = React.useRef(true);
@@ -13327,6 +13355,7 @@
             setFixEverything(st);
             if (!st.running) {
               clearInterval(poll);
+              loadPendingChanges(); // surface the QA review queue
               if (st.status !== 'interrupted' && st.status !== 'failed') runAudit(true); // re-crawl so all scores reflect the fixes
             }
           } catch (e) {}
@@ -13334,7 +13363,7 @@
       };
       const handleFixEverything = async () => {
         if (fixEverything && fixEverything.running) return;
-        if (!confirm('Fix Everything runs the full pipeline on the server:\n\n1. AI keywords + meta titles/descriptions for every page that needs them\n2. Weave missing focus keywords into page content (one natural sentence edit per page)\n3. Add inbound internal links to every orphan page\n4. Re-run the audit\n\nAll changes are logged for rollback. This can take 20-40 minutes — you can navigate away. Proceed?')) return;
+        if (!confirm('Fix Everything runs the full pipeline on the server:\n\n1. AI keywords + meta titles/descriptions for every page that needs them (applied, rollbackable)\n2. Weave missing focus keywords into content — QUEUED for your review, NOT applied until you approve\n3. Add inbound internal links to every orphan page\n4. Re-run the audit\n\nThis can take 20-40 minutes — you can navigate away. Proceed?')) return;
         try {
           const r = await api('/projects/' + project.id + '/onpage-audit/fix-everything/run', { method: 'POST' });
           if (r && r.error) { alert(r.error); return; }
@@ -13670,6 +13699,12 @@
                   <i className="fas fa-link" style={{ marginRight: 4 }} />Fix Orphans ({pages.filter(p => (p.inboundLinks || 0) === 0).length})
                 </button>
               )}
+              {pendingChanges.count > 0 && (
+                <button className="btn btn-primary" onClick={() => setPendingChanges(p => ({ ...p, open: !p.open }))}
+                  style={{ fontSize: 13, padding: '6px 14px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.4)', fontWeight: 700 }}>
+                  <i className="fas fa-clipboard-check" style={{ marginRight: 5 }} />Review AI Changes ({pendingChanges.count})
+                </button>
+              )}
               {pages.length > 0 && (
                 <button className="btn btn-primary" onClick={handleFixEverything} disabled={fixEverything && fixEverything.running}
                   style={{ fontSize: 13, padding: '6px 14px', background: (fixEverything && fixEverything.running) ? 'var(--bg3)' : 'linear-gradient(135deg, #22c55e, #14b8a6)', color: '#fff', border: 'none', fontWeight: 700 }}>
@@ -13693,6 +13728,47 @@
 
           {error && <div style={{ padding: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, color: '#ef4444', fontSize: 13, marginBottom: 16 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{error}</div>}
 
+          {/* QA Gate — pending AI content changes review panel */}
+          {pendingChanges.open && pendingChanges.count > 0 && (
+            <div style={{ padding: 16, background: 'var(--card)', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 10, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: '#f59e0b' }}>
+                  <i className="fas fa-clipboard-check" style={{ marginRight: 8 }} />
+                  Pending AI Content Changes ({pendingChanges.count}) — nothing touches the site until you approve
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-primary" disabled={pendingChanges.busy === 'all'} onClick={approveAllChanges}
+                    style={{ fontSize: 12, padding: '6px 14px', background: '#22c55e', color: '#fff', border: 'none', fontWeight: 700 }}>
+                    {pendingChanges.busy === 'all' ? 'Applying…' : 'Approve All'}
+                  </button>
+                  <button onClick={() => setPendingChanges(p => ({ ...p, open: false }))} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16 }}>×</button>
+                </div>
+              </div>
+              <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+                {pendingChanges.items.map(ch => (
+                  <div key={ch.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                      <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{ch.page_title || 'Page #' + ch.page_id}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>{ch.reason}</span>
+                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                        <button className="btn" disabled={pendingChanges.busy === ch.id} onClick={() => reviewChange(ch.id, 'approve')}
+                          style={{ fontSize: 12, padding: '4px 12px', background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)', fontWeight: 600 }}>
+                          {pendingChanges.busy === ch.id ? '…' : 'Approve'}
+                        </button>
+                        <button className="btn" disabled={pendingChanges.busy === ch.id} onClick={() => reviewChange(ch.id, 'reject')}
+                          style={{ fontSize: 12, padding: '4px 12px', background: 'rgba(239,68,68,0.12)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.35)', fontWeight: 600 }}>
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, padding: '6px 10px', background: 'rgba(239,68,68,0.07)', borderRadius: 6, color: 'var(--text2)', textDecoration: 'line-through', marginBottom: 4 }}>{ch.find_text}</div>
+                    <div style={{ fontSize: 13, lineHeight: 1.5, padding: '6px 10px', background: 'rgba(34,197,94,0.08)', borderRadius: 6, color: 'var(--text)' }}>{ch.replace_text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Fix Everything progress banner */}
           {fixEverything && (
             <div style={{ padding: 16, background: fixEverything.running ? 'rgba(34,197,94,0.08)' : 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', borderRadius: 10, marginBottom: 16 }}>
@@ -13703,7 +13779,7 @@
                     <span style={{ fontWeight: 700, color: 'var(--text)' }}>Fix Everything — {fixEverything.phase}</span>
                     {fixEverything.total > 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{fixEverything.done}/{fixEverything.total}</span>}
                     <span style={{ fontSize: 12, color: 'var(--text2)', marginLeft: 'auto' }}>
-                      metas {fixEverything.metas_fixed || 0} · content {fixEverything.content_fixed || 0} · orphans {fixEverything.orphans_linked || 0}{(fixEverything.errors || 0) > 0 ? ' · errors ' + fixEverything.errors : ''}
+                      metas {fixEverything.metas_fixed || 0} · content queued {fixEverything.content_queued || 0} · orphans {fixEverything.orphans_linked || 0}{(fixEverything.errors || 0) > 0 ? ' · errors ' + fixEverything.errors : ''}
                     </span>
                   </div>
                   {fixEverything.total > 0 && (
@@ -13718,7 +13794,7 @@
                     <i className="fas fa-check-circle" style={{ color: '#22c55e', marginRight: 8 }} />
                     <span style={{ fontWeight: 700, color: '#22c55e' }}>Fix Everything complete</span>
                     <span style={{ color: 'var(--text2)', marginLeft: 10, fontSize: 13 }}>
-                      {(fixEverything.metas_fixed || 0)} metas · {(fixEverything.content_fixed || 0)} content keyword fixes · {(fixEverything.orphans_linked || 0)} orphans linked{(fixEverything.errors || 0) > 0 ? ' · ' + fixEverything.errors + ' errors' : ''}
+                      {(fixEverything.metas_fixed || 0)} metas · {(fixEverything.content_queued || 0)} content changes queued for review · {(fixEverything.orphans_linked || 0)} orphans linked{(fixEverything.errors || 0) > 0 ? ' · ' + fixEverything.errors + ' errors' : ''}
                     </span>
                     {fixEverything.error && <span style={{ color: '#ef4444', marginLeft: 8 }}>{fixEverything.error}</span>}
                   </div>
