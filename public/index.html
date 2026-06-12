@@ -13143,11 +13143,15 @@
 
       // ---- FIX EVERYTHING: one-click server-side pipeline ----
       const [fixEverything, setFixEverything] = React.useState(null);
+      const pollAliveRef = React.useRef(true);
+      React.useEffect(() => { pollAliveRef.current = true; return () => { pollAliveRef.current = false; }; }, []);
       const pollFixEverything = () => {
         const poll = setInterval(async () => {
+          if (!pollAliveRef.current) { clearInterval(poll); return; }
           try {
             const st = await api('/projects/' + project.id + '/onpage-audit/fix-everything/status');
             if (!st) return;
+            if (!pollAliveRef.current) { clearInterval(poll); return; }
             setFixEverything(st);
             if (!st.running) {
               clearInterval(poll);
@@ -13177,9 +13181,11 @@
       const pollOrphanJob = () => {
         setFixAllState({ phase: 'links', current: 0, total: 0, currentTitle: 'Running on server…', suggestions: [], applied: 0, errors: 0 });
         const poll = setInterval(async () => {
+          if (!pollAliveRef.current) { clearInterval(poll); return; }
           try {
             const st = await api('/projects/' + project.id + '/onpage-audit/fix-orphans/status');
             if (!st) return;
+            if (!pollAliveRef.current) { clearInterval(poll); return; }
             setFixAllState(prev => prev && prev.phase === 'links' ? Object.assign({}, prev, { current: st.done, total: st.total, currentTitle: st.running ? ('Linked ' + st.linked + ' · no-links ' + st.no_links + ' · errors ' + st.errors) : '' }) : prev);
             if (!st.running) {
               clearInterval(poll);
@@ -18364,7 +18370,7 @@
             // Breadcrumbs
             React.createElement('div', { style: { padding: '8px 18px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' } },
               drivePicker.crumbs.map(function(c, i) {
-                return React.createElement(React.Fragment, { key: c.id },
+                return React.createElement(React.Fragment, { key: c.id + '-' + i },
                   i > 0 && React.createElement('span', { style: { color: 'var(--text3)' } }, '/'),
                   React.createElement('span', {
                     onClick: function() { if (i < drivePicker.crumbs.length - 1) openDrivePicker(c.id, drivePicker.crumbs.slice(0, i + 1)); },
