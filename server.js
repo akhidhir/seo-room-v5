@@ -5142,7 +5142,10 @@ app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:
         const handledIds0 = new Set(hr0.rows.map(r => r.comment_id));
         var pageHandledComments = comments.filter(c => c.id && handledIds0.has(c.id));
         comments = comments.filter(c => !(c.id && handledIds0.has(c.id)));
-      } catch(e) { var pageHandledComments = []; }
+      } catch(e) {
+        console.warn('[optimise] handled comments lookup failed — treating all as new:', e.message);
+        var pageHandledComments = [];
+      }
 
       if (comments.length) {
         feedbackContext += '\n\nFEEDBACK COMMENTS (from Google Drive):\n';
@@ -11434,6 +11437,8 @@ async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
         const text = await resp.text();
         let msg = `HTTP ${resp.status}`;
         try { const j = JSON.parse(text); msg = j.error?.message || j.error?.errors?.[0]?.message || msg; } catch {}
+        // DIAGNOSTIC: capture the exact HTTP status + raw body so we can see if it's 400 (Lighthouse) / 429 (rate limit) / 403 / 500
+        console.log(`[pagespeed-diag] ${strategy} requested=${url} | apiStatus=${resp.status} ${resp.statusText} | body=${text.slice(0, 600)}`);
         if (attempt < retries) {
           const delay = 5000 + attempt * 5000; // 5s, 10s, 15s
           console.log(`[pagespeed] ${strategy} ${url}: ${msg} — retry ${attempt + 1}/${retries} in ${delay/1000}s`);
@@ -18110,7 +18115,9 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
   }
 });
 
-const UTILITY_PAGE_RE = /thank[-_]?you|privacy|terms|conditions|contact|checkout|cart|my-account|sitemap|search|404/i;
+// Matches utility pages by URL SEGMENT (must start a path segment) — avoids false positives
+// like /blog/how-to-contact-your-plumber or /product-search-tips being excluded from scoring
+const UTILITY_PAGE_RE = /(^|\/)(thank[-_]?you|privacy[^/]*|terms[^/]*|conditions|contact(-us)?|checkout|cart|my-account|sitemap[^/]*|search|404)(\/|\.|\?|$)/i;
 
 // ===== Heavy-job lock: one heavy WP-hitting job per project at a time =====
 // Prevents e.g. Fix Everything + PageSpeed scan + audit crawl hammering the same WP server
@@ -28934,7 +28941,10 @@ CRITICAL RULES:
   }
 });
 
-app.post(['/api/projects/:projectId/site-pages/:pageId/optimise', '/api/builds/:buildId/site-pages/:pageId/optimise'], async (req, res) => {
+// DEAD ROUTE — shadowed by the identical route registered earlier (~line 5115), which Express
+// always matches first. Renamed with a -legacy suffix so it can never silently collide.
+// TODO: delete this whole handler once confirmed nothing depends on it.
+app.post(['/api/projects/:projectId/site-pages/:pageId/optimise-legacy', '/api/builds/:buildId/site-pages/:pageId/optimise-legacy'], async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);
   const { projectId, buildId, pageId } = req.params;
