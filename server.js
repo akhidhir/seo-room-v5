@@ -11445,6 +11445,8 @@ async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
       const data = await resp.json();
       // Check for Lighthouse errors in the response body (API returns 200 but Lighthouse failed)
       const runtimeErr = data.lighthouseResult?.runtimeError;
+      // DIAGNOSTIC: dump exactly what Google resolved + returned so we can compare to a manual PSI run
+      console.log(`[pagespeed-diag] ${strategy} requested=${url} | apiStatus=${resp.status} | id=${data.id || '?'} | requestedUrl=${data.lighthouseResult?.requestedUrl || '?'} | finalUrl=${data.lighthouseResult?.finalUrl || '?'} | mainDocUrl=${data.lighthouseResult?.mainDocumentUrl || '?'} | runtimeError=${runtimeErr ? JSON.stringify(runtimeErr) : 'none'} | fetchTime=${data.analysisUTCTimestamp || data.lighthouseResult?.fetchTime || '?'}`);
       if (runtimeErr && (runtimeErr.code === 'ERRORED_DOCUMENT_REQUEST' || runtimeErr.code === 'FAILED_DOCUMENT_REQUEST' || runtimeErr.code === 'UNKNOWN_ERROR')) {
         if (attempt < retries) {
           // FAILED_DOCUMENT_REQUEST = the target site couldn't even serve the page — it's overloaded.
