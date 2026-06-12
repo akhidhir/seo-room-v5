@@ -323,6 +323,17 @@ const PILLAR_CATEGORIES = {
 11. **Grid scan history** — track position changes over time.
 12. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
 
+## Recent Changes (June 12 2026 session)
+
+- **Client feedback loop**: comments read from page's own Drive doc + linked docs (`doc_id` fallback fixed — was silently never fetching), resolved comments included, fetch errors surfaced. `handled_doc_comments` table = comment memory (only NEW comments fed to AI). "N new client comments" badge with dismiss. Inputs Checked panel = server-verified evidence (per-comment patch verification, keyword presence checks).
+- **Drive**: folder picker on Push to Drive (browse My Drive + Shared with me, search, create folders, move existing docs). `driveUpdateDoc` fixed (was malformed multipart — doc updates never worked before).
+- **On-page**: live computed SEO score replaces stale Yoast linkdex; keyword-in-content/H1 checks; utility pages excluded (segment-matched regex). Fix Everything pipeline (metas → keyword weaving → orphan links → cache warm). Server-side orphan link job (site fetched once, 5 parallel AI pickers, serialized writes, See-also fallback). `fetchAllWpItems` = reliable WP crawl (retries + X-WP-TotalPages verification, aborts on partial — page counts were swinging 284→100).
+- **Speed**: seoroom-speed plugin v1.2.0 (scan slideshow heroes/oversized bgs, optimize-image→WebP, fix-hero swap, replace-image site-wide, restore endpoints; get_home_path fatal fixed — v1.1.0 took HouseWorks down once, recovered via cPanel folder rename). Dashboard: Scan Hero/Image Fixes UI, Optimize & Replace per unique image, Stop button for CWV scans, sequential mobile→desktop (8s gap), adaptive throttle on doc failures. New: `projects.seoroom_speed_key`.
+- **Infra**: per-project heavy-job lock (one WP-hammering job at a time). System health monitor (`system_issues` table, 10-min checks, watchdog auto-fails stuck audits, sidebar indicator). DB-backed background jobs (`background_jobs` table, heartbeats, interrupted-on-restart detection, status survives redeploys).
+- **ROOT CAUSE of PageSpeed failures (days of symptoms)**: NOT Cloudflare settings, NOT the sites. DreamIT host (web62.hosting-cloud.net) is overloaded (load ~20) AND throttles Cloudflare's edge IPs per-IP → Lighthouse bursts time out; with CF paused, same page scores 96. Ticket open with DreamIT (sysadmin review: CF IP allowlisting + LiteSpeed/CSF limits). seoroom/houseworks/projection = same server + same CF account (gail/wilson NS); goldpc = different account/host, unaffected. CPU faults on all 3 accounts (LVE limits). PHP 7.4→8.2 upgrade advised for seoroom + projection. VPS move under consideration (DreamIT KVM 8GB $39.95 base + cPanel/managed extras).
+- **HouseWorks hero**: homepage Elementor background slideshow = 3.8MB of JPGs (1.8MB first slide) = the real 27s LCP. Fix via plugin's fix-hero once host issues resolved.
+- **Reliability roadmap agreed**: 1) DB jobs ✅ (resume-after-restart next), 2) QA gate for AI content changes, 3) client-facing before/after reports, 4) finish Copywriter/Control Centre, 5) encrypt API keys at rest.
+
 ## Recent Changes (This Session — June 3 2026)
 
 ### Design-Safe Preview — FIXED ✅ (Plugin 8.9.16 → 8.9.19, tested on seoroom.com.au)

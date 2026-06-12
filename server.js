@@ -891,6 +891,27 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS ai_detection_result JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS brief_gaps JSONB DEFAULT NULL`).catch(() => {});
 
+    // Background jobs — DB-backed so they survive redeploys and report status afterwards
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS background_jobs (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER,
+        job_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        phase TEXT DEFAULT '',
+        done INTEGER DEFAULT 0,
+        total INTEGER DEFAULT 0,
+        counters JSONB DEFAULT '{}',
+        payload JSONB DEFAULT '{}',
+        results JSONB DEFAULT '[]',
+        error TEXT,
+        started_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        heartbeat_at TIMESTAMPTZ DEFAULT NOW(),
+        finished_at TIMESTAMPTZ
+      )
+    `).catch(() => {});
+
     // System health monitor — every captured issue across the whole system
     await client.query(`
       CREATE TABLE IF NOT EXISTS system_issues (
@@ -18232,6 +18253,84 @@ app.get('/api/system/health', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===== DB-BACKED BACKGROUND JOBS =====
+// In-memory job objects stay (fast live updates) but every job is mirrored to Postgres,
+// so a Railway redeploy can't silently lose progress — interrupted jobs are flagged
+// and their status survives for the UI and the health monitor.
+async function createBgJob(projectId, type, payload) {
+  try {
+    const r = await pool.query(
+      `INSERT INTO background_jobs (project_id, job_type, status, phase, payload) VALUES ($1,$2,'running','Starting…',$3) RETURNING id`,
+      [parseInt(projectId) || null, type, JSON.stringify(payload || {})]
+    );
+    return r.rows[0].id;
+  } catch (e) { console.warn('[jobs] create failed:', e.message); return null; }
+}
+
+function bgSaver(jobId) {
+  let last = 0;
+  return async function save(job, force = false) {
+    if (!jobId) return;
+    if (!force && Date.now() - last < 2000) return;
+    last = Date.now();
+    try {
+      const status = job.running ? 'running' : (job.error ? 'failed' : 'completed');
+      await pool.query(
+        `UPDATE background_jobs SET status=$2, phase=$3, done=$4, total=$5, counters=$6, results=$7, error=$8,
+           heartbeat_at=NOW(), updated_at=NOW(),
+           finished_at = CASE WHEN $2 IN ('completed','failed','cancelled') AND finished_at IS NULL THEN NOW() ELSE finished_at END
+         WHERE id=$1`,
+        [jobId, status, String(job.phase || job.current || '').substring(0, 200), job.done | 0, job.total | 0,
+         JSON.stringify({
+           linked: job.linked | 0, no_links: job.no_links | 0, errors: job.errors | 0,
+           metas_fixed: job.metas_fixed | 0, content_fixed: job.content_fixed | 0, orphans_linked: job.orphans_linked | 0
+         }),
+         JSON.stringify((job.results || []).slice(-100)),
+         job.error || null]
+      );
+    } catch (e) { console.warn('[jobs] save failed:', e.message); }
+  };
+}
+
+async function latestBgJob(projectId, type) {
+  try {
+    const r = await pool.query(`SELECT * FROM background_jobs WHERE project_id=$1 AND job_type=$2 ORDER BY id DESC LIMIT 1`, [parseInt(projectId) || null, type]);
+    return r.rows[0] || null;
+  } catch (e) { return null; }
+}
+
+function bgRowToStatus(row) {
+  if (!row) return null;
+  const c = (typeof row.counters === 'string' ? JSON.parse(row.counters || '{}') : row.counters) || {};
+  return {
+    running: row.status === 'running',
+    status: row.status,
+    phase: row.phase || '',
+    current: row.phase || '',
+    done: row.done, total: row.total,
+    linked: c.linked, no_links: c.no_links, errors: c.errors,
+    metas_fixed: c.metas_fixed, content_fixed: c.content_fixed, orphans_linked: c.orphans_linked,
+    results: (typeof row.results === 'string' ? JSON.parse(row.results || '[]') : row.results) || [],
+    error: row.status === 'interrupted' ? 'Interrupted by a server restart — run it again' : (row.error || undefined),
+    started_at: row.started_at, finished_at: row.finished_at
+  };
+}
+
+// Boot recovery: jobs still 'running' with a stale heartbeat died in a redeploy — flag them
+setTimeout(async () => {
+  try {
+    const r = await pool.query(
+      `UPDATE background_jobs SET status='interrupted', updated_at=NOW()
+       WHERE status='running' AND (heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '3 minutes')
+       RETURNING id, project_id, job_type`
+    );
+    for (const row of r.rows) {
+      console.warn(`[jobs] Job #${row.id} (${row.job_type}) interrupted by server restart`);
+      recordSystemIssue('medium', 'jobs', `Background job #${row.id} (${row.job_type}) was interrupted by a server restart — re-run it`, row.project_id);
+    }
+  } catch (e) {}
+}, 10000);
+
 // ===== SPEED FIXES — driven through the seoroom-speed plugin on the client site =====
 // Targets what BerqWP/generic optimizers can't reach: Elementor background slideshows
 // (CSS background images = LCP killers) and oversized background images.
@@ -18601,12 +18700,17 @@ app.post('/api/projects/:projectId/onpage-audit/fix-everything/run', async (req,
     if (locked) return heavyLockResponse(res, locked);
     const job = { running: true, phase: 'Starting…', done: 0, total: 0, metas_fixed: 0, content_fixed: 0, orphans_linked: 0, errors: 0, started_at: new Date().toISOString() };
     fixEverythingJobs[projectId] = job;
+    const bgId = await createBgJob(projectId, 'fix_everything', {});
+    const saveBg = bgSaver(bgId);
     (async () => {
+      const hb = setInterval(() => saveBg(job), 5000);
       try { await runFixEverything(projectId, job); }
       catch (e) { job.error = e.message; console.error('[fix-everything] Job error:', e.message); recordSystemIssue('high', 'fix-everything', e.message, parseInt(projectId) || null); }
+      clearInterval(hb);
       job.running = false;
       job.phase = 'Done';
       job.finished_at = new Date().toISOString();
+      await saveBg(job, true);
       releaseHeavyLock(projectId);
       console.log(`[fix-everything] Done for project ${projectId}: metas ${job.metas_fixed}, content ${job.content_fixed}, orphans ${job.orphans_linked}, errors ${job.errors}`);
     })();
@@ -18614,8 +18718,12 @@ app.post('/api/projects/:projectId/onpage-audit/fix-everything/run', async (req,
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/projects/:projectId/onpage-audit/fix-everything/status', (req, res) => {
-  res.json(fixEverythingJobs[req.params.projectId] || { running: false, phase: '', done: 0, total: 0 });
+app.get('/api/projects/:projectId/onpage-audit/fix-everything/status', async (req, res) => {
+  const job = fixEverythingJobs[req.params.projectId];
+  if (job) return res.json(job);
+  // No in-memory job (e.g. after a redeploy) — fall back to the DB record
+  const row = await latestBgJob(req.params.projectId, 'fix_everything');
+  res.json(bgRowToStatus(row) || { running: false, phase: '', done: 0, total: 0 });
 });
 
 // Bulk orphan fix — optimised: fetch site ONCE, AI picks in parallel, writes serialised against cache
@@ -18813,7 +18921,10 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
     if (locked) return heavyLockResponse(res, locked);
     const job = { running: true, total: page_ids.length, done: 0, linked: 0, no_links: 0, errors: 0, current: '', results: [], started_at: new Date().toISOString() };
     orphanLinkJobs[projectId] = job;
+    const bgId = await createBgJob(projectId, 'fix_orphans', { page_ids });
+    const saveBg = bgSaver(bgId);
     (async () => {
+      const hb = setInterval(() => saveBg(job), 5000);
       try {
         await runBulkOrphanLinks(projectId, page_ids, job);
         await warmCache(job.changed_urls, job, 'Warming cache for changed pages');
@@ -18822,9 +18933,11 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
         console.error('[fix-orphans] Job error:', e.message);
         recordSystemIssue('high', 'fix-orphans', e.message, parseInt(projectId) || null);
       }
+      clearInterval(hb);
       job.running = false;
       job.current = '';
       job.finished_at = new Date().toISOString();
+      await saveBg(job, true);
       releaseHeavyLock(projectId);
       console.log(`[fix-orphans] Done for project ${projectId}: ${job.linked} linked, ${job.no_links} no-links, ${job.errors} errors of ${job.total}`);
     })();
@@ -18832,10 +18945,12 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/projects/:projectId/onpage-audit/fix-orphans/status', (req, res) => {
+app.get('/api/projects/:projectId/onpage-audit/fix-orphans/status', async (req, res) => {
   const job = orphanLinkJobs[req.params.projectId];
-  if (!job) return res.json({ running: false, total: 0, done: 0 });
-  res.json({ running: job.running, total: job.total, done: job.done, linked: job.linked, no_links: job.no_links, errors: job.errors, current: job.current, results: job.results.slice(-20) });
+  if (job) return res.json({ running: job.running, total: job.total, done: job.done, linked: job.linked, no_links: job.no_links, errors: job.errors, current: job.current, results: job.results.slice(-20) });
+  // No in-memory job (e.g. after a redeploy) — fall back to the DB record
+  const row = await latestBgJob(req.params.projectId, 'fix_orphans');
+  res.json(bgRowToStatus(row) || { running: false, total: 0, done: 0 });
 });
 
 // Get change history for a project

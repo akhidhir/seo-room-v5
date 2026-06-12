@@ -13327,7 +13327,7 @@
             setFixEverything(st);
             if (!st.running) {
               clearInterval(poll);
-              runAudit(true); // re-crawl so all scores reflect the fixes
+              if (st.status !== 'interrupted' && st.status !== 'failed') runAudit(true); // re-crawl so all scores reflect the fixes
             }
           } catch (e) {}
         }, 5000);
@@ -13345,7 +13345,11 @@
       React.useEffect(() => {
         if (!project?.id) return;
         api('/projects/' + project.id + '/onpage-audit/fix-everything/status')
-          .then(st => { if (st && st.running) { setFixEverything(st); pollFixEverything(); } })
+          .then(st => {
+            if (!st) return;
+            if (st.running) { setFixEverything(st); pollFixEverything(); }
+            else if (st.status === 'interrupted') setFixEverything(st); // surface "interrupted by restart — run again"
+          })
           .catch(() => {});
       }, [project?.id]);
 
