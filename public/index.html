@@ -8741,6 +8741,32 @@
       const [fixResults, setFixResults] = useState({});
       const [retestingPage, setRetestingPage] = useState(null);
 
+      // ---- Hero / oversized-image fixes via the seoroom-speed plugin ----
+      const [heroScan, setHeroScan] = useState(null);
+      const [fixingHero, setFixingHero] = useState(null);
+      const runHeroScan = async () => {
+        setHeroScan({ loading: true });
+        try {
+          const r = await api(`/projects/${project.id}/speed-fixes/scan`);
+          if (r.error) { setHeroScan({ error: r.error }); return; }
+          setHeroScan({ findings: r.findings || [] });
+        } catch (e) { setHeroScan({ error: e.message }); }
+      };
+      const fixHero = async (f, ss) => {
+        const slide = ss.slides && ss.slides[0];
+        if (!confirm('Replace the background slideshow on "' + f.title + '" with a static optimized image (first slide, WebP, max 1920px)?\n\nSame design minus the rotation — this is usually the single biggest LCP fix. Rollback available via Change History.')) return;
+        setFixingHero(f.page_id);
+        try {
+          const r = await api(`/projects/${project.id}/speed-fixes/fix-hero`, { method: 'POST', body: { page_id: f.page_id, element_id: ss.element_id, slide_url: slide && slide.url, page_title: f.title, page_url: f.url } });
+          if (r.error) alert(r.error);
+          else {
+            alert('Fixed "' + f.title + '". ' + (r.optimized ? 'Image optimized: ' + r.optimized.from_kb + ' KB → ' + r.optimized.to_kb + ' KB (WebP)' : 'Used first slide as-is.'));
+            runHeroScan();
+          }
+        } catch (e) { alert(e.message); }
+        setFixingHero(null);
+      };
+
       const handleAutoFix = async (pageKey, page) => {
         setFixingPage(pageKey);
         try {
@@ -8887,6 +8913,38 @@
               <button className="btn btn-primary" onClick={handleFixAll} disabled={bulkFixing} style={{ fontSize: 13, padding: '7px 18px', background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
                 {bulkFixing ? <><span className="spinner"></span>Fixing...</> : <><i className="fas fa-wrench" style={{ marginRight: 6 }} />Fix All</>}
               </button>
+              <button className="btn btn-primary" onClick={runHeroScan} disabled={heroScan && heroScan.loading} style={{ fontSize: 13, padding: '7px 18px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.4)' }}>
+                {(heroScan && heroScan.loading) ? <><span className="spinner"></span>Scanning…</> : <><i className="fas fa-images" style={{ marginRight: 6 }} />Scan Hero / Image Fixes</>}
+              </button>
+            </div>
+          )}
+
+          {heroScan && !heroScan.loading && (
+            <div style={{ marginBottom: 16, padding: '14px 18px', background: 'var(--card)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                <i className="fas fa-images" style={{ marginRight: 6 }} />Hero / Image Fixes (via SEO Room Speed plugin)
+              </div>
+              {heroScan.error && <div style={{ fontSize: 13, color: '#ef4444' }}>{heroScan.error}</div>}
+              {heroScan.findings && heroScan.findings.length === 0 && <div style={{ fontSize: 13, color: '#22c55e' }}>No slideshow heroes or oversized background images found. All clear.</div>}
+              {(heroScan.findings || []).map(f => (
+                <div key={f.page_id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text2)' }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>{f.title}</div>
+                  {(f.slideshows || []).map((ss, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0 4px 14px' }}>
+                      <span style={{ color: '#ef4444' }}>Background slideshow — {(ss.slides || []).length} slides ({(ss.slides || []).map(s => (s.kb || '?') + 'KB').join(', ')})</span>
+                      <button className="btn btn-primary" disabled={fixingHero === f.page_id} onClick={() => fixHero(f, ss)}
+                        style={{ fontSize: 12, padding: '4px 12px', marginLeft: 'auto' }}>
+                        {fixingHero === f.page_id ? 'Fixing…' : 'Make Static + Optimize'}
+                      </button>
+                    </div>
+                  ))}
+                  {(f.big_backgrounds || []).map((b, i) => (
+                    <div key={'b' + i} style={{ padding: '2px 0 2px 14px', color: '#f59e0b' }}>
+                      Oversized background image: {(b.url || '').split('/').pop()} ({b.kb} KB — should be &lt;400 KB)
+                    </div>
+                  ))}
+                </div>
+              ))}
             </div>
           )}
 
@@ -33811,6 +33869,7 @@
         cloudflareZoneId: '',
         phone: '',
         seoroomApiKey: '',
+        seoroomSpeedKey: '',
       });
       const [newSuburb, setNewSuburb] = useState('');
       const [newDistance, setNewDistance] = useState(20);
@@ -33872,6 +33931,7 @@
               pluginLicenseExpires: data.project.plugin_license_expires || '',
               pluginLicenseActive: data.project.plugin_license_active !== false,
               seoroomApiKey: data.project.seoroom_api_key || '',
+              seoroomSpeedKey: data.project.seoroom_speed_key || '',
             });
             if (data.project.elementor_globals && Object.keys(data.project.elementor_globals).length > 0) setDesignExtracted(true);
           }
@@ -34239,6 +34299,12 @@
               <input type="text" className="form-input" value={formData.seoroomApiKey}
                 onChange={(e) => setFormData(prev => ({ ...prev, seoroomApiKey: e.target.value }))}
                 placeholder="sr_2026_..." style={{ fontSize: 12, maxWidth: 400 }} />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>Speed Plugin Key <span style={{ color: 'var(--text3)' }}>(SEO Room Speed Optimizer — for hero/image fixes)</span></label>
+              <input type="text" className="form-input" value={formData.seoroomSpeedKey || ''}
+                onChange={(e) => setFormData(prev => ({ ...prev, seoroomSpeedKey: e.target.value }))}
+                placeholder="srs_..." style={{ fontSize: 12, maxWidth: 400 }} />
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <button className="btn btn-sm" style={{ background: '#6366f1', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: 6, fontSize: 11, cursor: 'pointer', opacity: extractingDesign ? 0.6 : 1 }}

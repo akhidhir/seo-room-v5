@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room Speed Optimizer
  * Plugin URI: https://theseoroom.com.au
  * Description: Automatic website speed optimization — lazy loading, CSS/JS minification, browser caching, GZIP compression, font optimization, and preconnect. Safe, non-destructive, instant revert on deactivation.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_SPEED_VERSION', '1.0.0');
+define('SEOROOM_SPEED_VERSION', '1.1.0');
 define('SEOROOM_SPEED_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_SPEED_URL', plugin_dir_url(__FILE__));
 
@@ -48,6 +48,11 @@ register_activation_hook(__FILE__, 'seoroom_speed_activate');
 function seoroom_speed_activate() {
     $options = seoroom_speed_get_options();
     update_option('seoroom_speed_options', $options);
+
+    // API key for dashboard-driven fixes (scan / optimize-image / fix-hero)
+    if (!get_option('seoroom_speed_key')) {
+        update_option('seoroom_speed_key', 'srs_' . wp_generate_password(24, false));
+    }
 
     // Create cache directory
     $cache_dir = WP_CONTENT_DIR . '/cache/seoroom-speed/';
@@ -231,6 +236,13 @@ function seoroom_speed_settings_page() {
 
             <?php submit_button('Save & Apply'); ?>
         </form>
+
+        <div style="margin-top:30px;padding:16px;background:#e7f1ff;border:1px solid #b6d4fe;border-radius:6px;">
+            <h3 style="margin-top:0;">SEO Room Dashboard Connection</h3>
+            <p>API key for dashboard-driven fixes (hero slideshow swap, image optimization):</p>
+            <p><code style="font-size:14px;"><?php echo esc_html(get_option('seoroom_speed_key', '— activate the plugin to generate —')); ?></code></p>
+            <p class="description">Paste this into Project Settings → Speed Plugin Key in the SEO Room dashboard.</p>
+        </div>
 
         <div style="margin-top:30px;padding:16px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;">
             <h3 style="margin-top:0;">Quick Actions</h3>
@@ -718,6 +730,161 @@ function seoroom_speed_admin_bar($wp_admin_bar) {
         'meta'  => array('title' => 'SEO Room Speed Optimizer'),
     ));
 }
+
+// ============ DASHBOARD-DRIVEN FIXES (key-authenticated) ============
+// These target what generic optimizers and BerqWP CANNOT reach:
+// Elementor background SLIDESHOWS (the classic 25s-LCP killer) and oversized CSS background images.
+
+function seoroom_speed_auth_key(WP_REST_Request $req) {
+    $key = $req->get_param('key');
+    $stored = get_option('seoroom_speed_key', '');
+    return is_string($key) && $stored && hash_equals($stored, $key);
+}
+
+function seoroom_speed_file_kb($url) {
+    $up = wp_upload_dir();
+    if (strpos($url, $up['baseurl']) !== 0) return null;
+    $path = str_replace($up['baseurl'], $up['basedir'], $url);
+    return file_exists($path) ? (int) round(filesize($path) / 1024) : null;
+}
+
+function seoroom_speed_walk(array &$nodes, callable $fn) {
+    foreach ($nodes as &$node) {
+        if (is_array($node)) {
+            $fn($node);
+            if (!empty($node['elements']) && is_array($node['elements'])) seoroom_speed_walk($node['elements'], $fn);
+        }
+    }
+}
+
+add_action('rest_api_init', function () {
+    // SCAN: find slideshow heroes + oversized background images across the site
+    register_rest_route('seoroom/v1', '/speed-scan', array(
+        'methods' => 'GET', 'permission_callback' => '__return_true',
+        'callback' => function (WP_REST_Request $req) {
+            if (!seoroom_speed_auth_key($req)) return new WP_Error('forbidden', 'Bad key', array('status' => 403));
+            $findings = array();
+            $q = new WP_Query(array('post_type' => array('page', 'post'), 'post_status' => 'publish', 'posts_per_page' => 300, 'fields' => 'ids'));
+            foreach ($q->posts as $pid) {
+                $el = get_post_meta($pid, '_elementor_data', true);
+                if (!$el || !is_string($el)) continue;
+                $item = array('page_id' => $pid, 'title' => get_the_title($pid), 'url' => get_permalink($pid), 'slideshows' => array(), 'big_backgrounds' => array());
+                if (strpos($el, '"background_background":"slideshow"') !== false) {
+                    $data = json_decode($el, true);
+                    if (is_array($data)) {
+                        seoroom_speed_walk($data, function (&$node) use (&$item) {
+                            if (!empty($node['settings']['background_background']) && $node['settings']['background_background'] === 'slideshow') {
+                                $slides = array();
+                                $gallery = isset($node['settings']['background_slideshow_gallery']) ? $node['settings']['background_slideshow_gallery'] : array();
+                                foreach ($gallery as $s) {
+                                    if (!empty($s['url'])) $slides[] = array('url' => $s['url'], 'kb' => seoroom_speed_file_kb($s['url']));
+                                }
+                                $item['slideshows'][] = array('element_id' => isset($node['id']) ? $node['id'] : '', 'slides' => $slides);
+                            }
+                        });
+                    }
+                }
+                if (preg_match_all('/"background_image":\{[^}]*"url":"([^"]+)"/', $el, $m)) {
+                    foreach (array_unique($m[1]) as $u) {
+                        $u = stripslashes($u);
+                        $kb = seoroom_speed_file_kb($u);
+                        if ($kb !== null && $kb > 400) $item['big_backgrounds'][] = array('url' => $u, 'kb' => $kb);
+                    }
+                }
+                if ($item['slideshows'] || $item['big_backgrounds']) $findings[] = $item;
+            }
+            return array('ok' => true, 'findings' => $findings, 'scanned' => count($q->posts));
+        },
+    ));
+
+    // OPTIMIZE IMAGE: resize + convert to WebP using WP's own image engine
+    register_rest_route('seoroom/v1', '/speed-optimize-image', array(
+        'methods' => 'POST', 'permission_callback' => '__return_true',
+        'callback' => function (WP_REST_Request $req) {
+            if (!seoroom_speed_auth_key($req)) return new WP_Error('forbidden', 'Bad key', array('status' => 403));
+            $url = $req->get_param('url');
+            $max_w = (int) ($req->get_param('max_width') ?: 1920);
+            $quality = (int) ($req->get_param('quality') ?: 72);
+            $up = wp_upload_dir();
+            if (!$url || strpos($url, $up['baseurl']) !== 0) return new WP_Error('bad_url', 'URL must be inside uploads', array('status' => 400));
+            $path = str_replace($up['baseurl'], $up['basedir'], $url);
+            if (!file_exists($path)) return new WP_Error('not_found', 'File not found', array('status' => 404));
+            $editor = wp_get_image_editor($path);
+            if (is_wp_error($editor)) return $editor;
+            $size = $editor->get_size();
+            if (!empty($size['width']) && $size['width'] > $max_w) $editor->resize($max_w, null, false);
+            $editor->set_quality($quality);
+            $dest = preg_replace('/\.(jpe?g|png)$/i', '', $path) . '-optimized.webp';
+            $saved = $editor->save($dest, 'image/webp');
+            if (is_wp_error($saved)) return $saved;
+            $new_url = str_replace($up['basedir'], $up['baseurl'], $saved['path']);
+            return array(
+                'ok' => true,
+                'original_url' => $url, 'original_kb' => (int) round(filesize($path) / 1024),
+                'optimized_url' => $new_url, 'optimized_kb' => (int) round(filesize($saved['path']) / 1024),
+            );
+        },
+    ));
+
+    // FIX HERO: swap an Elementor background slideshow to a static (optimized) image
+    register_rest_route('seoroom/v1', '/speed-fix-hero', array(
+        'methods' => 'POST', 'permission_callback' => '__return_true',
+        'callback' => function (WP_REST_Request $req) {
+            if (!seoroom_speed_auth_key($req)) return new WP_Error('forbidden', 'Bad key', array('status' => 403));
+            $pid = (int) $req->get_param('page_id');
+            $image_url = $req->get_param('image_url');
+            $element_id = $req->get_param('element_id');
+            if (!$pid) return new WP_Error('bad_request', 'page_id required', array('status' => 400));
+            $el = get_post_meta($pid, '_elementor_data', true);
+            if (!$el || !is_string($el)) return new WP_Error('no_elementor', 'No Elementor data on this page', array('status' => 400));
+            $original = $el;
+            $data = json_decode($el, true);
+            if (!is_array($data)) return new WP_Error('bad_json', 'Could not parse Elementor data', array('status' => 500));
+            $changed = false;
+            $used_image = null;
+            seoroom_speed_walk($data, function (&$node) use (&$changed, &$used_image, $image_url, $element_id) {
+                if ($changed) return;
+                if (empty($node['settings']['background_background']) || $node['settings']['background_background'] !== 'slideshow') return;
+                if ($element_id && ((isset($node['id']) ? $node['id'] : '') !== $element_id)) return;
+                $first = isset($node['settings']['background_slideshow_gallery'][0]['url']) ? $node['settings']['background_slideshow_gallery'][0]['url'] : null;
+                $img = $image_url ?: $first;
+                if (!$img) return;
+                $node['settings']['background_background'] = 'classic';
+                $node['settings']['background_image'] = array('url' => $img, 'id' => '', 'size' => '');
+                $node['settings']['background_size'] = 'cover';
+                $node['settings']['background_position'] = 'center center';
+                $used_image = $img;
+                $changed = true;
+            });
+            if (!$changed) return new WP_Error('not_found', 'No slideshow background found on this page', array('status' => 404));
+            $new_json = wp_json_encode($data);
+            $new_json = str_replace('"settings":[]', '"settings":{}', $new_json); // Elementor {} vs [] safety net
+            update_post_meta($pid, '_elementor_data', wp_slash($new_json));
+            delete_post_meta($pid, '_elementor_css');
+            if (class_exists('\\Elementor\\Plugin')) {
+                try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
+            }
+            return array('ok' => true, 'page_id' => $pid, 'image_used' => $used_image, 'original_elementor' => $original, 'new_elementor' => $new_json);
+        },
+    ));
+
+    // RESTORE: rollback a hero fix using the original Elementor JSON (sent back by the dashboard)
+    register_rest_route('seoroom/v1', '/speed-restore-elementor', array(
+        'methods' => 'POST', 'permission_callback' => '__return_true',
+        'callback' => function (WP_REST_Request $req) {
+            if (!seoroom_speed_auth_key($req)) return new WP_Error('forbidden', 'Bad key', array('status' => 403));
+            $pid = (int) $req->get_param('page_id');
+            $json = $req->get_param('elementor_json');
+            if (!$pid || !$json) return new WP_Error('bad_request', 'page_id and elementor_json required', array('status' => 400));
+            update_post_meta($pid, '_elementor_data', wp_slash($json));
+            delete_post_meta($pid, '_elementor_css');
+            if (class_exists('\\Elementor\\Plugin')) {
+                try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
+            }
+            return array('ok' => true, 'page_id' => $pid, 'restored' => true);
+        },
+    ));
+});
 
 // ============ REST API STATUS ENDPOINT ============
 add_action('rest_api_init', function() {
