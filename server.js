@@ -554,6 +554,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_business_type TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_notes TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS linked_docs JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS seoroom_speed_key TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS nw_page_labels JSONB DEFAULT '{}'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS tone_of_voice TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_wireframe TEXT`).catch(() => {});
@@ -2661,6 +2662,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const cloudflare_zone_id = b.cloudflare_zone_id ?? b.cloudflareZoneId;
   const grid_scan_limit = b.grid_scan_limit ?? b.gridScanLimit;
   const seoroom_api_key = b.seoroom_api_key || b.seoroomApiKey;
+  const seoroom_speed_key = b.seoroom_speed_key || b.seoroomSpeedKey;
   const phone = b.phone;
   const product_slugs = b.product_slugs;
   const defined_services = b.defined_services;
@@ -2707,7 +2709,8 @@ app.put('/api/projects/:id', async (req, res) => {
            monthly_fee=COALESCE($39, monthly_fee),
            cloudflare_zone_id=COALESCE($40, cloudflare_zone_id),
            grid_scan_limit=COALESCE($41, grid_scan_limit),
-           seoroom_api_key=COALESCE($42, seoroom_api_key)
+           seoroom_api_key=COALESCE($42, seoroom_api_key),
+           seoroom_speed_key=COALESCE($43, seoroom_speed_key)
        WHERE id=$1
        RETURNING *`,
       [req.params.id, name, domain, business_name, industry, location,
@@ -2733,7 +2736,8 @@ app.put('/api/projects/:id', async (req, res) => {
        monthly_fee !== undefined ? parseFloat(monthly_fee) || null : null,
        cloudflare_zone_id || null,
        grid_scan_limit !== undefined ? parseInt(grid_scan_limit) || null : null,
-       seoroom_api_key || null]
+       seoroom_api_key || null,
+       seoroom_speed_key || null]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     console.log(`[project-update] Saved project ${req.params.id}, competitors:`, result.rows[0].competitors);
@@ -18227,6 +18231,78 @@ app.get('/api/system/health', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===== SPEED FIXES — driven through the seoroom-speed plugin on the client site =====
+// Targets what BerqWP/generic optimizers can't reach: Elementor background slideshows
+// (CSS background images = LCP killers) and oversized background images.
+function speedPluginCfg(project) {
+  const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+  const key = project.seoroom_speed_key;
+  if (!wpUrl || !key) return null;
+  return { wpUrl, key };
+}
+
+app.get('/api/projects/:projectId/speed-fixes/scan', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const cfg = speedPluginCfg(project);
+    if (!cfg) return res.status(400).json({ error: 'Speed Plugin Key not set. Install the SEO Room Speed plugin on the site, copy its API key from Settings → SEO Room Speed, and paste it into Project Settings.' });
+    const r = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-scan?key=${encodeURIComponent(cfg.key)}`, { signal: AbortSignal.timeout(120000) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(r.status).json({ error: data.message || 'Speed scan failed (HTTP ' + r.status + ')' });
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/projects/:projectId/speed-fixes/fix-hero', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id, element_id, slide_url, page_title, page_url } = req.body || {};
+    if (!page_id) return res.status(400).json({ error: 'page_id required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const cfg = speedPluginCfg(project);
+    if (!cfg) return res.status(400).json({ error: 'Speed Plugin Key not set in Project Settings.' });
+
+    // 1. Optimise the first slide (resize 1920px, WebP q72) so the static hero is light
+    let imageUrl = null, opt = null;
+    if (slide_url) {
+      try {
+        const orsp = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-optimize-image?key=${encodeURIComponent(cfg.key)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: slide_url, max_width: 1920, quality: 72 }),
+          signal: AbortSignal.timeout(120000)
+        });
+        opt = await orsp.json().catch(() => null);
+        if (orsp.ok && opt && opt.optimized_url) imageUrl = opt.optimized_url;
+      } catch (e) { console.warn('[speed-fixes] optimize-image failed, using original slide:', e.message); }
+    }
+
+    // 2. Swap the slideshow for a static background
+    const frsp = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-fix-hero?key=${encodeURIComponent(cfg.key)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_id, element_id, image_url: imageUrl }),
+      signal: AbortSignal.timeout(60000)
+    });
+    const fix = await frsp.json().catch(() => ({}));
+    if (!frsp.ok) return res.status(frsp.status).json({ error: fix.message || 'Hero fix failed (HTTP ' + frsp.status + ')' });
+
+    // 3. Snapshot for rollback
+    try {
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'hero-static','_elementor_data',$5,$6)`,
+        [projectId, page_id, page_url || '', page_title || '', fix.original_elementor || '', fix.new_elementor || '']
+      );
+    } catch (e) { console.warn('[speed-fixes] history snapshot failed:', e.message); }
+
+    res.json({
+      ok: true,
+      image_used: fix.image_used,
+      optimized: (opt && opt.ok) ? { from_kb: opt.original_kb, to_kb: opt.optimized_kb } : null
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== Heavy-job lock: one heavy WP-hitting job per project at a time =====
 // Prevents e.g. Fix Everything + PageSpeed scan + audit crawl hammering the same WP server
 // simultaneously (causes Lighthouse net::ERR_TIMED_OUT and WP write timeouts).
@@ -18733,6 +18809,25 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     const project = projRes.rows[0];
     const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+
+    // Elementor data (e.g. hero-static fixes): prefer the seoroom-speed plugin restore endpoint —
+    // standard REST writes to _elementor_data are blocked on many hosts and miss wp_slash handling
+    if (change.field_name === '_elementor_data' && project.seoroom_speed_key && change.original_value) {
+      try {
+        const r = await fetch(`${wpBase}/wp-json/seoroom/v1/speed-restore-elementor?key=${encodeURIComponent(project.seoroom_speed_key)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ page_id: change.page_id, elementor_json: change.original_value }),
+          signal: AbortSignal.timeout(30000)
+        });
+        if (r.ok) {
+          await pool.query('UPDATE wp_change_history SET rolled_back_at=NOW() WHERE id=$1', [changeId]);
+          console.log(`[rollback] Restored _elementor_data via speed plugin for page ${change.page_id}`);
+          return res.json({ success: true, via: 'speed-plugin' });
+        }
+        console.warn('[rollback] plugin restore returned HTTP ' + r.status + ' — falling back to REST');
+      } catch (e) { console.warn('[rollback] plugin restore failed, falling back to REST:', e.message); }
+    }
+
     const authHeaders = getWpAuthHeaders(project);
     if (!authHeaders) return res.status(400).json({ error: 'WordPress auth not configured' });
 
