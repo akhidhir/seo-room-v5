@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room Speed Optimizer
  * Plugin URI: https://theseoroom.com.au
  * Description: Automatic website speed optimization — lazy loading, CSS/JS minification, browser caching, GZIP compression, font optimization, and preconnect. Safe, non-destructive, instant revert on deactivation.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_SPEED_VERSION', '1.1.0');
+define('SEOROOM_SPEED_VERSION', '1.1.1');
 define('SEOROOM_SPEED_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_SPEED_URL', plugin_dir_url(__FILE__));
 
@@ -565,10 +565,21 @@ function seoroom_speed_optimize_css_tag($tag, $handle, $href, $media) {
 }
 
 // ============ 5. HTACCESS — GZIP & CACHE HEADERS ============
+function seoroom_speed_get_home_path() {
+    // get_home_path() lives in wp-admin/includes/file.php and is NOT loaded on the
+    // front end — calling it from init caused a sitewide fatal. Guard + fallback.
+    if (!function_exists('get_home_path')) {
+        $file = ABSPATH . 'wp-admin/includes/file.php';
+        if (file_exists($file)) require_once $file;
+    }
+    if (function_exists('get_home_path')) return get_home_path();
+    return trailingslashit(ABSPATH);
+}
+
 function seoroom_speed_write_htaccess_rules($options = null) {
     if (!$options) $options = seoroom_speed_get_options();
 
-    $htaccess_file = get_home_path() . '.htaccess';
+    $htaccess_file = seoroom_speed_get_home_path() . '.htaccess';
     if (!file_exists($htaccess_file) || !is_writable($htaccess_file)) return false;
 
     $rules = "\n# BEGIN SEO Room Speed Optimizer\n";
@@ -635,7 +646,7 @@ function seoroom_speed_write_htaccess_rules($options = null) {
 }
 
 function seoroom_speed_remove_htaccess_rules() {
-    $htaccess_file = get_home_path() . '.htaccess';
+    $htaccess_file = seoroom_speed_get_home_path() . '.htaccess';
     if (!file_exists($htaccess_file) || !is_writable($htaccess_file)) return;
 
     $existing = file_get_contents($htaccess_file);
@@ -643,12 +654,14 @@ function seoroom_speed_remove_htaccess_rules() {
     file_put_contents($htaccess_file, $existing);
 }
 
-// Write .htaccess rules on activation
-add_action('init', function() {
+// Write .htaccess rules (admin requests only — never on the front end)
+add_action('admin_init', function() {
     if (get_transient('seoroom_speed_htaccess_written')) return;
     $options = seoroom_speed_get_options();
     if ($options['enable_gzip'] || $options['enable_cache_headers']) {
-        seoroom_speed_write_htaccess_rules($options);
+        try {
+            seoroom_speed_write_htaccess_rules($options);
+        } catch (\Throwable $e) { /* never take the site down over htaccess rules */ }
         set_transient('seoroom_speed_htaccess_written', true, DAY_IN_SECONDS);
     }
 });
