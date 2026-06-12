@@ -8752,6 +8752,18 @@
           setHeroScan({ findings: r.findings || [] });
         } catch (e) { setHeroScan({ error: e.message }); }
       };
+      const fixBgImage = async (b) => {
+        const name = (b.url || '').split('/').pop();
+        if (!confirm('Optimize "' + name + '" (' + b.kb + ' KB) to WebP (max 1920px, ~70-150 KB) and replace it on EVERY page that uses it?\n\nFully reversible via Change History.')) return;
+        setFixingHero('bg:' + b.url);
+        try {
+          const r = await api(`/projects/${project.id}/speed-fixes/optimize-background`, { method: 'POST', body: { url: b.url } });
+          if (r.error) alert(r.error);
+          else { alert(name + ': ' + r.from_kb + ' KB → ' + r.to_kb + ' KB (WebP), replaced on ' + r.pages_changed + ' page(s).'); runHeroScan(); }
+        } catch (e) { alert(e.message); }
+        setFixingHero(null);
+      };
+
       const fixHero = async (f, ss) => {
         const slide = ss.slides && ss.slides[0];
         if (!confirm('Replace the background slideshow on "' + f.title + '" with a static optimized image (first slide, WebP, max 1920px)?\n\nSame design minus the rotation — this is usually the single biggest LCP fix. Rollback available via Change History.')) return;
@@ -8866,6 +8878,14 @@
               <button className="btn btn-primary" onClick={runSpeedAudit} disabled={speedLoading} style={{ fontSize: 14, padding: '10px 22px' }}>
                 {speedLoading ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run CWV Audit</>}
               </button>
+              {speedLoading && (
+                <button className="btn" onClick={async () => {
+                  if (!confirm('Stop the running speed test? Results collected so far are kept.')) return;
+                  try { await api(`/speed-audit/${project.id}/stop`, { method: 'POST' }); } catch (e) { alert(e.message); }
+                }} style={{ fontSize: 14, padding: '10px 18px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)' }}>
+                  <i className="fas fa-stop" style={{ marginRight: 6 }} />Stop
+                </button>
+              )}
             </div>
           </div>
 
@@ -8926,6 +8946,34 @@
               </div>
               {heroScan.error && <div style={{ fontSize: 13, color: '#ef4444' }}>{heroScan.error}</div>}
               {heroScan.findings && heroScan.findings.length === 0 && <div style={{ fontSize: 13, color: '#22c55e' }}>No slideshow heroes or oversized background images found. All clear.</div>}
+              {(() => {
+                // Consolidate: the same oversized image often appears on many pages — fix it ONCE
+                const uniq = {};
+                (heroScan.findings || []).forEach(f => (f.big_backgrounds || []).forEach(b => {
+                  if (!uniq[b.url]) uniq[b.url] = { ...b, pages: 0 };
+                  uniq[b.url].pages++;
+                }));
+                const imgs = Object.values(uniq).sort((a, b) => (b.kb || 0) - (a.kb || 0));
+                if (imgs.length === 0) return null;
+                return (
+                  <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>
+                      {imgs.length} unique oversized image{imgs.length !== 1 ? 's' : ''} — optimize once, fixes every page using it
+                    </div>
+                    {imgs.map(b => (
+                      <div key={b.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 13, color: 'var(--text2)' }}>
+                        <span>{(b.url || '').split('/').pop()}</span>
+                        <span style={{ color: '#ef4444', fontWeight: 600 }}>{b.kb} KB</span>
+                        <span style={{ color: 'var(--text3)', fontSize: 12 }}>on {b.pages} page{b.pages !== 1 ? 's' : ''}</span>
+                        <button className="btn btn-primary" disabled={fixingHero === 'bg:' + b.url} onClick={() => fixBgImage(b)}
+                          style={{ fontSize: 12, padding: '4px 12px', marginLeft: 'auto' }}>
+                          {fixingHero === 'bg:' + b.url ? 'Optimizing…' : 'Optimize & Replace'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
               {(heroScan.findings || []).map(f => (
                 <div key={f.page_id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text2)' }}>
                   <div style={{ fontWeight: 600, color: 'var(--text)' }}>{f.title}</div>

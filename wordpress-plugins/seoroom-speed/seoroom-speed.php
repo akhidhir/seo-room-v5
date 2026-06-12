@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room Speed Optimizer
  * Plugin URI: https://theseoroom.com.au
  * Description: Automatic website speed optimization — lazy loading, CSS/JS minification, browser caching, GZIP compression, font optimization, and preconnect. Safe, non-destructive, instant revert on deactivation.
- * Version: 1.1.1
+ * Version: 1.2.0
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_SPEED_VERSION', '1.1.1');
+define('SEOROOM_SPEED_VERSION', '1.2.0');
 define('SEOROOM_SPEED_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_SPEED_URL', plugin_dir_url(__FILE__));
 
@@ -878,6 +878,46 @@ add_action('rest_api_init', function () {
                 try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
             }
             return array('ok' => true, 'page_id' => $pid, 'image_used' => $used_image, 'original_elementor' => $original, 'new_elementor' => $new_json);
+        },
+    ));
+
+    // REPLACE IMAGE: swap one image URL for another across ALL pages (Elementor data + post content).
+    // Symmetric — rollback is the same call with old/new reversed.
+    register_rest_route('seoroom/v1', '/speed-replace-image', array(
+        'methods' => 'POST', 'permission_callback' => '__return_true',
+        'callback' => function (WP_REST_Request $req) {
+            if (!seoroom_speed_auth_key($req)) return new WP_Error('forbidden', 'Bad key', array('status' => 403));
+            $old_url = $req->get_param('old_url');
+            $new_url = $req->get_param('new_url');
+            if (!$old_url || !$new_url) return new WP_Error('bad_request', 'old_url and new_url required', array('status' => 400));
+            $q = new WP_Query(array('post_type' => array('page', 'post'), 'post_status' => 'publish', 'posts_per_page' => 300, 'fields' => 'ids'));
+            $changed = array();
+            foreach ($q->posts as $pid) {
+                $did = false;
+                // Elementor data (URLs stored with escaped slashes in the JSON string)
+                $el = get_post_meta($pid, '_elementor_data', true);
+                if ($el && is_string($el)) {
+                    $search  = array($old_url, str_replace('/', '\\/', $old_url));
+                    $replace = array($new_url, str_replace('/', '\\/', $new_url));
+                    $new_el = str_replace($search, $replace, $el);
+                    if ($new_el !== $el) {
+                        update_post_meta($pid, '_elementor_data', wp_slash($new_el));
+                        delete_post_meta($pid, '_elementor_css');
+                        $did = true;
+                    }
+                }
+                // Classic post content
+                $content = get_post_field('post_content', $pid);
+                if ($content && strpos($content, $old_url) !== false) {
+                    wp_update_post(array('ID' => $pid, 'post_content' => str_replace($old_url, $new_url, $content)));
+                    $did = true;
+                }
+                if ($did) $changed[] = $pid;
+            }
+            if (count($changed) > 0 && class_exists('\\Elementor\\Plugin')) {
+                try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
+            }
+            return array('ok' => true, 'pages_changed' => count($changed), 'page_ids' => $changed);
         },
     ));
 

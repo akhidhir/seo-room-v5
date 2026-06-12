@@ -11891,8 +11891,9 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         async function processPage(page) {
           try {
             // Render ONE strategy at a time — never two full renders of the same (heavy) site at once.
+            // 8s gap: shared-hosting per-IP throttles need time to release before the next full render.
             const mobile = extractCwvAndOpps(await runPageSpeedAudit(page.url, 'mobile'));
-            await new Promise(r => setTimeout(r, 1500));
+            await new Promise(r => setTimeout(r, 8000));
             let desktop = { score: 0, cwv: {}, opportunities: [] };
             try {
               desktop = extractCwvAndOpps(await runPageSpeedAudit(page.url, 'desktop'));
@@ -18303,6 +18304,61 @@ app.post('/api/projects/:projectId/speed-fixes/fix-hero', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Stop a running speed audit (the background loop checks status between pages and exits)
+app.post('/api/speed-audit/:projectId/stop', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `UPDATE audits SET status='failed', completed_at=NOW(), audit_data = COALESCE(audit_data,'{}'::jsonb) || '{"error":"Stopped by user"}'::jsonb
+       WHERE project_id=$1 AND pillar='speed' AND status='running' RETURNING id`,
+      [req.params.projectId]
+    );
+    releaseHeavyLock(req.params.projectId);
+    console.log(`[speed-audit] Stopped by user for project ${req.params.projectId} (${r.rows.length} audit(s))`);
+    res.json({ ok: true, stopped: r.rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Optimize an oversized background image and replace it on EVERY page that uses it
+app.post('/api/projects/:projectId/speed-fixes/optimize-background', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { url } = req.body || {};
+    if (!url) return res.status(400).json({ error: 'url required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const cfg = speedPluginCfg(project);
+    if (!cfg) return res.status(400).json({ error: 'Speed Plugin Key not set in Project Settings.' });
+
+    // 1. Create the optimized WebP (resize to 1920px, q72)
+    const orsp = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-optimize-image?key=${encodeURIComponent(cfg.key)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, max_width: 1920, quality: 72 }),
+      signal: AbortSignal.timeout(120000)
+    });
+    const opt = await orsp.json().catch(() => ({}));
+    if (!orsp.ok || !opt.optimized_url) return res.status(500).json({ error: opt.message || 'Image optimization failed' });
+
+    // 2. Replace the URL everywhere (Elementor data + post content)
+    const rrsp = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-replace-image?key=${encodeURIComponent(cfg.key)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_url: url, new_url: opt.optimized_url }),
+      signal: AbortSignal.timeout(120000)
+    });
+    const rep = await rrsp.json().catch(() => ({}));
+    if (!rrsp.ok) return res.status(500).json({ error: rep.message || 'Image replacement failed' });
+
+    // 3. History row — rollback is the same replace call reversed
+    try {
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,0,'','Site-wide image swap','bg-image-swap','image_url',$2,$3)`,
+        [projectId, url, opt.optimized_url]
+      );
+    } catch (e) {}
+
+    res.json({ ok: true, from_kb: opt.original_kb, to_kb: opt.optimized_kb, pages_changed: rep.pages_changed || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== Heavy-job lock: one heavy WP-hitting job per project at a time =====
 // Prevents e.g. Fix Everything + PageSpeed scan + audit crawl hammering the same WP server
 // simultaneously (causes Lighthouse net::ERR_TIMED_OUT and WP write timeouts).
@@ -18809,6 +18865,23 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     const project = projRes.rows[0];
     const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+
+    // Site-wide image swaps: rollback = the same replace call with old/new reversed
+    if (change.change_type === 'bg-image-swap' && project.seoroom_speed_key) {
+      try {
+        const r = await fetch(`${wpBase}/wp-json/seoroom/v1/speed-replace-image?key=${encodeURIComponent(project.seoroom_speed_key)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ old_url: change.new_value, new_url: change.original_value }),
+          signal: AbortSignal.timeout(120000)
+        });
+        if (r.ok) {
+          await pool.query('UPDATE wp_change_history SET rolled_back_at=NOW() WHERE id=$1', [changeId]);
+          return res.json({ success: true, via: 'speed-plugin' });
+        }
+        const t = await r.json().catch(() => ({}));
+        return res.status(500).json({ error: t.message || 'Image swap rollback failed (HTTP ' + r.status + ')' });
+      } catch (e) { return res.status(500).json({ error: e.message }); }
+    }
 
     // Elementor data (e.g. hero-static fixes): prefer the seoroom-speed plugin restore endpoint —
     // standard REST writes to _elementor_data are blocked on many hosts and miss wp_slash handling
