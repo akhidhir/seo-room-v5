@@ -159,6 +159,16 @@ function isServicePage(path, schemas, wordCount, pageExclusions) {
 app.use(cors());
 app.use(express.json({ limit: '30mb' }));
 
+// System health: record every 5xx API response as an issue (recordSystemIssue defined later — hoisted)
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    if (res.statusCode >= 500 && req.path.startsWith('/api/') && typeof recordSystemIssue === 'function') {
+      recordSystemIssue('high', 'api-5xx', `${req.method} ${req.path} → ${res.statusCode}`);
+    }
+  });
+  next();
+});
+
 // CORS for WordPress plugin calls
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -879,6 +889,18 @@ async function initDb() {
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS plagiarism_result JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS ai_detection_result JSONB DEFAULT NULL`).catch(() => {});
     await client.query(`ALTER TABLE site_pages ADD COLUMN IF NOT EXISTS brief_gaps JSONB DEFAULT NULL`).catch(() => {});
+
+    // System health monitor — every captured issue across the whole system
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS system_issues (
+        id SERIAL PRIMARY KEY,
+        severity TEXT NOT NULL DEFAULT 'medium',
+        source TEXT NOT NULL,
+        message TEXT NOT NULL,
+        project_id INTEGER,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
 
     // Handled Drive comments — tracks which client comments were already evaluated per page
     await client.query(`
@@ -11931,6 +11953,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         }
       } catch (bgErr) {
         console.error('[speed-audit] Background error:', bgErr.message);
+        recordSystemIssue('high', 'speed-audit', bgErr.message, parseInt(req.params.projectId) || null);
         try { await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
           [JSON.stringify({ error: bgErr.message }), auditId]); } catch (e2) {}
       } finally {
@@ -18119,6 +18142,91 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
 // like /blog/how-to-contact-your-plumber or /product-search-tips being excluded from scoring
 const UTILITY_PAGE_RE = /(^|\/)(thank[-_]?you|privacy[^/]*|terms[^/]*|conditions|contact(-us)?|checkout|cart|my-account|sitemap[^/]*|search|404)(\/|\.|\?|$)/i;
 
+// ===== SYSTEM HEALTH MONITOR =====
+// Captures issues from everywhere (API 5xx, crashes, stuck jobs, failed checks) into
+// system_issues, runs periodic health checks, and serves /api/system/health for the UI.
+const healthState = { status: 'ok', checks: {}, last_run: null };
+let _issueDedup = {}; // message -> last logged ms (avoid flooding the table)
+
+async function recordSystemIssue(severity, source, message, projectId = null) {
+  try {
+    const key = source + '|' + String(message).substring(0, 120);
+    if (_issueDedup[key] && Date.now() - _issueDedup[key] < 10 * 60 * 1000) return; // same issue within 10 min → skip
+    _issueDedup[key] = Date.now();
+    if (Object.keys(_issueDedup).length > 500) _issueDedup = {};
+    await pool.query(
+      'INSERT INTO system_issues (severity, source, message, project_id) VALUES ($1,$2,$3,$4)',
+      [severity, source, String(message).substring(0, 500), projectId]
+    );
+  } catch (e) { console.warn('[health] failed to record issue:', e.message); }
+}
+
+// Crash + rejection capture
+process.on('unhandledRejection', (reason) => {
+  console.error('[health] Unhandled rejection:', reason?.message || reason);
+  recordSystemIssue('high', 'unhandled-rejection', reason?.message || String(reason));
+});
+process.on('uncaughtException', (err) => {
+  console.error('[health] Uncaught exception:', err.message);
+  recordSystemIssue('critical', 'uncaught-exception', err.message);
+});
+
+// Periodic health checks — every 10 minutes
+async function runHealthChecks() {
+  const checks = {};
+  // 1. Database
+  try { await pool.query('SELECT 1'); checks.database = { ok: true }; }
+  catch (e) { checks.database = { ok: false, error: e.message }; recordSystemIssue('critical', 'health-check', 'Database unreachable: ' + e.message); }
+  // 2. Required env keys present
+  const keys = { ANTHROPIC_API_KEY: 'AI audits/fixes', SERPAPI_KEY: 'rank tracking', PAGESPEED_API_KEY: 'CWV scans', GOOGLE_CLIENT_ID: 'Google OAuth' };
+  for (const [k, why] of Object.entries(keys)) {
+    if (!process.env[k]) { checks[k] = { ok: false, error: 'missing — ' + why + ' will fail' }; recordSystemIssue('high', 'health-check', `Env key ${k} missing (${why})`); }
+    else checks[k] = { ok: true };
+  }
+  // 3. Stuck audits — running > 1 hour means the job died (watchdog: auto-fail them)
+  try {
+    const stuck = await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data = COALESCE(audit_data,'{}'::jsonb) || '{"error":"Watchdog: job stuck >1h, auto-failed"}'::jsonb WHERE status='running' AND started_at < NOW() - INTERVAL '1 hour' RETURNING id, project_id, pillar`);
+    checks.stuck_audits = { ok: stuck.rows.length === 0, count: stuck.rows.length };
+    for (const r of stuck.rows) recordSystemIssue('medium', 'watchdog', `Audit #${r.id} (${r.pillar}) stuck >1h — auto-failed`, r.project_id);
+  } catch (e) { checks.stuck_audits = { ok: false, error: e.message }; }
+  // 4. Stale heavy locks
+  const staleLocks = Object.entries(heavyJobLocks).filter(([, l]) => Date.now() - l.ms > 60 * 60 * 1000);
+  checks.heavy_locks = { ok: staleLocks.length === 0, active: Object.keys(heavyJobLocks).length };
+  for (const [pid, l] of staleLocks) { releaseHeavyLock(pid); recordSystemIssue('medium', 'watchdog', `Stale heavy lock "${l.type}" released`, parseInt(pid) || null); }
+  // 5. Google OAuth tokens refresh (Drive/GSC) — try for the first user with an integration
+  try {
+    const ui = await pool.query(`SELECT user_id FROM user_integrations WHERE provider IN ('google','gsc','drive') LIMIT 1`);
+    if (ui.rows[0]) {
+      try { const t = await getGscAccessToken(ui.rows[0].user_id).catch(() => null) || await getDriveAccessToken(ui.rows[0].user_id).catch(() => null); checks.google_oauth = { ok: !!t, error: t ? undefined : 'token refresh failed' }; if (!t) recordSystemIssue('high', 'health-check', 'Google OAuth token refresh failing — GSC/Drive features down'); }
+      catch (e) { checks.google_oauth = { ok: false, error: e.message }; }
+    } else checks.google_oauth = { ok: true, note: 'no integrations configured' };
+  } catch (e) { checks.google_oauth = { ok: false, error: e.message }; }
+  // 6. Issue cleanup — keep 30 days
+  try { await pool.query(`DELETE FROM system_issues WHERE created_at < NOW() - INTERVAL '30 days'`); } catch (e) {}
+
+  const failed = Object.values(checks).filter(c => c && c.ok === false).length;
+  healthState.checks = checks;
+  healthState.status = checks.database && !checks.database.ok ? 'critical' : failed > 0 ? 'warn' : 'ok';
+  healthState.last_run = new Date().toISOString();
+  if (failed > 0) console.warn(`[health] ${failed} check(s) failing`);
+}
+setInterval(() => runHealthChecks().catch(e => console.error('[health] run error:', e.message)), 10 * 60 * 1000);
+setTimeout(() => runHealthChecks().catch(() => {}), 15000); // first run shortly after boot
+
+app.get('/api/system/health', async (req, res) => {
+  try {
+    const issues = await pool.query(`SELECT id, severity, source, message, project_id, created_at FROM system_issues ORDER BY created_at DESC LIMIT 50`);
+    const counts = await pool.query(`SELECT severity, COUNT(*)::int AS n FROM system_issues WHERE created_at > NOW() - INTERVAL '24 hours' GROUP BY severity`);
+    res.json({
+      status: healthState.status,
+      last_run: healthState.last_run,
+      checks: healthState.checks,
+      issues_24h: Object.fromEntries(counts.rows.map(r => [r.severity, r.n])),
+      recent_issues: issues.rows
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== Heavy-job lock: one heavy WP-hitting job per project at a time =====
 // Prevents e.g. Fix Everything + PageSpeed scan + audit crawl hammering the same WP server
 // simultaneously (causes Lighthouse net::ERR_TIMED_OUT and WP write timeouts).
@@ -18363,7 +18471,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix-everything/run', async (req,
     fixEverythingJobs[projectId] = job;
     (async () => {
       try { await runFixEverything(projectId, job); }
-      catch (e) { job.error = e.message; console.error('[fix-everything] Job error:', e.message); }
+      catch (e) { job.error = e.message; console.error('[fix-everything] Job error:', e.message); recordSystemIssue('high', 'fix-everything', e.message, parseInt(projectId) || null); }
       job.running = false;
       job.phase = 'Done';
       job.finished_at = new Date().toISOString();
@@ -18580,6 +18688,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix-orphans/run', async (req, re
       } catch (e) {
         job.error = e.message;
         console.error('[fix-orphans] Job error:', e.message);
+        recordSystemIssue('high', 'fix-orphans', e.message, parseInt(projectId) || null);
       }
       job.running = false;
       job.current = '';

@@ -12799,6 +12799,72 @@
       );
     }
 
+    // ============ SYSTEM HEALTH INDICATOR (sidebar) ============
+    function SystemHealthIndicator() {
+      const [health, setHealth] = React.useState(null);
+      const [open, setOpen] = React.useState(false);
+      const load = () => api('/system/health').then(setHealth).catch(() => {});
+      React.useEffect(() => {
+        load();
+        const t = setInterval(load, 120000); // refresh every 2 min
+        return () => clearInterval(t);
+      }, []);
+      const status = health?.status || 'ok';
+      const color = status === 'critical' ? '#ef4444' : status === 'warn' ? '#f59e0b' : '#22c55e';
+      const label = status === 'critical' ? 'System issues' : status === 'warn' ? 'Warnings' : 'System healthy';
+      const issues24 = health?.issues_24h ? Object.values(health.issues_24h).reduce((a, b) => a + b, 0) : 0;
+      const sevColor = (s) => s === 'critical' ? '#ef4444' : s === 'high' ? '#f97316' : s === 'medium' ? '#f59e0b' : 'var(--text3)';
+      return (
+        <React.Fragment>
+          <div onClick={() => { setOpen(true); load(); }} title="System health — click for details"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', marginBottom: 8, borderRadius: 8, cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg2)', fontSize: 12, color: 'var(--text2)' }}>
+            <span style={{ width: 9, height: 9, borderRadius: '50%', background: color, boxShadow: `0 0 6px ${color}`, flexShrink: 0 }}></span>
+            <span style={{ fontWeight: 600 }}>{label}</span>
+            {issues24 > 0 && <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{issues24} in 24h</span>}
+          </div>
+          {open && (
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={e => { if (e.target === e.currentTarget) setOpen(false); }}>
+              <div style={{ width: 640, maxWidth: '94vw', maxHeight: '82vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block', marginRight: 8 }}></span>
+                    System Health
+                    <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)', marginLeft: 10 }}>{health?.last_run ? 'checked ' + new Date(health.last_run).toLocaleTimeString() : ''}</span>
+                  </div>
+                  <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 18 }}>×</button>
+                </div>
+                <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Checks</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    {Object.entries(health?.checks || {}).map(([name, c]) => (
+                      <div key={name} style={{ fontSize: 12, color: 'var(--text2)' }}>
+                        <span style={{ color: c.ok ? '#22c55e' : '#ef4444', marginRight: 6, fontWeight: 700 }}>{c.ok ? '✓' : '✗'}</span>
+                        {name.replace(/_/g, ' ')}{c.error ? <span style={{ color: '#ef4444' }}> — {String(c.error).substring(0, 60)}</span> : ''}{c.note ? <span style={{ color: 'var(--text3)' }}> ({c.note})</span> : ''}
+                      </div>
+                    ))}
+                    {!health?.checks || Object.keys(health.checks).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>First check runs ~15s after server start…</div> : null}
+                  </div>
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '12px 18px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Recent Issues</div>
+                  {(health?.recent_issues || []).length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)' }}>No issues recorded. All clear.</div>}
+                  {(health?.recent_issues || []).map(iss => (
+                    <div key={iss.id} style={{ padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)', lineHeight: 1.4 }}>
+                      <span style={{ color: sevColor(iss.severity), fontWeight: 700, textTransform: 'uppercase', fontSize: 10, marginRight: 8 }}>{iss.severity}</span>
+                      <span style={{ color: 'var(--text3)', marginRight: 8 }}>[{iss.source}]</span>
+                      {iss.message}
+                      <span style={{ color: 'var(--text3)', marginLeft: 8, fontSize: 11 }}>{new Date(iss.created_at).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </React.Fragment>
+      );
+    }
+
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     const _onpageCache = {};
     function OnPageAuditPage({ project }) {
@@ -37743,6 +37809,7 @@ case 'action-plan':
             </div>
 
             <div className="sidebar-footer">
+              <SystemHealthIndicator />
               <button className="btn btn-danger" style={{ width: '100%' }} onClick={handleLogout}>
                 <i className="fas fa-sign-out-alt"></i> Sign out
               </button>
