@@ -35379,11 +35379,20 @@
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-                {stat('Real SEO issues', s.real_issues || 0, '#ef4444')}
-                {stat('High severity', s.high || 0, '#f59e0b')}
-                {stat('Impressions at stake', (s.impressions_at_stake || 0).toLocaleString())}
-              </div>
+              {/* Derive stats from the rows actually shown, so the cards can never contradict the table
+                  (the cached summary can be stale from an older scan). */}
+              {(() => {
+                const realRows = rows.filter(c => c.is_real_issue !== false);
+                const highCount = realRows.filter(c => c.severity === 'high').length;
+                const imprAtStake = realRows.reduce((sum, c) => sum + (c.total_impressions || 0), 0);
+                return (
+                  <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+                    {stat('Real SEO issues', realRows.length, '#ef4444')}
+                    {stat('High severity', highCount, '#f59e0b')}
+                    {stat('Impressions at stake', imprAtStake.toLocaleString())}
+                  </div>
+                );
+              })()}
               <div style={{ display: 'flex', marginBottom: 12, alignItems: 'center' }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>{rows.length > 0 ? `${rows.length} real cannibalization issue${rows.length > 1 ? 's' : ''} to fix` : 'Showing genuine SEO issues only'}</span>
                 <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>Last scan: {data.scanned_at ? new Date(data.scanned_at).toLocaleString() : '-'}</span>
