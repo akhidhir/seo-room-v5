@@ -12257,6 +12257,7 @@
       const [insertProgress, setInsertProgress] = useState(null);
       const [verifying, setVerifying] = useState(false);
       const [autoLinking, setAutoLinking] = useState(false);
+      const [advOpen, setAdvOpen] = useState(false); // "Advanced" actions dropdown
       const [autoStatus, setAutoStatus] = useState('');
       const [tab, setTab] = useState('overview'); // overview, suggestions
       const [pageFilter, setPageFilter] = useState('all'); // all, orphan, few_links, ok
@@ -12482,107 +12483,69 @@
               title: 'Reload the latest audit results (orphans, links, suggestions)',
               style: { fontSize: 13, padding: '8px 14px' }
             }, React.createElement('i', { className: loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate', style: { marginRight: 6 } }), (audit && audit.status === 'running') ? 'Auditing…' : 'Refresh'),
-            audit?.audited_at && React.createElement('button', {
-              className: 'btn',
-              disabled: isRunning,
-              onClick: async () => {
-                if (!confirm('Build topic clusters?\n\nAI groups your pages into service clusters and creates pillar↔spoke internal links. Saved as pending suggestions for you to review and approve.')) return;
-                try {
-                  const r = await api('/projects/' + project.id + '/internal-links/build-clusters', { method: 'POST' });
-                  if (r.error) { alert(r.error); return; }
-                  alert(r.message || ((r.created || 0) + ' cluster links created'));
-                  setTab('suggestions'); setFilter('pending'); loadData();
-                } catch (e) { alert('Error: ' + e.message); }
-              },
-              style: { fontSize: 13, padding: '8px 20px', background: '#8b5cf6', color: '#fff', border: 'none', marginRight: 8 }
-            }, React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 6 } }), 'Build Clusters'),
-            audit?.audited_at && (stats.orphan_count || (stats.page_details || []).filter(p => p.is_orphan).length) > 0 && React.createElement('button', {
-              className: 'btn',
-              disabled: isRunning,
-              onClick: async () => {
-                if (!confirm('Create contextual internal links to rescue all orphan pages?\n\nThey are saved as pending suggestions — you review and approve before anything goes live.')) return;
-                try {
-                  const r = await api('/projects/' + project.id + '/internal-links/rescue-orphans', { method: 'POST' });
-                  if (r.error) { alert(r.error); return; }
-                  alert(r.message || ((r.created || 0) + ' orphan-rescue links created'));
-                  setTab('suggestions'); setFilter('pending'); loadData();
-                } catch (e) { alert('Error: ' + e.message); }
-              },
-              style: { fontSize: 13, padding: '8px 20px', background: '#ef4444', color: '#fff', border: 'none', marginRight: 8 }
-            }, React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6 } }), 'Rescue Orphans'),
-            React.createElement('button', {
-              className: 'btn',
-              disabled: verifying || isRunning,
-              title: 'Turn empty index pages (e.g. /a-f, /services) into hubs that link all their child pages in body content',
-              onClick: async () => {
-                if (!confirm('Build hub pages?\n\nFinds parent/index pages (like /a-f or /services) that have 3+ child pages, and inserts an in-content list linking to those children — fixing pages that are only linked from the nav menu. Reversible (the page is backed up).')) return;
-                setVerifying(true);
-                try {
-                  const r = await api('/projects/' + project.id + '/internal-links/build-hubs', { method: 'POST' });
-                  if (r.error) { alert(r.error); }
-                  else {
-                    let msg = r.message || (r.built + ' hubs built');
-                    if (r.hubs && r.hubs.length) msg += '\n\n' + r.hubs.map(h => '• ' + (h.hub || '').replace(/^https?:\/\/[^/]+/, '') + (h.error ? ' — ' + h.error : h.already ? ' (already done)' : ' — ' + h.children + ' links added')).join('\n');
-                    alert(msg);
-                  }
-                } catch (e) { alert('Error: ' + e.message); }
-                setVerifying(false);
-              },
-              style: { fontSize: 13, padding: '8px 20px', background: '#8b5cf6', color: '#fff', border: 'none', marginRight: 8 }
-            }, React.createElement('i', { className: 'fas fa-diagram-project', style: { marginRight: 6 } }), 'Build Hubs'),
-            React.createElement('button', {
-              className: 'btn',
-              disabled: verifying || isRunning,
-              title: 'Add a contextual link on each child page back to its hub and to your services page (completes the hub-and-spoke loop)',
-              onClick: async () => {
-                if (!confirm('Link spoke pages?\n\nAdds a small contextual block to each child page (model/suburb pages) linking back to its hub and to your services page, with clean descriptive anchors. Processes ~25 per click — run again to continue. Reversible.')) return;
-                setVerifying(true);
-                try {
-                  const r = await api('/projects/' + project.id + '/internal-links/link-spokes', { method: 'POST', body: {} });
-                  alert(r.error ? r.error : (r.message || (r.processed + ' linked')));
-                } catch (e) { alert('Error: ' + e.message); }
-                setVerifying(false);
-              },
-              style: { fontSize: 13, padding: '8px 20px', background: '#6366f1', color: '#fff', border: 'none', marginRight: 8 }
-            }, React.createElement('i', { className: 'fas fa-sitemap', style: { marginRight: 6 } }), 'Link Spokes'),
-            React.createElement('button', {
-              className: 'btn',
-              disabled: verifying || isRunning,
-              title: 'Re-anchor failed links to phrases that actually exist on the source page, so they can be placed',
-              onClick: async () => {
-                if (!confirm('Fix failed links?\n\nFor every "Failed" link, this finds a relevant phrase that actually exists on the source page and uses it as the anchor, then sets them back to Approved. After it runs, open SEO Room → Settings on the site, then click Verify Now.')) return;
-                setVerifying(true);
-                try {
-                  const r = await api('/projects/' + project.id + '/internal-links/reanchor-failed', { method: 'POST' });
-                  if (r.error) { alert(r.error); }
-                  else { alert(r.message || (r.reanchored + ' re-anchored')); loadData(); }
-                } catch (e) { alert('Error: ' + e.message); }
-                setVerifying(false);
-              },
-              style: { fontSize: 13, padding: '8px 20px', background: '#f59e0b', color: '#fff', border: 'none', marginRight: 8 }
-            }, React.createElement('i', { className: 'fas fa-wand-magic-sparkles', style: { marginRight: 6 } }), 'Fix Failed Anchors'),
-            React.createElement('button', {
-              className: 'btn',
-              disabled: verifying || isRunning,
-              title: 'Check the live pages now and mark links Live (no need to wait for the plugin)',
-              onClick: async () => {
-                setVerifying(true);
-                try {
-                  const r = await api('/projects/' + project.id + '/internal-links/verify', { method: 'POST' });
-                  if (r.error) { alert(r.error); }
-                  else { alert('Verify complete — ' + (r.message || (r.live + ' live, ' + r.failed + ' not found'))); loadData(); }
-                } catch (e) { alert('Verify error: ' + e.message); }
-                setVerifying(false);
-              },
-              style: { fontSize: 13, padding: '8px 20px', background: '#22c55e', color: '#fff', border: 'none', marginRight: 8 }
-            }, React.createElement('i', { className: verifying ? 'fas fa-spinner fa-spin' : 'fas fa-circle-check', style: { marginRight: 6 } }), verifying ? 'Verifying...' : 'Verify Now'),
             React.createElement('button', {
               className: 'btn',
               disabled: isRunning,
               onClick: () => runAudit(true),
               title: 'Re-crawl your live pages (fresh) and recount internal links / orphans',
-              style: { fontSize: 13, padding: '8px 20px' }
-            }, React.createElement('i', { className: 'fas fa-search', style: { marginRight: 6 } }), audit?.audited_at ? 'Re-run Audit' : 'Run Audit')
+              style: { fontSize: 13, padding: '8px 14px' }
+            }, React.createElement('i', { className: 'fas fa-search', style: { marginRight: 6 } }), audit?.audited_at ? 'Re-run Audit' : 'Run Audit'),
+            // ── Advanced actions (the granular steps that "Optimise Links (Auto)" runs for you) ──
+            React.createElement('div', { style: { position: 'relative' } },
+              React.createElement('button', {
+                className: 'btn', disabled: verifying || isRunning, onClick: () => setAdvOpen(o => !o),
+                title: 'Run individual steps manually',
+                style: { fontSize: 13, padding: '8px 14px' }
+              }, React.createElement('i', { className: 'fas fa-sliders', style: { marginRight: 6 } }), 'Advanced',
+                 React.createElement('i', { className: 'fas fa-chevron-' + (advOpen ? 'up' : 'down'), style: { marginLeft: 6, fontSize: 10 } })),
+              advOpen && React.createElement('div', {
+                onMouseLeave: () => setAdvOpen(false),
+                style: { position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 8px 28px rgba(0,0,0,0.35)', minWidth: 230, padding: 6, display: 'flex', flexDirection: 'column', gap: 2 }
+              },
+                (() => {
+                  const itemStyle = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '9px 12px', background: 'transparent', border: 'none', borderRadius: 7, color: 'var(--text1)', fontSize: 13, cursor: 'pointer' };
+                  const hov = e => e.currentTarget.style.background = 'var(--bg2)';
+                  const out = e => e.currentTarget.style.background = 'transparent';
+                  const item = (icon, color, label, onClick) => React.createElement('button', {
+                    onMouseEnter: hov, onMouseLeave: out, disabled: verifying || isRunning,
+                    onClick: () => { setAdvOpen(false); onClick(); }, style: itemStyle
+                  }, React.createElement('i', { className: 'fas ' + icon, style: { color, width: 16, textAlign: 'center' } }), label);
+                  return [
+                    item('fa-sitemap', '#8b5cf6', 'Build Clusters', async () => {
+                      if (!confirm('Build topic clusters?\n\nAI groups your pages into service clusters and creates pillar↔spoke internal links. Saved as pending suggestions for you to review and approve.')) return;
+                      try { const r = await api('/projects/' + project.id + '/internal-links/build-clusters', { method: 'POST' }); if (r.error) { alert(r.error); return; } alert(r.message || ((r.created || 0) + ' cluster links created')); setTab('suggestions'); setFilter('pending'); loadData(); } catch (e) { alert('Error: ' + e.message); }
+                    }),
+                    item('fa-link', '#ef4444', 'Rescue Orphans', async () => {
+                      if (!confirm('Create contextual internal links to rescue all orphan pages?\n\nThey are saved as pending suggestions — you review and approve before anything goes live.')) return;
+                      try { const r = await api('/projects/' + project.id + '/internal-links/rescue-orphans', { method: 'POST' }); if (r.error) { alert(r.error); return; } alert(r.message || ((r.created || 0) + ' orphan-rescue links created')); setTab('suggestions'); setFilter('pending'); loadData(); } catch (e) { alert('Error: ' + e.message); }
+                    }),
+                    item('fa-diagram-project', '#8b5cf6', 'Build Hubs', async () => {
+                      if (!confirm('Build hub pages?\n\nFinds parent/index pages (like /a-f or /services) that have 3+ child pages, and inserts an in-content list linking to those children — fixing pages that are only linked from the nav menu. Reversible (the page is backed up).')) return;
+                      setVerifying(true);
+                      try { const r = await api('/projects/' + project.id + '/internal-links/build-hubs', { method: 'POST' }); if (r.error) { alert(r.error); } else { let msg = r.message || (r.built + ' hubs built'); if (r.hubs && r.hubs.length) msg += '\n\n' + r.hubs.map(h => '• ' + (h.hub || '').replace(/^https?:\/\/[^/]+/, '') + (h.error ? ' — ' + h.error : h.already ? ' (already done)' : ' — ' + h.children + ' links added')).join('\n'); alert(msg); } } catch (e) { alert('Error: ' + e.message); }
+                      setVerifying(false);
+                    }),
+                    item('fa-sitemap', '#6366f1', 'Link Spokes', async () => {
+                      if (!confirm('Link spoke pages?\n\nAdds a small contextual block to each child page (model/suburb pages) linking back to its hub and to your services page, with clean descriptive anchors. Processes ~25 per click — run again to continue. Reversible.')) return;
+                      setVerifying(true);
+                      try { const r = await api('/projects/' + project.id + '/internal-links/link-spokes', { method: 'POST', body: {} }); alert(r.error ? r.error : (r.message || (r.processed + ' linked'))); } catch (e) { alert('Error: ' + e.message); }
+                      setVerifying(false);
+                    }),
+                    item('fa-wand-magic-sparkles', '#f59e0b', 'Fix Failed Anchors', async () => {
+                      if (!confirm('Fix failed links?\n\nFor every "Failed" link, this finds a relevant phrase that actually exists on the source page and uses it as the anchor, then sets them back to Approved. After it runs, open SEO Room → Settings on the site, then click Verify Now.')) return;
+                      setVerifying(true);
+                      try { const r = await api('/projects/' + project.id + '/internal-links/reanchor-failed', { method: 'POST' }); if (r.error) { alert(r.error); } else { alert(r.message || (r.reanchored + ' re-anchored')); loadData(); } } catch (e) { alert('Error: ' + e.message); }
+                      setVerifying(false);
+                    }),
+                    item('fa-circle-check', '#22c55e', 'Verify Now', async () => {
+                      setVerifying(true);
+                      try { const r = await api('/projects/' + project.id + '/internal-links/verify', { method: 'POST' }); if (r.error) { alert(r.error); } else { alert('Verify complete — ' + (r.message || (r.live + ' live, ' + r.failed + ' not found'))); loadData(); } } catch (e) { alert('Verify error: ' + e.message); }
+                      setVerifying(false);
+                    }),
+                  ];
+                })()
+              )
+            )
           )
         ),
 
