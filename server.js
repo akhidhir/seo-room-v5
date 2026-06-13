@@ -19064,6 +19064,105 @@ app.get('/api/projects/:projectId/onpage-audit/fix-orphans/status', async (req, 
   res.json(bgRowToStatus(row) || { running: false, total: 0, done: 0 });
 });
 
+// ==================== WEBSITE AUDIT: FIX INTERNAL LINKS (Site Health findings → orphan link job) ====================
+// Takes "slug — no internal links" / "slug — only N internal link(s)" findings, resolves WP pages,
+// runs the proven bulk orphan-link job, then marks findings fixed for pages that actually received links.
+const internalLinkJobs = {};
+app.post('/api/projects/:projectId/audits/website/fix-internal-links/run', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { finding_ids } = req.body || {};
+    if (!Array.isArray(finding_ids) || finding_ids.length === 0) return res.status(400).json({ error: 'finding_ids required' });
+    const existing = internalLinkJobs[projectId];
+    if (existing && existing.running) return res.json({ ok: true, already_running: true, total: existing.total, done: existing.done });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    // 1. Load findings + parse target slugs from titles
+    const fRes = await pool.query(
+      `SELECT id, title FROM audit_findings WHERE project_id=$1 AND id = ANY($2) AND status NOT IN ('fixed','rejected')`,
+      [projectId, finding_ids.map(Number)]
+    );
+    const findingSlugs = []; // { finding_id, slug }
+    for (const f of fRes.rows) {
+      const m = (f.title || '').match(/^\/?(.+?)\/?\s*[—–-]\s*(?:no internal links|only \d+ internal link)/i);
+      if (m) {
+        const segs = m[1].replace(/^\/|\/$/g, '').split('/');
+        findingSlugs.push({ finding_id: f.id, slug: segs[segs.length - 1].toLowerCase() });
+      }
+    }
+    if (findingSlugs.length === 0) return res.status(400).json({ error: 'No internal-link findings could be parsed' });
+
+    const locked = acquireHeavyLock(projectId, 'Fix Internal Links');
+    if (locked) return heavyLockResponse(res, locked);
+
+    const job = { running: true, total: findingSlugs.length, done: 0, linked: 0, no_links: 0, errors: 0, current: 'Resolving pages…', results: [], findings_fixed: 0, started_at: new Date().toISOString() };
+    internalLinkJobs[projectId] = job;
+    const bgId = await createBgJob(projectId, 'fix_internal_links', { finding_ids });
+    const saveBg = bgSaver(bgId);
+
+    (async () => {
+      const hb = setInterval(() => saveBg(job), 5000);
+      try {
+        // 2. Resolve slugs → WP page IDs (one reliable crawl)
+        const allWp = [];
+        for (const type of ['pages', 'posts']) {
+          const items = await fetchAllWpItems(wpUrl, authHeaders, type, '&_fields=id,slug,link');
+          allWp.push(...items);
+        }
+        const bySlug = new Map(allWp.map(p => [(p.slug || '').toLowerCase(), p]));
+        const pageIdToFinding = new Map();
+        const pageIds = [];
+        for (const fs of findingSlugs) {
+          const wp = bySlug.get(fs.slug);
+          if (wp) { pageIds.push(wp.id); pageIdToFinding.set(String(wp.id), fs.finding_id); }
+          else { job.errors++; job.results.push({ finding_id: fs.finding_id, slug: fs.slug, error: 'page not found in WordPress' }); }
+        }
+        if (pageIds.length === 0) throw new Error('None of the pages were found in WordPress');
+
+        // 3. Run the proven orphan-link pipeline (AI picks sources, sequential safe writes)
+        await runBulkOrphanLinks(projectId, pageIds, job);
+        await warmCache(job.changed_urls, job, 'Warming cache for changed pages');
+
+        // 4. Mark findings fixed ONLY where links were actually added
+        for (const r of job.results) {
+          if (r.page_id != null && r.added > 0) {
+            const fid = pageIdToFinding.get(String(r.page_id));
+            if (fid) {
+              await pool.query(`UPDATE audit_findings SET status='fixed', updated_at=NOW() WHERE id=$1`, [fid]);
+              job.findings_fixed++;
+            }
+          }
+        }
+      } catch (e) {
+        job.error = e.message;
+        console.error('[fix-internal-links] Job error:', e.message);
+        recordSystemIssue('high', 'fix-internal-links', e.message, parseInt(projectId) || null);
+      }
+      clearInterval(hb);
+      job.running = false;
+      job.current = '';
+      job.finished_at = new Date().toISOString();
+      await saveBg(job, true);
+      releaseHeavyLock(projectId);
+      console.log(`[fix-internal-links] Done for project ${projectId}: ${job.linked} pages linked, ${job.findings_fixed} findings fixed, ${job.no_links} no-links, ${job.errors} errors`);
+    })();
+
+    res.json({ ok: true, started: true, total: job.total });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/audits/website/fix-internal-links/status', async (req, res) => {
+  const job = internalLinkJobs[req.params.projectId];
+  if (job) return res.json({ running: job.running, total: job.total, done: job.done, linked: job.linked, no_links: job.no_links, errors: job.errors, findings_fixed: job.findings_fixed, error: job.error, current: job.current });
+  const row = await latestBgJob(req.params.projectId, 'fix_internal_links');
+  res.json(bgRowToStatus(row) || { running: false, total: 0, done: 0 });
+});
+
 // Get change history for a project
 app.get('/api/projects/:projectId/wp-changes', async (req, res) => {
   try {

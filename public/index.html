@@ -6845,6 +6845,44 @@
 
       // Fix All Alt Text: sequentially fix every alt text finding
       const [fixAllAltProgress, setFixAllAltProgress] = useState(null);
+
+      // Fix Internal Links: background job (AI picks source pages, adds inbound links, marks findings fixed)
+      const [linkJobProgress, setLinkJobProgress] = useState(null);
+      const linkJobPollRef = React.useRef(false);
+      const isInternalLinkFinding = f => (f.category || '') === 'Site Health' && /[—–-]\s*(no internal links|only \d+ internal link)/i.test(f.title || '');
+      const pollLinkJob = async () => {
+        if (linkJobPollRef.current) return;
+        linkJobPollRef.current = true;
+        try {
+          while (true) {
+            const s = await api(`/projects/${project.id}/audits/website/fix-internal-links/status`);
+            setLinkJobProgress({ ...s });
+            if (!s.running) break;
+            await new Promise(r => setTimeout(r, 3000));
+          }
+          await loadFindings(); // statuses updated server-side
+        } catch (e) {
+          setLinkJobProgress(prev => ({ ...(prev || {}), running: false, error: e.message }));
+        }
+        linkJobPollRef.current = false;
+      };
+      const fixInternalLinks = async () => {
+        const targets = findings.filter(f => isInternalLinkFinding(f) && f.status !== 'fixed' && f.status !== 'rejected');
+        if (targets.length === 0) return;
+        try {
+          const r = await api(`/projects/${project.id}/audits/website/fix-internal-links/run`, { method: 'POST', body: { finding_ids: targets.map(f => f.id) } });
+          if (r.error) { setLinkJobProgress({ running: false, error: r.error }); return; }
+          setLinkJobProgress({ running: true, total: r.total || targets.length, done: 0 });
+          pollLinkJob();
+        } catch (e) { setLinkJobProgress({ running: false, error: e.message }); }
+      };
+      useEffect(() => {
+        // Resume polling if a link job is already running (e.g. after navigation)
+        if (project?.id) api(`/projects/${project.id}/audits/website/fix-internal-links/status`).then(s => {
+          if (s.running) { setLinkJobProgress({ ...s }); pollLinkJob(); }
+        }).catch(() => {});
+      }, [project?.id]);
+
       const fixAllAltText = async () => {
         const altFindings = findings.filter(f => isAltTextFixable(f) && f.status !== 'fixed' && f.status !== 'rejected');
         if (altFindings.length === 0) return;
@@ -7471,6 +7509,43 @@
                     style: { fontSize: 14, background: '#f9731620', color: '#f97316', border: '1px solid #f9731640', fontWeight: 600, marginLeft: 'auto' } },
                     React.createElement('i', { className: 'fas fa-image', style: { marginRight: 6 } }), `Fix All Alt Text (${altFixable.length})`)
                 ) : null
+              )
+            );
+          })()}
+
+          {/* Fix Internal Links banner */}
+          {(() => {
+            const linkFixable = findings.filter(f => isInternalLinkFinding(f) && f.status !== 'fixed' && f.status !== 'rejected');
+            if (linkFixable.length === 0 && !linkJobProgress) return null;
+            return (
+              React.createElement('div', { style: { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px', marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' } },
+                linkJobProgress?.running ? React.createElement(React.Fragment, null,
+                  React.createElement('i', { className: 'fas fa-spinner fa-spin', style: { color: '#22c55e' } }),
+                  React.createElement('span', { style: { fontSize: 14, color: 'var(--text1)' } },
+                    linkJobProgress.current || `Adding internal links: ${linkJobProgress.done || 0}/${linkJobProgress.total || '?'}`),
+                  React.createElement('div', { style: { flex: 1, minWidth: 100, height: 6, background: 'var(--bg)', borderRadius: 3 } },
+                    React.createElement('div', { style: { width: `${linkJobProgress.total ? ((linkJobProgress.done || 0) / linkJobProgress.total) * 100 : 5}%`, height: '100%', background: '#22c55e', borderRadius: 3, transition: 'width 0.3s' } })
+                  )
+                ) : linkJobProgress && !linkJobProgress.running ? (() => {
+                  const fixed = linkJobProgress.findings_fixed || 0, tot = linkJobProgress.total || 0;
+                  const failed = linkJobProgress.error ? tot : (tot - fixed);
+                  const color = linkJobProgress.error ? '#ef4444' : fixed === tot ? '#22c55e' : fixed > 0 ? '#f59e0b' : '#ef4444';
+                  const icon = linkJobProgress.error ? 'fa-circle-xmark' : fixed === tot ? 'fa-check-circle' : fixed > 0 ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
+                  return React.createElement(React.Fragment, null,
+                    React.createElement('i', { className: `fas ${icon}`, style: { color } }),
+                    React.createElement('span', { style: { fontSize: 14, color, fontWeight: 600 } },
+                      linkJobProgress.error ? `Failed: ${linkJobProgress.error}`
+                        : fixed === tot ? `Internal links added — ${fixed}/${tot} pages fixed`
+                        : `${fixed}/${tot} pages fixed — ${failed} could not be linked (no relevant source pages found)`),
+                    React.createElement('button', { className: 'btn btn-small', onClick: () => setLinkJobProgress(null), style: { fontSize: 12, marginLeft: 'auto' } }, 'Dismiss')
+                  );
+                })() : React.createElement(React.Fragment, null,
+                  React.createElement('i', { className: 'fas fa-link', style: { color: '#22c55e' } }),
+                  React.createElement('span', { style: { fontSize: 14, color: 'var(--text2)' } }, `${linkFixable.length} pages need internal links — AI can add relevant links from other pages`),
+                  React.createElement('button', { className: 'btn btn-small', onClick: fixInternalLinks,
+                    style: { fontSize: 14, background: '#22c55e20', color: '#22c55e', border: '1px solid #22c55e40', fontWeight: 600, marginLeft: 'auto' } },
+                    React.createElement('i', { className: 'fas fa-link', style: { marginRight: 6 } }), `Fix Internal Links (${linkFixable.length})`)
+                )
               )
             );
           })()}
