@@ -48392,6 +48392,59 @@ app.post('/api/projects/:projectId/security-audit/fix/spam-410', async (req, res
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET: Cloudflare diagnostic — which token is used, zone resolution, and the raw Transform-Rules API result
+app.get('/api/projects/:projectId/security-audit/cf-debug', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Which token source?
+    let source = 'none', token = null;
+    if (project.cloudflare_api_token) { source = 'project'; token = project.cloudflare_api_token; }
+    else if (project.user_id) {
+      const u = (await pool.query('SELECT cloudflare_api_token FROM users WHERE id=$1', [project.user_id])).rows[0];
+      if (u && u.cloudflare_api_token) { source = 'user(agency)'; token = u.cloudflare_api_token; }
+    }
+    if (!token && process.env.CLOUDFLARE_API_TOKEN) { source = 'env'; token = process.env.CLOUDFLARE_API_TOKEN; }
+    if (!token) return res.json({ token_source: 'none', error: 'No Cloudflare token found in project, agency user, or env.' });
+
+    const mask = t => t ? `${t.slice(0, 4)}…${t.slice(-4)} (len ${t.length})` : null;
+    const out = { token_source: source, token_preview: mask(token) };
+
+    // 1. Token self-verify
+    try {
+      const v = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', { headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+      const vd = await v.json().catch(() => ({}));
+      out.token_verify = { http: v.status, success: vd.success, status: vd.result?.status, errors: vd.errors };
+    } catch (e) { out.token_verify = { error: e.message }; }
+
+    // 2. Zone resolution
+    let zoneId = project.cloudflare_zone_id;
+    out.stored_zone_id = zoneId || null;
+    if (!zoneId) {
+      const root = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+      out.zone_lookup_domain = root;
+      try {
+        const zr = await fetch(`https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(root)}`, { headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+        const zd = await zr.json().catch(() => ({}));
+        out.zone_lookup = { http: zr.status, success: zd.success, found: zd.result?.length || 0, errors: zd.errors };
+        if (zd.success && zd.result?.[0]) zoneId = zd.result[0].id;
+      } catch (e) { out.zone_lookup = { error: e.message }; }
+    }
+    out.resolved_zone_id = zoneId || null;
+
+    // 3. Try reading the Transform-Rules entrypoint ruleset (the exact call the fix makes)
+    if (zoneId) {
+      try {
+        const r = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/rulesets/phases/http_response_headers_transform/entrypoint`, { headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+        const rd = await r.json().catch(() => ({}));
+        out.transform_rules_read = { http: r.status, success: rd.success, rule_count: rd.result?.rules?.length, errors: rd.errors };
+      } catch (e) { out.transform_rules_read = { error: e.message }; }
+    }
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST: Disable XML-RPC via .htaccess snippet through WP REST
 app.post('/api/projects/:projectId/security-audit/fix/xmlrpc', async (req, res) => {
   try {
