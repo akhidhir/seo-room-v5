@@ -35745,6 +35745,7 @@
       const [showAddProspect, setShowAddProspect] = useState(false);
       const [newProspect, setNewProspect] = useState({ domain: '', url: '', contact_email: '', contact_name: '', notes: '' });
       const [history, setHistory] = useState([]);
+      const [diag, setDiag] = useState(null);
 
       const accent = '#14b8a6';
       const pid = project?.id;
@@ -35775,6 +35776,8 @@
         api(`/projects/${pid}/backlinks/competitors?prefer=serp`).then(r => setDiscoveredComps(r.competitors || [])).catch(() => setDiscoveredComps([]));
         // Restore the last gap analysis result so it isn't lost when navigating away
         api(`/projects/${pid}/backlinks/gap`).then(r => { if (r && (r.opportunities || []).length) setGapData(r); }).catch(() => {});
+        // Profile health diagnostics (reads latest scan — no API cost)
+        api(`/projects/${pid}/backlinks/diagnostics`).then(r => { if (r && r.anchor_distribution) setDiag(r); }).catch(() => {});
       };
 
       useEffect(() => { loadData(); }, [pid]);
@@ -35930,6 +35933,64 @@
                   {statCard('New (30d)', newLinks.length, 'fas fa-plus-circle', '#22c55e', () => setTab('all'))}
                   {statCard('Lost (30d)', lostLinks.length, 'fas fa-minus-circle', '#ef4444', () => setTab('all'))}
                 </div>
+
+                {/* PROFILE HEALTH — anchor distribution + domain diversity diagnostics */}
+                {diag && (() => {
+                  const ad = diag.anchor_distribution.by_referring_domains;
+                  const segs = [
+                    { key: 'branded', label: 'Branded', color: '#22c55e' },
+                    { key: 'url', label: 'Naked URL', color: '#3b82f6' },
+                    { key: 'generic', label: 'Generic', color: '#64748b' },
+                    { key: 'commercial', label: 'Exact-match', color: '#ef4444' },
+                    { key: 'empty', label: 'Empty/Image', color: '#a855f7' },
+                  ];
+                  const dd = diag.domain_diversity;
+                  return <div style={{ ...cardStyle, marginBottom: 20 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}><i className="fas fa-heart-pulse" style={{ marginRight: 8, color: accent }} />Profile Health</div>
+                      {diag.toxic.count > 0 && <button onClick={() => { window.open(`/api/projects/${pid}/backlinks/disavow?token=${encodeURIComponent(localStorage.getItem('token')||'')}`, '_blank'); }}
+                        style={{ fontSize: 13, fontWeight: 600, padding: '7px 14px', borderRadius: 6, border: '1px solid #ef444440', background: '#ef444420', color: '#ef4444', cursor: 'pointer' }}>
+                        <i className="fas fa-file-arrow-down" style={{ marginRight: 6 }} />Export disavow ({diag.toxic.unique_domains} domains)</button>}
+                    </div>
+
+                    {/* Flags */}
+                    {(diag.flags || []).length > 0 && <div style={{ marginBottom: 16 }}>
+                      {diag.flags.map((f, i) => <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 12px', marginBottom: 6, borderRadius: 6, fontSize: 13,
+                        background: f.level === 'high' ? '#ef444415' : '#f59e0b15', border: `1px solid ${f.level === 'high' ? '#ef444430' : '#f59e0b30'}`, color: f.level === 'high' ? '#ef4444' : '#f59e0b' }}>
+                        <i className="fas fa-triangle-exclamation" style={{ marginTop: 2 }} /><span style={{ color: 'var(--text2)' }}>{f.text}</span></div>)}
+                    </div>}
+                    {(diag.flags || []).length === 0 && <div style={{ padding: '8px 12px', marginBottom: 16, borderRadius: 6, fontSize: 13, background: '#22c55e15', border: '1px solid #22c55e30', color: '#22c55e' }}><i className="fas fa-check-circle" style={{ marginRight: 6 }} />Anchor profile and domain diversity look healthy.</div>}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+                      {/* Anchor distribution */}
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)', marginBottom: 8 }}>Anchor mix <span style={{ fontWeight: 400 }}>(by referring domain)</span></div>
+                        <div style={{ height: 12, borderRadius: 6, overflow: 'hidden', display: 'flex', marginBottom: 10, background: 'var(--border)' }}>
+                          {segs.map(sg => (ad[sg.key] > 0 ? <div key={sg.key} title={`${sg.label}: ${ad[sg.key]}%`} style={{ width: ad[sg.key] + '%', background: sg.color }} /> : null))}
+                        </div>
+                        {segs.map(sg => <div key={sg.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, padding: '3px 0' }}>
+                          <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: sg.color, marginRight: 8 }} />{sg.label}</span>
+                          <span style={{ fontWeight: 700, color: sg.key === 'commercial' && ad.commercial >= 25 ? '#ef4444' : 'var(--text1)' }}>{ad[sg.key]}%</span>
+                        </div>)}
+                      </div>
+                      {/* Domain diversity */}
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text3)', marginBottom: 8 }}>Domain diversity</div>
+                        <div style={{ display: 'flex', gap: 18, marginBottom: 12 }}>
+                          <div><div style={{ fontSize: 22, fontWeight: 800 }}>{dd.referring_domains.toLocaleString()}</div><div style={{ fontSize: 11, color: 'var(--text3)' }}>Referring domains</div></div>
+                          <div><div style={{ fontSize: 22, fontWeight: 800, color: dd.links_per_domain >= 8 ? '#f59e0b' : 'var(--text1)' }}>{dd.links_per_domain}</div><div style={{ fontSize: 11, color: 'var(--text3)' }}>Links / domain</div></div>
+                        </div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)', marginBottom: 4 }}>Most-linking domains (sample)</div>
+                        <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+                          {(dd.top_domains || []).slice(0, 8).map((d, i) => <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0' }}>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }}>{d.domain}</span>
+                            <span style={{ color: d.count >= 10 ? '#f59e0b' : 'var(--text3)', fontWeight: 600 }}>{d.count}</span>
+                          </div>)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>;
+                })()}
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
                   {/* Dofollow / Nofollow split — computed from actual backlinks array + summary fallback */}

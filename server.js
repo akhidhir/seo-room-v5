@@ -46606,6 +46606,111 @@ app.get('/api/projects/:projectId/backlinks', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Diagnostics: anchor-text distribution + referring-domain diversity + toxic summary.
+// Reads the latest scan — no new API cost.
+app.get('/api/projects/:projectId/backlinks/diagnostics', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const scan = (await pool.query('SELECT * FROM backlink_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 1', [projectId])).rows[0];
+    if (!scan) return res.json({ scan: null });
+    const project = (await pool.query('SELECT domain, business_name, name FROM projects WHERE id=$1', [projectId])).rows[0] || {};
+
+    const parse = v => { try { return typeof v === 'string' ? JSON.parse(v) : (v || []); } catch { return []; } };
+    const anchors = parse(scan.anchor_texts);
+    const backlinks = parse(scan.backlinks);
+    const toxic = parse(scan.toxic_links);
+    const summary = (() => { try { return typeof scan.summary === 'string' ? JSON.parse(scan.summary) : (scan.summary || {}); } catch { return {}; } })();
+
+    // ---- Brand + generic vocab ----
+    const domainBase = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+    const domainNoTld = domainBase.split('.')[0]; // seoroom
+    const brandTokens = new Set();
+    (project.business_name || project.name || '').toLowerCase().split(/\s+/).filter(w => w.length > 2 && !['the','and','for'].includes(w)).forEach(w => brandTokens.add(w));
+    if (domainNoTld) brandTokens.add(domainNoTld.toLowerCase());
+    const GENERIC = ['click here','read more','here','website','visit','learn more','more','this','link','homepage','home page','more info','website powered by','powered by','website design by','designed by','built by','visit website','this website','see more','find out more','website credit'];
+
+    const classify = (raw) => {
+      const a = (raw || '').trim().toLowerCase();
+      if (!a || a === '(empty)') return 'empty';
+      if (/^https?:\/\//.test(a) || (domainBase && a.includes(domainBase)) || a === domainNoTld) return 'url';
+      for (const t of brandTokens) { if (t && a.includes(t)) return 'branded'; }
+      if (GENERIC.some(g => a === g || a.includes(g))) return 'generic';
+      return 'commercial'; // money / keyword-rich — the over-optimization bucket
+    };
+
+    // Weight anchor distribution by referring domains (more meaningful than raw link count)
+    const dist = { branded: 0, url: 0, generic: 0, commercial: 0, empty: 0 };
+    const distLinks = { branded: 0, url: 0, generic: 0, commercial: 0, empty: 0 };
+    const commercialExamples = [];
+    for (const an of anchors) {
+      const cls = classify(an.anchor);
+      const rd = an.referring_domains || 0;
+      const bl = an.backlinks || 0;
+      dist[cls] += rd || (bl > 0 ? 1 : 0);
+      distLinks[cls] += bl;
+      if (cls === 'commercial' && commercialExamples.length < 12) commercialExamples.push({ anchor: an.anchor, referring_domains: rd, backlinks: bl });
+    }
+    const totalRd = Object.values(dist).reduce((s, n) => s + n, 0) || 1;
+    const pct = obj => Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, Math.round((v / totalRd) * 100)]));
+    const anchorPct = pct(dist);
+    commercialExamples.sort((a, b) => (b.referring_domains - a.referring_domains) || (b.backlinks - a.backlinks));
+
+    // ---- Referring-domain diversity (from the backlink sample) ----
+    const domainCounts = {};
+    for (const b of backlinks) {
+      const d = (b.domain_from || (b.url_from || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).toLowerCase();
+      if (d) domainCounts[d] = (domainCounts[d] || 0) + 1;
+    }
+    const topDomains = Object.entries(domainCounts).map(([domain, count]) => ({ domain, count })).sort((a, b) => b.count - a.count).slice(0, 15);
+    const totalBacklinks = summary.total_backlinks || scan.total_backlinks || backlinks.length;
+    const referringDomains = summary.referring_domains || scan.referring_domains || Object.keys(domainCounts).length;
+    const linksPerDomain = referringDomains ? +(totalBacklinks / referringDomains).toFixed(1) : 0;
+
+    // ---- Flags ----
+    const flags = [];
+    if (anchorPct.commercial >= 40) flags.push({ level: 'high', text: `${anchorPct.commercial}% of anchors are exact-match / keyword-rich — well above the safe ~20%. Over-optimized anchor profile is a manipulation signal.` });
+    else if (anchorPct.commercial >= 25) flags.push({ level: 'medium', text: `${anchorPct.commercial}% exact-match anchors — slightly high. Aim to keep money anchors a minority.` });
+    if (anchorPct.branded + anchorPct.url < 40) flags.push({ level: 'medium', text: `Only ${anchorPct.branded + anchorPct.url}% of anchors are branded or naked-URL. A natural profile is usually branded/URL-heavy.` });
+    if (linksPerDomain >= 8) flags.push({ level: 'medium', text: `${linksPerDomain} links per referring domain on average — suggests heavy sitewide/footer links rather than diverse editorial links.` });
+    if (referringDomains && totalBacklinks && referringDomains < 100) flags.push({ level: 'medium', text: `Only ${referringDomains} referring domains for ${totalBacklinks} links — diversity is thin. New domains matter more than more links.` });
+
+    // Unique toxic domains (for disavow)
+    const toxicDomains = [...new Set(toxic.map(t => (t.domain_from || (t.url_from || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).toLowerCase()).filter(Boolean))];
+
+    res.json({
+      scanned_at: scan.scanned_at,
+      anchor_distribution: { by_referring_domains: anchorPct, counts: dist, link_counts: distLinks, commercial_examples: commercialExamples },
+      domain_diversity: { total_backlinks: totalBacklinks, referring_domains: referringDomains, links_per_domain: linksPerDomain, top_domains: topDomains, unique_in_sample: Object.keys(domainCounts).length, sample_size: backlinks.length },
+      toxic: { count: toxic.length, unique_domains: toxicDomains.length },
+      flags
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Download a Google disavow file (.txt) built from the toxic links of the latest scan
+app.get('/api/projects/:projectId/backlinks/disavow', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const scan = (await pool.query('SELECT toxic_links, scanned_at FROM backlink_scans WHERE project_id=$1 ORDER BY scanned_at DESC LIMIT 1', [projectId])).rows[0];
+    const project = (await pool.query('SELECT domain FROM projects WHERE id=$1', [projectId])).rows[0] || {};
+    if (!scan) return res.status(404).json({ error: 'No scan found' });
+    let toxic = []; try { toxic = typeof scan.toxic_links === 'string' ? JSON.parse(scan.toxic_links) : (scan.toxic_links || []); } catch {}
+
+    // Disavow at domain level (Google's recommended granularity for spammy networks)
+    const domains = [...new Set(toxic.map(t => (t.domain_from || (t.url_from || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')).toLowerCase()).filter(Boolean))].sort();
+    const header = [
+      `# Google disavow file for ${project.domain || ''}`,
+      `# Generated by SEO Room on ${new Date().toISOString().split('T')[0]} from ${toxic.length} toxic backlinks (${domains.length} domains)`,
+      `# Review before uploading. Submit at: https://search.google.com/search-console/disavow-links`,
+      ''
+    ].join('\n');
+    const body = domains.map(d => `domain:${d}`).join('\n');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=disavow-${(project.domain || 'site').replace(/[^a-z0-9.]/gi, '_')}.txt`);
+    res.send(header + body + '\n');
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Get all scans (history)
 app.get('/api/projects/:projectId/backlinks/history', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
