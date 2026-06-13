@@ -1531,6 +1531,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/rc-grid-sync$/)) return next();
   // Allow RC sync (called by scheduled automation)
   if (req.path.match(/\/api\/projects\/\d+\/rc-sync$/)) return next();
+  // Allow GBP sync targets list (read-only: project id/name/location id — called by scheduled automation)
+  if (req.path === '/api/gbp-sync/targets') return next();
   // Allow plugin-verify (WP plugin uses connection code, not JWT)
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
@@ -13758,6 +13760,15 @@ app.get('/api/projects/:projectId/handshake/latest', async (req, res) => {
 // ==================== RATING CAPTAIN SYNC ====================
 
 // Accept Rating Captain data and generate internal GBP audit findings
+// Sync targets — every project that has a GBP location set, so the scheduled GBP sync reads the
+// mapping from settings instead of hardcoding it. No auth (returns only project id/name/location id).
+app.get('/api/gbp-sync/targets', async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT id, name, business_name, gbp_location_id FROM projects WHERE gbp_location_id IS NOT NULL AND gbp_location_id <> '' ORDER BY id`);
+    res.json({ targets: r.rows.map(p => ({ project_id: p.id, name: p.business_name || p.name, location_id: p.gbp_location_id })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
   const { projectId } = req.params;
   const { location_id, profile, healthcheck, reviews_stats, posts, rc_location_id, db_location_id } = req.body;
