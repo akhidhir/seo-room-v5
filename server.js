@@ -537,10 +537,15 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_id TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS rc_location_id INTEGER`).catch(() => {});
-    // Set RC location IDs + correct gbp_location_id for all projects
-    await client.query(`UPDATE projects SET rc_location_id = 16189, gbp_location_id = 'locations/12755344744730282615' WHERE id = 1`).catch(() => {});
-    await client.query(`UPDATE projects SET rc_location_id = 190720, gbp_location_id = 'locations/8702513397324148400' WHERE id = 2`).catch(() => {});
-    await client.query(`UPDATE projects SET rc_location_id = 192823, gbp_location_id = 'locations/17933670947974765351' WHERE id = 3`).catch(() => {});
+    // One-time bootstrap defaults ONLY — never overwrite a location the user has set in Project Settings.
+    // (These previously ran unconditionally and clobbered gbp_location_id on every deploy, breaking the
+    //  project→GBP mapping. Now they only fill blanks.)
+    await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
+    await client.query(`UPDATE projects SET gbp_location_id = 'locations/12755344744730282615' WHERE id = 1 AND (gbp_location_id IS NULL OR gbp_location_id = '')`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 190720 WHERE id = 2 AND rc_location_id IS NULL`).catch(() => {});
+    await client.query(`UPDATE projects SET gbp_location_id = 'locations/8702513397324148400' WHERE id = 2 AND (gbp_location_id IS NULL OR gbp_location_id = '')`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 192823 WHERE id = 3 AND rc_location_id IS NULL`).catch(() => {});
+    await client.query(`UPDATE projects SET gbp_location_id = 'locations/17933670947974765351' WHERE id = 3 AND (gbp_location_id IS NULL OR gbp_location_id = '')`).catch(() => {});
     await client.query(`UPDATE projects SET rc_location_id = 116961 WHERE id = 4 AND rc_location_id IS NULL`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
