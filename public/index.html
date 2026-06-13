@@ -36386,9 +36386,20 @@
 
               {/* TOXIC LINKS TAB */}
               {tab === 'toxic' && <>
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 13, color: 'var(--text3)' }}>{toxicLinks.length} potentially toxic links found</div>
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>Scored 0–100 from DataForSEO spam score + IP hosts, spam-niche domains/anchors, and broken links. Low authority alone is not counted as toxic. Re-run the scan to apply.</div>
+                <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontSize: 13, color: 'var(--text3)' }}>{toxicLinks.length} potentially toxic links found</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>Scored 0–100 from DataForSEO spam score + IP hosts, spam-niche domains/anchors, and broken links. Low authority alone is not counted as toxic. Re-run the scan to apply.</div>
+                  </div>
+                  <button onClick={() => window.open(`/api/projects/${pid}/backlinks/disavow?token=${encodeURIComponent(localStorage.getItem('token')||'')}`, '_blank')}
+                    style={{ ...btnStyle, whiteSpace: 'nowrap', background: '#ef444420', color: '#ef4444', border: '1px solid #ef444440' }}>
+                    <i className="fas fa-file-arrow-down" style={{ marginRight: 6 }}></i>Export disavow file
+                  </button>
+                </div>
+                {/* How to submit to GSC — Google has no disavow API, so it's a manual upload */}
+                <div style={{ ...cardStyle, marginBottom: 16, padding: '12px 16px', fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>
+                  <i className="fas fa-circle-info" style={{ marginRight: 6, color: accent }}></i>
+                  <b>Submit to Google:</b> Google has no disavow API, so the file is uploaded by hand (one time). Click <b>Export disavow file</b> above, then open the <a href="https://search.google.com/search-console/disavow-links" target="_blank" rel="noopener" style={{ color: accent }}>GSC Disavow Tool</a>, pick the property, and upload the file. The export only includes genuinely spammy domains (score ≥ 40, broken-only links excluded) — disavowing good links can hurt rankings, so review it first.
                 </div>
                 <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
                   <div style={{ maxHeight: 600, overflowY: 'auto' }}>
