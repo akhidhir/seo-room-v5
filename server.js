@@ -14203,6 +14203,95 @@ app.get('/api/rc/locations', async (req, res) => {
   }
 });
 
+// ==================== GBP OPTIMISE — read-only audit (scores the profile vs local ranking factors) ====================
+// Reads the stored GBP profile (+ posts/reviews caches) and grades it. No writes — diagnosis only.
+app.get('/api/projects/:projectId/gbp-optimise/audit', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Source 1: full Google-shape profile (kind='rc_profile' → config.profile), Source 2: clean gbp_profile
+    const intg = await pool.query(`SELECT kind, config FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_profile','gbp_profile')`, [projectId]);
+    const byKind = {}; for (const r of intg.rows) byKind[r.kind] = (typeof r.config === 'string' ? JSON.parse(r.config) : r.config);
+    const rcProfile = byKind.rc_profile?.profile || null;          // full GBP API shape
+    const gbp = byKind.gbp_profile || null;                         // flattened convenience shape
+    if (!rcProfile && !gbp) {
+      return res.json({ connected: false, error: 'No GBP profile synced for this project yet. Sync RatingCaptain / set the GBP Location ID in Project Settings.' });
+    }
+
+    // Normalise the fields we grade from whichever source we have
+    const description = rcProfile?.profile?.description || gbp?.description || '';
+    const primaryCategory = rcProfile?.categories?.primaryCategory?.displayName || (gbp?.categories || [])[0] || '';
+    const additionalCategories = rcProfile?.categories?.additionalCategories?.map(c => c.displayName) || (gbp?.categories || []).slice(1);
+    const serviceItems = rcProfile?.serviceItems || [];
+    const servicesCount = serviceItems.length || (gbp?.services || []).length;
+    const hoursPeriods = rcProfile?.regularHours?.periods || gbp?.hours || [];
+    const openDays = new Set(hoursPeriods.map(p => p.openDay));
+    const serviceAreas = rcProfile?.serviceArea?.places?.placeInfos?.map(p => p.placeName) || gbp?.service_areas || [];
+    const website = rcProfile?.websiteUri || gbp?.website || '';
+    const phone = rcProfile?.phoneNumbers?.primaryPhone || gbp?.phone || '';
+    const hasEmergencyService = serviceItems.some(s => /emergency|24|callout/i.test(s.freeFormServiceItem?.label?.displayName || ''));
+
+    // Posts recency + review count from caches
+    let lastPostDays = null, postCount = 0;
+    try {
+      const pc = (await pool.query(`SELECT posts, updated_at FROM posts_cache WHERE project_id=$1`, [projectId])).rows[0];
+      const posts = pc ? (typeof pc.posts === 'string' ? JSON.parse(pc.posts) : pc.posts) : [];
+      postCount = (posts || []).length;
+      const dates = (posts || []).map(p => new Date(p.create_time || p.created_at || p.date || 0).getTime()).filter(t => t > 0);
+      if (dates.length) lastPostDays = Math.floor((Date.now() - Math.max(...dates)) / 86400000);
+    } catch {}
+    let reviewCount = 0, rating = null;
+    try {
+      const rc = (await pool.query(`SELECT reviews, total_count FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
+      if (rc) { reviewCount = rc.total_count || 0; const rv = typeof rc.reviews === 'string' ? JSON.parse(rc.reviews) : (rc.reviews || []); const rs = rv.map(r => r.rating || r.star_rating).filter(Boolean); if (rs.length) rating = +(rs.reduce((a, b) => a + b, 0) / rs.length).toFixed(1); }
+    } catch {}
+
+    // ── Grade ──
+    const findings = [];
+    const add = (factor, severity, label, detail, rec) => findings.push({ factor, severity, label, detail, recommendation: rec });
+
+    // Relevance
+    if (!primaryCategory) add('Relevance', 'critical', 'No primary category', 'Primary category is the single biggest GBP relevance signal.', 'Set the most specific primary category.');
+    if (additionalCategories.length < 3) add('Relevance', 'medium', `Only ${additionalCategories.length} secondary categories`, 'More relevant categories widen the queries you can rank for.', 'Add relevant secondary categories (aim 3–8).');
+    const descLen = description.length;
+    if (descLen < 200) add('Relevance', 'high', 'Thin business description', `Description is ${descLen} chars (max 750).`, 'Expand to 600–750 chars with services + suburbs.');
+    else if (descLen < 600) add('Relevance', 'low', 'Description could be fuller', `${descLen}/750 chars used.`, 'Use more of the 750 characters with services and service areas.');
+    if (servicesCount < 10) add('Relevance', 'medium', `Only ${servicesCount} services listed`, 'Each service is a relevance signal and can rank.', 'Add your full service list.');
+    if (serviceAreas.length < 3) add('Relevance', 'low', `Only ${serviceAreas.length} service areas`, 'Service areas tell Google where you operate.', 'Add the suburbs/regions you serve (up to 20).');
+
+    // Prominence (freshness, reviews)
+    if (lastPostDays === null) add('Prominence', 'high', 'No Google Posts found', 'Posting weekly is a freshness/engagement signal.', 'Publish a Google Post; keep a weekly cadence.');
+    else if (lastPostDays > 14) add('Prominence', 'medium', `Last post ${lastPostDays} days ago`, 'Stale profiles lose the freshness signal.', 'Post at least every 1–2 weeks.');
+    if (reviewCount && reviewCount < 25) add('Prominence', 'medium', `Only ${reviewCount} reviews`, 'Review count + rating are major map-pack factors.', 'Run a review-request campaign.');
+    if (rating && rating < 4.5) add('Prominence', 'medium', `Rating ${rating}★`, 'Below 4.5 dampens click-through and ranking.', 'Address service issues; encourage happy customers to review.');
+
+    // Consistency / completeness
+    if (hasEmergencyService && openDays.size < 6) add('Consistency', 'low', 'Emergency service but limited hours', `You list emergency/callout services but hours are only ${openDays.size} days.`, 'Add a 24-hour or emergency "more hours" entry so the listing matches the service.');
+    if (!website) add('Completeness', 'high', 'No website URL', 'The website link is a ranking + conversion signal.', 'Add the website URL.');
+    if (!phone) add('Completeness', 'high', 'No phone number', 'A local phone number is core NAP.', 'Add the primary phone.');
+
+    const weight = { critical: 25, high: 12, medium: 6, low: 2 };
+    const penalty = findings.reduce((s, f) => s + (weight[f.severity] || 0), 0);
+    const score = Math.max(0, 100 - penalty);
+
+    res.json({
+      connected: true,
+      score,
+      profile: {
+        title: rcProfile?.title || gbp?.business?.name || project.business_name,
+        primaryCategory, additionalCategories, servicesCount,
+        description_chars: descLen, open_days: openDays.size,
+        service_areas: serviceAreas.length, website, phone,
+        reviews: reviewCount, rating, last_post_days: lastPostDays,
+      },
+      findings,
+      maps_url: rcProfile?.metadata?.mapsUri || gbp?.maps_url || null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // RC Grid Sync — DIRECT from RC Local API (on-demand, called from dashboard button)
 app.post('/api/projects/:projectId/rc-grid-sync/live', async (req, res) => {
   const { projectId } = req.params;

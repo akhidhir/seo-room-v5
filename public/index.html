@@ -10250,6 +10250,98 @@
       );
     }
 
+    // ============ GBP OPTIMISE (read-only audit) ============
+    function GBPOptimisePage({ project }) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [err, setErr] = useState('');
+      const load = () => {
+        if (!project?.id) return;
+        setLoading(true); setErr('');
+        api(`/projects/${project.id}/gbp-optimise/audit`).then(d => { if (d.error && !d.connected) setErr(d.error); setData(d); }).catch(e => setErr(e.message)).finally(() => setLoading(false));
+      };
+      useEffect(() => { load(); }, [project?.id]);
+
+      const factorColor = { Relevance: '#6366f1', Prominence: '#14b8a6', Consistency: '#f59e0b', Completeness: '#ef4444', Distance: '#8b5cf6' };
+      const sevColor = { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#9ca3af' };
+      const scoreColor = s => s >= 80 ? '#22c55e' : s >= 55 ? '#f59e0b' : '#ef4444';
+
+      return (
+        <div style={{ padding: '24px 32px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: '#14b8a6' }} />GBP Optimise</h2>
+            <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Re-audit</button>
+          </div>
+          <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors. Read-only — applying fixes comes next.</p>
+
+          {loading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }} />Auditing profile…</div>}
+          {!loading && err && <div style={{ padding: 16, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, color: '#f59e0b', fontSize: 14 }}><i className="fas fa-circle-info" style={{ marginRight: 8 }} />{err}</div>}
+
+          {!loading && data?.connected && (() => {
+            const p = data.profile || {};
+            const grouped = {};
+            (data.findings || []).forEach(f => { (grouped[f.factor] = grouped[f.factor] || []).push(f); });
+            const tiles = [
+              { label: 'Primary category', value: p.primaryCategory || '—', ok: !!p.primaryCategory },
+              { label: 'Secondary categories', value: (p.additionalCategories || []).length, ok: (p.additionalCategories || []).length >= 3 },
+              { label: 'Services listed', value: p.servicesCount || 0, ok: (p.servicesCount || 0) >= 10 },
+              { label: 'Description', value: (p.description_chars || 0) + ' chars', ok: (p.description_chars || 0) >= 600 },
+              { label: 'Service areas', value: p.service_areas || 0, ok: (p.service_areas || 0) >= 3 },
+              { label: 'Open days/wk', value: p.open_days || 0, ok: (p.open_days || 0) >= 5 },
+              { label: 'Reviews', value: p.reviews || 0, ok: (p.reviews || 0) >= 25 },
+              { label: 'Rating', value: p.rating ? p.rating + '★' : '—', ok: !p.rating || p.rating >= 4.5 },
+              { label: 'Last post', value: p.last_post_days == null ? 'none' : p.last_post_days + 'd ago', ok: p.last_post_days != null && p.last_post_days <= 14 },
+            ];
+            return <>
+              {/* Score + profile name */}
+              <div style={{ display: 'flex', gap: 20, alignItems: 'center', marginBottom: 20, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                <div style={{ width: 84, height: 84, borderRadius: '50%', border: `5px solid ${scoreColor(data.score)}`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <span style={{ fontSize: 26, fontWeight: 800, color: scoreColor(data.score) }}>{data.score}</span>
+                  <span style={{ fontSize: 9, color: 'var(--text3)' }}>/ 100</span>
+                </div>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>{p.title}</div>
+                  <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{p.primaryCategory}{p.website ? ' · ' + p.website.replace(/^https?:\/\//, '').replace(/\/$/, '') : ''}</div>
+                  <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>{(data.findings || []).length} opportunit{(data.findings || []).length === 1 ? 'y' : 'ies'} found{data.maps_url ? ' · ' : ''}{data.maps_url && <a href={data.maps_url} target="_blank" rel="noopener" style={{ color: '#14b8a6' }}>View on Maps</a>}</div>
+                </div>
+              </div>
+
+              {/* Snapshot tiles */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10, marginBottom: 24 }}>
+                {tiles.map((t, i) => (
+                  <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{t.label}</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: t.ok ? '#22c55e' : '#f59e0b' }}>{t.value} {t.ok ? <i className="fas fa-check" style={{ fontSize: 11 }} /> : <i className="fas fa-triangle-exclamation" style={{ fontSize: 11 }} />}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Findings grouped by ranking factor */}
+              {(data.findings || []).length === 0
+                ? <div style={{ padding: 24, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10, color: '#22c55e', fontSize: 14 }}><i className="fas fa-circle-check" style={{ marginRight: 8 }} />No gaps found — this profile is well optimised.</div>
+                : Object.entries(grouped).map(([factor, items]) => (
+                  <div key={factor} style={{ marginBottom: 18 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: factorColor[factor] || 'var(--text2)', marginBottom: 8 }}>
+                      <i className="fas fa-location-crosshairs" style={{ marginRight: 6 }} />{factor} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({items.length})</span>
+                    </div>
+                    {items.map((f, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', background: 'var(--card)', border: '1px solid var(--border)', borderLeft: `3px solid ${sevColor[f.severity]}`, borderRadius: 8, padding: '12px 16px', marginBottom: 8 }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: sevColor[f.severity], background: sevColor[f.severity] + '22', padding: '3px 8px', borderRadius: 4, marginTop: 2, whiteSpace: 'nowrap' }}>{f.severity}</span>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 600 }}>{f.label}</div>
+                          <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{f.detail}</div>
+                          <div style={{ fontSize: 13, color: '#22c55e', marginTop: 4 }}><i className="fas fa-lightbulb" style={{ marginRight: 6 }} />{f.recommendation}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+            </>;
+          })()}
+        </div>
+      );
+    }
+
     // ============ CITATIONS & DIRECTORIES PAGE ============
     function CitationsPage({ project }) {
       const [directories, setDirectories] = useState([]);
@@ -37875,6 +37967,8 @@
             return <GSCIndexedPage project={project} filter="indexed" />;
           case 'gsc-not-indexed':
             return <GSCIndexedPage project={project} filter="not-indexed" />;
+          case 'gbp-optimise':
+            return <GBPOptimisePage project={project} />;
           case 'citations':
             return <CitationsPage project={project} />;
           case 'user-behaviour':
@@ -37979,6 +38073,7 @@ case 'action-plan':
         { section: 'AUDIT', items: [
           { id: 'fix-center', label: 'Fix Center', icon: 'fas fa-screwdriver-wrench' },
           { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true, expandable: true, children: [
+            { id: 'gbp-optimise', label: 'GBP Optimise', icon: 'fas fa-map-marker-alt' },
             { id: 'citations', label: 'Citations & NAP', icon: 'fas fa-building' },
           ] },
           // { id: 'gbp-audit-internal', label: 'GBP Audit', icon: 'fas fa-map-marker-alt', localOnly: true },
