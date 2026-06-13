@@ -12581,7 +12581,7 @@
               { label: 'PAGES CRAWLED', value: stats.total_pages || 0, color: 'var(--accent)', filter: 'all' },
               { label: 'INTERNAL LINKS', value: stats.total_internal_links || 0, color: '#3b82f6', filter: null },
               { label: 'ORPHAN PAGES', value: stats.orphan_count || 0, color: stats.orphan_count > 0 ? '#ef4444' : '#22c55e', filter: 'orphan' },
-              { label: 'ZERO AUTHORITY', value: (stats.page_details || []).filter(p => { const n = (p.url || '').replace(/\/$/, '').toLowerCase(); return !backlinkMap[n]; }).length, color: '#f97316', filter: 'zero_authority' }
+              { label: 'LOW AUTHORITY', value: (stats.page_details || []).filter(p => (typeof p.authority === 'number' ? p.authority : 0) < 8).length, color: '#f97316', filter: 'zero_authority' }
             ].map((s, i) =>
               React.createElement('div', { key: i, onClick: s.filter ? () => setPageFilter(s.filter) : undefined, style: { background: pageFilter === s.filter ? (s.color + '18') : '#1a1a2e', borderRadius: 8, padding: 20, textAlign: 'center', cursor: s.filter ? 'pointer' : 'default', border: pageFilter === s.filter ? `2px solid ${s.color}` : '2px solid transparent', transition: 'all 0.15s' } },
                 React.createElement('div', { style: { fontSize: 32, fontWeight: 700, color: s.color } }, s.value),
@@ -12597,10 +12597,7 @@
               { id: 'all', label: 'All Pages', count: stats.page_details.length, color: 'var(--accent)', icon: 'fas fa-globe' },
               { id: 'orphan', label: 'Orphans', count: (stats.page_details || []).filter(p => p.is_orphan).length, color: '#ef4444', icon: 'fas fa-unlink' },
               { id: 'few_links', label: 'Few Links', count: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count < 3).length, color: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
-              { id: 'zero_authority', label: 'Zero Authority', count: (stats.page_details || []).filter(p => {
-                const norm = (p.url || '').replace(/\/$/, '').toLowerCase();
-                return !backlinkMap[norm];
-              }).length, color: '#f97316', icon: 'fas fa-shield-halved' },
+              { id: 'zero_authority', label: 'Low Authority', count: (stats.page_details || []).filter(p => (typeof p.authority === 'number' ? p.authority : 0) < 8).length, color: '#f97316', icon: 'fas fa-shield-halved' },
               { id: 'ok', label: 'OK', count: (stats.page_details || []).filter(p => !p.is_orphan && p.outbound_count >= 3).length, color: '#22c55e', icon: 'fas fa-check-circle' }
             ].map(f => React.createElement('button', {
               key: f.id,
@@ -12637,7 +12634,7 @@
             let filteredPages = pageFilter === 'orphan' ? stats.page_details.filter(p => p.is_orphan)
               : pageFilter === 'few_links' ? stats.page_details.filter(p => !p.is_orphan && p.outbound_count < 3)
               : pageFilter === 'ok' ? stats.page_details.filter(p => !p.is_orphan && p.outbound_count >= 3)
-              : pageFilter === 'zero_authority' ? stats.page_details.filter(p => getAuthority(p.url) === 0)
+              : pageFilter === 'zero_authority' ? stats.page_details.filter(p => (typeof p.authority === 'number' ? p.authority : getAuthority(p.url)) < 8)
               : stats.page_details;
             // Apply search
             if (pageSearch.trim()) {
@@ -12649,7 +12646,7 @@
                 case 'title': return (p.title || p.url || '').toLowerCase();
                 case 'outbound_count': return p.outbound_count || 0;
                 case 'inbound_count': return p.inbound_count || 0;
-                case 'authority': return getAuthority(p.url) || 0;
+                case 'authority': return (typeof p.authority === 'number') ? p.authority : (getAuthority(p.url) || 0);
                 case 'word_count': return p.word_count || 0;
                 case 'status': return p.is_orphan ? 0 : (p.outbound_count < 3 ? 1 : 2);
                 default: return 0;
@@ -12679,7 +12676,9 @@
                 React.createElement('tbody', null,
                   sortedPages.length === 0 ? React.createElement('tr', null, React.createElement('td', { colSpan: 6, style: { padding: 30, textAlign: 'center', color: '#666' } }, 'No pages match this filter')) :
                   sortedPages.map((p, i) => {
-                    const auth = getAuthority(p.url);
+                    const auth = (typeof p.authority === 'number') ? p.authority : getAuthority(p.url);
+                    const authTier = p.authority_tier || (auth >= 60 ? 'high' : auth >= 25 ? 'medium' : auth >= 8 ? 'low' : 'minimal');
+                    const authColor = { high: '#22c55e', medium: '#14b8a6', low: '#f59e0b', minimal: '#ef4444' }[authTier];
                     return React.createElement('tr', { key: i, style: { borderBottom: '1px solid #222' } },
                       React.createElement('td', { style: { padding: '10px 16px' } },
                         React.createElement('div', { style: { fontWeight: 500, color: '#fff', fontSize: 12 } }, p.title),
@@ -12688,11 +12687,11 @@
                       ),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.outbound_count < 3 ? '#f59e0b' : '#22c55e', fontWeight: 600 } }, p.outbound_count),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: p.inbound_count === 0 ? '#ef4444' : '#22c55e', fontWeight: 600 } }, p.inbound_count),
-                      // Authority column — referring domains from backlinks
-                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },
+                      // Authority column — internal link equity (PageRank over the internal link graph), 0–100
+                      React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' }, title: 'Internal authority — share of link equity this page receives via internal links (0–100)' },
                         React.createElement('span', {
-                          style: { padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: auth === 0 ? '#ef444422' : auth < 3 ? '#f59e0b22' : '#22c55e22', color: auth === 0 ? '#ef4444' : auth < 3 ? '#f59e0b' : '#22c55e' }
-                        }, auth === 0 ? 'NONE' : auth + ' RD')
+                          style: { padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: authColor + '22', color: authColor }
+                        }, auth + ' · ' + authTier.toUpperCase())
                       ),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center', color: '#999' } }, p.word_count?.toLocaleString()),
                       React.createElement('td', { style: { padding: '10px 16px', textAlign: 'center' } },

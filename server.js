@@ -45658,17 +45658,47 @@ app.post('/api/projects/:projectId/internal-links/audit', async (req, res) => {
           }
         }
 
+        // 3b. Internal authority = PageRank over the internal link graph (the link equity each page receives).
+        //     This is the meaningful "authority" for an internal-linking view, and it varies per page —
+        //     unlike external backlinks, which are ~0 for most blog posts.
+        const nodes = [...pageMap.keys()];
+        const N = nodes.length;
+        const pr = {}; const outDeg = {};
+        nodes.forEach(u => { pr[u] = 1 / Math.max(N, 1); outDeg[u] = (pageMap.get(u)?.outbound || []).filter(o => pageMap.has((o.target_url || '').replace(/\/$/, ''))).length; });
+        const incoming = {}; nodes.forEach(u => incoming[u] = []);
+        for (const link of linkGraph) {
+          const s = (link.source_url || '').replace(/\/$/, ''); const t = (link.target_url || '').replace(/\/$/, '');
+          if (pageMap.has(s) && pageMap.has(t) && incoming[t]) incoming[t].push(s);
+        }
+        const d = 0.85;
+        for (let iter = 0; iter < 20; iter++) {
+          const next = {};
+          let dangling = 0; nodes.forEach(u => { if (outDeg[u] === 0) dangling += pr[u]; });
+          nodes.forEach(u => {
+            let sum = 0;
+            for (const s of incoming[u]) if (outDeg[s] > 0) sum += pr[s] / outDeg[s];
+            next[u] = (1 - d) / Math.max(N, 1) + d * (sum + dangling / Math.max(N, 1));
+          });
+          nodes.forEach(u => pr[u] = next[u]);
+        }
+        const maxPr = Math.max(...nodes.map(u => pr[u]), 1e-9);
+        // Normalize to 0–100 (relative to the strongest page)
+        const authorityOf = (u) => Math.round((pr[u] / maxPr) * 100);
+
         // 4. Find orphan pages (0 inbound internal links, excluding homepage)
         const orphanPages = [];
         const pageStats = [];
         for (const [url, data] of pageMap) {
           const isHome = url === baseUrl || url === baseUrl.replace(/\/$/, '') || url.replace(/https?:\/\//, '').replace(/\/$/, '') === domain;
+          const authority = authorityOf(url);
           pageStats.push({
             url,
             title: data.title,
             outbound_count: data.outbound.length,
             inbound_count: data.inbound.length,
             word_count: data.wordCount,
+            authority, // internal link-equity score 0–100
+            authority_tier: authority >= 60 ? 'high' : authority >= 25 ? 'medium' : authority >= 8 ? 'low' : 'minimal',
             is_orphan: !isHome && data.inbound.length === 0
           });
           if (!isHome && data.inbound.length === 0) {
