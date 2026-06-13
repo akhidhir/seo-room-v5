@@ -48721,7 +48721,8 @@ app.post('/api/projects/:projectId/security-audit/fix/inactive-plugins', async (
       try {
         const slug = plugin.plugin || plugin.textdomain;
         if (!slug) continue;
-        const delResp = await fetch(`${wpUrl}/wp-json/wp/v2/plugins/${encodeURIComponent(slug)}`, {
+        const encSlug = slug.split('/').map(encodeURIComponent).join('/');
+        const delResp = await fetch(`${wpUrl}/wp-json/wp/v2/plugins/${encSlug}`, {
           method: 'DELETE',
           headers: authHeaders,
           signal: AbortSignal.timeout(10000),
@@ -48785,11 +48786,13 @@ app.post('/api/projects/:projectId/security-audit/plugins/delete', async (req, r
 
     // Never let the dashboard delete the plugin it depends on
     const PROTECTED = /seo.?room/i;
+    // WordPress plugin routes keep the slash literal (e.g. akismet/akismet) — encode each segment, NOT the slash
+    const encodeSlug = s => s.split('/').map(encodeURIComponent).join('/');
     const results = [];
     for (const slug of slugs) {
       if (PROTECTED.test(slug)) { results.push({ slug, ok: false, error: 'protected (SEO Room plugin — required by the dashboard)' }); continue; }
       try {
-        const url = `${wpUrl}/wp-json/wp/v2/plugins/${encodeURIComponent(slug)}`;
+        const url = `${wpUrl}/wp-json/wp/v2/plugins/${encodeSlug(slug)}`;
         // 1. Check current status; WordPress refuses to delete an ACTIVE plugin
         const getR = await fetch(`${url}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(12000) });
         const cur = getR.ok ? await getR.json() : null;
