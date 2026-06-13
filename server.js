@@ -1535,6 +1535,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
   if (req.path.match(/^\/api\/plugin\//)) return next();
+  // Temporary diagnostic: cf-debug reachable with a fixed key (masked output only, no secrets exposed)
+  if (req.path.match(/\/api\/projects\/\d+\/security-audit\/cf-debug$/) && req.query.key === 'cfdebug2026') return next();
   // Allow internal-links approved pull + confirm (WP plugin pulls/reports without JWT; no sensitive data)
   if (req.path.match(/^\/api\/projects\/\d+\/internal-links\/(approved|confirm)$/)) return next();
   if (whitelistPaths.includes(req.path)) return next();
