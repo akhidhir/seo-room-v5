@@ -10646,8 +10646,9 @@
         // SPAM URLs: injected content, embedded domains, and known spam niches. These get 410'd, never redirected.
         const spamNiche = /(speed-dating|\bdating\b|singles|hookup|casino|poker|slots|bet(ting)?|gambling|viagra|cialis|pharma|tramadol|payday|loan|forex|crypto-?(invest|profit)|escort|porn|xxx|adult|replica|rolex|nike-?outlet|daohang|\bsex\b|essay-?writing|term-?paper)/i;
         const embeddedUrl = /\/(https?[:/]|www\.|[a-z0-9-]+\.(net|cn|ru|top|xyz|info)\/)/i; // a domain/URL buried in the path = injection
-        const foreignContact = /\/(contactez-nous|contatti|contacto|kontakt|contato|connexion|iniciar-sesion)([?\/]|$)/i;
-        if (spamNiche.test(p) || embeddedUrl.test(p) || foreignContact.test(p)) return 'spam';
+        // Foreign-language slugs on an English site = scraper/spam probes (contact, jobs/careers, login, about, etc.)
+        const foreignSlug = /\/(contactez-nous|contatti|contacto|kontakt|contato|connexion|iniciar-sesion|karriere|emploi|emplois|rejoindre|trabajo|empleo|empleos|lavoro|vacatures|carriere|carrieres|carrera|carreras|kariera|praca|werk|sobre-nosotros|chi-siamo|qui-sommes-nous|uber-uns|a-propos|accueil|inicio|startseite|home-fr|nos-services|services-fr|produkte|productos|prodotti|preise|precios|tarifs)([?\/]|$)/i;
+        if (spamNiche.test(p) || embeddedUrl.test(p) || foreignSlug.test(p)) return 'spam';
         // Preview/draft URLs
         if (/[?&](preview|p)=true|[?&]page_id=\d+&preview/i.test(u)) return 'preview';
         // Malformed URLs: encoded spaces, double slashes, or a trailing /null|/undefined|/NaN
@@ -10679,11 +10680,8 @@
               return { title: `404: ${path}`, page: u, description: `Returns 404 (${f.hit_count || 1} hit(s)). 301-redirect it if the page moved, or 410 it if it's gone for good.`, severity: 'high', category: '404 Error' };
             }));
           }
-          // Auto-run matching + diagnosis so the Root Cause column and redirect suggestions fill in
-          // without the user clicking — only when there are real-page 404s worth resolving.
-          if (classified.some(x => x._category === 'real')) {
-            setTimeout(() => { suggestRedirects(); diagnose404s(); }, 300);
-          }
+          // (Root Cause fills instantly via instantCause below — heavy matching/diagnosis stay on the
+          //  Suggest Redirects / Diagnose Root Cause buttons so the page never hangs on load.)
         } catch (err) { console.error('Load 404s error:', err); }
         setFourLoading(false);
       };
