@@ -36636,7 +36636,11 @@ async function getGscAccessToken(userId) {
 
   // Refresh if expired (with 60s buffer)
   if (Date.now() > (config.expires_at - 60000)) {
-    if (!config.refresh_token) return null;
+    // No refresh token, or it's been revoked → mark the integration disconnected so the UI shows the truth.
+    if (!config.refresh_token) {
+      await pool.query("UPDATE user_integrations SET status='disconnected', updated_at=NOW() WHERE user_id=$1 AND kind='gsc'", [userId]).catch(() => {});
+      return null;
+    }
     const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -36646,7 +36650,13 @@ async function getGscAccessToken(userId) {
       })
     });
     const newTokens = await refreshRes.json();
-    if (newTokens.error) { console.error('[gsc] Token refresh failed:', newTokens.error); return null; }
+    if (newTokens.error) {
+      console.error('[gsc] Token refresh failed:', newTokens.error);
+      // Refresh token revoked/expired (common when the Google OAuth app is in "Testing" mode — tokens die after 7 days).
+      // Flip status to disconnected so the dashboard prompts a reconnect instead of silently failing.
+      await pool.query("UPDATE user_integrations SET status='disconnected', updated_at=NOW() WHERE user_id=$1 AND kind='gsc'", [userId]).catch(() => {});
+      return null;
+    }
     config.access_token = newTokens.access_token;
     config.expires_at = Date.now() + (newTokens.expires_in * 1000);
     await pool.query('UPDATE user_integrations SET config=$1, updated_at=NOW() WHERE user_id=$2 AND kind=$3',
