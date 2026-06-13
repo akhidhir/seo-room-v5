@@ -33757,7 +33757,8 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       // BreadcrumbList — deterministic from each page's URL path, no business data needed
       if (title.includes('breadcrumb')) {
         const titleCase = s => s.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        let bcFixed = 0, bcSkipped = 0;
+        // 1. Collect all published pages + posts
+        const allItems = [];
         for (const type of ['pages', 'posts']) {
           let pg = 1;
           while (true) {
@@ -33768,45 +33769,57 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
               items = await resp.json();
             } catch { break; }
             if (!Array.isArray(items) || items.length === 0) break;
-            for (const p of items) {
-              try {
-                const link = p.link || '';
-                const path = link.replace(/^https?:\/\/[^/]+/, '').replace(/^\/|\/$/g, '');
-                const segs = path ? path.split('/') : [];
-                if (segs.length === 0) { bcSkipped++; continue; } // homepage: breadcrumb is pointless
-                const existing = p.meta?._seoroom_schema || '';
-                if (existing.includes('"BreadcrumbList"')) { bcSkipped++; continue; }
-                const crumbs = [{ "@type": "ListItem", "position": 1, "name": "Home", "item": `https://${domain}/` }];
-                let acc = '';
-                segs.forEach((s, i) => {
-                  acc += '/' + s;
-                  const isLast = i === segs.length - 1;
-                  const name = isLast ? String(p.title?.rendered || titleCase(s)).replace(/<[^>]+>/g, '') : titleCase(s);
-                  crumbs.push({ "@type": "ListItem", "position": i + 2, "name": name, "item": `https://${domain}${acc}/` });
-                });
-                const bc = { "@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": crumbs };
-                let combined;
-                if (existing) {
-                  try { const ex = JSON.parse(existing); combined = JSON.stringify(Array.isArray(ex) ? [...ex, bc] : [ex, bc]); }
-                  catch { combined = JSON.stringify(bc); }
-                } else combined = JSON.stringify(bc);
-                const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${p.id}`, {
-                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ meta: { _seoroom_schema: combined } }), signal: AbortSignal.timeout(10000)
-                });
-                if (w.ok) bcFixed++;
-              } catch {}
-            }
+            items.forEach(p => allItems.push({ ...p, _wpType: type }));
             if (items.length < 100) break;
             pg++;
           }
         }
-        if (bcFixed > 0) await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
-        console.log(`[technical-fix] BreadcrumbList: ${bcFixed} pages fixed, ${bcSkipped} skipped`);
+        // 2. Apply in parallel batches of 5
+        let bcFixed = 0, bcSkipped = 0, bcFailed = 0;
+        const fixedUrls = [];
+        const fixOne = async (p) => {
+          try {
+            const link = p.link || '';
+            const path = link.replace(/^https?:\/\/[^/]+/, '').replace(/^\/|\/$/g, '');
+            const segs = path ? path.split('/') : [];
+            if (segs.length === 0) { bcSkipped++; return; } // homepage: breadcrumb is pointless
+            const existing = p.meta?._seoroom_schema || '';
+            if (existing.includes('"BreadcrumbList"')) { bcSkipped++; if (fixedUrls.length < 5) fixedUrls.push(link); return; }
+            const crumbs = [{ "@type": "ListItem", "position": 1, "name": "Home", "item": `https://${domain}/` }];
+            let acc = '';
+            segs.forEach((s, i) => {
+              acc += '/' + s;
+              const isLast = i === segs.length - 1;
+              const name = isLast ? String(p.title?.rendered || titleCase(s)).replace(/<[^>]+>/g, '') : titleCase(s);
+              crumbs.push({ "@type": "ListItem", "position": i + 2, "name": name, "item": `https://${domain}${acc}/` });
+            });
+            const bc = { "@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": crumbs };
+            let combined;
+            if (existing) {
+              try { const ex = JSON.parse(existing); combined = JSON.stringify(Array.isArray(ex) ? [...ex, bc] : [ex, bc]); }
+              catch { combined = JSON.stringify(bc); }
+            } else combined = JSON.stringify(bc);
+            const w = await fetch(`${wpUrl}/wp-json/wp/v2/${p._wpType}/${p.id}`, {
+              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ meta: { _seoroom_schema: combined } }), signal: AbortSignal.timeout(10000)
+            });
+            if (w.ok) { bcFixed++; if (fixedUrls.length < 5) fixedUrls.push(link); }
+            else bcFailed++;
+          } catch { bcFailed++; }
+        };
+        for (let i = 0; i < allItems.length; i += 5) {
+          await Promise.all(allItems.slice(i, i + 5).map(fixOne));
+        }
+        // 3. Persist: mark fixed + store sample URLs so Verify crawls pages that actually have the breadcrumb
+        if (bcFixed > 0) {
+          await pool.query(`UPDATE audit_findings SET status='fixed', current_value=$2, updated_at=NOW() WHERE id=$1`,
+            [finding_id, JSON.stringify(fixedUrls)]);
+        }
+        console.log(`[technical-fix] BreadcrumbList: ${bcFixed} fixed, ${bcSkipped} skipped, ${bcFailed} failed of ${allItems.length} pages`);
         return res.json({
           success: bcFixed > 0, fix_type: 'schema', schema_type: 'BreadcrumbList',
-          message: bcFixed > 0 ? `BreadcrumbList schema added to ${bcFixed} page(s) (${bcSkipped} already had it or are the homepage).` : undefined,
-          error: bcFixed === 0 ? 'No pages could be updated — check the seoroom-schema plugin is installed and the WP Application Password works' : undefined,
+          message: bcFixed > 0 ? `BreadcrumbList schema added to ${bcFixed} of ${allItems.length} page(s)${bcFailed ? `, ${bcFailed} failed` : ''} (${bcSkipped} skipped: homepage or already had it).` : undefined,
+          error: bcFixed === 0 ? `No pages updated (${allItems.length} found, ${bcFailed} write failures) — check the seoroom-schema plugin is active and the WP Application Password works` : undefined,
           pages_fixed: bcFixed
         });
       }
@@ -35437,6 +35450,20 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
     let targetUrls = [];
     const homeUrl = `https://${domain}/`;
 
+    // BreadcrumbList: read sample fixed URLs stored by the fix (homepage has no breadcrumb by design)
+    if (title.includes('breadcrumb')) {
+      try {
+        const cv = finding.current_value || '';
+        if (cv.startsWith('[')) {
+          const storedUrls = JSON.parse(cv);
+          if (Array.isArray(storedUrls) && storedUrls.length > 0) {
+            targetUrls = storedUrls.filter(u => typeof u === 'string' && u.startsWith('http')).slice(0, 5);
+            console.log(`[verify-fix] Breadcrumb: using ${targetUrls.length} stored URLs from current_value`);
+          }
+        }
+      } catch {}
+    }
+
     // For Service schema: read stored URLs from finding's current_value (set by audit)
     if (title.includes('service') && title.includes('schema')) {
       // First try: parse URLs from current_value (JSON array stored by audit)
@@ -35518,8 +35545,8 @@ app.post('/api/projects/:projectId/verify-fix', async (req, res) => {
       const pathMatches = desc.match(/\/[a-z0-9-]+\/?/gi) || [];
       targetUrls = pathMatches.map(p => `https://${domain}${p.replace(/\/?$/, '/')}`);
     }
-    // Always include homepage for LocalBusiness / site-wide issues (but NOT for alt text — those are page-specific)
-    if (!title.includes('service') && !title.includes('missing alt') && !cat.includes('alt text')) {
+    // Always include homepage for LocalBusiness / site-wide issues (but NOT for alt text or breadcrumb — page-specific / homepage exempt)
+    if (!title.includes('service') && !title.includes('missing alt') && !cat.includes('alt text') && !title.includes('breadcrumb')) {
       if (!targetUrls.includes(homeUrl)) targetUrls.unshift(homeUrl);
     }
     // Limit to 5 pages max

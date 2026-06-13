@@ -7302,7 +7302,10 @@
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
             <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
               <i className="fas fa-spider" style={{ marginRight: 10, color: '#8b5cf6' }} />Website Audit
-              <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>{findings.length} issues</span>
+              <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 16, marginLeft: 10 }}>
+                {findings.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length} open
+                {findings.some(f => f.status === 'fixed') ? <span style={{ color: '#22c55e', marginLeft: 8 }}>· {findings.filter(f => f.status === 'fixed').length} fixed</span> : null}
+              </span>
             </h2>
             <div style={{ marginLeft: 'auto' }}>
               <button className="btn btn-primary" onClick={runAudit} disabled={loading} style={{ fontSize: 15, padding: '10px 20px' }}>
@@ -7315,9 +7318,9 @@
           {summary && (<div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
             {[
               { label: 'Pages Scanned', value: summary.crawled || 0, color: '#3b82f6', icon: 'fa-spider' },
-              { label: 'Missing Schema', value: findings.filter(f => (f.category || '').includes('Schema')).length, color: '#ef4444', icon: 'fa-code' },
-              { label: 'Weak Internal Links', value: summary.crawled ? (() => { const lp = findings.filter(f => (f.title || '').toLowerCase().includes('internal link')); return lp.length > 0 ? (lp[0].current_value || '').match(/\d+/)?.[0] || lp.length : 0; })() : 0, color: '#f59e0b', icon: 'fa-project-diagram' },
-              { label: 'Issues Found', value: findings.length, color: '#f97316', icon: 'fa-exclamation-triangle' },
+              { label: 'Schema Issues Open', value: findings.filter(f => (f.category || '').includes('Schema') && f.status !== 'fixed' && f.status !== 'rejected').length, color: '#ef4444', icon: 'fa-code' },
+              { label: 'Weak Internal Links', value: summary.crawled ? (() => { const lp = findings.filter(f => (f.title || '').toLowerCase().includes('internal link') && f.status !== 'fixed' && f.status !== 'rejected'); return lp.length > 0 ? (lp[0].current_value || '').match(/\d+/)?.[0] || lp.length : 0; })() : 0, color: '#f59e0b', icon: 'fa-project-diagram' },
+              { label: 'Open Issues', value: findings.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length, color: '#f97316', icon: 'fa-exclamation-triangle' },
             ].map((s, i) => (
               <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 20px' }}>
                 <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: 1, marginBottom: 8 }}>
@@ -7368,7 +7371,10 @@
           {findings.length > 0 && (<div style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 0, marginBottom: 12, flexWrap: 'wrap' }}>
               {[{ key: 'all', label: 'All Categories', color: '#8b5cf6' }, ...categories.map(c => ({ key: c, label: c, color: catColors[c] || '#6366f1' }))].map((tab, i, arr) => {
-                const count = tab.key === 'all' ? findings.filter(f => f.status !== 'rejected').length : findings.filter(f => f.category === tab.key && f.status !== 'rejected').length;
+                const inCat = tab.key === 'all' ? findings : findings.filter(f => f.category === tab.key);
+                const open = inCat.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length;
+                const fixed = inCat.filter(f => f.status === 'fixed').length;
+                const count = `${open}${fixed > 0 ? ` open · ${fixed} fixed` : ''}`;
                 const active = filterCat === tab.key;
                 return (<button key={tab.key} onClick={() => { setFilterCat(tab.key); setFilterStatus('all'); }}
                   style={{ flex: 1, minWidth: 120, padding: '12px 8px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)',
