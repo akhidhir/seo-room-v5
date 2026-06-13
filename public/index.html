@@ -7360,8 +7360,8 @@
               const linkCat = categories.find(c => (c || '').toLowerCase().includes('site health')) || 'all';
               return [
               { label: 'Pages Scanned', value: summary.crawled || 0, color: '#3b82f6', icon: 'fa-spider' },
-              { label: 'Schema Issues Open', value: findings.filter(f => (f.category || '').includes('Schema') && f.status !== 'fixed' && f.status !== 'rejected').length, color: '#ef4444', icon: 'fa-code', filter: { cat: schemaCat, status: 'pending' } },
-              { label: 'Weak Internal Links', value: summary.crawled ? (() => { const lp = findings.filter(f => (f.title || '').toLowerCase().includes('internal link') && f.status !== 'fixed' && f.status !== 'rejected'); return lp.length > 0 ? (lp[0].current_value || '').match(/\d+/)?.[0] || lp.length : 0; })() : 0, color: '#f59e0b', icon: 'fa-project-diagram', filter: { cat: linkCat, status: 'pending', search: 'internal link' } },
+              { label: 'Schema Issues Open', value: findings.filter(f => (f.category || '').includes('Schema') && f.status !== 'fixed' && f.status !== 'rejected').length, color: '#ef4444', icon: 'fa-code', filter: { cat: schemaCat, status: 'pending', search: '' } },
+              { label: 'Weak Internal Links', value: findings.filter(f => (f.title || '').toLowerCase().includes('internal link') && f.status !== 'fixed' && f.status !== 'rejected').length, color: '#f59e0b', icon: 'fa-project-diagram', filter: { cat: 'all', status: 'pending', search: 'internal link' } },
               { label: 'Open Issues', value: findings.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length, color: '#f97316', icon: 'fa-exclamation-triangle', filter: { cat: 'all', status: 'pending' } },
             ]; })().map((s, i) => (
               <div key={i}
