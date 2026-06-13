@@ -35746,6 +35746,9 @@
       const [newProspect, setNewProspect] = useState({ domain: '', url: '', contact_email: '', contact_name: '', notes: '' });
       const [history, setHistory] = useState([]);
       const [diag, setDiag] = useState(null);
+      const [bulkAdding, setBulkAdding] = useState(false);
+      const [bulkResult, setBulkResult] = useState(null);
+      const [findingContact, setFindingContact] = useState(null);
 
       const accent = '#14b8a6';
       const pid = project?.id;
@@ -35879,7 +35882,7 @@
         return <span style={{ padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: (colors[score] || '#666') + '22', color: colors[score] || '#666' }}>{score}</span>;
       };
 
-      const statusColors = { prospect: '#6b7280', emailed: '#3b82f6', responded: '#f59e0b', placed: '#22c55e', rejected: '#ef4444', 'follow-up': '#8b5cf6' };
+      const statusColors = { prospect: '#6b7280', ready: '#14b8a6', emailed: '#3b82f6', responded: '#f59e0b', placed: '#22c55e', rejected: '#ef4444', 'follow-up': '#8b5cf6' };
       const statusBadge = (status) => <span style={{ padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: (statusColors[status] || '#666') + '22', color: statusColors[status] || '#666' }}>{status}</span>;
 
       const thStyle = { textAlign: 'left', padding: '8px 10px', fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, borderBottom: '1px solid var(--border)' };
@@ -36123,15 +36126,39 @@
                 )}
                 {gapData ? (
                   <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-                    <div style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700 }}>
-                        {gapData.total} domains link to competitors but not to you
+                    <div style={{ padding: 16, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700 }}>
+                          {gapData.total} domains link to competitors but not to you
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                          Competitors: {(gapData.competitors || []).join(', ')}
+                          {gapData.auto_discovered && <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: accent + '22', color: accent }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }}></i>Auto-found</span>}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                        Competitors: {(gapData.competitors || []).join(', ')}
-                        {gapData.auto_discovered && <span style={{ marginLeft: 8, padding: '1px 7px', borderRadius: 4, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', background: accent + '22', color: accent }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }}></i>Auto-found</span>}
-                      </div>
+                      <button disabled={bulkAdding} onClick={async () => {
+                        // Take the top 10 non-spam opportunities by score and bulk-add them, auto-finding contacts.
+                        const top = (gapData.opportunities || [])
+                          .filter(o => o.link_type !== 'spam')
+                          .slice().sort((a, b) => (b.score || 0) - (a.score || 0))
+                          .slice(0, 10)
+                          .map(o => ({ domain: o.domain, rank: o.rank || 0, link_type: o.link_type, directory: o.directory || null, competitors_count: o.competitors_count }));
+                        if (!top.length) return;
+                        setBulkAdding(true); setBulkResult(null);
+                        try {
+                          const r = await api(`/projects/${pid}/backlinks/prospects/from-gap`, { method: 'POST', body: { domains: top, find_contacts: true } });
+                          setBulkResult(r);
+                          loadData();
+                        } catch (e) { setBulkResult({ error: e.message }); }
+                        setBulkAdding(false);
+                      }} style={{ ...btnStyle, whiteSpace: 'nowrap', opacity: bulkAdding ? 0.6 : 1 }}>
+                        {bulkAdding ? <><span className="spinner" style={{ marginRight: 6 }}></span>Finding contacts…</> : <><i className="fas fa-bolt" style={{ marginRight: 6 }}></i>Add top 10 + find contacts</>}
+                      </button>
                     </div>
+                    {bulkResult && <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', fontSize: 13, background: bulkResult.error ? '#ef444415' : '#22c55e15', color: bulkResult.error ? '#ef4444' : '#22c55e' }}>
+                      {bulkResult.error ? <><i className="fas fa-circle-xmark" style={{ marginRight: 6 }} />{bulkResult.error}</> :
+                        <><i className="fas fa-check-circle" style={{ marginRight: 6 }} />Added {bulkResult.added} prospect{bulkResult.added !== 1 ? 's' : ''} to Outreach — found a contact email for {bulkResult.contacts_found} of them. <button onClick={() => setTab('outreach')} style={{ background: 'none', border: 'none', color: accent, cursor: 'pointer', textDecoration: 'underline', fontSize: 13, padding: 0 }}>Go to Outreach →</button></>}
+                    </div>}
                     {(() => {
                       const opps = gapData.opportunities || [];
                       const typeCounts = opps.reduce((a, o) => { const t = o.link_type || 'resource'; a[t] = (a[t] || 0) + 1; return a; }, {});
@@ -36261,8 +36288,8 @@
                 )}
 
                 {/* Pipeline stats */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8, marginBottom: 16 }}>
-                  {['prospect', 'emailed', 'follow-up', 'responded', 'placed', 'rejected'].map(st => {
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8, marginBottom: 16 }}>
+                  {['prospect', 'ready', 'emailed', 'follow-up', 'responded', 'placed', 'rejected'].map(st => {
                     const count = prospects.filter(p => p.status === st).length;
                     return (
                       <div key={st} style={{ ...cardStyle, padding: 12, textAlign: 'center' }}>
@@ -36289,11 +36316,22 @@
                         {prospects.map((p, i) => (
                           <tr key={p.id || i}>
                             <td style={{ ...tdStyle, fontWeight: 600 }}>{p.domain}</td>
-                            <td style={{ ...tdStyle, fontSize: 12 }}>{p.contact_email || p.contact_name || '-'}</td>
+                            <td style={{ ...tdStyle, fontSize: 12 }}>
+                              {p.contact_email
+                                ? <a href={`mailto:${p.contact_email}`} style={{ color: accent, textDecoration: 'none' }}>{p.contact_email}</a>
+                                : (findingContact === p.id
+                                    ? <span style={{ color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 6 }}></span>Searching…</span>
+                                    : <button onClick={async () => {
+                                        setFindingContact(p.id);
+                                        try { const r = await api(`/projects/${pid}/backlinks/prospects/${p.id}/find-contact`, { method: 'POST' }); if (!r.found) alert('No public email found on ' + p.domain + '. Try their contact page: ' + (r.contact_url || '')); loadData(); }
+                                        catch (e) { alert('Error: ' + e.message); }
+                                        setFindingContact(null);
+                                      }} style={{ ...btnOutline, padding: '3px 8px', fontSize: 11 }}><i className="fas fa-magnifying-glass" style={{ marginRight: 4 }}></i>Find</button>)}
+                            </td>
                             <td style={tdStyle}>{p.domain_rank || '-'}</td>
                             <td style={tdStyle}>
                               <select value={p.status} onChange={e => updateProspect(p.id, { status: e.target.value })} style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', fontSize: 11 }}>
-                                {['prospect', 'emailed', 'follow-up', 'responded', 'placed', 'rejected'].map(s => <option key={s} value={s}>{s}</option>)}
+                                {['prospect', 'ready', 'emailed', 'follow-up', 'responded', 'placed', 'rejected'].map(s => <option key={s} value={s}>{s}</option>)}
                               </select>
                             </td>
                             <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text3)' }}>{p.source || 'manual'}</td>

@@ -11283,6 +11283,50 @@ function isJunkBacklinkDomain(domain) {
   return isSpamLinkDir(d) || JUNK_BACKLINK_RE.test(d) || FREE_HOST_RE.test(d);
 }
 
+// Discover an outreach contact for a domain — FREE (fetches the site itself, no paid lookup API).
+// Returns { email, contact_url, found } by scanning the homepage + common contact pages for mailto:/email patterns.
+async function discoverContact(domain) {
+  const host = (domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+  if (!host) return { found: false };
+  const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+  const paths = ['', '/contact', '/contact-us', '/about', '/about-us'];
+  // Junk addresses we never want to surface as an outreach contact
+  const BAD = /(sentry|wixpress|example\.|\.png|\.jpg|\.gif|\.svg|@2x|@sentry|sentry\.io|@example|godaddy|@cloudflare|core@|noreply|no-reply|donotreply)/i;
+  const emails = new Map(); // email -> score (prefer info@/editor@/contact@ over generic)
+  let contactUrl = null;
+  const scoreEmail = e => {
+    const l = e.toLowerCase();
+    if (/^(editor|editorial|news|tips|press)@/.test(l)) return 5;
+    if (/^(info|hello|hi|contact|enquir|enquiries|admin|office)@/.test(l)) return 4;
+    if (/^(marketing|partnerships|media|pr)@/.test(l)) return 3;
+    return 1;
+  };
+  for (const p of paths) {
+    let html;
+    try {
+      const r = await fetch(`https://${host}${p}`, { headers: { 'User-Agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(8000) });
+      if (!r.ok) continue;
+      html = await r.text();
+      if (p && /contact/i.test(p) && !contactUrl) contactUrl = `https://${host}${p}`;
+    } catch { continue; }
+    // mailto: links (most reliable)
+    for (const m of html.matchAll(/mailto:([^"'?\s>]+)/gi)) {
+      const e = decodeURIComponent(m[1]).trim();
+      if (e.includes('@') && !BAD.test(e)) emails.set(e, Math.max(emails.get(e) || 0, scoreEmail(e) + 2));
+    }
+    // plain-text emails (prefer ones on the prospect's own domain)
+    for (const m of html.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
+      const e = m[0].trim();
+      if (BAD.test(e)) continue;
+      const onDomain = e.toLowerCase().endsWith('@' + host) || e.toLowerCase().endsWith('.' + host);
+      emails.set(e, Math.max(emails.get(e) || 0, scoreEmail(e) + (onDomain ? 1 : 0)));
+    }
+    if ([...emails.values()].some(v => v >= 4)) break; // good enough, stop early
+  }
+  const best = [...emails.entries()].sort((a, b) => b[1] - a[1])[0];
+  return { found: !!best, email: best ? best[0] : '', contact_url: contactUrl || `https://${host}/contact`, candidates: [...emails.keys()].slice(0, 5) };
+}
+
 // Composite opportunity score (0-100): authority (domain rank) weighted with how many competitors already
 // earned the link (more competitors = more proven-relevant and attainable for this niche).
 function scoreOpportunity(rank, competitorsCount) {
@@ -47633,20 +47677,55 @@ app.delete('/api/projects/:projectId/backlinks/prospects/:id', async (req, res) 
 // Add from gap — bulk add gap opportunities as prospects
 app.post('/api/projects/:projectId/backlinks/prospects/from-gap', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { domains } = req.body; // array of { domain, rank }
+  const { domains, find_contacts } = req.body; // domains: [{ domain, rank, link_type, directory, competitors_count }], find_contacts: bool
   try {
-    let added = 0;
-    for (const d of (domains || [])) {
+    let added = 0, contactsFound = 0;
+    const results = [];
+    // Cap contact discovery so a huge selection can't hammer the server / time out
+    const list = (domains || []).slice(0, find_contacts ? 25 : 200);
+    for (const d of list) {
+      if (!d || !d.domain) continue;
+      // Carry the free/paid + price context from the directory metadata into notes so the user sees cost upfront
+      const dir = d.directory || null;
+      const costNote = dir
+        ? (dir.free ? 'Directory — FREE listing' : `Directory — PAID${dir.price ? ' ~' + dir.price : ''}${dir.difficulty ? ' · ' + dir.difficulty : ''}`)
+        : (d.link_type ? `${d.link_type} link — free to earn (editorial outreach)` : '');
+      let email = '', contactUrl = '', status = 'prospect';
+      if (find_contacts) {
+        try {
+          const c = await discoverContact(d.domain);
+          if (c.found) { email = c.email; contactsFound++; }
+          contactUrl = c.contact_url || '';
+          if (c.found) status = 'ready'; // has a contact → ready to draft/send
+        } catch {}
+      }
       try {
-        await pool.query(
-          `INSERT INTO backlink_prospects (project_id, domain, domain_rank, source, status)
-           VALUES ($1, $2, $3, 'gap_analysis', 'prospect') ON CONFLICT DO NOTHING`,
-          [projectId, d.domain, d.rank || 0]
+        const ins = await pool.query(
+          `INSERT INTO backlink_prospects (project_id, domain, url, contact_email, domain_rank, source, status, notes)
+           VALUES ($1, $2, $3, $4, $5, 'gap_analysis', $6, $7)
+           ON CONFLICT DO NOTHING RETURNING id`,
+          [projectId, d.domain, contactUrl, email, d.rank || 0, status, costNote]
         );
-        added++;
+        if (ins.rows.length) { added++; results.push({ domain: d.domain, email, has_contact: !!email, cost_note: costNote }); }
       } catch (e) { /* skip duplicates */ }
     }
-    res.json({ ok: true, added });
+    res.json({ ok: true, added, contacts_found: contactsFound, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Find a contact for an existing prospect on demand (FREE — scrapes the prospect's own site).
+app.post('/api/projects/:projectId/backlinks/prospects/:id/find-contact', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  try {
+    const p = (await pool.query('SELECT * FROM backlink_prospects WHERE id=$1 AND project_id=$2', [id, projectId])).rows[0];
+    if (!p) return res.status(404).json({ error: 'Prospect not found' });
+    const c = await discoverContact(p.domain);
+    await pool.query(
+      `UPDATE backlink_prospects SET contact_email=$3, url=COALESCE(NULLIF($4,''), url), status=CASE WHEN $3<>'' AND status='prospect' THEN 'ready' ELSE status END, updated_at=NOW() WHERE id=$1 AND project_id=$2`,
+      [id, projectId, c.email || '', c.contact_url || '']
+    );
+    res.json({ ok: true, found: c.found, email: c.email || '', contact_url: c.contact_url, candidates: c.candidates || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -47725,14 +47804,16 @@ app.post('/api/projects/:projectId/backlinks/prospects/:id/outreach', async (req
       wiki: 'suggest a citation only where it genuinely supports existing content',
     };
 
+    const notes = prospect.notes || '';
     const prompt = `Write a short, warm, non-spammy backlink outreach email.
 
 From: ${bizName} (${bizDomain}), a ${industry}${location ? ' in ' + location : ''}.
 To: the owner/editor of ${prospect.domain} (link type: ${linkType}).
 Goal/play: ${playByType[linkType] || playByType.resource}.
 ${prospect.contact_name ? 'Contact name: ' + prospect.contact_name + '.' : 'No contact name known — use a friendly generic greeting.'}
+${notes ? 'Context: ' + notes + '.' : ''}
 
-Rules: under 130 words, specific to their site, lead with value (not a demand), one clear ask, friendly Australian tone, no buzzwords, no fake flattery. Return STRICT JSON only: {"subject": "...", "body": "..."} with \\n for line breaks in body.`;
+Rules: under 130 words, specific to their site, lead with value (not a demand), one clear ask, friendly Australian tone, no buzzwords, no fake flattery. Do NOT mention competitors, SEO, backlinks, or that you analysed their links — that reads as spam. Return STRICT JSON only: {"subject": "...", "body": "..."} with \\n for line breaks in body.`;
 
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
