@@ -48105,16 +48105,34 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
         checks.push(c);
       };
 
-      // Helper: fetch with timeout
+      // Helper: fetch with timeout, a real browser User-Agent (many hosts/WAFs hang or block UA-less bot
+      // requests — the cause of "operation was aborted" timeouts), and one automatic retry on timeout.
+      const SCAN_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
       const quickFetch = async (url, opts = {}) => {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
+        const attempt = async (ms) => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), ms);
+          try {
+            const r = await fetch(url, {
+              redirect: 'manual',
+              ...opts,
+              headers: { 'User-Agent': SCAN_UA, 'Accept': '*/*', ...(opts.headers || {}) },
+              signal: controller.signal,
+            });
+            clearTimeout(timeout);
+            return r;
+          } finally {
+            clearTimeout(timeout);
+          }
+        };
         try {
-          const r = await fetch(url, { ...opts, signal: controller.signal, redirect: 'manual' });
-          clearTimeout(timeout);
-          return r;
+          return await attempt(15000);
         } catch (e) {
-          clearTimeout(timeout);
+          // One retry with a longer timeout for slow hosts; rethrow a clearer message if it still fails
+          if (e.name === 'AbortError' || /abort|timed?\s*out|network/i.test(e.message || '')) {
+            try { return await attempt(25000); }
+            catch (e2) { throw new Error('site did not respond in time (timeout) — host may be slow or blocking automated requests'); }
+          }
           throw e;
         }
       };
