@@ -7376,7 +7376,7 @@
                 const fixed = inCat.filter(f => f.status === 'fixed').length;
                 const count = `${open}${fixed > 0 ? ` open · ${fixed} fixed` : ''}`;
                 const active = filterCat === tab.key;
-                return (<button key={tab.key} onClick={() => { setFilterCat(tab.key); setFilterStatus('all'); }}
+                return (<button key={tab.key} onClick={() => { setFilterCat(tab.key); setFilterStatus(open > 0 ? 'pending' : 'all'); }}
                   style={{ flex: 1, minWidth: 120, padding: '12px 8px', border: '1px solid var(--border)', background: active ? tab.color + '15' : 'var(--card)',
                     borderBottom: active ? `3px solid ${tab.color}` : '1px solid var(--border)', cursor: 'pointer', color: active ? tab.color : 'var(--text2)',
                     fontWeight: active ? 700 : 500, fontSize: 14, transition: 'all 0.15s',
