@@ -32606,15 +32606,30 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
     let findings = [];
     const successPages = crawlResults.filter(p => !p.error && p.statusCode >= 200 && p.statusCode < 400);
     // Filter out Cloudflare blocks from error pages (false positives — site works fine for real users)
+    // Network-level failures (no HTTP status at all) are crawl hiccups, NOT broken pages —
+    // don't report each one as a Critical finding
+    const networkFails = crawlResults.filter(p => !p.statusCode && p.error && !p.cloudflareBlocked && p.error !== 'cloudflare_blocked');
     const errorPages = crawlResults.filter(p => {
       if (p.cloudflareBlocked) return false;
       if (p.statusCode === 403) return false;
       if (p.error === 'cloudflare_blocked') return false;
+      if (!p.statusCode && p.error) return false; // network hiccup — summarised separately below
       return p.error || p.statusCode >= 400;
     });
 
     // ===== SITE HEALTH =====
     // Broken pages (4xx, 5xx)
+    if (networkFails.length > 0) {
+      findings.push({
+        pillar: 'website', category: 'Crawlability',
+        title: `${networkFails.length} page(s) could not be crawled (network timeouts)`,
+        description: 'These pages did not respond to the crawler in time: ' + networkFails.slice(0, 10).map(p => p.path || p.url).join(', ') + (networkFails.length > 10 ? '…' : '') + '. This is usually temporary server slowness or firewall throttling, not a page problem.',
+        recommendation: 'Re-run the audit. If the same pages keep failing, check server load and per-IP firewall limits.',
+        severity: 'Medium',
+        current_value: `${networkFails.length} unreachable during crawl`,
+        recommended_value: 'All pages reachable'
+      });
+    }
     for (const p of errorPages) {
       findings.push({
         pillar: 'website', category: 'Site Health',
@@ -34624,6 +34639,7 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       let allFixed = true;
       let fixedCount = 0;
       let alreadyPresent = 0;
+      const manualElementor = [];
       const results = [];
 
       for (const slug of slugs) {
@@ -34637,12 +34653,22 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
         // Try to find and fix in WordPress
         let pageFixed = false;
         for (const type of ['pages', 'posts']) {
-          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&_fields=id,title,content`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&context=edit&_fields=id,title,content,meta`, { headers: authHeaders, signal: AbortSignal.timeout(10000) });
           if (resp.ok) {
             const items = await resp.json();
             if (items.length > 0) {
               const content = items[0].content?.raw || items[0].content?.rendered || '';
-              if (!/<h1[\s>]/i.test(content)) {
+              const isElementorPage = !!(items[0].meta && items[0].meta._elementor_data);
+              if (/<h1[\s>]/i.test(content)) {
+                alreadyPresent++;
+                results.push({ slug, result: 'h1_in_wp_content' });
+                pageFixed = true;
+              } else if (isElementorPage) {
+                // Injecting into post_content does nothing on Elementor pages — honest manual step
+                manualElementor.push(slug);
+                results.push({ slug, result: 'elementor_manual' });
+                pageFixed = true;
+              } else {
                 const h1Text = items[0].title?.rendered || items[0].title || slug;
                 const newContent = `<h1>${h1Text}</h1>\n${content}`;
                 const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${items[0].id}`, {
@@ -34650,10 +34676,6 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
                   body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
                 });
                 if (writeResp.ok) { fixedCount++; pageFixed = true; results.push({ slug, result: 'h1_injected' }); }
-              } else {
-                alreadyPresent++;
-                results.push({ slug, result: 'h1_in_wp_content' });
-                pageFixed = true;
               }
               break;
             }
@@ -34663,7 +34685,7 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
       }
 
       // If all pages either fixed or already have H1, mark finding as fixed
-      if (fixedCount > 0 || alreadyPresent === slugs.length) {
+      if ((fixedCount > 0 || alreadyPresent === slugs.length) && manualElementor.length === 0) {
         await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
         await saveVerification(finding.id, 'post_fix', { result: 'completed', pages: results, fixed: fixedCount, already_present: alreadyPresent });
         const msg = alreadyPresent === slugs.length
@@ -34671,7 +34693,16 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
           : `H1 injected on ${fixedCount} page(s). ${alreadyPresent} already had H1.`;
         return res.json({ success: true, fix_type: alreadyPresent === slugs.length ? 'already_present' : 'h1_injected', message: msg, pages_fixed: fixedCount, verified: true });
       }
-      return res.json({ success: false, error: `Could not fix H1 on ${slugs.length - fixedCount - alreadyPresent} page(s)`, results });
+      if (manualElementor.length > 0) {
+        return res.json({
+          success: false, manual: true,
+          error: `${manualElementor.length} page(s) are built with Elementor (${manualElementor.join(', ')}) — an H1 can't be injected from here. Open each in Elementor and set the page title to a Heading widget with HTML tag = H1.` +
+            (fixedCount ? ` (${fixedCount} non-Elementor page(s) were fixed.)` : ''),
+          results
+        });
+      }
+      const notFound = results.filter(r => r.result === 'page_not_found').map(r => r.slug);
+      return res.json({ success: false, error: `Could not fix H1 — page(s) not found in WordPress by slug: ${notFound.join(', ') || 'unknown'}`, results });
     }
 
     // ---- FIX TYPE 6: Missing Open Graph via Yoast ----
