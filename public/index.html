@@ -10641,6 +10641,13 @@
         const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)|\/server\/php([?\/]|$)|\/upload[s]?\/server([?\/]|$)|jquery[-.]?file[-.]?upload/i;
         const apiProbes = /^\/(api|graphql|gql|v[0-9]+\/_?catalog|_next|swagger|openapi|health|metrics|readyz|livez)([?\/]|$)/i;
         if (botPatterns.test(p) || apiProbes.test(p)) return 'bot';
+        // Self-generated noise: our own scanners append cache-busters — never a real 404 to act on
+        if (/[?&](nocache|cache_?bust|_=|v=\d{10,}|t=\d{10,})/i.test(u)) return 'noise';
+        // SPAM URLs: injected content, embedded domains, and known spam niches. These get 410'd, never redirected.
+        const spamNiche = /(speed-dating|\bdating\b|singles|hookup|casino|poker|slots|bet(ting)?|gambling|viagra|cialis|pharma|tramadol|payday|loan|forex|crypto-?(invest|profit)|escort|porn|xxx|adult|replica|rolex|nike-?outlet|daohang|\bsex\b|essay-?writing|term-?paper)/i;
+        const embeddedUrl = /\/(https?[:/]|www\.|[a-z0-9-]+\.(net|cn|ru|top|xyz|info)\/)/i; // a domain/URL buried in the path = injection
+        const foreignContact = /\/(contactez-nous|contatti|contacto|kontakt|contato|connexion|iniciar-sesion)([?\/]|$)/i;
+        if (spamNiche.test(p) || embeddedUrl.test(p) || foreignContact.test(p)) return 'spam';
         // Preview/draft URLs
         if (/[?&](preview|p)=true|[?&]page_id=\d+&preview/i.test(u)) return 'preview';
         // Malformed URLs (encoded spaces, path double slashes)
@@ -11060,7 +11067,7 @@
       const blExternal = brokenLinks.filter(x => x.link_type === 'external').length;
 
       // ---- 404 Monitor Tab ----
-      const catBadgeConfig = { real: { label: 'Real Page', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444', icon: 'fas fa-file' }, bot: { label: 'Bot Probe', bg: 'rgba(107,114,128,0.15)', fg: '#6b7280', icon: 'fas fa-robot' }, preview: { label: 'Preview', bg: 'rgba(99,102,241,0.15)', fg: '#818cf8', icon: 'fas fa-eye' }, malformed: { label: 'Bad URL', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', icon: 'fas fa-link-slash' } };
+      const catBadgeConfig = { real: { label: 'Real Page', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444', icon: 'fas fa-file' }, spam: { label: 'Spam', bg: 'rgba(217,70,239,0.15)', fg: '#d946ef', icon: 'fas fa-skull-crossbones' }, bot: { label: 'Bot Probe', bg: 'rgba(107,114,128,0.15)', fg: '#6b7280', icon: 'fas fa-robot' }, noise: { label: 'Scanner Noise', bg: 'rgba(20,184,166,0.15)', fg: '#14b8a6', icon: 'fas fa-wave-square' }, preview: { label: 'Preview', bg: 'rgba(99,102,241,0.15)', fg: '#818cf8', icon: 'fas fa-eye' }, malformed: { label: 'Bad URL', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', icon: 'fas fa-link-slash' } };
 
       const render404Tab = () => e('div', null,
         // Stats row
@@ -11073,7 +11080,9 @@
         e('div', { style: { display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' } },
           [
             { id: 'real', label: 'Real Pages', icon: 'fas fa-file', color: '#ef4444' },
+            { id: 'spam', label: 'Spam', icon: 'fas fa-skull-crossbones', color: '#d946ef' },
             { id: 'bot', label: 'Bot Probes', icon: 'fas fa-robot', color: '#6b7280' },
+            { id: 'noise', label: 'Scanner Noise', icon: 'fas fa-wave-square', color: '#14b8a6' },
             { id: 'preview', label: 'Preview/Draft', icon: 'fas fa-eye', color: '#818cf8' },
             { id: 'malformed', label: 'Malformed URLs', icon: 'fas fa-link-slash', color: '#f59e0b' },
             { id: 'all', label: 'All', icon: 'fas fa-list', color: 'var(--text3)' },

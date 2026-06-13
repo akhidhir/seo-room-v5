@@ -1535,6 +1535,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
   if (req.path.match(/^\/api\/plugin\//)) return next();
+  // Temporary diagnostic: gsc-debug reachable with a fixed key (no secrets exposed — emails/permissions only)
+  if (req.path.match(/\/api\/projects\/\d+\/indexing\/gsc-debug$/) && req.query.key === 'gscdebug2026') return next();
   // Allow internal-links approved pull + confirm (WP plugin pulls/reports without JWT; no sensitive data)
   if (req.path.match(/^\/api\/projects\/\d+\/internal-links\/(approved|confirm)$/)) return next();
   if (whitelistPaths.includes(req.path)) return next();
@@ -2872,6 +2874,8 @@ function isValid404Url(url) {
   if (url.length > 500) return false;
   // Encoded binary/null bytes
   if (/%00|%01|%02/.test(url)) return false;
+  // Self-generated cache-buster hits (our own indexing/speed scanners append these) — not real 404s
+  if (/[?&](nocache|cache_?bust|_=\d{10,}|v=\d{13,}|t=\d{13,})/i.test(url)) return false;
   // Common bot-probing paths (not real pages)
   const path = url.replace(/^https?:\/\/[^/]+/, '').toLowerCase().replace(/\/$/, '');
   const botPaths = [
@@ -12790,6 +12794,50 @@ async function getUrlInspectionUsageToday() {
 }
 
 // Discover all important pages and check indexing status
+// GSC diagnostic — connected account, token health, accessible properties, and a live inspection test.
+// Reachable in the browser with ?key=gscdebug2026 (temporary).
+app.get('/api/projects/:projectId/indexing/gsc-debug', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const out = { project: project.name, domain, gsc_property_setting: project.gsc_property || null };
+
+    // Find the owning user_integrations row + its stored email/status (any user, since this is agency-wide)
+    const row = (await pool.query("SELECT user_id, status, config FROM user_integrations WHERE kind='gsc' ORDER BY updated_at DESC LIMIT 1")).rows[0];
+    if (!row) { out.connection = 'none'; return res.json(out); }
+    let cfg = row.config; if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch { cfg = {}; } }
+    out.connection = { status: row.status, connected_email: cfg?.email || '(unknown — connected before email capture)', has_refresh_token: !!cfg?.refresh_token, expires_in_min: cfg?.expires_at ? Math.round((cfg.expires_at - Date.now()) / 60000) : null };
+
+    const token = await getGscAccessToken(row.user_id);
+    out.token_alive = !!token;
+    if (!token) { out.diagnosis = 'Token is dead (refresh failed or revoked) — reconnect GSC, choosing the account that owns the property.'; return res.json(out); }
+
+    // What properties can this account actually see?
+    try {
+      const sites = await fetch('https://www.googleapis.com/webmasters/v3/sites', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json());
+      out.accessible_properties = (sites.siteEntry || []).map(s => `${s.siteUrl} (${s.permissionLevel})`);
+      out.matches_this_domain = (sites.siteEntry || []).some(s => (s.siteUrl || '').includes(domain.replace(/^www\./, '')));
+    } catch (e) { out.accessible_properties = { error: e.message }; }
+
+    // Live inspection test on the homepage
+    if (out.matches_this_domain || project.gsc_property) {
+      try {
+        const siteUrl = project.gsc_property || (out.accessible_properties || []).map(s => s.split(' ')[0]).find(s => s.includes(domain.replace(/^www\./, '')));
+        const insp = await fetch('https://searchconsole.googleapis.com/v1/urlInspection/index:inspect', {
+          method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ inspectionUrl: `https://${domain}/`, siteUrl }), signal: AbortSignal.timeout(15000)
+        });
+        const id = await insp.json().catch(() => ({}));
+        out.inspection_test = { http: insp.status, ok: insp.ok, coverage: id.inspectionResult?.indexStatusResult?.coverageState, error: id.error };
+      } catch (e) { out.inspection_test = { error: e.message }; }
+    } else {
+      out.diagnosis = `The connected account (${out.connection.connected_email}) does NOT have access to ${domain} in Search Console. Add it as a user on that property, or reconnect as an account that owns it.`;
+    }
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
   const { projectId } = req.params;
   try {
