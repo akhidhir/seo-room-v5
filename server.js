@@ -36736,7 +36736,7 @@ app.get('/api/user/gsc/connect', (req, res) => {
   const state = Buffer.from(JSON.stringify({
     token: req.headers.authorization?.replace('Bearer ', '')
   })).toString('base64url');
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GSC_SCOPES)}&access_type=offline&prompt=consent&state=${state}`;
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GOOGLE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GSC_SCOPES)}&access_type=offline&prompt=select_account%20consent&state=${state}`;
   res.json({ url });
 });
 
@@ -36763,6 +36763,13 @@ app.get('/api/gsc/callback', async (req, res) => {
     const tokens = await tokenRes.json();
     if (tokens.error) return res.status(400).send(`OAuth error: ${tokens.error_description || tokens.error}`);
 
+    // Which Google account did they connect as? (so the UI can show it and avoid the wrong-account confusion)
+    let connectedEmail = null;
+    try {
+      const ui = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: `Bearer ${tokens.access_token}` } }).then(r => r.json());
+      connectedEmail = ui.email || null;
+    } catch {}
+
     // Store in user_integrations (not project_integrations)
     await pool.query(
       `INSERT INTO user_integrations (user_id, kind, config, status)
@@ -36771,10 +36778,11 @@ app.get('/api/gsc/callback', async (req, res) => {
       [userId, JSON.stringify({
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
-        expires_at: Date.now() + (tokens.expires_in * 1000)
+        expires_at: Date.now() + (tokens.expires_in * 1000),
+        email: connectedEmail
       })]
     );
-    console.log(`[gsc] OAuth tokens stored for user ${userId}`);
+    console.log(`[gsc] OAuth tokens stored for user ${userId} (account: ${connectedEmail || 'unknown'})`);
 
     res.send('<html><body><script>window.close(); window.opener && window.opener.location.reload();</script><p>GSC connected! You can close this tab.</p></body></html>');
   } catch (err) {
@@ -36785,9 +36793,10 @@ app.get('/api/gsc/callback', async (req, res) => {
 
 // User-level GSC status
 app.get('/api/user/gsc/status', async (req, res) => {
-  const r = await pool.query('SELECT status, updated_at FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth.userId, 'gsc']);
+  const r = await pool.query('SELECT status, updated_at, config FROM user_integrations WHERE user_id=$1 AND kind=$2', [req.auth.userId, 'gsc']);
   if (r.rows.length === 0) return res.json({ connected: false });
-  res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at });
+  let cfg = r.rows[0].config; if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch { cfg = {}; } }
+  res.json({ connected: r.rows[0].status === 'connected', updated_at: r.rows[0].updated_at, email: cfg?.email || null });
 });
 
 // User-level GSC disconnect
@@ -36805,7 +36814,7 @@ app.get('/api/user/gbp/connect', (req, res) => {
   const state = Buffer.from(JSON.stringify({
     token: req.headers.authorization?.replace('Bearer ', '')
   })).toString('base64url');
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GBP_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GBP_SCOPES)}&access_type=offline&prompt=consent&state=${state}`;
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(GBP_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(GBP_SCOPES)}&access_type=offline&prompt=select_account%20consent&state=${state}`;
   res.json({ url });
 });
 
