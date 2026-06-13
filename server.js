@@ -12800,7 +12800,7 @@ app.post('/api/projects/:projectId/indexing/check', async (req, res) => {
     const gscProperty = project.gsc_property;
 
     const accessToken = await getGscAccessToken(req.auth?.userId);
-    if (!accessToken) return res.status(400).json({ error: 'GSC not connected. Connect in Agency Integrations.' });
+    if (!accessToken) return res.status(400).json({ error: 'Google Search Console isn\'t connected. Connect your agency Google account in Agency Integrations.' });
 
     // Check daily budget
     const usedToday = await getUrlInspectionUsageToday();
@@ -12942,7 +12942,7 @@ app.get('/api/projects/:projectId/indexing/sitemaps', async (req, res) => {
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
     const accessToken = await getGscAccessToken(req.auth?.userId);
-    if (!accessToken) return res.status(400).json({ error: 'GSC not connected. Connect in Agency Integrations.' });
+    if (!accessToken) return res.status(400).json({ error: 'Google Search Console isn\'t connected. Connect your agency Google account in Agency Integrations.' });
     const matchedSite = await resolveGscSite(project, accessToken);
     if (!matchedSite) return res.status(400).json({ error: 'GSC property not found. Set it in Project Settings.' });
 
@@ -12975,7 +12975,7 @@ app.post('/api/projects/:projectId/indexing/submit-sitemap', async (req, res) =>
     if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
     const project = proj.rows[0];
     const accessToken = await getGscAccessToken(req.auth?.userId);
-    if (!accessToken) return res.status(400).json({ error: 'GSC not connected. Connect in Agency Integrations.' });
+    if (!accessToken) return res.status(400).json({ error: 'Google Search Console isn\'t connected. Connect your agency Google account in Agency Integrations.' });
     const matchedSite = await resolveGscSite(project, accessToken);
     if (!matchedSite) return res.status(400).json({ error: 'GSC property not found. Set it in Project Settings.' });
 
