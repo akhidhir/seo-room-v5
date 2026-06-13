@@ -8298,6 +8298,21 @@
         }
       };
 
+      // Plugin manager: delete selected plugins (deactivates active ones first), then re-run the audit.
+      const [pluginBusy, setPluginBusy] = useState(false);
+      const deletePlugins = async (slugs) => {
+        if (!slugs || !slugs.length) return;
+        if (!confirm(`Delete ${slugs.length} plugin${slugs.length > 1 ? 's' : ''}? Active ones are deactivated first. This is permanent on the WordPress site.`)) return;
+        setPluginBusy(true);
+        try {
+          const r = await api(`/projects/${project.id}/security-audit/plugins/delete`, { method: 'POST', body: { slugs } });
+          const failed = (r.results || []).filter(x => !x.ok);
+          alert(`Deleted ${r.deleted} of ${r.total} plugin(s).` + (failed.length ? `\n\nCould not delete:\n${failed.map(f => `• ${f.slug}: ${f.error}`).join('\n')}` : ''));
+          runAudit(); // refresh the list
+        } catch (e) { alert('Delete error: ' + e.message); }
+        setPluginBusy(false);
+      };
+
       const categories = [
         { id: 'access', label: 'Access Control', icon: 'fas fa-lock', color: '#ef4444' },
         { id: 'headers', label: 'Security Headers', icon: 'fas fa-shield-halved', color: '#6366f1' },
@@ -8555,7 +8570,14 @@
                   check.plugins && check.plugins.length > 0 && (() => {
                     const actionColor = { remove: { bg: 'rgba(239,68,68,0.12)', fg: '#ef4444', label: 'Remove', icon: 'fa-trash' }, review: { bg: 'rgba(245,158,11,0.12)', fg: '#f59e0b', label: 'Review', icon: 'fa-eye' }, keep: { bg: 'rgba(34,197,94,0.08)', fg: '#22c55e', label: 'Keep', icon: 'fa-check' } };
                     const sorted = [...check.plugins].sort((a, b) => { const order = { remove: 0, review: 1, keep: 2 }; return (order[a.action] || 2) - (order[b.action] || 2); });
+                    const flaggedSlugs = sorted.filter(p => p.action === 'remove' && p.slug && !/seo.?room/i.test(p.slug)).map(p => p.slug);
                     return e('div', { style: { paddingLeft: 30, marginTop: 10 } },
+                      flaggedSlugs.length > 0 && e('div', { style: { marginBottom: 10, display: 'flex', justifyContent: 'flex-end' } },
+                        e('button', { onClick: () => deletePlugins(flaggedSlugs), disabled: pluginBusy,
+                          style: { padding: '6px 14px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontSize: 12, fontWeight: 700, cursor: pluginBusy ? 'wait' : 'pointer' } },
+                          e('i', { className: pluginBusy ? 'fas fa-spinner fa-spin' : 'fas fa-trash', style: { marginRight: 6 } }),
+                          pluginBusy ? 'Working…' : `Delete all ${flaggedSlugs.length} flagged`)
+                      ),
                       e('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
                         e('thead', null,
                           e('tr', { style: { borderBottom: '1px solid var(--border)' } },
@@ -8563,7 +8585,8 @@
                             e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', width: 70 } }, 'Status'),
                             e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', width: 80 } }, 'Action'),
                             e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' } }, 'Reason'),
-                            e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' } }, 'Impact if Removed')
+                            e('th', { style: { textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' } }, 'Impact if Removed'),
+                            e('th', { style: { textAlign: 'right', padding: '8px 10px', color: 'var(--text3)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', width: 60 } }, '')
                           )
                         ),
                         e('tbody', null,
@@ -8580,7 +8603,14 @@
                                 )
                               ),
                               e('td', { style: { padding: '8px 10px', color: 'var(--text3)', fontSize: 12 } }, pl.reason),
-                              e('td', { style: { padding: '8px 10px', color: pl.action === 'remove' ? '#ef4444' : pl.action === 'review' ? '#f59e0b' : 'var(--text3)', fontSize: 12 } }, pl.impact || '—')
+                              e('td', { style: { padding: '8px 10px', color: pl.action === 'remove' ? '#ef4444' : pl.action === 'review' ? '#f59e0b' : 'var(--text3)', fontSize: 12 } }, pl.impact || '—'),
+                              e('td', { style: { padding: '8px 10px', textAlign: 'right' } },
+                                pl.slug && !/seo.?room/i.test(pl.slug)
+                                  ? e('button', { onClick: () => deletePlugins([pl.slug]), disabled: pluginBusy, title: pl.status === 'active' ? 'Deactivate & delete' : 'Delete',
+                                      style: { background: 'none', border: 'none', color: '#ef4444', cursor: pluginBusy ? 'wait' : 'pointer', fontSize: 13, opacity: pl.action === 'keep' ? 0.45 : 1 } },
+                                      e('i', { className: 'fas fa-trash-alt' }))
+                                  : e('span', { style: { color: 'var(--text3)', fontSize: 11 } }, '—')
+                              )
                             );
                           })
                         )

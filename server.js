@@ -48734,6 +48734,80 @@ app.post('/api/projects/:projectId/security-audit/fix/inactive-plugins', async (
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Standalone plugin classifier (keep / review / remove) used by the plugin manager endpoint.
+function classifyPluginSecurity(p) {
+  const slug = (p.plugin || p.textdomain || '').toLowerCase();
+  const name = (p.name || '').replace(/<[^>]*>/g, '');
+  const test = slug + ' ' + name;
+  if (p.status !== 'active') return { action: 'remove', reason: 'Inactive — can still be exploited even when deactivated' };
+  if (/file.?manager/i.test(test)) return { action: 'remove', reason: 'File manager — major security risk; use cPanel instead' };
+  if (/(hello.?dolly|akismet.*(unused)|classic.?editor|wp.?reset|demo|sample)/i.test(test)) return { action: 'remove', reason: 'Unused/sample plugin — safe to remove' };
+  if (/(duplicate|backup|migrat|import|export|debug|query.?monitor|wp.?file|adminer)/i.test(test)) return { action: 'review', reason: 'Utility/dev plugin — keep only if actively used; deactivate when done' };
+  if (/(seo.?room|berqwp|berq|yoast|rank.?math|elementor|woocommerce|google.?site.?kit|wordfence|updraft)/i.test(test)) return { action: 'keep', reason: 'Core/required plugin' };
+  return { action: 'keep', reason: 'Active plugin' };
+}
+
+// GET: full plugin list with keep/review/remove classification (for the plugin manager UI)
+app.get('/api/projects/:projectId/security-audit/plugins', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || project.wp_url || `https://${(project.domain || '').replace(/^https?:\/\//, '')}`).replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured in Project Settings' });
+
+    const resp = await fetch(`${wpUrl}/wp-json/wp/v2/plugins`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    if (!resp.ok) return res.status(400).json({ error: `Could not fetch plugins (HTTP ${resp.status}) — check WP Application Password` });
+    const plugins = await resp.json();
+    const list = plugins.map(p => ({
+      slug: p.plugin || p.textdomain,
+      name: (p.name || '').replace(/<[^>]*>/g, ''),
+      status: p.status,
+      version: p.version,
+      // Reuse the same recommendation buckets the audit uses
+      recommendation: classifyPluginSecurity(p),
+    }));
+    res.json({ ok: true, plugins: list });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST: delete one or more plugins by slug. Active plugins are safely deactivated first, then deleted.
+// Body: { slugs: ["akismet/akismet.php", ...] }
+app.post('/api/projects/:projectId/security-audit/plugins/delete', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || project.wp_url || `https://${(project.domain || '').replace(/^https?:\/\//, '')}`).replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    const slugs = Array.isArray(req.body?.slugs) ? req.body.slugs.filter(Boolean) : [];
+    if (!slugs.length) return res.status(400).json({ error: 'No plugin slugs provided' });
+
+    // Never let the dashboard delete the plugin it depends on
+    const PROTECTED = /seo.?room/i;
+    const results = [];
+    for (const slug of slugs) {
+      if (PROTECTED.test(slug)) { results.push({ slug, ok: false, error: 'protected (SEO Room plugin — required by the dashboard)' }); continue; }
+      try {
+        const url = `${wpUrl}/wp-json/wp/v2/plugins/${encodeURIComponent(slug)}`;
+        // 1. Check current status; WordPress refuses to delete an ACTIVE plugin
+        const getR = await fetch(`${url}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(12000) });
+        const cur = getR.ok ? await getR.json() : null;
+        if (cur && cur.status === 'active') {
+          const deact = await fetch(url, { method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'inactive' }), signal: AbortSignal.timeout(15000) });
+          if (!deact.ok) { results.push({ slug, ok: false, error: `deactivate failed (HTTP ${deact.status})` }); continue; }
+        }
+        // 2. Delete
+        const del = await fetch(url, { method: 'DELETE', headers: authHeaders, signal: AbortSignal.timeout(15000) });
+        if (del.ok) results.push({ slug, ok: true });
+        else { const b = await del.json().catch(() => ({})); results.push({ slug, ok: false, error: b.message || `HTTP ${del.status}` }); }
+      } catch (e) { results.push({ slug, ok: false, error: e.message }); }
+    }
+    const deleted = results.filter(r => r.ok).length;
+    res.json({ ok: deleted > 0, deleted, total: slugs.length, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST: Add security headers via seoroom plugin or .htaccess
 app.post('/api/projects/:projectId/security-audit/fix/headers', async (req, res) => {
   try {
