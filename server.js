@@ -32244,7 +32244,14 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       `SELECT id, title, status, category, severity FROM audit_findings WHERE project_id=$1 AND pillar='website'`, [projectId]
     );
     const existingByTitle = new Map();
-    existingFindings.rows.forEach(f => existingByTitle.set(f.title, f));
+    // Digit-insensitive fallback: "1430 images missing alt text across 48 pages" must match
+    // "1290 images missing alt text across 50 pages" — same finding, counts changed between runs
+    const normFindingTitle = t => String(t || '').toLowerCase().replace(/\d+/g, '#');
+    const existingByNorm = new Map();
+    existingFindings.rows.forEach(f => {
+      existingByTitle.set(f.title, f);
+      if (!existingByNorm.has(normFindingTitle(f.title))) existingByNorm.set(normFindingTitle(f.title), f);
+    });
 
     const auditRes = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at) VALUES ($1, 'website', 'running', NOW()) RETURNING id`,
@@ -33148,11 +33155,37 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         }
       }
     }
+    // Auto-resolve STALE deterministic findings: these checks re-emit every run when the
+    // condition still holds — if a pending one is absent from this run's findings, the
+    // condition cleared (e.g. sitemap now exists) and the finding must not linger.
+    const DETERMINISTIC_RESOLVE = [
+      /^no xml sitemap found/i,
+      /robots\.txt (missing|not found|blocked)/i,
+      /not using https/i,
+      /duplicate title/i,
+      /missing h1 heading/i,
+      /marked noindex/i,
+      /— (error|\d{3}): /i,                 // old per-page crawl-error findings
+      /could not be crawled \(network timeouts\)/i,
+      /images missing alt text/i
+    ];
+    try {
+      const newNormSet = new Set(findings.map(f => normFindingTitle(f.title)));
+      for (const ex of existingFindings.rows) {
+        if (ex.status === 'fixed' || ex.status === 'dismissed') continue;
+        const t = String(ex.title || '');
+        if (DETERMINISTIC_RESOLVE.some(re => re.test(t)) && !newNormSet.has(normFindingTitle(t))) {
+          await pool.query(`UPDATE audit_findings SET status='fixed', updated_at=NOW() WHERE id=$1`, [ex.id]);
+          console.log(`[website-audit] Auto-resolved stale finding "${t}" — condition no longer present in this crawl`);
+        }
+      }
+    } catch (e) { console.warn('[website-audit] stale-resolve error:', e.message); }
+
     const batchTopics = new Set();
     const batchTitles = new Set();
 
     for (const f of findings) {
-      const existing = existingByTitle.get(f.title);
+      const existing = existingByTitle.get(f.title) || existingByNorm.get(normFindingTitle(f.title));
       const perPage = isPerPageTitle(f.title);
 
       // _forceStatus findings (e.g. schema-present records) skip dedup — they must persist
@@ -33227,13 +33260,14 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
 
       if (existing) {
-        // Existing finding with same title — update description/severity but keep status
+        // Existing finding with same title — update description/severity but keep status.
+        // Title refreshed too, so digit-matched findings show the CURRENT counts.
         await pool.query(
-          `UPDATE audit_findings SET audit_id=$1, description=$2, recommendation=$3, severity=$4,
+          `UPDATE audit_findings SET audit_id=$1, title=$9, description=$2, recommendation=$3, severity=$4,
            current_value=$5, recommended_value=$6, category=$7, updated_at=NOW()
            WHERE id=$8`,
           [auditId, f.description, f.recommendation, f.severity,
-           f.current_value, f.recommended_value, f.category, existing.id]
+           f.current_value, f.recommended_value, f.category, existing.id, f.title]
         );
         f.id = existing.id;
         f.status = existing.status;
