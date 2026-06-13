@@ -12,9 +12,28 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.30');
+define('SEOROOM_VERSION', '8.9.31');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
+
+// ============ SECURITY HEADERS ============
+// Output security response headers based on saved options (set from the dashboard Security Audit).
+// Design-safe: headers never alter page appearance. Fully reversible — clear the option to remove.
+add_action('send_headers', 'seoroom_send_security_headers');
+function seoroom_send_security_headers() {
+    if (is_admin()) return; // never touch wp-admin
+    $h = get_option('seoroom_security_headers', array());
+    if (empty($h) || !is_array($h)) return;
+    if (!empty($h['x_frame_options']))        header('X-Frame-Options: ' . $h['x_frame_options']);
+    if (!empty($h['x_content_type_options'])) header('X-Content-Type-Options: ' . $h['x_content_type_options']);
+    if (!empty($h['referrer_policy']))        header('Referrer-Policy: ' . $h['referrer_policy']);
+    if (!empty($h['permissions_policy']))     header('Permissions-Policy: ' . $h['permissions_policy']);
+    // HSTS only over HTTPS (sending it over HTTP is ignored anyway, but be correct)
+    if (!empty($h['strict_transport_security']) && is_ssl()) header('Strict-Transport-Security: ' . $h['strict_transport_security']);
+    // CSP report-only by default so it never breaks the live site
+    if (!empty($h['csp_report_only']))        header('Content-Security-Policy-Report-Only: ' . $h['csp_report_only']);
+    if (!empty($h['csp']))                    header('Content-Security-Policy: ' . $h['csp']);
+}
 
 // ============ DEFAULT OPTIONS ============
 function sropt_defaults() {
@@ -3819,7 +3838,58 @@ add_action('rest_api_init', function() {
         'callback' => 'sropt_page_audit',
         'permission_callback' => function() { return current_user_can('manage_options'); },
     ));
+
+    // ---- Security Headers: set / clear the headers the plugin emits via send_headers ----
+    register_rest_route('seoroom-opt/v1', '/security-headers', array(
+        'methods'  => 'POST',
+        'callback' => 'seoroom_set_security_headers',
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+    register_rest_route('seoroom-opt/v1', '/security-headers', array(
+        'methods'  => 'GET',
+        'callback' => function() { return new WP_REST_Response(array('headers' => get_option('seoroom_security_headers', array())), 200); },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
 });
+
+/**
+ * Save the security headers the plugin should emit. Accepts either:
+ *  - an explicit { headers: { x_frame_options: "...", ... } } object, OR
+ *  - a list { headers: ["x-frame-options", ...] } of header keys to enable with safe defaults.
+ * Pass { clear: true } to remove all headers. Returns the stored map.
+ */
+function seoroom_set_security_headers($request) {
+    $body = $request->get_json_params();
+    if (!empty($body['clear'])) {
+        delete_option('seoroom_security_headers');
+        return new WP_REST_Response(array('ok' => true, 'cleared' => true), 200);
+    }
+    // Safe defaults — CSP intentionally report-only, HSTS short max-age until HTTPS is proven
+    $defaults = array(
+        'x-frame-options'           => array('x_frame_options' => 'SAMEORIGIN'),
+        'x-content-type-options'    => array('x_content_type_options' => 'nosniff'),
+        'referrer-policy'           => array('referrer_policy' => 'strict-origin-when-cross-origin'),
+        'permissions-policy'        => array('permissions_policy' => 'camera=(), microphone=(), geolocation=()'),
+        'strict-transport-security' => array('strict_transport_security' => 'max-age=300'),
+        'content-security-policy'   => array('csp_report_only' => "default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'"),
+    );
+    $stored = get_option('seoroom_security_headers', array());
+    if (!is_array($stored)) $stored = array();
+
+    $in = isset($body['headers']) ? $body['headers'] : array();
+    if (is_array($in) && array_keys($in) !== range(0, count($in) - 1)) {
+        // Associative object: merge explicit values directly
+        $stored = array_merge($stored, $in);
+    } else {
+        // List of header keys: apply safe defaults for each
+        foreach ((array)$in as $key) {
+            $key = strtolower(trim($key));
+            if (isset($defaults[$key])) $stored = array_merge($stored, $defaults[$key]);
+        }
+    }
+    update_option('seoroom_security_headers', $stored);
+    return new WP_REST_Response(array('ok' => true, 'headers' => $stored), 200);
+}
 
 /**
  * Page Audit endpoint — crawls all published pages/posts from inside WordPress.

@@ -48394,21 +48394,30 @@ app.post('/api/projects/:projectId/security-audit/fix/headers', async (req, res)
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const wpUrl = project.wp_url || `https://${(project.domain || '').replace(/^https?:\/\//, '')}`;
+    const wpUrl = (project.wordpress_url || project.wp_url || `https://${(project.domain || '').replace(/^https?:\/\//, '')}`).replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
     if (!authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
 
-    const headers = req.body?.headers || ['x-frame-options', 'x-content-type-options', 'strict-transport-security', 'referrer-policy', 'permissions-policy'];
+    // Safe-by-default set: the 4 plain headers + HSTS at SHORT max-age + CSP in report-only mode.
+    // Caller can override with an explicit list or associative object.
+    const headers = req.body?.headers || [
+      'x-frame-options', 'x-content-type-options', 'referrer-policy',
+      'permissions-policy', 'strict-transport-security', 'content-security-policy'
+    ];
 
     // Try via seoroom-opt endpoint
     try {
       const resp = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/security-headers`, {
         method: 'POST',
-        headers: authHeaders,
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ headers }),
         signal: AbortSignal.timeout(10000),
       });
-      if (resp.ok) return res.json({ ok: true, method: 'plugin' });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        return res.json({ ok: true, method: 'plugin', applied: data.headers || null,
+          message: 'Security headers applied via the SEO Room plugin. HSTS starts at a short max-age (300s) and CSP is report-only — both safe. Re-scan to verify, then I can raise HSTS once HTTPS is confirmed solid.' });
+      }
     } catch (e) { /* not available */ }
 
     // Return structured manual steps

@@ -8332,12 +8332,12 @@
         xmlrpc: { endpoint: 'xmlrpc', label: 'Disable XML-RPC', auto: false },
         wp_plugins_inactive: { endpoint: 'inactive-plugins', label: 'Delete Inactive Plugins', auto: true },
         wp_plugins_filemanager: { endpoint: 'inactive-plugins', label: 'Delete File Manager Plugin', auto: true },
-        header_x_frame_options: { endpoint: 'headers', label: 'Add Security Headers', auto: false },
-        header_x_content_type_options: { endpoint: 'headers', label: 'Add Security Headers', auto: false },
-        header_strict_transport_security: { endpoint: 'headers', label: 'Add HSTS Header', auto: false },
-        header_referrer_policy: { endpoint: 'headers', label: 'Add Referrer Policy', auto: false },
-        header_permissions_policy: { endpoint: 'headers', label: 'Add Permissions Policy', auto: false },
-        header_content_security_policy: { endpoint: 'headers', label: 'Add CSP Header', auto: false },
+        header_x_frame_options: { endpoint: 'headers', label: 'Fix All Headers', auto: true },
+        header_x_content_type_options: { endpoint: 'headers', label: 'Fix All Headers', auto: true },
+        header_strict_transport_security: { endpoint: 'headers', label: 'Fix All Headers', auto: true },
+        header_referrer_policy: { endpoint: 'headers', label: 'Fix All Headers', auto: true },
+        header_permissions_policy: { endpoint: 'headers', label: 'Fix All Headers', auto: true },
+        header_content_security_policy: { endpoint: 'headers', label: 'Fix All Headers', auto: true },
         wp_debug_log: { endpoint: 'debug-log', label: 'Block Debug Log', auto: false },
         dir_listing: { endpoint: 'dir-listing', label: 'Disable Directory Listing', auto: false },
         wp_login: { endpoint: null, label: 'Hide Login Page', steps: [
@@ -8387,7 +8387,7 @@
           } else if (data.manual) {
             setFixResult(prev => ({ ...prev, [checkId]: { ok: false, manual: true, message: data.instructions || data.message } }));
           } else if (data.ok) {
-            const msg = data.deleted != null ? `Deleted ${data.deleted} plugin(s)` : data.fixed != null ? `Applied 410 to ${data.fixed} URL(s)` : 'Fixed successfully';
+            const msg = data.message || (data.deleted != null ? `Deleted ${data.deleted} plugin(s)` : data.fixed != null ? `Applied 410 to ${data.fixed} URL(s)` : 'Fixed successfully');
             setFixResult(prev => ({ ...prev, [checkId]: { ok: true, message: msg } }));
           } else {
             setFixResult(prev => ({ ...prev, [checkId]: { ok: false, message: data.error || 'Fix failed' } }));
