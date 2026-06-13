@@ -9362,8 +9362,23 @@
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     // ============ INDEXING PAGE ============
     const _indexingCache = {};
-    function IndexingPage({ project }) {
+    function IndexingPage({ project, setActiveTab }) {
       const _ixck = project?.id + ':indexing';
+      // GSC URL-Inspection deep link: opens the exact URL in Search Console so "Request Indexing" is one click.
+      const gscInspectUrl = (pageUrl) => {
+        const prop = project?.gsc_property || project?.gscProperty || '';
+        const resource = prop || `sc-domain:${(project?.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '')}`;
+        return `https://search.google.com/search-console/inspect?resource_id=${encodeURIComponent(resource)}&id=${encodeURIComponent(pageUrl)}`;
+      };
+      // Route a not-indexed page to the right fix tool based on Google's coverage reason.
+      const fixRouteFor = (coverageState) => {
+        const c = (coverageState || '').toLowerCase();
+        if (c.includes('crawled')) return { tab: 'onpage-audit', label: 'Improve content', icon: 'fa-pen', why: 'Google judged it thin/low-value' };
+        if (c.includes('discovered') || c.includes('unknown')) return { tab: 'internal-linking', label: 'Add internal links', icon: 'fa-link', why: 'Needs discovery / crawl priority' };
+        if (c.includes('404') || c.includes('not found')) return { tab: 'redirects', label: 'Fix 404 / redirect', icon: 'fa-route', why: 'Page is dead — restore or redirect' };
+        if (c.includes('redirect')) return { tab: 'redirects', label: 'Review redirect', icon: 'fa-route', why: 'Redirects elsewhere' };
+        return null;
+      };
       const [results, setResults] = useState(_indexingCache[_ixck]?.results || []);
       const [loading, setLoading] = useState(false);
       const [initialLoading, setInitialLoading] = useState(!_indexingCache[_ixck]);
@@ -10183,6 +10198,26 @@
                                 </div>
                               </div>
                             </div>
+                            {/* Action row: route to the right fix tool + one-click GSC reindex request */}
+                            {(() => {
+                              const route = fixRouteFor(r.coverageState);
+                              return (
+                                <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                                  {route && setActiveTab && (
+                                    <button onClick={() => setActiveTab(route.tab)} title={route.why}
+                                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 6, border: 'none', background: '#6366f1', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                      <i className={`fas ${route.icon}`} />{route.label}
+                                    </button>
+                                  )}
+                                  <a href={gscInspectUrl(r.url)} target="_blank" rel="noopener"
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text1)', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}
+                                    title="Opens this URL in Google Search Console — then click Request Indexing (Google has no API for this; ~10/day limit)">
+                                    <i className="fab fa-google" style={{ color: '#4285f4' }} />Request indexing in GSC
+                                  </a>
+                                  {route && <span style={{ fontSize: 11, color: 'var(--text3)' }}>Fix the cause first — reindexing a page Google declined just gets it declined again.</span>}
+                                </div>
+                              );
+                            })()}
                             <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text3)' }}>
                               <span style={{ marginRight: 16 }}>Fetch: {r.pageFetchState || '—'}</span>
                               <span style={{ marginRight: 16 }}>Robots: {r.robotsTxtState || '—'}</span>
@@ -37831,7 +37866,7 @@
           case 'onpage-audit':
             return <OnPageAuditPage project={project} />;
           case 'indexing':
-            return <IndexingPage project={project} />;
+            return <IndexingPage project={project} setActiveTab={setActiveTab} />;
           case 'gsc-indexed':
             return <GSCIndexedPage project={project} filter="indexed" />;
           case 'gsc-not-indexed':
