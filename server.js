@@ -18997,9 +18997,15 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
     }
   };
 
+  // Reset the counter for the apply phase so the UI shows 1,2,3… as pages are actually linked
+  job.done = 0;
+  job.phase = 'applying';
   for (const pr of pickResults) {
     if (!pr) continue;
     const targetUrl = pr.target.link || '';
+    job.done++;
+    const prTitle = ((pr.target.title?.rendered || pr.target.title?.raw || '').replace(/<[^>]+>/g, '').trim()) || (pr.target.slug || '');
+    job.current = `Adding links ${job.done}/${pickResults.length}: ${prTitle}`;
     if (pr.error) { job.errors++; job.results.push({ page_id: pr.target.id, error: pr.error }); continue; }
     let added = 0;
     let firstSource = null;
