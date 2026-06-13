@@ -35009,10 +35009,17 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       const label = words.charAt(0).toUpperCase() + words.slice(1);
       return isLogo ? `${label} logo` : label;
     };
+    const brokenImages = [];   // 404/410 — the image itself is dead on the page; alt text won't help
+    const unfetchable = [];    // blocked/timeout/too large — fall back to text-based AI alt
     for (const img of imagesToFix) {
       try {
-        const imgResp = await fetch(img.src, { signal: AbortSignal.timeout(10000), redirect: 'follow' });
-        if (!imgResp.ok) { console.log(`[alt-text-fix] Skipped ${img.src}: HTTP ${imgResp.status}`); continue; }
+        const imgResp = await fetch(img.src, { signal: AbortSignal.timeout(10000), redirect: 'follow', headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } });
+        if (!imgResp.ok) {
+          console.log(`[alt-text-fix] Skipped ${img.src}: HTTP ${imgResp.status}`);
+          if (imgResp.status === 404 || imgResp.status === 410) brokenImages.push(img.src);
+          else unfetchable.push(img.src);
+          continue;
+        }
         let contentType = (imgResp.headers.get('content-type') || 'image/jpeg').split(';')[0].trim().toLowerCase();
         if (contentType === 'image/jpg') contentType = 'image/jpeg'; // non-standard but common
         // Claude Vision only accepts these four — SVG/AVIF/ICO etc. must be skipped, not sent
@@ -35030,8 +35037,8 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
           }
         }
         const buf = await imgResp.arrayBuffer();
-        if (buf.byteLength > 3 * 1024 * 1024) { console.log(`[alt-text-fix] Skipped ${img.src}: too large (${(buf.byteLength/1024/1024).toFixed(1)}MB)`); continue; }
-        if (buf.byteLength < 100) { console.log(`[alt-text-fix] Skipped ${img.src}: too small`); continue; }
+        if (buf.byteLength > 3 * 1024 * 1024) { console.log(`[alt-text-fix] Skipped ${img.src}: too large (${(buf.byteLength/1024/1024).toFixed(1)}MB)`); unfetchable.push(img.src); continue; }
+        if (buf.byteLength < 100) { console.log(`[alt-text-fix] Skipped ${img.src}: too small`); unfetchable.push(img.src); continue; }
         imageData.push({
           src: img.src,
           base64: Buffer.from(buf).toString('base64'),
@@ -35039,11 +35046,16 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
         });
       } catch (e) {
         console.log(`[alt-text-fix] Skipped ${img.src}: ${e.message}`);
+        unfetchable.push(img.src);
       }
     }
 
-    if (imageData.length === 0 && nameBasedAlts.length === 0) {
-      return res.json({ success: false, message: 'Could not fetch any of the images (blocked or too large). Alt text must be added manually.' });
+    // All images are dead links — alt text is the wrong fix
+    if (imageData.length === 0 && nameBasedAlts.length === 0 && unfetchable.length === 0 && brokenImages.length > 0) {
+      return res.json({
+        success: false, broken: brokenImages,
+        message: `Image returns 404 — it's broken on the live page. Remove or replace it instead of adding alt text. (${brokenImages.map(s => s.split('/').pop()).join(', ')})`
+      });
     }
     allGenerated.push(...nameBasedAlts);
 
@@ -35079,8 +35091,32 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       }
     }
 
+    // Text-based fallback: images the server couldn't download (blocked/too large) — infer alt from filename + page context
+    if (unfetchable.length > 0) {
+      try {
+        const fbResp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
+          messages: [{ role: 'user', content: `Generate SEO alt text for images that could not be visually analyzed. Infer the likely content from the filename and page context. Page: "${pageSlug}" on ${businessName} website (${domain}). Industry: ${industry}. Return ONLY a JSON array: [{"src":"image_url","alt":"alt text"}]. Rules: under 125 chars, no "image of"/"photo of", natural keywords, generic but plausible (e.g. blog illustration topics from the page slug). Images:\n${unfetchable.join('\n')}` }]
+        });
+        const fbText = fbResp.content?.[0]?.text || '';
+        const fbMatch = fbText.match(/\[[\s\S]*\]/);
+        if (fbMatch) {
+          const fbParsed = JSON.parse(fbMatch[0]).filter(g => g && g.src && g.alt);
+          allGenerated.push(...fbParsed);
+          console.log(`[alt-text-fix] Text fallback: generated ${fbParsed.length} alts for unfetchable images`);
+        }
+      } catch (e) {
+        console.error(`[alt-text-fix] Text fallback error: ${e.message}`);
+      }
+    }
+
     if (allGenerated.length === 0) {
-      return res.json({ success: false, message: 'AI could not generate alt text. Try again or add manually.' });
+      return res.json({
+        success: false,
+        message: brokenImages.length > 0
+          ? `Image returns 404 — it's broken on the live page. Remove or replace it instead of adding alt text. (${brokenImages.map(s => s.split('/').pop()).join(', ')})`
+          : 'AI could not generate alt text. Try again or add manually.'
+      });
     }
 
     console.log(`[alt-text-fix] Generated ${allGenerated.length} alt texts`);
