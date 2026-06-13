@@ -420,6 +420,8 @@ async function initDb() {
       )
     `);
 
+    await client.query(`ALTER TABLE monthly_reports ADD COLUMN IF NOT EXISTS share_token TEXT`).catch(() => {});
+
     // On-page audit cache
     await client.query(`
       CREATE TABLE IF NOT EXISTS onpage_audit_cache (
@@ -41944,10 +41946,87 @@ app.get('/api/projects/:projectId/reports', async (req, res) => {
     const r = await pool.query('SELECT * FROM monthly_reports WHERE project_id=$1 ORDER BY month DESC', [req.params.projectId]);
     const reports = r.rows.map(row => {
       const data = typeof row.report_data === 'string' ? JSON.parse(row.report_data) : (row.report_data || {});
-      return { id: row.id, month: row.month, createdAt: row.created_at, ...data };
+      return { id: row.id, month: row.month, createdAt: row.created_at, share_token: row.share_token, ...data };
     });
     res.json({ reports });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUBLIC client-facing report — clean, print-friendly, no login (token-protected URL)
+app.get('/report/:token', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM monthly_reports WHERE share_token=$1', [req.params.token]);
+    if (r.rows.length === 0) return res.status(404).send('<h1 style="font-family:sans-serif">Report not found</h1>');
+    const d = typeof r.rows[0].report_data === 'string' ? JSON.parse(r.rows[0].report_data) : r.rows[0].report_data;
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const num = (v, dec = 0) => (v == null || isNaN(v)) ? '—' : Number(v).toFixed(dec);
+    const delta = (cur, prev, lowerBetter = false) => {
+      if (cur == null || prev == null) return '';
+      const diff = cur - prev;
+      if (Math.abs(diff) < 0.005) return '<span class="d flat">no change</span>';
+      const good = lowerBetter ? diff < 0 : diff > 0;
+      return `<span class="d ${good ? 'up' : 'down'}">${diff > 0 ? '+' : ''}${Number(diff.toFixed(2))} vs last month</span>`;
+    };
+    const g = d.gscData || {}, pg = (d.previousMonth && d.previousMonth.gscData) || {};
+    const wc = d.workCompleted;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>SEO Report — ${esc(d.project?.name)} — ${esc(d.monthLabel)}</title>
+<style>
+  body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;margin:0;background:#f6f7fb;color:#1a202c}
+  .wrap{max-width:820px;margin:0 auto;padding:32px 20px}
+  .card{background:#fff;border-radius:14px;padding:24px 28px;margin-bottom:18px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:15px;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;margin:0 0 14px}
+  .sub{color:#6b7280;font-size:14px}
+  .score{display:flex;align-items:center;gap:20px}
+  .ring{width:92px;height:92px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
+  .kpi{padding:14px;border:1px solid #e5e7eb;border-radius:10px}
+  .kpi .v{font-size:24px;font-weight:800} .kpi .l{font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px}
+  .d{display:block;font-size:12px;margin-top:3px} .d.up{color:#16a34a} .d.down{color:#dc2626} .d.flat{color:#9ca3af}
+  table{width:100%;border-collapse:collapse;font-size:14px} td,th{padding:8px 6px;text-align:left;border-bottom:1px solid #f1f2f4}
+  th{font-size:11px;text-transform:uppercase;color:#6b7280}
+  .footer{text-align:center;color:#9ca3af;font-size:12px;padding:18px 0}
+  .summary{font-size:15px;line-height:1.65;white-space:pre-wrap}
+  @media print {.card{box-shadow:none;border:1px solid #e5e7eb}}
+</style></head><body><div class="wrap">
+  <div class="card"><h1>${esc(d.project?.name)} — SEO Performance Report</h1>
+    <div class="sub">${esc(d.monthLabel)} · ${esc(d.project?.domain || '')} · ${esc(d.project?.location || '')}</div></div>
+  <div class="card"><div class="score">
+    <div class="ring" style="background:${d.healthScore >= 70 ? '#16a34a' : d.healthScore >= 50 ? '#f59e0b' : '#dc2626'}">${num(d.healthScore)}</div>
+    <div><div style="font-weight:700;font-size:16px">Overall SEO Health</div>
+    <div class="sub">Composite of visibility, rankings, site quality and performance${d.previousMonth?.healthScore != null ? ' · ' + delta(d.healthScore, d.previousMonth.healthScore).replace(/<[^>]+>/g, '') : ''}</div></div>
+  </div></div>
+  ${d.executiveSummary ? `<div class="card"><h2>Summary</h2><div class="summary">${esc(d.executiveSummary)}</div></div>` : ''}
+  <div class="card"><h2>Google Search Performance</h2><div class="grid">
+    <div class="kpi"><div class="v">${num(g.clicks)}</div><div class="l">Clicks</div>${delta(g.clicks, pg.clicks)}</div>
+    <div class="kpi"><div class="v">${num(g.impressions)}</div><div class="l">Impressions</div>${delta(g.impressions, pg.impressions)}</div>
+    <div class="kpi"><div class="v">${g.ctr != null ? num(g.ctr * 100, 1) + '%' : '—'}</div><div class="l">CTR</div></div>
+    <div class="kpi"><div class="v">${num(g.avgPosition, 1)}</div><div class="l">Avg Position</div>${delta(g.avgPosition, pg.avgPosition, true)}</div>
+  </div></div>
+  ${d.mapsRankings ? `<div class="card"><h2>Google Maps Visibility</h2><div class="grid">
+    <div class="kpi"><div class="v">${num(d.mapsRankings.avgArp, 1)}</div><div class="l">Avg Map Rank</div>${delta(d.mapsRankings.avgArp, d.previousMonth?.mapsRankings?.avgArp, true)}</div>
+    <div class="kpi"><div class="v">${d.mapsRankings.avgVisibility != null ? num(d.mapsRankings.avgVisibility, 1) + '%' : '—'}</div><div class="l">Top-3 Visibility</div>${delta(d.mapsRankings.avgVisibility, d.previousMonth?.mapsRankings?.avgVisibility)}</div>
+    ${d.pageSpeedStats ? `<div class="kpi"><div class="v">${num(d.pageSpeedStats.avgPerformance)}</div><div class="l">Avg Site Speed Score</div>${delta(d.pageSpeedStats.avgPerformance, d.previousMonth?.pageSpeedStats?.avgPerformance)}</div>` : ''}
+    ${d.onPageStats ? `<div class="kpi"><div class="v">${num(d.onPageStats.avgScore)}%</div><div class="l">On-Page SEO Score</div>${delta(d.onPageStats.avgScore, d.previousMonth?.onPageStats?.avgScore)}</div>` : ''}
+  </div></div>` : ''}
+  ${wc && wc.total_changes > 0 ? `<div class="card"><h2>Work Completed This Month</h2>
+    <div class="grid" style="margin-bottom:14px">
+      <div class="kpi"><div class="v">${num(wc.total_changes)}</div><div class="l">Improvements Applied</div></div>
+      <div class="kpi"><div class="v">${num(wc.findings_resolved)}</div><div class="l">Issues Resolved</div></div>
+    </div>
+    <table><tr><th>Type of work</th><th style="text-align:right">Count</th></tr>
+    ${wc.by_type.map(t => `<tr><td>${esc(t.label)}</td><td style="text-align:right;font-weight:700">${t.count}</td></tr>`).join('')}</table>
+  </div>` : ''}
+  ${Array.isArray(d.mapsRankings?.topKeywords) && d.mapsRankings.topKeywords.length ? `<div class="card"><h2>Top Map Rankings</h2>
+    <table><tr><th>Keyword</th><th style="text-align:right">Avg Position</th><th style="text-align:right">Top-3 Visibility</th></tr>
+    ${d.mapsRankings.topKeywords.slice(0, 8).map(k => `<tr><td>${esc(k.keyword)}</td><td style="text-align:right">${num(k.arp, 1)}</td><td style="text-align:right">${k.solv != null ? num(k.solv, 0) + '%' : '—'}</td></tr>`).join('')}</table>
+  </div>` : ''}
+  <div class="footer">Prepared by The SEO Room · ${esc(new Date(d.generatedAt || Date.now()).toLocaleDateString('en-AU'))} · This report is private — please don't share the link.</div>
+</div></body></html>`;
+    res.set('Content-Type', 'text/html').send(html);
+  } catch (e) {
+    res.status(500).send('<h1 style="font-family:sans-serif">Report error</h1>');
+  }
 });
 
 // Generate monthly report
@@ -42245,6 +42324,39 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       (Math.min(100, (gscData.ctr || 0) * 20) * 0.15) // CTR weight (5% CTR = 100)
     )));
 
+    // 8b. WORK COMPLETED — proof of work from change history + resolved findings (this month)
+    let workCompleted = null;
+    try {
+      const monthStart = `${month}-01`;
+      const byType = await pool.query(
+        `SELECT change_type, COUNT(*)::int AS n FROM wp_change_history
+         WHERE project_id=$1 AND applied_at >= $2::date AND rolled_back_at IS NULL GROUP BY change_type ORDER BY n DESC`,
+        [projectId, monthStart]
+      );
+      const recent = await pool.query(
+        `SELECT page_title, page_url, change_type, field_name, applied_at FROM wp_change_history
+         WHERE project_id=$1 AND applied_at >= $2::date AND rolled_back_at IS NULL ORDER BY applied_at DESC LIMIT 25`,
+        [projectId, monthStart]
+      );
+      const resolvedFindings = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM audit_findings WHERE project_id=$1 AND status='fixed' AND updated_at >= $2::date`,
+        [projectId, monthStart]
+      );
+      const TYPE_LABELS = {
+        'onpage-fix': 'Meta titles, descriptions & keywords optimised',
+        'keyword-content': 'Content optimised for target keywords',
+        'inbound-link': 'Internal links added',
+        'hero-static': 'Heavy hero slideshows replaced with fast static images',
+        'bg-image-swap': 'Oversized images compressed & converted to WebP'
+      };
+      workCompleted = {
+        total_changes: byType.rows.reduce((s, r) => s + r.n, 0),
+        by_type: byType.rows.map(r => ({ type: r.change_type, label: TYPE_LABELS[r.change_type] || r.change_type, count: r.n })),
+        findings_resolved: resolvedFindings.rows[0].n,
+        recent: recent.rows.map(r => ({ page: r.page_title || r.page_url || '', type: TYPE_LABELS[r.change_type] || r.change_type, date: r.applied_at }))
+      };
+    } catch (e) { console.log('[reports] work completed skipped:', e.message); }
+
     // 9. Previous month comparison
     let previousMonth = null;
     try {
@@ -42278,6 +42390,7 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       actions: { completed: actionsByStatus.done, inProgress: actionsByStatus['in-progress'], pending: actionsByStatus.pending, total: totalActions, completionRate, recentActions },
       onPageStats,
       pageSpeedStats,
+      workCompleted,
       previousMonth,
       generatedAt: now.toISOString()
     };
@@ -42289,8 +42402,15 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       [projectId, month, JSON.stringify(reportData)]
     );
 
+    // Ensure a share token exists (stable across regenerations)
+    let shareToken = r.rows[0].share_token;
+    if (!shareToken) {
+      shareToken = 'rpt_' + require('crypto').randomBytes(16).toString('hex');
+      await pool.query('UPDATE monthly_reports SET share_token=$2 WHERE id=$1', [r.rows[0].id, shareToken]);
+    }
+
     console.log(`[reports] Generated v2 ${month} report for project ${projectId}`);
-    res.json({ report: { id: r.rows[0].id, month, createdAt: r.rows[0].created_at, ...reportData } });
+    res.json({ report: { id: r.rows[0].id, month, createdAt: r.rows[0].created_at, share_token: shareToken, ...reportData } });
   } catch (e) {
     console.error('[reports] Error:', e.message);
     res.status(500).json({ error: e.message });
