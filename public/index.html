@@ -9657,11 +9657,15 @@
               </button>
               {gscSite && results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL').length > 0 && (
                 <button onClick={() => {
+                  // Google honours only ~10 manual indexing requests per day — never flood the browser with tabs.
+                  const DAILY = 10;
                   const notIndexed = results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL');
-                  if (notIndexed.length > 8 && !window.confirm(`This opens ${notIndexed.length} Search Console tabs (one per page). Continue?`)) return;
-                  notIndexed.forEach((r, i) => { const l = gscInspectLink(r.url); if (l) setTimeout(() => window.open(l, '_blank', 'noopener'), i * 350); });
-                }} title="Opens each not-indexed page in Google's URL Inspection tool, where you click Request Indexing" style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, border: '1px solid #1a73e8', background: 'transparent', color: '#1a73e8', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <i className="fas fa-up-right-from-square" />Request Indexing ({results.filter(r => r.verdict === 'FAIL' || r.verdict === 'NEUTRAL').length})
+                  const batch = notIndexed.slice(0, DAILY);
+                  const extra = notIndexed.length - batch.length;
+                  if (!window.confirm(`Google only accepts about ${DAILY} indexing requests per day.\n\nThis opens the top ${batch.length} not-indexed page${batch.length > 1 ? 's' : ''} in Search Console (one tab each) — click "Request Indexing" on each.${extra > 0 ? `\n\nThe remaining ${extra} can be done over the next days, or just submit your sitemap instead (one click, covers all).` : ''}\n\nContinue?`)) return;
+                  batch.forEach((r, i) => { const l = gscInspectLink(r.url); if (l) setTimeout(() => window.open(l, '_blank', 'noopener'), i * 400); });
+                }} title={`Opens the top 10 not-indexed pages in Google's URL Inspection tool (Google's daily limit). For all pages at once, use Submit Sitemap instead.`} style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, border: '1px solid #1a73e8', background: 'transparent', color: '#1a73e8', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <i className="fas fa-up-right-from-square" />Request Indexing (top 10)
                 </button>
               )}
               <button className="btn btn-primary" onClick={runCheck} disabled={loading || (budget && budget.remaining <= 0)} style={{ fontSize: 13 }}>
