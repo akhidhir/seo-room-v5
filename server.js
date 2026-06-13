@@ -33754,6 +33754,63 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     if (cat.includes('schema') || title.includes('schema') || title.includes('json-ld') || title.includes('structured data') || title.includes('localbusiness') || title.includes('faqpage')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
 
+      // BreadcrumbList — deterministic from each page's URL path, no business data needed
+      if (title.includes('breadcrumb')) {
+        const titleCase = s => s.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        let bcFixed = 0, bcSkipped = 0;
+        for (const type of ['pages', 'posts']) {
+          let pg = 1;
+          while (true) {
+            let items;
+            try {
+              const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=100&page=${pg}&_fields=id,slug,link,title,meta&status=publish&context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(20000) });
+              if (!resp.ok) break;
+              items = await resp.json();
+            } catch { break; }
+            if (!Array.isArray(items) || items.length === 0) break;
+            for (const p of items) {
+              try {
+                const link = p.link || '';
+                const path = link.replace(/^https?:\/\/[^/]+/, '').replace(/^\/|\/$/g, '');
+                const segs = path ? path.split('/') : [];
+                if (segs.length === 0) { bcSkipped++; continue; } // homepage: breadcrumb is pointless
+                const existing = p.meta?._seoroom_schema || '';
+                if (existing.includes('"BreadcrumbList"')) { bcSkipped++; continue; }
+                const crumbs = [{ "@type": "ListItem", "position": 1, "name": "Home", "item": `https://${domain}/` }];
+                let acc = '';
+                segs.forEach((s, i) => {
+                  acc += '/' + s;
+                  const isLast = i === segs.length - 1;
+                  const name = isLast ? String(p.title?.rendered || titleCase(s)).replace(/<[^>]+>/g, '') : titleCase(s);
+                  crumbs.push({ "@type": "ListItem", "position": i + 2, "name": name, "item": `https://${domain}${acc}/` });
+                });
+                const bc = { "@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": crumbs };
+                let combined;
+                if (existing) {
+                  try { const ex = JSON.parse(existing); combined = JSON.stringify(Array.isArray(ex) ? [...ex, bc] : [ex, bc]); }
+                  catch { combined = JSON.stringify(bc); }
+                } else combined = JSON.stringify(bc);
+                const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${p.id}`, {
+                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ meta: { _seoroom_schema: combined } }), signal: AbortSignal.timeout(10000)
+                });
+                if (w.ok) bcFixed++;
+              } catch {}
+            }
+            if (items.length < 100) break;
+            pg++;
+          }
+        }
+        if (bcFixed > 0) await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+        console.log(`[technical-fix] BreadcrumbList: ${bcFixed} pages fixed, ${bcSkipped} skipped`);
+        return res.json({
+          success: bcFixed > 0, fix_type: 'schema', schema_type: 'BreadcrumbList',
+          message: bcFixed > 0 ? `BreadcrumbList schema added to ${bcFixed} page(s) (${bcSkipped} already had it or are the homepage).` : undefined,
+          error: bcFixed === 0 ? 'No pages could be updated — check the seoroom-schema plugin is installed and the WP Application Password works' : undefined,
+          pages_fixed: bcFixed
+        });
+      }
+
       // PRE-FIX VERIFICATION: Check the actual affected pages
       const targetUrls = getTargetUrls(finding, domain);
       const preVerify = {};
