@@ -7452,11 +7452,19 @@
                   React.createElement('div', { style: { flex: 1, minWidth: 100, height: 6, background: 'var(--bg)', borderRadius: 3 } },
                     React.createElement('div', { style: { width: `${(fixAllAltProgress.current / fixAllAltProgress.total) * 100}%`, height: '100%', background: '#f97316', borderRadius: 3, transition: 'width 0.3s' } })
                   )
-                ) : fixAllAltProgress?.done ? React.createElement(React.Fragment, null,
-                  React.createElement('i', { className: 'fas fa-check-circle', style: { color: '#22c55e' } }),
-                  React.createElement('span', { style: { fontSize: 14, color: '#22c55e', fontWeight: 600 } }, `Fixed ${fixAllAltProgress.okCount}/${fixAllAltProgress.total} alt text findings`),
-                  React.createElement('button', { className: 'btn btn-small', onClick: () => setFixAllAltProgress(null), style: { fontSize: 12, marginLeft: 'auto' } }, 'Dismiss')
-                ) : altFixable.length > 0 ? React.createElement(React.Fragment, null,
+                ) : fixAllAltProgress?.done ? (() => {
+                  const ok = fixAllAltProgress.okCount, tot = fixAllAltProgress.total;
+                  const color = ok === tot ? '#22c55e' : ok > 0 ? '#f59e0b' : '#ef4444';
+                  const icon = ok === tot ? 'fa-check-circle' : ok > 0 ? 'fa-triangle-exclamation' : 'fa-circle-xmark';
+                  const firstErr = (fixAllAltProgress.results || []).find(r => !r.ok)?.msg;
+                  return React.createElement(React.Fragment, null,
+                    React.createElement('i', { className: `fas ${icon}`, style: { color } }),
+                    React.createElement('span', { style: { fontSize: 14, color, fontWeight: 600 } },
+                      ok === tot ? `Fixed ${ok}/${tot} alt text findings` : ok > 0 ? `Fixed ${ok}/${tot} — ${tot - ok} could not be fixed` : `Fix failed (0/${tot})`),
+                    firstErr && ok < tot ? React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)' } }, firstErr) : null,
+                    React.createElement('button', { className: 'btn btn-small', onClick: () => setFixAllAltProgress(null), style: { fontSize: 12, marginLeft: 'auto' } }, 'Dismiss')
+                  );
+                })() : altFixable.length > 0 ? React.createElement(React.Fragment, null,
                   React.createElement('i', { className: 'fas fa-image', style: { color: '#f97316' } }),
                   React.createElement('span', { style: { fontSize: 14, color: 'var(--text2)' } }, `${altFixable.length} pages with missing alt text can be auto-fixed with AI`),
                   React.createElement('button', { className: 'btn btn-small', onClick: fixAllAltText,

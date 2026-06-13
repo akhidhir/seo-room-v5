@@ -35129,21 +35129,23 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     let contentFixed = 0;
     const changes = [];
 
+    // WP serves resized variants (image-768x504.jpg) while the media library holds the original (image.jpg) — match on the base name
+    const stripSizeSuffix = f => f.replace(/-\d+x\d+(\.[a-z0-9]+)$/i, '$1');
     for (const gen of altsToApply) {
       if (!gen.alt || !gen.src) continue;
-      const filename = gen.src.split('/').pop().split('?')[0].replace(/\.[^.]+$/, '');
+      const filename = gen.src.split('/').pop().split('?')[0].replace(/\.[^.]+$/, '').replace(/-\d+x\d+$/, '');
 
       // Try to find in WP media library
       try {
-        const mediaResp = await fetch(`${wpUrl}/wp-json/wp/v2/media?search=${encodeURIComponent(filename)}&per_page=5`, {
+        const mediaResp = await fetch(`${wpUrl}/wp-json/wp/v2/media?search=${encodeURIComponent(filename)}&per_page=10`, {
           headers: authHeaders, signal: AbortSignal.timeout(10000)
         });
         if (mediaResp.ok) {
           const items = await mediaResp.json();
           const match = items.find(m => {
             const mFile = (m.source_url || '').split('/').pop();
-            const gFile = gen.src.split('/').pop();
-            return mFile === gFile;
+            const gFile = gen.src.split('/').pop().split('?')[0];
+            return mFile === gFile || stripSizeSuffix(mFile) === stripSizeSuffix(gFile);
           });
           if (match) {
             const oldAlt = match.alt_text || '';
@@ -35192,13 +35194,17 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
           for (const gen of altsToApply) {
             if (!gen.alt || !gen.src) continue;
             const srcFile = gen.src.split('/').pop().split('?')[0];
-            const escapedFile = srcFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Match any size variant: content may hold image.jpg while the live page renders image-768x504.jpg (or vice versa)
+            const srcExt = (srcFile.match(/\.[a-z0-9]+$/i) || [''])[0];
+            const srcBase = srcFile.replace(/\.[a-z0-9]+$/i, '').replace(/-\d+x\d+$/, '');
+            const escapedBase = srcBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const escapedExt = srcExt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const safeAlt = gen.alt.replace(/"/g, '&quot;');
 
             // Update in classic content
             if (content) {
-              // Match img tags containing this filename, replace or add alt
-              const imgPattern = new RegExp(`(<img[^>]*${escapedFile}[^>]*)(/?>)`, 'gi');
+              // Match img tags containing this filename (any -WxH size variant), replace or add alt
+              const imgPattern = new RegExp(`(<img[^>]*${escapedBase}(?:-\\d+x\\d+)?${escapedExt}[^>]*)(/?>)`, 'gi');
               content = content.replace(imgPattern, (match, before, close) => {
                 let updated = before.replace(/\s*alt=["'][^"']*["']/i, '');
                 return `${updated} alt="${safeAlt}"${close}`;
@@ -35207,12 +35213,13 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
 
             // Update in Elementor data
             if (elementorData) {
+              const elUrlMatches = u => !!u && (u.includes(srcFile) || u.includes(srcBase));
               const updateElementorAlt = (elements) => {
                 for (const el of elements) {
-                  if (el.settings?.image?.url && el.settings.image.url.includes(srcFile)) {
+                  if (elUrlMatches(el.settings?.image?.url)) {
                     el.settings.image.alt = gen.alt;
                   }
-                  if (el.settings?.background_image?.url && el.settings.background_image.url.includes(srcFile)) {
+                  if (elUrlMatches(el.settings?.background_image?.url)) {
                     el.settings.background_image.alt = gen.alt;
                   }
                   if (el.elements) updateElementorAlt(el.elements);
@@ -35277,12 +35284,14 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     // 10. Try to purge cache
     try { await purgeCloudflareCache(project, [pageUrl]); } catch {}
 
-    const totalFixed = altsToApply.length;
-    console.log(`[alt-text-fix] Done: ${totalFixed} alt texts applied, ${mediaFixed} media updated, ${contentFixed} content updates, ${changes.length} history records`);
+    const anyWritten = mediaFixed > 0 || contentFixed > 0;
+    console.log(`[alt-text-fix] Done: ${altsToApply.length} alts generated, ${mediaFixed} media updated, ${contentFixed} content updates, ${changes.length} history records — ${anyWritten ? 'WRITTEN' : 'NOTHING WRITTEN'}`);
     res.json({
-      success: true, applied: true,
-      message: `Fixed ${totalFixed} image alt texts on ${pageSlug}. Media library: ${mediaFixed}, page content: ${contentFixed > 0 ? 'updated' : 'unchanged'}.`,
-      fixed: totalFixed, mediaFixed, contentFixed,
+      success: anyWritten, applied: anyWritten,
+      message: anyWritten
+        ? `Fixed alt text on ${pageSlug}. Media library: ${mediaFixed}, page content: ${contentFixed > 0 ? 'updated' : 'unchanged'}.`
+        : `Nothing written for ${pageSlug} — image(s) not found in the media library or page content. External or theme/plugin-rendered images need manual alt text.`,
+      fixed: anyWritten ? altsToApply.length : 0, mediaFixed, contentFixed,
       generated: altsToApply
     });
 
