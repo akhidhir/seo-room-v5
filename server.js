@@ -16151,6 +16151,91 @@ async function purgeCloudflareCache(project, urls) {
   }
 }
 
+// Resolve (and cache) the Cloudflare zone id for a project
+async function resolveCfZone(project, apiToken) {
+  if (project.cloudflare_zone_id) return project.cloudflare_zone_id;
+  try {
+    const root = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '');
+    const zr = await fetch(`https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(root)}`, { headers: { 'Authorization': `Bearer ${apiToken}` } });
+    const zd = await zr.json();
+    if (zd.success && zd.result && zd.result[0]) {
+      const zoneId = zd.result[0].id;
+      await pool.query('UPDATE projects SET cloudflare_zone_id=$1 WHERE id=$2', [zoneId, project.id]).catch(() => {});
+      return zoneId;
+    }
+  } catch (e) {}
+  return null;
+}
+
+// Set security response headers at the Cloudflare edge via a Transform Rule (http_response_headers_transform phase).
+// Edge-level so it applies to EVERY response — cached or not — unlike PHP send_headers which a full-page cache bypasses.
+// Reversible: pass clear=true to remove our rule. Returns { ok, applied|cleared, error }.
+async function setCloudflareSecurityHeaders(project, { clear = false } = {}) {
+  const apiToken = await resolveCfToken(project);
+  if (!apiToken) return { ok: false, error: 'No Cloudflare API token configured for this project or agency.' };
+  const zoneId = await resolveCfZone(project, apiToken);
+  if (!zoneId) return { ok: false, error: 'Could not resolve the Cloudflare zone for this domain.' };
+
+  const RULE_DESC = 'SEO Room security headers';
+  const phaseUrl = `https://api.cloudflare.com/client/v4/zones/${zoneId}/rulesets/phases/http_response_headers_transform/entrypoint`;
+  const auth = { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' };
+
+  // Safe set: 4 plain headers + HSTS short max-age + CSP report-only (never blocks)
+  const headerOps = {
+    'X-Frame-Options':            { operation: 'set', value: 'SAMEORIGIN' },
+    'X-Content-Type-Options':     { operation: 'set', value: 'nosniff' },
+    'Referrer-Policy':            { operation: 'set', value: 'strict-origin-when-cross-origin' },
+    'Permissions-Policy':         { operation: 'set', value: 'camera=(), microphone=(), geolocation=()' },
+    'Strict-Transport-Security':  { operation: 'set', value: 'max-age=300' },
+    'Content-Security-Policy-Report-Only': { operation: 'set', value: "default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'" },
+  };
+
+  try {
+    // 1. Read the current entrypoint ruleset (may 404 if none exists yet)
+    let existingRules = [];
+    const getResp = await fetch(phaseUrl, { headers: auth, signal: AbortSignal.timeout(12000) });
+    if (getResp.ok) {
+      const gd = await getResp.json();
+      existingRules = (gd.result && Array.isArray(gd.result.rules)) ? gd.result.rules : [];
+    } else if (getResp.status !== 404) {
+      const err = await getResp.json().catch(() => ({}));
+      const msg = (err.errors && err.errors[0] && err.errors[0].message) || `HTTP ${getResp.status}`;
+      return { ok: false, error: `Cloudflare API rejected the request (${msg}). The token likely needs "Zone → Transform Rules / Config Rules" edit permission.` };
+    }
+
+    // 2. Drop any prior copy of our rule, then re-add unless clearing
+    const kept = existingRules
+      .filter(r => r.description !== RULE_DESC)
+      .map(r => { const { id, version, last_updated, ref, ...rest } = r; return rest; }); // strip read-only fields
+    const newRules = [...kept];
+    if (!clear) {
+      newRules.push({
+        action: 'rewrite',
+        action_parameters: { headers: headerOps },
+        expression: 'true',
+        description: RULE_DESC,
+        enabled: true,
+      });
+    }
+
+    // 3. Write the ruleset back
+    const putResp = await fetch(phaseUrl, {
+      method: 'PUT', headers: auth,
+      body: JSON.stringify({ rules: newRules }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const pd = await putResp.json().catch(() => ({}));
+    if (!putResp.ok || !pd.success) {
+      const msg = (pd.errors && pd.errors[0] && pd.errors[0].message) || `HTTP ${putResp.status}`;
+      return { ok: false, error: `Cloudflare rejected the rule update (${msg}). The token likely needs "Zone → Transform Rules" edit permission.` };
+    }
+    console.log(`[cloudflare] Security headers ${clear ? 'cleared' : 'applied'} on zone ${zoneId}`);
+    return { ok: true, applied: clear ? null : Object.keys(headerOps), cleared: clear, zone: zoneId };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 // Helper: clean action item title into WP search terms
 // "Optimize gaming PC repair page H1 and messaging" → "gaming PC repair"
 // "Expand laptop screen replacement page content" → "laptop screen replacement"
@@ -48405,7 +48490,16 @@ app.post('/api/projects/:projectId/security-audit/fix/headers', async (req, res)
       'permissions-policy', 'strict-transport-security', 'content-security-policy'
     ];
 
-    // Try via seoroom-opt endpoint
+    // PRIMARY: Cloudflare edge (Transform Rule). Works even when BerqWP/Cloudflare serve a cached page,
+    // because PHP send_headers never runs for fully-cached responses.
+    const cf = await setCloudflareSecurityHeaders(project, { clear: false });
+    if (cf.ok) {
+      return res.json({ ok: true, method: 'cloudflare', applied: cf.applied,
+        message: 'Security headers set at the Cloudflare edge — applies to every response, cached or not. HSTS starts at a short max-age (300s) and CSP is report-only, both safe. Re-scan to verify; once HTTPS is confirmed solid I can raise HSTS to a year.' });
+    }
+    const cfError = cf.error;
+
+    // FALLBACK: plugin send_headers (only effective on uncached PHP responses)
     try {
       const resp = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/security-headers`, {
         method: 'POST',
@@ -48416,7 +48510,7 @@ app.post('/api/projects/:projectId/security-audit/fix/headers', async (req, res)
       if (resp.ok) {
         const data = await resp.json().catch(() => ({}));
         return res.json({ ok: true, method: 'plugin', applied: data.headers || null,
-          message: 'Security headers applied via the SEO Room plugin. HSTS starts at a short max-age (300s) and CSP is report-only — both safe. Re-scan to verify, then I can raise HSTS once HTTPS is confirmed solid.' });
+          message: `Headers saved in the SEO Room plugin, but Cloudflare edge setup failed (${cfError}) — and a full-page cache can bypass plugin headers. If the re-scan still warns, set the Cloudflare token's Transform Rules permission or add the headers in Cloudflare directly.` });
       }
     } catch (e) { /* not available */ }
 
