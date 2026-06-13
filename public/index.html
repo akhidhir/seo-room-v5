@@ -10679,8 +10679,31 @@
               return { title: `404: ${path}`, page: u, description: `Returns 404 (${f.hit_count || 1} hit(s)). 301-redirect it if the page moved, or 410 it if it's gone for good.`, severity: 'high', category: '404 Error' };
             }));
           }
+          // Auto-run matching + diagnosis so the Root Cause column and redirect suggestions fill in
+          // without the user clicking — only when there are real-page 404s worth resolving.
+          if (classified.some(x => x._category === 'real')) {
+            setTimeout(() => { suggestRedirects(); diagnose404s(); }, 300);
+          }
         } catch (err) { console.error('Load 404s error:', err); }
         setFourLoading(false);
+      };
+
+      // Instant, zero-cost root cause from what we already know (shown until/if the deeper diagnose runs).
+      const instantCause = (item) => {
+        const url = item.url || item.url_path || '';
+        const cat = classify404(url);
+        const ref = item.referrer || '';
+        const path = url.replace(/^https?:\/\/[^/]+/, '');
+        if (cat === 'spam') return { label: 'Spam / injected URL', fg: '#d946ef', icon: 'fas fa-skull-crossbones' };
+        if (cat === 'noise') return { label: 'Scanner noise', fg: '#14b8a6', icon: 'fas fa-wave-square' };
+        if (cat === 'bot') return { label: 'Bot probe', fg: '#9ca3af', icon: 'fas fa-robot' };
+        if (cat === 'malformed') return { label: /\/(null|undefined|nan)/i.test(path) ? 'Broken link (site JS bug)' : 'Malformed URL', fg: '#f59e0b', icon: 'fas fa-link-slash' };
+        if (cat === 'preview') return { label: 'Preview/draft URL', fg: '#818cf8', icon: 'fas fa-eye' };
+        if (/[?&](page_id|p)=\d+/i.test(url)) return { label: 'Old WordPress ID', fg: '#f59e0b', icon: 'fas fa-clock-rotate-left' };
+        if (/google\.|bing\.|duckduckgo/i.test(ref)) return { label: 'Indexed by search engine', fg: '#ef4444', icon: 'fas fa-magnifying-glass' };
+        if (ref && ref.includes((project?.domain || '').replace(/^https?:\/\//, ''))) return { label: 'Broken internal link', fg: '#ef4444', icon: 'fas fa-link' };
+        if (ref) return { label: 'External broken link', fg: '#f59e0b', icon: 'fas fa-arrow-up-right-from-square' };
+        return { label: 'Deleted / moved page', fg: '#9ca3af', icon: 'fas fa-ghost' };
       };
 
       const loadRedirects = async () => {
@@ -11243,7 +11266,12 @@
                     (() => {
                       const key = item.url || item.url_path || '';
                       const diag = diagnoses[key];
-                      if (!diag) return e('span', { style: { fontSize: 11, color: 'var(--text3)' } }, '—');
+                      if (!diag) {
+                        // Instant client-side cause until (or instead of) the deeper diagnose
+                        const ic = instantCause(item);
+                        return e('span', { style: { fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4, background: ic.fg + '22', color: ic.fg, padding: '2px 8px', borderRadius: 4, fontWeight: 600 } },
+                          e('i', { className: ic.icon, style: { fontSize: 9 } }), ic.label);
+                      }
                       const causeConfig = {
                         sitemap: { label: 'In Sitemap', bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', icon: 'fas fa-sitemap' },
                         internal_link: { label: 'Internal Link', bg: 'rgba(239,68,68,0.15)', fg: '#ef4444', icon: 'fas fa-link' },
