@@ -2909,6 +2909,64 @@ function isValid404Url(url) {
   return true;
 }
 
+// Server-side mirror of the frontend classify404() — keep the two in sync.
+// Returns one of: 'spam' | 'bot' | 'noise' | 'preview' | 'malformed' | 'real'
+function classify404Server(url) {
+  const u = (url || '').toLowerCase();
+  const p = u.replace(/^https?:\/\/[^\/]+/, '');
+  const botPatterns = /\.(jsp|asp|aspx|cgi|env|php[0-9]?|bak|sql|gz|tar|zip|rar|7z)([?\/]|$)|\/?(wp-login|wp-admin|wp-includes|wp-content\/(?!uploads)|xmlrpc|wlwmanifest|wp-config|phpmyadmin|pma|myadmin|mysql|adminer|geoserver|solr|actuator|\.well-known\/security|telescope|_profiler|debug|console|owa|autodiscover|ecp|remote|vendor\/phpunit|cgi-bin|\.git|\.svn|\.env|\.htaccess|\.htpasswd|\.DS_Store|thumbs\.db|web\.config|crossdomain|clientaccesspolicy|humans\.txt|ads\.txt|security\.txt|\.aws|\.ssh|wp-cron|install\.php|setup\.php|test\.php|info\.php|phpinfo|server-status|server-info|cpanel|webmail|administrator|joomla|drupal|magento|shopify|elfinder|filemanager|ckfinder|fckeditor|tiny_mce|tinymce)([?\/]|$)|\/server\/php([?\/]|$)|\/upload[s]?\/server([?\/]|$)|jquery[-.]?file[-.]?upload/i;
+  const apiProbes = /^\/(api|graphql|gql|v[0-9]+\/_?catalog|_next|swagger|openapi|health|metrics|readyz|livez)([?\/]|$)/i;
+  if (botPatterns.test(p) || apiProbes.test(p)) return 'bot';
+  if (/[?&](nocache|cache_?bust|_=|v=\d{10,}|t=\d{10,})/i.test(u)) return 'noise';
+  const spamNiche = /(speed-dating|\bdating\b|singles|hookup|casino|poker|slots|bet(ting)?|gambling|viagra|cialis|pharma|tramadol|payday|loan|forex|crypto-?(invest|profit)|escort|porn|xxx|adult|replica|rolex|nike-?outlet|daohang|\bsex\b|essay-?writing|term-?paper)/i;
+  const embeddedUrl = /\/(https?[:/]|www\.|[a-z0-9-]+\.(net|cn|ru|top|xyz|info)\/)/i;
+  const foreignSlug = /\/(contactez-nous|contatti|contacto|kontakt|contato|connexion|iniciar-sesion|karriere|emploi|emplois|rejoindre|trabajo|empleo|empleos|lavoro|vacatures|carriere|carrieres|carrera|carreras|kariera|praca|werk|sobre-nosotros|chi-siamo|qui-sommes-nous|uber-uns|a-propos|accueil|inicio|startseite|home-fr|nos-services|services-fr|produkte|productos|prodotti|preise|precios|tarifs)([?\/]|$)/i;
+  if (spamNiche.test(p) || embeddedUrl.test(p) || foreignSlug.test(p)) return 'spam';
+  if (/[?&](preview|p)=true|[?&]page_id=\d+&preview/i.test(u)) return 'preview';
+  if (/%20|%2520|\s/.test(p) || /\/\//.test(p) || /\/(null|undefined|nan|\[object%20object\])\/?$/i.test(p)) return 'malformed';
+  return 'real';
+}
+
+// Categories safe to auto-410 (clearly junk; never touches 'real' or 'preview').
+const AUTO_410_CATEGORIES = new Set(['spam', 'bot', 'malformed']);
+
+// Sweep one project's 404 log and 410 every junk URL (spam/bot/malformed). Returns a summary.
+// Skips real pages and preview/draft entirely. Safe to call repeatedly (already-410'd URLs just re-apply).
+async function autoSweepJunk404s(project) {
+  const data = await callPluginApi(project, '/404s');
+  const items = (Array.isArray(data) ? data : (data.items || []))
+    .filter(it => isValid404Url(it.url || it.url_path || ''));
+  const summary = { total: items.length, fixed: 0, by_category: { spam: 0, bot: 0, malformed: 0 }, skipped_real: 0, errors: 0 };
+  for (const it of items) {
+    const cat = classify404Server(it.url || it.url_path || '');
+    if (!AUTO_410_CATEGORIES.has(cat)) { if (cat === 'real') summary.skipped_real++; continue; }
+    const fid = it.id || it.fid || it.finding_id;
+    if (fid == null) { summary.errors++; continue; }
+    try {
+      await callPluginApi(project, `/404s/${fid}/redirect`, 'POST', { target_url: '', redirect_type: 410 });
+      summary.fixed++; summary.by_category[cat]++;
+    } catch (e) {
+      summary.errors++;
+      console.error(`[auto-410] project ${project.id} url ${it.url || it.url_path}: ${e.message}`);
+    }
+  }
+  return summary;
+}
+
+// POST /api/projects/:id/plugin/404s/auto-410 — one-click: 410 every spam/bot/malformed 404 now.
+app.post('/api/projects/:id/plugin/404s/auto-410', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const summary = await autoSweepJunk404s(project);
+    console.log(`[auto-410] project ${project.id}: 410'd ${summary.fixed} junk URLs (${JSON.stringify(summary.by_category)}), kept ${summary.skipped_real} real`);
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error('[auto-410] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/projects/:id/plugin/404s — fetch 404 log from WP plugin
 app.get('/api/projects/:id/plugin/404s', async (req, res) => {
   try {
@@ -14249,34 +14307,37 @@ app.get('/api/projects/:projectId/gbp-optimise/audit', async (req, res) => {
     const phone = rcProfile?.phoneNumbers?.primaryPhone || gbp?.phone || '';
     const hasEmergencyService = serviceItems.some(s => /emergency|24|callout/i.test(s.freeFormServiceItem?.label?.displayName || ''));
 
-    // Posts recency + review count from caches
-    let lastPostDays = null, postCount = 0;
-    try {
-      const pc = (await pool.query(`SELECT posts, updated_at FROM posts_cache WHERE project_id=$1`, [projectId])).rows[0];
-      const posts = pc ? (typeof pc.posts === 'string' ? JSON.parse(pc.posts) : pc.posts) : [];
-      postCount = (posts || []).length;
-      const dates = (posts || []).map(p => new Date(p.create_time || p.created_at || p.date || 0).getTime()).filter(t => t > 0);
-      if (dates.length) lastPostDays = Math.floor((Date.now() - Math.max(...dates)) / 86400000);
-    } catch {}
-    let reviewCount = 0, rating = null;
-    try {
-      const rc = (await pool.query(`SELECT reviews, total_count FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
-      if (rc) { reviewCount = rc.total_count || 0; const rv = typeof rc.reviews === 'string' ? JSON.parse(rc.reviews) : (rc.reviews || []); const rs = rv.map(r => r.rating || r.star_rating).filter(Boolean); if (rs.length) rating = +(rs.reduce((a, b) => a + b, 0) / rs.length).toFixed(1); }
-    } catch {}
-
-    // Fallback: use the synced RC data (from the daily GBP sync) when the Local-Intel caches are empty.
-    // The rc-sync endpoint stores reviews_stats + posts on the rc_profile / gbp_profile integration rows.
+    // Reviews + posts: PREFER the authoritative synced RC data (reviews-stats API matches the RC app and
+    // excludes deleted/duplicate reviews). The Local-Intel reviews_cache/posts_cache are only a fallback —
+    // that cache can be inflated by duplicate review rows (e.g. Gold PC's reviews come through tripled).
     const syncedReviews = byKind.rc_profile?.reviews_stats || byKind.gbp_profile?.reviews || null;
-    if (!reviewCount && syncedReviews && (syncedReviews.total_reviews || syncedReviews.average_rating)) {
+    const syncedPosts = byKind.rc_profile?.posts || null;
+
+    let reviewCount = 0, rating = null;
+    if (syncedReviews && (syncedReviews.total_reviews || syncedReviews.average_rating)) {
       reviewCount = syncedReviews.total_reviews || 0;
       if (syncedReviews.average_rating) rating = +Number(syncedReviews.average_rating).toFixed(1);
+    } else {
+      try {
+        const rc = (await pool.query(`SELECT reviews, total_count FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
+        if (rc) { reviewCount = rc.total_count || 0; const rv = typeof rc.reviews === 'string' ? JSON.parse(rc.reviews) : (rc.reviews || []); const rs = rv.map(r => r.rating || r.star_rating).filter(Boolean); if (rs.length) rating = +(rs.reduce((a, b) => a + b, 0) / rs.length).toFixed(1); }
+      } catch {}
     }
-    const syncedPosts = byKind.rc_profile?.posts || null;
-    if (!postCount && syncedPosts) {
-      const parr = Array.isArray(syncedPosts) ? syncedPosts : (syncedPosts.published_posts || []);
-      postCount = (syncedPosts.count != null ? syncedPosts.count : parr.length) || 0;
-      const pdates = parr.map(p => new Date(p.createTime || p.create_time || p.created_at || p.publishedAt || p.published_at || p.date || 0).getTime()).filter(t => t > 0);
+
+    let lastPostDays = null, postCount = 0;
+    const spArr = syncedPosts ? (Array.isArray(syncedPosts) ? syncedPosts : (syncedPosts.published_posts || [])) : [];
+    if (syncedPosts && (syncedPosts.count != null || spArr.length)) {
+      postCount = (syncedPosts.count != null ? syncedPosts.count : spArr.length) || 0;
+      const pdates = spArr.map(p => new Date(p.createTime || p.create_time || p.created_at || p.publishedAt || p.published_at || p.date || 0).getTime()).filter(t => t > 0);
       if (pdates.length) lastPostDays = Math.floor((Date.now() - Math.max(...pdates)) / 86400000);
+    } else {
+      try {
+        const pc = (await pool.query(`SELECT posts, updated_at FROM posts_cache WHERE project_id=$1`, [projectId])).rows[0];
+        const posts = pc ? (typeof pc.posts === 'string' ? JSON.parse(pc.posts) : pc.posts) : [];
+        postCount = (posts || []).length;
+        const dates = (posts || []).map(p => new Date(p.create_time || p.created_at || p.date || 0).getTime()).filter(t => t > 0);
+        if (dates.length) lastPostDays = Math.floor((Date.now() - Math.max(...dates)) / 86400000);
+      } catch {}
     }
 
     // ── Grade ──
@@ -18557,6 +18618,29 @@ async function runHealthChecks() {
 }
 setInterval(() => runHealthChecks().catch(e => console.error('[health] run error:', e.message)), 10 * 60 * 1000);
 setTimeout(() => runHealthChecks().catch(() => {}), 15000); // first run shortly after boot
+
+// Daily auto-410 sweep: 410 spam/bot/malformed 404s across every project with the plugin connected.
+// Real pages and preview/draft are never touched. Runs once a day; logs a per-project summary.
+async function runDailyAuto410Sweep() {
+  let projects;
+  try {
+    projects = (await pool.query(`SELECT * FROM projects WHERE (wordpress_url IS NOT NULL AND wordpress_url <> '') OR (domain IS NOT NULL AND domain <> '')`)).rows;
+  } catch (e) { console.error('[auto-410] sweep: project query failed:', e.message); return; }
+  let totalFixed = 0;
+  for (const project of projects) {
+    if (!getWpAuthHeaders(project)) continue; // no WP app password → plugin not usable
+    try {
+      const s = await autoSweepJunk404s(project);
+      if (s.fixed > 0) { totalFixed += s.fixed; console.log(`[auto-410] daily sweep project ${project.id} (${project.name || project.domain}): 410'd ${s.fixed} (${JSON.stringify(s.by_category)})`); }
+    } catch (e) {
+      // Plugin not installed / site unreachable — skip quietly, it's a best-effort sweep.
+      console.error(`[auto-410] daily sweep project ${project.id} skipped: ${e.message}`);
+    }
+  }
+  if (totalFixed > 0) console.log(`[auto-410] daily sweep done: ${totalFixed} junk 404s 410'd across ${projects.length} project(s)`);
+}
+setInterval(() => runDailyAuto410Sweep().catch(e => console.error('[auto-410] daily sweep error:', e.message)), 24 * 60 * 60 * 1000);
+setTimeout(() => runDailyAuto410Sweep().catch(() => {}), 90 * 1000); // first sweep ~90s after boot
 
 app.get('/api/system/health', async (req, res) => {
   try {

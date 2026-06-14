@@ -11018,6 +11018,25 @@
         load404s();
       };
 
+      // One-click: 410 every spam/bot/malformed 404 server-side (never touches real pages).
+      const [auto410ing, setAuto410ing] = useState(false);
+      const autoFix410Junk = async () => {
+        const junk = fourOhFours.filter(x => ['spam','bot','malformed'].includes(x._category));
+        if (!junk.length) { alert('No spam, bot, or malformed 404s to clear.'); return; }
+        if (!confirm(`410 all ${junk.length} junk 404(s)? This covers spam, bot probes and malformed URLs — real pages are left untouched. Reversible from Redirects.`)) return;
+        setAuto410ing(true);
+        try {
+          const r = await api(`/projects/${project.id}/plugin/404s/auto-410`, { method: 'POST', body: {} });
+          const bc = r.by_category || {};
+          alert(`Done — 410'd ${r.fixed} junk URL(s): ${bc.spam||0} spam · ${bc.bot||0} bot · ${bc.malformed||0} malformed. Kept ${r.skipped_real||0} real page(s).`);
+        } catch (err) {
+          alert('Auto-410 failed: ' + (err.message || err));
+        }
+        setAuto410ing(false);
+        setSelected404s(new Set());
+        load404s();
+      };
+
       const bulkRedirectOrphans = async (mode) => {
         // mode: 'homepage' or '410'
         var orphanItems = fourOhFours.filter(function(f) {
@@ -11294,6 +11313,19 @@
             })()
           ),
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            // 410 All Junk — one-click server-side sweep of spam/bot/malformed (never touches real pages)
+            (() => {
+              const junkCount = fourOhFours.filter(x => ['spam','bot','malformed'].includes(x._category)).length;
+              return junkCount > 0 && e('button', {
+                style: { ...btnStyle('#d946ef'), padding: '5px 12px', fontSize: 12, background: 'rgba(217,70,239,0.15)', color: '#d946ef', border: '1px solid rgba(217,70,239,0.3)' },
+                onClick: autoFix410Junk,
+                disabled: auto410ing,
+                title: 'Auto-410 every spam, bot-probe and malformed 404. Real pages are left for redirect decisions. Also runs automatically each day.'
+              },
+                auto410ing ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin' }), ' Clearing junk…') :
+                e('span', null, e('i', { className: 'fas fa-skull-crossbones' }), ` 410 All Junk (${junkCount})`)
+              );
+            })(),
             // Bulk 410 — always available, works on selected or all filtered
             filtered404s.length > 0 && e('button', {
               style: { ...btnStyle('#ef4444'), padding: '5px 12px', fontSize: 12, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
