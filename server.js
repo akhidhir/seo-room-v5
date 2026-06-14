@@ -47589,7 +47589,7 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
         if (p.is_primary) {
           p.fix = mode === 'duplicate'
             ? `Keep this as the one page for "${kw}". Make sure "${kw}" stays in its title, H1 and focus keyword, and strengthen the content.`
-            : `Make this your main (pillar) page for "${kw}" — Google already ranks it most for the term. Add "${kw}" to its title/H1/focus keyword and link the related pages below to it.`;
+            : `Make this your main (pillar) page for "${kw}" — it pulls the most impressions for the term${primary.position > 10 ? `, but only ranks #${Math.round(primary.position)}, so it needs strengthening to reach page 1` : ''}. Add "${kw}" to its title/H1/focus keyword and link the related pages below to it.`;
           p.fix_type = 'keep';
         } else if (p.targets_exact) {
           const redFields = [];
@@ -47665,11 +47665,18 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       // suburb term) is NOT this — Google handles that, and your dedicated page is usually already winning.
       const primaryMisconfigured = pages.some(p => p.is_primary && (p.canonical_elsewhere || p.noindex));
       const nearDuplicate = simPairs.some(s => s.score >= 50);
-      const is_real_issue = (mode === 'duplicate') || nearDuplicate || primaryMisconfigured;
+      // Real cannibalization needs clicks genuinely at stake: a page must actually rank on PAGE 1 (bestPos <= 10)
+      // OR the cluster is already earning clicks that get split. Several pages dribbling impressions for a head
+      // term at #15-#55 with 0 clicks is a RANKING problem, not cannibalization — so we no longer flag it.
+      // Structural problems (duplicate content, mis-set canonical/noindex) are always real, regardless of rank.
+      const clicksAtStake = bestPos <= 10 || totalClicks > 0;
+      const is_real_issue = (mode === 'duplicate' && clicksAtStake) || nearDuplicate || primaryMisconfigured;
 
-      // Only keep genuine, fixable SEO problems — minor co-ranking is not stored at all.
+      // Only keep genuine, fixable SEO problems — incidental co-ranking is not stored at all.
       if (!is_real_issue) continue;
-      const severity = (totalImpr >= 500 || primaryMisconfigured || nearDuplicate) ? 'high' : (totalImpr >= 100 ? 'medium' : 'low');
+      // HIGH only when the harm is real: a structural problem, or clicks actually being split. Raw impressions
+      // (the old rule) wrongly marked page-2 keywords with 0 clicks as HIGH.
+      const severity = (primaryMisconfigured || nearDuplicate || totalClicks > 0) ? 'high' : (bestPos <= 10 ? 'medium' : 'low');
 
       competing.push({
         keyword: kw, page_count: pages.length, total_impressions: totalImpr, total_clicks: totalClicks,
