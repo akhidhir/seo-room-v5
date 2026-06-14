@@ -14264,6 +14264,21 @@ app.get('/api/projects/:projectId/gbp-optimise/audit', async (req, res) => {
       if (rc) { reviewCount = rc.total_count || 0; const rv = typeof rc.reviews === 'string' ? JSON.parse(rc.reviews) : (rc.reviews || []); const rs = rv.map(r => r.rating || r.star_rating).filter(Boolean); if (rs.length) rating = +(rs.reduce((a, b) => a + b, 0) / rs.length).toFixed(1); }
     } catch {}
 
+    // Fallback: use the synced RC data (from the daily GBP sync) when the Local-Intel caches are empty.
+    // The rc-sync endpoint stores reviews_stats + posts on the rc_profile / gbp_profile integration rows.
+    const syncedReviews = byKind.rc_profile?.reviews_stats || byKind.gbp_profile?.reviews || null;
+    if (!reviewCount && syncedReviews && (syncedReviews.total_reviews || syncedReviews.average_rating)) {
+      reviewCount = syncedReviews.total_reviews || 0;
+      if (syncedReviews.average_rating) rating = +Number(syncedReviews.average_rating).toFixed(1);
+    }
+    const syncedPosts = byKind.rc_profile?.posts || null;
+    if (!postCount && syncedPosts) {
+      const parr = Array.isArray(syncedPosts) ? syncedPosts : (syncedPosts.published_posts || []);
+      postCount = (syncedPosts.count != null ? syncedPosts.count : parr.length) || 0;
+      const pdates = parr.map(p => new Date(p.createTime || p.create_time || p.created_at || p.publishedAt || p.published_at || p.date || 0).getTime()).filter(t => t > 0);
+      if (pdates.length) lastPostDays = Math.floor((Date.now() - Math.max(...pdates)) / 86400000);
+    }
+
     // ── Grade ──
     const findings = [];
     const add = (factor, severity, label, detail, rec) => findings.push({ factor, severity, label, detail, recommendation: rec });
