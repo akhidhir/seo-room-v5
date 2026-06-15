@@ -11611,7 +11611,7 @@ async function wpFetch(wpUrl, endpoint) {
 async function runPageSpeedAudit(url, strategy = 'mobile', retries = 3) {
   const PAGESPEED_KEY = process.env.PAGESPEED_API_KEY;
   const keyParam = PAGESPEED_KEY ? `&key=${PAGESPEED_KEY}` : '';
-  const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&category=performance${keyParam}`;
+  const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}&category=performance&category=accessibility&category=best-practices&category=seo${keyParam}`;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(90000) });
@@ -12007,7 +12007,11 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
 
         function extractCwvAndOpps(psData) {
           const metrics = psData.lighthouseResult?.audits || {};
-          const score = Math.round((psData.lighthouseResult?.categories?.performance?.score || 0) * 100);
+          const cats = psData.lighthouseResult?.categories || {};
+          const score = Math.round((cats.performance?.score || 0) * 100);
+          const accessibility = cats.accessibility?.score != null ? Math.round(cats.accessibility.score * 100) : null;
+          const bestPractices = cats['best-practices']?.score != null ? Math.round(cats['best-practices'].score * 100) : null;
+          const seo = cats.seo?.score != null ? Math.round(cats.seo.score * 100) : null;
           const opportunities = [];
           const fixableAudits = [
             'unsized-images', 'render-blocking-resources', 'unused-css', 'unused-javascript',
@@ -12037,7 +12041,7 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
             }
           }
           return {
-            score,
+            score, accessibility, bestPractices, seo,
             cwv: {
               lcp: metrics['largest-contentful-paint']?.displayValue || 'N/A',
               fid: metrics['max-potential-fid']?.displayValue || 'N/A',
@@ -12067,6 +12071,9 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
             return {
               page_id: page.page_id, title: page.title, slug: page.slug, url: page.url,
               performance_score: mobile.score,
+              accessibility_score: mobile.accessibility,
+              best_practices_score: mobile.bestPractices,
+              seo_score: mobile.seo,
               cwv: mobile.cwv,
               opportunities: mobile.opportunities,
               desktop_score: desktop.score,
@@ -42250,23 +42257,27 @@ app.post('/api/projects/:projectId/baseline/generate', async (req, res) => {
           }
         } catch {}
 
-        // ── 9. PageSpeed scores ──
+        // ── 9. PageSpeed scores — read from the ACTUAL speed audit (pillar='speed', audit_data.results) ──
         let pageSpeedStats = null;
         try {
-          const psRes = await pool.query(`SELECT report_data FROM audits WHERE project_id=$1 AND pillar='pagespeed' ORDER BY created_at DESC LIMIT 1`, [projectId]);
-          if (psRes.rows.length > 0 && psRes.rows[0].report_data) {
-            const psData = typeof psRes.rows[0].report_data === 'string' ? JSON.parse(psRes.rows[0].report_data) : psRes.rows[0].report_data;
-            if (Array.isArray(psData) && psData.length > 0) {
-              const scores = psData.filter(p => p.performance != null).map(p => p.performance);
-              pageSpeedStats = {
-                avgPerformance: scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
-                good: scores.filter(s => s >= 90).length,
-                needsImprovement: scores.filter(s => s >= 50 && s < 90).length,
-                poor: scores.filter(s => s < 50).length,
-                totalPages: psData.length,
-                pages: psData.slice(0, 20).map(p => ({ url: p.url, performance: p.performance, lcp: p.lcp, fcp: p.fcp, cls: p.cls, tbt: p.tbt })),
-              };
-            }
+          const psRes = await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`, [projectId]);
+          const ad = psRes.rows[0]?.audit_data;
+          const parsed = typeof ad === 'string' ? JSON.parse(ad || '{}') : (ad || {});
+          const psData = Array.isArray(parsed.results) ? parsed.results.filter(p => p && !p.error) : [];
+          if (psData.length > 0) {
+            const avgOf = (key) => { const v = psData.map(p => p[key]).filter(s => s != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null; };
+            const perf = psData.map(p => p.performance_score).filter(s => s != null);
+            pageSpeedStats = {
+              avgPerformance: avgOf('performance_score'),
+              avgAccessibility: avgOf('accessibility_score'),
+              avgBestPractices: avgOf('best_practices_score'),
+              avgSeo: avgOf('seo_score'),
+              good: perf.filter(s => s >= 90).length,
+              needsImprovement: perf.filter(s => s >= 50 && s < 90).length,
+              poor: perf.filter(s => s < 50).length,
+              totalPages: psData.length,
+              pages: psData.slice(0, 20).map(p => ({ url: p.url, performance: p.performance_score, accessibility: p.accessibility_score, bestPractices: p.best_practices_score, seo: p.seo_score, lcp: p.cwv?.lcp, fcp: p.cwv?.fcp, cls: p.cwv?.cls, tbt: p.cwv?.tbt })),
+            };
           }
         } catch {}
 
@@ -42915,22 +42926,28 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
       onPageStats.pagesFixed = parseInt(fixRes.rows[0]?.cnt || 0);
     } catch (e) { /* skip */ }
 
-    // 6. PageSpeed scores
+    // 6. PageSpeed scores — read from the ACTUAL speed audit (pillar='speed', audit_data.results).
+    // (Previously this queried pillar='pagespeed'/report_data/p.performance, which the scan never writes — so
+    // every score gauge in the report was empty.) Aggregates all 4 Lighthouse categories across scanned pages.
     let pageSpeedStats = null;
     try {
-      const psRes = await pool.query(`SELECT report_data FROM audits WHERE project_id=$1 AND pillar='pagespeed' ORDER BY created_at DESC LIMIT 1`, [projectId]);
-      if (psRes.rows.length > 0 && psRes.rows[0].report_data) {
-        const psData = typeof psRes.rows[0].report_data === 'string' ? JSON.parse(psRes.rows[0].report_data) : psRes.rows[0].report_data;
-        if (Array.isArray(psData) && psData.length > 0) {
-          const scores = psData.filter(p => p.performance != null).map(p => p.performance);
-          pageSpeedStats = {
-            avgPerformance: scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
-            good: scores.filter(s => s >= 90).length,
-            needsImprovement: scores.filter(s => s >= 50 && s < 90).length,
-            poor: scores.filter(s => s < 50).length,
-            totalPages: psData.length,
-          };
-        }
+      const psRes = await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`, [projectId]);
+      const ad = psRes.rows[0]?.audit_data;
+      const parsed = typeof ad === 'string' ? JSON.parse(ad || '{}') : (ad || {});
+      const psData = Array.isArray(parsed.results) ? parsed.results.filter(p => p && !p.error) : [];
+      if (psData.length > 0) {
+        const avgOf = (key) => { const v = psData.map(p => p[key]).filter(s => s != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null; };
+        const perf = psData.map(p => p.performance_score).filter(s => s != null);
+        pageSpeedStats = {
+          avgPerformance: avgOf('performance_score'),
+          avgAccessibility: avgOf('accessibility_score'),
+          avgBestPractices: avgOf('best_practices_score'),
+          avgSeo: avgOf('seo_score'),
+          good: perf.filter(s => s >= 90).length,
+          needsImprovement: perf.filter(s => s >= 50 && s < 90).length,
+          poor: perf.filter(s => s < 50).length,
+          totalPages: psData.length,
+        };
       }
     } catch (e) { /* skip */ }
 
