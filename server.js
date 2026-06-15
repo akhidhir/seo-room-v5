@@ -39643,12 +39643,20 @@ app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
       ORDER BY keyword, location, scanned_at DESC
     `, [req.params.projectId]);
 
-    // Get previous scan per keyword (oldest scan older than 7 days for comparison)
+    // Previous scan per keyword = the 2nd-most-recent scan (any age). This makes the ▲/▼ show movement vs the
+    // PRIOR scan, so re-running today produces arrows — instead of only comparing to a week-old baseline (which
+    // is why a fresh re-scan showed no change, and why only projects with >7-day-old history ever showed trends).
     const { rows: prevRows } = await pool.query(`
-      SELECT DISTINCT ON (keyword, location) keyword, location, arp AS prev_arp, atrp AS prev_atrp, solv AS prev_solv, found_in AS prev_found_in, data_points AS prev_data_points, scanned_at AS prev_scanned_at
-      FROM grid_scans
-      WHERE project_id=$1 AND scanned_at < NOW() - INTERVAL '7 days'
-      ORDER BY keyword, location, scanned_at ASC
+      SELECT keyword, location, prev_arp, prev_atrp, prev_solv, prev_found_in, prev_data_points, prev_scanned_at
+      FROM (
+        SELECT keyword, location,
+               arp AS prev_arp, atrp AS prev_atrp, solv AS prev_solv, found_in AS prev_found_in,
+               data_points AS prev_data_points, scanned_at AS prev_scanned_at,
+               ROW_NUMBER() OVER (PARTITION BY keyword, location ORDER BY scanned_at DESC) AS rn
+        FROM grid_scans
+        WHERE project_id=$1
+      ) t
+      WHERE rn = 2
     `, [req.params.projectId]);
 
     const prevMap = {};
