@@ -14156,22 +14156,14 @@ app.post('/api/projects/:projectId/rc-grid-sync', async (req, res) => {
       const cLat = center_lat || (rawPoints.reduce((s, p) => s + p.lat, 0) / rawPoints.length);
       const cLng = center_lng || (rawPoints.reduce((s, p) => s + p.lng, 0) / rawPoints.length);
 
-      // Upsert into grid_scans (replace existing for same keyword)
+      // Append a new row per sync so position history accumulates — the Maps Rankings ▲/▼ compares the latest
+      // two scans. The display reads the latest via DISTINCT ON, so multiple rows per keyword are expected.
+      // (Previously this overwrote in place / delete+insert, so only one scan ever existed → no trend.)
       await pool.query(
         `INSERT INTO grid_scans (project_id, keyword, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'rating_captain')
-         ON CONFLICT ON CONSTRAINT grid_scans_project_keyword_unique
-         DO UPDATE SET grid_size=$3, center_lat=$4, center_lng=$5, radius_km=$6, grid_points=$7, arp=$8, atrp=$9, solv=$10, found_in=$11, data_points=$12, scanned_at=NOW(), source='rating_captain'`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), 'rating_captain')`,
         [projectId, keyword, size, cLat, cLng, rad, JSON.stringify(gridPoints), arp, atrp, solv, foundPoints.length, gridPoints.length]
-      ).catch(async () => {
-        // If unique constraint doesn't exist, do delete + insert
-        await pool.query('DELETE FROM grid_scans WHERE project_id=$1 AND keyword=$2', [projectId, keyword]);
-        await pool.query(
-          `INSERT INTO grid_scans (project_id, keyword, grid_size, center_lat, center_lng, radius_km, grid_points, arp, atrp, solv, found_in, data_points, scanned_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [projectId, keyword, size, cLat, cLng, rad, JSON.stringify(gridPoints), arp, atrp, solv, foundPoints.length, gridPoints.length]
-        );
-      });
+      );
 
       // Also upsert rank_keywords so it shows in the table
       const existingKw = await pool.query('SELECT id FROM rank_keywords WHERE project_id=$1 AND keyword=$2', [projectId, keyword]);
