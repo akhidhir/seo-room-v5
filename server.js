@@ -39635,20 +39635,16 @@ app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
       ORDER BY keyword, location, scanned_at DESC
     `, [req.params.projectId]);
 
-    // Previous scan per keyword = the 2nd-most-recent scan (any age). This makes the ▲/▼ show movement vs the
-    // PRIOR scan, so re-running today produces arrows — instead of only comparing to a week-old baseline (which
-    // is why a fresh re-scan showed no change, and why only projects with >7-day-old history ever showed trends).
+    // BASELINE = the FIRST scan recorded per keyword (captured when the project starts being tracked). Every
+    // later scan is compared to this fixed baseline, so the ▲/▼ shows cumulative progress since launch — not
+    // scan-to-scan noise. The baseline never changes; new scans just append after it.
     const { rows: prevRows } = await pool.query(`
-      SELECT keyword, location, prev_arp, prev_atrp, prev_solv, prev_found_in, prev_data_points, prev_scanned_at
-      FROM (
-        SELECT keyword, location,
-               arp AS prev_arp, atrp AS prev_atrp, solv AS prev_solv, found_in AS prev_found_in,
-               data_points AS prev_data_points, scanned_at AS prev_scanned_at,
-               ROW_NUMBER() OVER (PARTITION BY keyword, location ORDER BY scanned_at DESC) AS rn
-        FROM grid_scans
-        WHERE project_id=$1
-      ) t
-      WHERE rn = 2
+      SELECT DISTINCT ON (keyword, location) keyword, location,
+             arp AS prev_arp, atrp AS prev_atrp, solv AS prev_solv, found_in AS prev_found_in,
+             data_points AS prev_data_points, scanned_at AS prev_scanned_at
+      FROM grid_scans
+      WHERE project_id=$1
+      ORDER BY keyword, location, scanned_at ASC
     `, [req.params.projectId]);
 
     const prevMap = {};
