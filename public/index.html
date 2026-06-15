@@ -8880,6 +8880,7 @@
       // ---- Hero / oversized-image fixes via the seoroom-speed plugin ----
       const [heroScan, setHeroScan] = useState(null);
       const [fixingHero, setFixingHero] = useState(null);
+      const [optAll, setOptAll] = useState(null);
       const runHeroScan = async () => {
         setHeroScan({ loading: true });
         try {
@@ -8899,6 +8900,23 @@
         } catch (e) { alert(e.message); }
         setFixingHero(null);
       };
+
+      const optimizeAllImages = async (count) => {
+        if (!confirm('Optimize ALL ' + count + ' oversized images to WebP and replace each site-wide?\n\nRuns one image at a time in the background (gentle on the host) — roughly ' + Math.ceil(count * 0.4) + '-' + Math.ceil(count * 0.8) + ' min. Every swap is reversible via Change History, and it auto-stops if the host starts erroring.')) return;
+        try {
+          const r = await api(`/projects/${project.id}/speed-fixes/optimize-all`, { method: 'POST', body: {} });
+          if (r.error) { alert(r.error); return; }
+        } catch (e) { alert(e.message); return; }
+        setOptAll({ running: true, phase: 'Starting…', done: 0, total: count, optimized: 0, errors: 0, saved_kb: 0 });
+        const poll = setInterval(async () => {
+          try {
+            const s = await api(`/projects/${project.id}/speed-fixes/optimize-all/status`);
+            setOptAll(s);
+            if (!s || !s.running) { clearInterval(poll); runHeroScan(); }
+          } catch (e) {}
+        }, 2500);
+      };
+      const stopOptimizeAll = async () => { try { await api(`/projects/${project.id}/speed-fixes/optimize-all/stop`, { method: 'POST', body: {} }); } catch (e) {} };
 
       const fixHero = async (f, ss) => {
         const slide = ss.slides && ss.slides[0];
@@ -9093,9 +9111,32 @@
                 if (imgs.length === 0) return null;
                 return (
                   <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>
-                      {imgs.length} unique oversized image{imgs.length !== 1 ? 's' : ''} — optimize once, fixes every page using it
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#ef4444' }}>
+                        {imgs.length} unique oversized image{imgs.length !== 1 ? 's' : ''} — optimize once, fixes every page using it
+                      </div>
+                      {(!optAll || !optAll.running) && (
+                        <button className="btn btn-primary" onClick={() => optimizeAllImages(imgs.length)}
+                          style={{ fontSize: 12, padding: '5px 14px', marginLeft: 'auto' }}>
+                          <i className="fas fa-bolt" style={{ marginRight: 6 }} />Optimize All ({imgs.length})
+                        </button>
+                      )}
+                      {optAll && optAll.running && (
+                        <button className="btn" onClick={stopOptimizeAll} style={{ fontSize: 12, padding: '5px 12px', marginLeft: 'auto', background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+                          <i className="fas fa-stop" style={{ marginRight: 6 }} />Stop
+                        </button>
+                      )}
                     </div>
+                    {optAll && (
+                      <div style={{ marginBottom: 10, fontSize: 12, color: 'var(--text2)' }}>
+                        <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden', marginBottom: 4 }}>
+                          <div style={{ height: '100%', width: ((optAll.total ? (optAll.done / optAll.total) : 0) * 100) + '%', background: '#6366f1', transition: 'width .3s' }} />
+                        </div>
+                        {optAll.running
+                          ? <span>{optAll.phase} — {optAll.done}/{optAll.total} · {optAll.optimized} optimized · {Math.round((optAll.saved_kb || 0) / 1024 * 10) / 10} MB saved{optAll.current ? ' · ' + optAll.current : ''}</span>
+                          : <span>{optAll.phase} — {optAll.optimized} optimized, {Math.round((optAll.saved_kb || 0) / 1024 * 10) / 10} MB saved{optAll.errors ? ', ' + optAll.errors + ' failed' : ''}. Flush BerqWP, then re-scan PageSpeed.</span>}
+                      </div>
+                    )}
                     {imgs.map(b => (
                       <div key={b.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', fontSize: 13, color: 'var(--text2)' }}>
                         <span>{(b.url || '').split('/').pop()}</span>

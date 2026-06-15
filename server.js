@@ -18972,6 +18972,96 @@ app.post('/api/projects/:projectId/speed-fixes/optimize-background', async (req,
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===== Fix All Images — paced background job: optimize every unique oversized background image once and
+// swap it site-wide. Sequential + gaps so it can't overload a fragile host; stops on repeated errors; each
+// swap is logged to wp_change_history (one-click rollback). Aggressive settings (q62/1600px) to land <400KB. =====
+const imageOptimizeJobs = {};
+app.post('/api/projects/:projectId/speed-fixes/optimize-all', async (req, res) => {
+  const { projectId } = req.params;
+  const locked = acquireHeavyLock(projectId, 'Optimize all images');
+  if (locked) return heavyLockResponse(res, locked);
+  const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+  if (!project) { releaseHeavyLock(projectId); return res.status(404).json({ error: 'Project not found' }); }
+  const cfg = speedPluginCfg(project);
+  if (!cfg) { releaseHeavyLock(projectId); return res.status(400).json({ error: 'Speed Plugin Key not set in Project Settings.' }); }
+
+  const job = { running: true, phase: 'Scanning…', total: 0, done: 0, optimized: 0, errors: 0, saved_kb: 0, current: '', started: Date.now() };
+  imageOptimizeJobs[projectId] = job;
+  res.json({ started: true });
+
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  (async () => {
+    try {
+      // 1. Scan for oversized background images and collect UNIQUE URLs (biggest first).
+      const sr = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-scan?key=${encodeURIComponent(cfg.key)}`, { signal: AbortSignal.timeout(120000) });
+      const sd = await sr.json().catch(() => ({}));
+      const seen = new Map();
+      for (const f of (Array.isArray(sd.findings) ? sd.findings : [])) {
+        for (const b of (f.big_backgrounds || [])) { if (b.url && !seen.has(b.url)) seen.set(b.url, b.kb || 0); }
+      }
+      const images = [...seen.entries()].map(([url, kb]) => ({ url, kb })).sort((a, b) => b.kb - a.kb);
+      job.total = images.length;
+      job.phase = job.total ? 'Optimizing images' : 'No oversized images found';
+
+      let consecutiveErrors = 0;
+      for (const img of images) {
+        if (!imageOptimizeJobs[projectId] || !job.running) return; // cancelled
+        job.current = img.url.split('/').pop();
+        try {
+          const orsp = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-optimize-image?key=${encodeURIComponent(cfg.key)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: img.url, max_width: 1600, quality: 62 }),
+            signal: AbortSignal.timeout(120000),
+          });
+          const opt = await orsp.json().catch(() => ({}));
+          if (!orsp.ok || !opt.optimized_url) throw new Error(opt.message || 'optimize failed');
+
+          const rrsp = await fetch(`${cfg.wpUrl}/wp-json/seoroom/v1/speed-replace-image?key=${encodeURIComponent(cfg.key)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ old_url: img.url, new_url: opt.optimized_url }),
+            signal: AbortSignal.timeout(120000),
+          });
+          const rep = await rrsp.json().catch(() => ({}));
+          if (!rrsp.ok) throw new Error(rep.message || 'replace failed');
+
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,0,'','Site-wide image swap','bg-image-swap','image_url',$2,$3)`,
+            [projectId, img.url, opt.optimized_url]
+          ).catch(() => {});
+          job.optimized++;
+          job.saved_kb += Math.max(0, (opt.original_kb || 0) - (opt.optimized_kb || 0));
+          consecutiveErrors = 0;
+        } catch (e) {
+          job.errors++; consecutiveErrors++;
+          console.error(`[optimize-all] ${img.url}: ${e.message}`);
+          if (consecutiveErrors >= 5) { job.phase = 'Stopped — too many consecutive errors (host may be overloaded). Re-run later.'; break; }
+        }
+        job.done++;
+        await sleep(3500); // host-friendly gap between images
+      }
+      if (job.phase === 'Optimizing images') job.phase = 'Done';
+    } catch (e) {
+      job.phase = 'Failed: ' + e.message;
+    } finally {
+      job.running = false;
+      releaseHeavyLock(projectId);
+    }
+  })();
+});
+
+app.get('/api/projects/:projectId/speed-fixes/optimize-all/status', (req, res) => {
+  const job = imageOptimizeJobs[req.params.projectId];
+  if (!job) return res.json({ running: false, none: true });
+  res.json({ running: job.running, phase: job.phase, total: job.total, done: job.done, optimized: job.optimized, errors: job.errors, saved_kb: job.saved_kb, current: job.current });
+});
+
+app.post('/api/projects/:projectId/speed-fixes/optimize-all/stop', (req, res) => {
+  const job = imageOptimizeJobs[req.params.projectId];
+  if (job) { job.running = false; job.phase = 'Stopped by user'; }
+  releaseHeavyLock(req.params.projectId);
+  res.json({ ok: true });
+});
+
 // ===== Heavy-job lock: one heavy WP-hitting job per project at a time =====
 // Prevents e.g. Fix Everything + PageSpeed scan + audit crawl hammering the same WP server
 // simultaneously (causes Lighthouse net::ERR_TIMED_OUT and WP write timeouts).
@@ -42931,10 +43021,12 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     // every score gauge in the report was empty.) Aggregates all 4 Lighthouse categories across scanned pages.
     let pageSpeedStats = null;
     try {
-      const psRes = await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 1`, [projectId]);
+      // Prefer a completed scan, but fall back to a 'failed' one's PARTIAL results — on throttled hosts a full
+      // scan often ends 'failed' while some pages still got scored, and those are worth showing.
+      const psRes = await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status IN ('completed','failed') AND audit_data IS NOT NULL ORDER BY (status='completed') DESC, completed_at DESC NULLS LAST, started_at DESC LIMIT 1`, [projectId]);
       const ad = psRes.rows[0]?.audit_data;
       const parsed = typeof ad === 'string' ? JSON.parse(ad || '{}') : (ad || {});
-      const psData = Array.isArray(parsed.results) ? parsed.results.filter(p => p && !p.error) : [];
+      const psData = Array.isArray(parsed.results) ? parsed.results.filter(p => p && !p.error && p.performance_score != null) : [];
       if (psData.length > 0) {
         const avgOf = (key) => { const v = psData.map(p => p[key]).filter(s => s != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null; };
         const perf = psData.map(p => p.performance_score).filter(s => s != null);
