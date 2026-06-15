@@ -42554,18 +42554,12 @@ app.get('/api/projects/:projectId/baseline/pdf', async (req, res) => {
   }
 });
 
-// Auto-trigger: check if baseline exists, fire generation if not
+// Baseline capture is intentionally MANUAL: the user runs their onboarding scans first, then clicks
+// "Generate Baseline". Auto-firing on the first audit would lock a PARTIAL baseline (only the data scanned
+// so far — e.g. one audit, no Maps/PageSpeed), so this auto-trigger is disabled. Kept as a no-op so existing
+// call sites don't break.
 async function maybeGenerateBaseline(projectId, userId) {
-  try {
-    const existing = await pool.query('SELECT status FROM baseline_reports WHERE project_id=$1', [projectId]);
-    if (existing.rows.length > 0) return; // already exists or running
-    console.log(`[baseline] Auto-triggering baseline for project ${projectId} (first audit completed)`);
-    // Use internal fetch to trigger the generate endpoint
-    const port = process.env.PORT || 3000;
-    fetch(`http://localhost:${port}/api/projects/${projectId}/baseline/generate`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-    }).catch(e => console.log('[baseline] Auto-trigger fetch error:', e.message));
-  } catch (e) { console.log('[baseline] Auto-trigger check error:', e.message); }
+  return; // no-op — baseline is generated only via the explicit "Generate Baseline" button
 }
 
 // ==================== 12. MONTHLY REPORTS ====================

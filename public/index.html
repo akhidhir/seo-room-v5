@@ -32336,8 +32336,12 @@
           <div style={{ ...cardStyle, textAlign: 'center', padding: 60, maxWidth: 500, margin: '40px auto' }}>
             <i className="fas fa-flag-checkered" style={{ fontSize: 48, color: '#6366f1', marginBottom: 16, display: 'block' }}></i>
             <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>No Baseline Report Yet</div>
-            <div style={{ color: 'var(--text3)', fontSize: 14, marginBottom: 20, lineHeight: 1.6 }}>
+            <div style={{ color: 'var(--text3)', fontSize: 14, marginBottom: 16, lineHeight: 1.6 }}>
               The baseline captures a full snapshot of your SEO performance when you start — Maps rankings, SERP positions, GSC data, audit findings, PageSpeed scores, and more. This becomes the reference point to measure all future progress against.
+            </div>
+            <div style={{ textAlign: 'left', background: '#f59e0b14', border: '1px solid #f59e0b40', borderRadius: 8, padding: '12px 14px', marginBottom: 20, fontSize: 12.5, lineHeight: 1.6, color: 'var(--text2)' }}>
+              <i className="fas fa-triangle-exclamation" style={{ color: '#f59e0b', marginRight: 6 }}></i>
+              <b>Run your scans first.</b> The baseline is a snapshot of data already in the dashboard — it doesn't run scans itself. Before generating, run whatever you want captured: <b>Maps grid scan, SERP/rank tracking, Website + GBP + GSC audits, On-Page, PageSpeed, 404s</b>. Anything not yet run will be blank in the baseline, and the baseline locks once generated — so make it complete.
             </div>
             {baseline?.status === 'failed' && <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>Previous generation failed. Try again.</div>}
             <button onClick={generateBaseline} disabled={generating} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '12px 28px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
@@ -32345,7 +32349,7 @@
             </button>
             <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 12 }}>
               <i className="fas fa-info-circle" style={{ marginRight: 4 }}></i>
-              Also auto-generates when you run your first audit
+              Generate this once you've run your onboarding scans — it's your locked starting point.
             </div>
           </div>
         </div>
