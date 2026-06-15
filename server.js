@@ -11948,11 +11948,16 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
         } catch (cacheErr) {
           console.log(`[speed-audit] Connector cache unavailable: ${cacheErr.message}`);
         }
-        // Fallback to external discovery if no cache (retry on connection errors)
-        if (pages.length === 0) {
+        // Run sitemap/WP discovery when there's no cache OR the cache looks partial (a stale/partial connector
+        // cache was the "sometimes scans fewer pages" cause). Use whichever source yields MORE pages.
+        if (pages.length < 5) {
           for (let discAttempt = 0; discAttempt < 3; discAttempt++) {
             try {
-              pages = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+              const disc = await discoverPages(siteUrl, project.wordpress_url, getWpAuthHeaders(project));
+              if ((disc || []).length > pages.length) {
+                console.log(`[speed-audit] Discovery found ${(disc || []).length} pages (cache had ${pages.length}) — using discovery`);
+                pages = disc;
+              }
               break;
             } catch (discErr) {
               if (discAttempt < 2 && /ECONNRESET|ETIMEDOUT|socket hang up|UND_ERR/i.test(discErr.message)) {
@@ -11960,6 +11965,8 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
                 await new Promise(r => setTimeout(r, 5000));
                 continue;
               }
+              // Don't fail the whole audit on a discovery error if we already have some cache pages.
+              if (pages.length > 0) { console.log(`[speed-audit] Discovery failed (${discErr.message}) — using ${pages.length} cache pages`); break; }
               throw discErr;
             }
           }
@@ -12085,9 +12092,10 @@ app.post('/api/speed-audit/:projectId/run', async (req, res) => {
           const result = await processPage(pages[i]);
           results.push(result);
           console.log(`[speed-audit] Progress: ${results.length}/${pages.length} pages`);
-          // Save partial results so the frontend can show them incrementally
+          // Save partial results so the frontend can show them incrementally. beat_at is a heartbeat the
+          // watchdog uses to tell "slow but progressing" from "genuinely stuck".
           await pool.query(`UPDATE audits SET audit_data=$1 WHERE id=$2`,
-            [JSON.stringify({ progress: results.length, total: pages.length, results }), auditId]);
+            [JSON.stringify({ progress: results.length, total: pages.length, results, beat_at: Date.now() }), auditId]);
           // If a page times out, ease off progressively before the next so the site can recover.
           const docFail = result.error && /FAILED_DOCUMENT_REQUEST|ERRORED_DOCUMENT_REQUEST|TIMED_OUT/i.test(result.error);
           consecutiveFails = docFail ? consecutiveFails + 1 : 0;
@@ -12136,12 +12144,18 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
     );
     if (result.rows.length === 0) return res.json({ status: 'none' });
     const audit = result.rows[0];
-    // Auto-fail audits stuck running for more than 10 minutes (e.g. server restarted)
+    // Auto-fail only a GENUINELY STUCK scan — not a slow-but-progressing one. A 50-page sequential scan with
+    // 8s gaps + throttle back-offs on a slow host legitimately runs 30-45+ min, so killing it on total elapsed
+    // alone abandoned its results mid-run (the "audit didn't save" bug). Use the per-page heartbeat (beat_at):
+    // fail only if no page has completed for 15 min, or as an absolute safety cap at 90 min. Crucially we do
+    // NOT overwrite audit_data here, so whatever pages did complete survive for the fallback below.
     if (audit.status === 'running' && audit.started_at) {
       const elapsed = Date.now() - new Date(audit.started_at).getTime();
-      if (elapsed > 30 * 60 * 1000) {
-        await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Audit timed out"}'::jsonb WHERE id=$1`, [audit.id]);
-        // Fall through to failed handler below
+      const d0 = typeof audit.audit_data === 'string' ? JSON.parse(audit.audit_data || '{}') : (audit.audit_data || {});
+      const sinceBeat = d0.beat_at ? (Date.now() - d0.beat_at) : null;
+      const stuck = (sinceBeat != null && sinceBeat > 15 * 60 * 1000) || (sinceBeat == null && elapsed > 30 * 60 * 1000);
+      if (stuck || elapsed > 90 * 60 * 1000) {
+        await pool.query(`UPDATE audits SET status='failed', completed_at=NOW() WHERE id=$1`, [audit.id]);
         audit.status = 'failed';
       }
     }
@@ -12151,9 +12165,11 @@ app.get('/api/speed-audit/:projectId/status', async (req, res) => {
         `SELECT id, status, audit_data, started_at, completed_at FROM audits WHERE project_id=$1 AND pillar='speed' AND status='completed' ORDER BY completed_at DESC LIMIT 3`,
         [req.params.projectId]
       );
-      // Pick the completed audit with the most results
+      // Pick the audit with the most usable results — including THIS just-failed scan's own partial results,
+      // so a watchdog-failed run still shows whatever pages completed instead of vanishing.
+      const candidates = [...lastGood.rows, audit];
       let bestAudit = null, bestCount = 0;
-      for (const row of lastGood.rows) {
+      for (const row of candidates) {
         const d = typeof row.audit_data === 'string' ? JSON.parse(row.audit_data) : (row.audit_data || {});
         const count = (d.results || []).filter(r => r.cwv && !r.error).length;
         if (count > bestCount) { bestCount = count; bestAudit = { row, data: d }; }
