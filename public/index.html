@@ -21913,7 +21913,7 @@
     // ============ SITE ISSUES PAGE (triage view) ============
     // ============ CONTROL CENTRE — team job board (root-cause tickets, assignment, lead monitoring) ============
     // Where each ticket type opens when clicked "Open" (fix-in-place routing)
-    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', MAPS: 'maps-rankings', SERP: 'serp-rankings', AISR: 'ai-search', GEN: 'fix-center' };
+    const TICKET_ROUTE = { CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CONT: 'ow-queue', ONPG: 'onpage-audit', CANB: 'competing-pages', CITE: 'citations', GBP: 'gbp-audit-external', REVW: 'gbp-audit-external', LINK: 'internal-linking', BLNK: 'backlinks', TECH: 'website-audit', SEC: 'security-audit', MAPS: 'maps-rankings', SERP: 'serp-rankings', AISR: 'ai-search', GEN: 'website-audit' };
 
     // Ticket code chip — shows the Control Centre ticket code(s) on the audit page where the work happens.
     const __ticketCodesCache = {};
@@ -22044,7 +22044,7 @@
       // "Open" → switch to the ticket's project (if needed) and land on the right tool page.
       const openInTool = async (tk) => {
         try { await api(`/control-centre/tickets/${tk.code}/open`, { method: 'POST', body: {} }); } catch (_) {}
-        const route = TICKET_ROUTE[tk.pillar_code] || 'fix-center';
+        const route = TICKET_ROUTE[tk.pillar_code] || 'website-audit';
         // tell the destination page WHICH issue this ticket is about (filter + auto-expand)
         window.__ticketFocus = { pillar: tk.pillar_code, title: tk.title || '', code: tk.code };
         if (currentProject && Number(currentProject.id) !== Number(tk.project_id)) {
@@ -38157,7 +38157,6 @@ case 'action-plan':
 
       const allNavItems = [
         { section: 'AUDIT', items: [
-          { id: 'fix-center', label: 'Fix Center', icon: 'fas fa-screwdriver-wrench' },
           { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true, expandable: true, children: [
             { id: 'gbp-optimise', label: 'GBP Optimise', icon: 'fas fa-map-marker-alt' },
             { id: 'citations', label: 'Citations & NAP', icon: 'fas fa-building' },
