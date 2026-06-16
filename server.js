@@ -30606,36 +30606,46 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
       });
     }
 
-    // 4. CANNIBALIZATION: Multiple pages ranking for the same keyword
+    // 4. CANNIBALIZATION: 2+ pages GENUINELY competing for the same keyword (not homepage co-ranking, not noise).
     if (pageQueryRows && pageQueryRows.length > 0) {
       const kwPages = {};
       for (const row of pageQueryRows) {
         if (!kwPages[row.keyword]) kwPages[row.keyword] = [];
         kwPages[row.keyword].push(row);
       }
+      const isHome = (u) => { try { return new URL(u).pathname.replace(/\/+$/, '') === ''; } catch { return u === '/' || u === ''; } };
+      const pathOf = (u) => { try { return new URL(u).pathname; } catch { return u; } };
 
       const cannibalized = Object.entries(kwPages)
-        .filter(([kw, pages]) => pages.length >= 2 && pages.some(p => p.impressions >= 10))
-        .sort((a, b) => {
-          const aImp = a[1].reduce((s, p) => s + p.impressions, 0);
-          const bImp = b[1].reduce((s, p) => s + p.impressions, 0);
-          return bImp - aImp;
+        .map(([kw, pages]) => {
+          const nonHome = pages.filter(p => !isHome(p.page));
+          const bestPos = Math.min(...pages.map(p => (p.position != null ? p.position : 99)));
+          const totalClicks = pages.reduce((s, p) => s + (p.clicks || 0), 0);
+          const totalImp = pages.reduce((s, p) => s + p.impressions, 0);
+          return { kw, pages, nonHome, bestPos, totalClicks, totalImp };
         })
+        // Real cannibalization needs 2+ NON-homepage pages (the homepage naturally co-ranks for broad terms —
+        // that's not cannibalization), AND a page actually on page 1 (<=10) OR clicks already being split.
+        // Several differently-targeted pages sitting at #15-#50 with 0 clicks is a RANKING problem, not this.
+        .filter(c => c.nonHome.length >= 2 && (c.bestPos <= 10 || c.totalClicks > 0))
+        .sort((a, b) => b.totalImp - a.totalImp)
         .slice(0, 10);
 
-      for (const [kw, pages] of cannibalized) {
-        const totalImp = pages.reduce((s, p) => s + p.impressions, 0);
-        const urls = pages.map(p => {
-          try { return new URL(p.page).pathname; } catch { return p.page; }
-        }).join(', ');
+      for (const c of cannibalized) {
+        const { kw, pages, nonHome, totalImp, totalClicks, bestPos } = c;
+        const keep = [...nonHome].sort((a, b) => (a.position || 99) - (b.position || 99))[0]; // best-ranking real page
+        const keepPath = pathOf(keep.page);
+        const detail = [...pages].sort((a, b) => (a.position || 99) - (b.position || 99))
+          .map(p => `${pathOf(p.page)}${isHome(p.page) ? ' (homepage)' : ''} — pos ${p.position != null ? Math.round(p.position) : '?'}, ${p.impressions} impr${p.clicks ? ', ' + p.clicks + ' clicks' : ''}`)
+          .join('   |   ');
         findings.push({
           pillar: 'gsc', category: 'Cannibalization',
           title: `"${kw}" ranking on ${pages.length} different pages`,
-          description: `Multiple pages compete for the same keyword, splitting authority. Pages: ${urls}`,
-          recommendation: 'Consolidate content into one authoritative page. Redirect or noindex the weaker pages, or differentiate their target keywords.',
-          severity: totalImp >= 100 ? 'Critical' : 'Medium',
-          current_value: `${pages.length} pages | ${totalImp} total impressions`,
-          recommended_value: '1 page per keyword'
+          description: `These pages all show for "${kw}" — pick one to own it:   ${detail}`,
+          recommendation: `Make ${keepPath} the single page for "${kw}" (it already ranks best). Re-target or 301-redirect the other non-homepage pages to it, and leave the homepage brand-focused.`,
+          severity: (totalClicks > 0 || bestPos <= 3) ? 'Critical' : 'Medium',
+          current_value: `${pages.length} pages | ${totalImp} total impressions | best position ${Math.round(bestPos)}`,
+          recommended_value: `1 page (${keepPath})`
         });
       }
     }
