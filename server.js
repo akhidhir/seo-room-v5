@@ -6287,6 +6287,80 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
 // Bulk-build empty-copy pages on the CURRENT project's WP site from an uploaded Elementor template JSON,
 // carrying each source URL's slug + SEO title + meta description + (derived) focus keyword. Reuses the proven
 // migration engine (extractOldPageBlocks for meta + createNewElementorPage for the template page + Yoast write).
+// Page Builder: summarise an Elementor tree into top-level section chips (deterministic, no AI)
+function summarizeElementorSections(tree) {
+  const out = [];
+  (Array.isArray(tree) ? tree : []).forEach((sec, i) => {
+    const widgets = [];
+    let words = 0, heading = '';
+    const walk = (els) => {
+      (Array.isArray(els) ? els : []).forEach(el => {
+        if (el && el.widgetType) {
+          widgets.push(el.widgetType);
+          const s = el.settings || {};
+          const texts = [s.title, s.editor, s.text, s.description_text, s.heading_title].filter(t => typeof t === 'string');
+          for (const t of texts) {
+            const clean = t.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').trim();
+            if (clean) {
+              words += clean.split(/\s+/).filter(Boolean).length;
+              if (!heading && el.widgetType === 'heading') heading = clean.slice(0, 60);
+            }
+          }
+        }
+        if (el && el.elements) walk(el.elements);
+      });
+    };
+    walk(sec && sec.elements || []);
+    const ws = widgets.join(' ');
+    const has = (re) => re.test(ws);
+    let type = 'content', locked = false;
+    if (has(/form/i)) { type = 'form'; locked = true; }
+    else if (has(/google_maps|\bmap\b/i)) { type = 'map'; locked = true; }
+    else if (has(/carousel|slides|loop/i)) { type = 'carousel'; locked = true; }
+    else if (has(/toggle|accordion/i)) { type = 'faq'; }
+    else if (i === 0 && has(/heading/i)) { type = 'hero'; }
+    else if (words <= 15 && has(/button/i)) { type = 'cta bar'; locked = true; }
+    else if (has(/icon-list|icon-box|price/i)) { type = 'services'; }
+    else if (has(/image|gallery/i) && words < 30) { type = 'media'; }
+    out.push({ type, heading, locked, word_estimate: words, widgets: Array.from(new Set(widgets)) });
+  });
+  return out;
+}
+
+// Page Builder: parse a live template page URL → real Elementor tree + section chips
+app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: "Set this project's WordPress URL + Application Password in Project Settings first." });
+    const url = (req.body.url || '').trim();
+    if (!url) return res.status(400).json({ error: 'Template page URL required.' });
+
+    let slug = '';
+    try { slug = new URL(url).pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
+    if (!slug) return res.status(400).json({ error: 'Could not read a slug from that URL.' });
+
+    let page = null;
+    for (const pt of ['pages', 'posts']) {
+      try {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&context=edit&per_page=1`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+        if (r.ok) { const arr = await r.json(); if (Array.isArray(arr) && arr.length) { page = arr[0]; break; } }
+      } catch {}
+    }
+    if (!page) return res.status(404).json({ error: `No page found on this site with slug "${slug}". The template page must live on this project's WordPress site.` });
+
+    let tree = null;
+    const rawEl = page.meta && page.meta._elementor_data;
+    if (rawEl) { try { tree = typeof rawEl === 'string' ? JSON.parse(rawEl) : rawEl; } catch {} }
+    if (!Array.isArray(tree) || !tree.length) return res.status(400).json({ error: 'That page has no Elementor data — pick a page built with Elementor.' });
+
+    const sections = summarizeElementorSections(tree);
+    res.json({ ok: true, page_title: (page.title && (page.title.raw || page.title.rendered)) || slug, tree, sections, section_count: sections.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];

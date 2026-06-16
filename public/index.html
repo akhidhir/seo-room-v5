@@ -19970,24 +19970,42 @@
       const [urls, setUrls] = useState('');
       const [templateText, setTemplateText] = useState('');
       const [templateName, setTemplateName] = useState('');
+      const [templateUrl, setTemplateUrl] = useState('');
+      const [parsing, setParsing] = useState(false);
+      const [sections, setSections] = useState(null);
+      const [tmplTitle, setTmplTitle] = useState('');
       const [results, setResults] = useState(null);
       const [building, setBuilding] = useState(false);
       const [publishing, setPublishing] = useState(false);
       const [msg, setMsg] = useState('');
+
+      const parseTemplate = async () => {
+        if (!templateUrl.trim()) { setMsg('Enter your template page URL.'); return; }
+        setParsing(true); setMsg('');
+        try {
+          const r = await api('/projects/' + project.id + '/page-builder/template', { method: 'POST', body: { url: templateUrl.trim() } });
+          if (r.error) { setMsg('Parse failed: ' + r.error); setParsing(false); return; }
+          setTemplateText(JSON.stringify(r.tree));
+          setSections(r.sections || []);
+          setTmplTitle(r.page_title || '');
+          setTemplateName('');
+        } catch (e) { setMsg('Parse failed: ' + e.message); }
+        setParsing(false);
+      };
 
       const onTemplateFile = (ev) => {
         const f = ev.target.files && ev.target.files[0];
         if (!f) return;
         setTemplateName(f.name);
         const reader = new FileReader();
-        reader.onload = () => setTemplateText(String(reader.result || ''));
+        reader.onload = () => { setTemplateText(String(reader.result || '')); setSections(null); setTmplTitle(f.name); };
         reader.readAsText(f);
       };
 
       const build = async () => {
         const list = urls.split(/[\s,]+/).map(u => u.trim()).filter(Boolean);
         if (!list.length) { setMsg('Paste at least one URL.'); return; }
-        if (!templateText.trim()) { setMsg('Upload or paste your Elementor template JSON.'); return; }
+        if (!templateText.trim()) { setMsg('Parse a template page first (or upload a JSON export).'); return; }
         setBuilding(true); setMsg('Building ' + list.length + ' draft(s) — scraping meta + creating from template...');
         try {
           const r = await api('/projects/' + project.id + '/page-builder/build', { method: 'POST', body: { urls: list, template: templateText } });
@@ -20022,16 +20040,33 @@
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>1. Source URLs <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(one per line)</span></div>
             <textarea value={urls} onChange={e => setUrls(e.target.value)} placeholder={'https://oldsite.com/page-one\nhttps://oldsite.com/page-two'} style={{ width: '100%', minHeight: 120, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 13, fontFamily: 'monospace', boxSizing: 'border-box' }} />
 
-            <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>2. Elementor template (JSON export)</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-              <label style={{ background: '#6366f1', color: '#fff', borderRadius: 6, padding: '6px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600 }}>
-                <i className="fas fa-upload" style={{ marginRight: 6 }} />Upload JSON
-                <input type="file" accept=".json,application/json" onChange={onTemplateFile} style={{ display: 'none' }} />
-              </label>
-              {templateName && <span style={{ fontSize: 12, color: '#22c55e' }}><i className="fas fa-check" style={{ marginRight: 4 }} />{templateName}</span>}
-              <span style={{ fontSize: 12, color: 'var(--text3)' }}>or paste below</span>
+            <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>2. Template page <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(an existing Elementor page on this site)</span></div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="text" value={templateUrl} onChange={e => setTemplateUrl(e.target.value)} placeholder={'https://' + (project.domain || 'yoursite.com') + '/suburb-wireframe/'} style={{ flex: 1, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' }} />
+              <button onClick={parseTemplate} disabled={parsing || !templateUrl.trim()} style={{ background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', cursor: parsing ? 'wait' : 'pointer' }}>
+                {parsing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Parsing…</> : (sections ? 'Re-parse' : 'Parse')}
+              </button>
             </div>
-            <textarea value={templateText} onChange={e => { setTemplateText(e.target.value); setTemplateName(''); }} placeholder='{"content":[ ... Elementor template ... ]}' style={{ width: '100%', minHeight: 70, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 12, fontFamily: 'monospace', boxSizing: 'border-box' }} />
+            {sections && (
+              <div style={{ marginTop: 10, padding: 12, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <i className="fas fa-map-marker-alt" style={{ color: '#14b8a6' }} />
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{tmplTitle || 'Template'}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,0.15)', padding: '2px 8px', borderRadius: 4 }}>{sections.length} SECTIONS</span>
+                </div>
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                  {sections.map((s, i) => (
+                    <span key={i} style={{ padding: '3px 8px', fontSize: 11, borderRadius: 5, fontWeight: 500, background: s.locked ? 'rgba(239,68,68,0.12)' : 'rgba(99,102,241,0.1)', color: s.locked ? '#ef4444' : 'var(--text2)' }}>
+                      {(s.type || 'section')}{s.locked ? ' (locked)' : ''}{s.word_estimate ? ' ~' + s.word_estimate + 'w' : ''}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text3)' }}><i className="fas fa-lock" style={{ marginRight: 4 }} />Locked sections (forms, maps, CTAs) stay as-is; the rest get fresh copy.</div>
+              </div>
+            )}
+            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text3)' }}>
+              or <label style={{ color: '#8b5cf6', cursor: 'pointer' }}>upload a JSON export<input type="file" accept=".json,application/json" onChange={onTemplateFile} style={{ display: 'none' }} /></label>{templateName ? ' · ' + templateName : ''}
+            </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
               <button onClick={build} disabled={building} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 20px', fontSize: 14, fontWeight: 600, cursor: building ? 'wait' : 'pointer' }}>
