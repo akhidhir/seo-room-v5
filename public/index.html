@@ -19965,6 +19965,110 @@
     }
 
     // ============ SEO MIGRATION WIZARD ============
+    function PageBuilderPage({ project }) {
+      const card = { background: 'var(--card, #161922)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
+      const [urls, setUrls] = useState('');
+      const [templateText, setTemplateText] = useState('');
+      const [templateName, setTemplateName] = useState('');
+      const [results, setResults] = useState(null);
+      const [building, setBuilding] = useState(false);
+      const [publishing, setPublishing] = useState(false);
+      const [msg, setMsg] = useState('');
+
+      const onTemplateFile = (ev) => {
+        const f = ev.target.files && ev.target.files[0];
+        if (!f) return;
+        setTemplateName(f.name);
+        const reader = new FileReader();
+        reader.onload = () => setTemplateText(String(reader.result || ''));
+        reader.readAsText(f);
+      };
+
+      const build = async () => {
+        const list = urls.split(/[\s,]+/).map(u => u.trim()).filter(Boolean);
+        if (!list.length) { setMsg('Paste at least one URL.'); return; }
+        if (!templateText.trim()) { setMsg('Upload or paste your Elementor template JSON.'); return; }
+        setBuilding(true); setMsg('Building ' + list.length + ' draft(s) — scraping meta + creating from template...');
+        try {
+          const r = await api('/projects/' + project.id + '/page-builder/build', { method: 'POST', body: { urls: list, template: templateText } });
+          if (r.error) { setMsg('Error: ' + r.error); setBuilding(false); return; }
+          setResults(r.results || []);
+          const ok = (r.results || []).filter(x => x.status === 'draft').length;
+          const err = (r.results || []).filter(x => x.status === 'error').length;
+          setMsg('Built ' + ok + ' draft(s)' + (err ? ' · ' + err + ' failed' : '') + '. Review the previews, then Publish.');
+        } catch (e) { setMsg('Error: ' + e.message); }
+        setBuilding(false);
+      };
+
+      const publishAll = async () => {
+        const ids = (results || []).filter(x => x.page_id).map(x => x.page_id);
+        if (!ids.length) return;
+        if (!confirm('Publish ' + ids.length + ' page(s) live on ' + (project.domain || 'the site') + '?')) return;
+        setPublishing(true);
+        try {
+          const r = await api('/projects/' + project.id + '/page-builder/publish', { method: 'POST', body: { page_ids: ids } });
+          setMsg('Published ' + (r.published || 0) + ' page(s)' + ((r.errors && r.errors.length) ? ' · ' + r.errors.length + ' failed' : '') + '.');
+          setResults((results || []).map(x => x.page_id ? Object.assign({}, x, { status: 'published' }) : x));
+        } catch (e) { setMsg('Publish error: ' + e.message); }
+        setPublishing(false);
+      };
+
+      return (
+        <div>
+          <div className="page-title"><i className="fas fa-layer-group" style={{ marginRight: 10, color: '#6366f1' }} />Page Builder</div>
+          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>Bulk-create pages on <b>{project.domain || 'this project'}</b> from an Elementor template. Each new page keeps the source URL's <b>slug, SEO title, meta description and focus keyword</b> — with empty copy. Builds as drafts first; you publish when ready.</div>
+
+          <div style={{ ...card, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>1. Source URLs <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(one per line)</span></div>
+            <textarea value={urls} onChange={e => setUrls(e.target.value)} placeholder={'https://oldsite.com/page-one\nhttps://oldsite.com/page-two'} style={{ width: '100%', minHeight: 120, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 13, fontFamily: 'monospace', boxSizing: 'border-box' }} />
+
+            <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>2. Elementor template (JSON export)</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <label style={{ background: '#6366f1', color: '#fff', borderRadius: 6, padding: '6px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600 }}>
+                <i className="fas fa-upload" style={{ marginRight: 6 }} />Upload JSON
+                <input type="file" accept=".json,application/json" onChange={onTemplateFile} style={{ display: 'none' }} />
+              </label>
+              {templateName && <span style={{ fontSize: 12, color: '#22c55e' }}><i className="fas fa-check" style={{ marginRight: 4 }} />{templateName}</span>}
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>or paste below</span>
+            </div>
+            <textarea value={templateText} onChange={e => { setTemplateText(e.target.value); setTemplateName(''); }} placeholder='{"content":[ ... Elementor template ... ]}' style={{ width: '100%', minHeight: 70, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 12, fontFamily: 'monospace', boxSizing: 'border-box' }} />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
+              <button onClick={build} disabled={building} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 20px', fontSize: 14, fontWeight: 600, cursor: building ? 'wait' : 'pointer' }}>
+                {building ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Building...</> : <><i className="fas fa-hammer" style={{ marginRight: 6 }} />Build Drafts</>}
+              </button>
+              {results && results.some(x => x.page_id) && <button onClick={publishAll} disabled={publishing} style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)', borderRadius: 8, padding: '9px 20px', fontSize: 14, fontWeight: 600, cursor: publishing ? 'wait' : 'pointer' }}>
+                {publishing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Publishing...</> : <><i className="fas fa-globe" style={{ marginRight: 6 }} />Publish All</>}
+              </button>}
+              {msg && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{msg}</span>}
+            </div>
+          </div>
+
+          {results && results.length > 0 && (
+            <div style={card}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Results ({results.length})</div>
+              <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+                <thead><tr style={{ color: 'var(--text3)', textAlign: 'left', fontSize: 11, textTransform: 'uppercase' }}>
+                  <th style={{ padding: '6px 8px' }}>Slug</th><th style={{ padding: '6px 8px' }}>SEO Title</th><th style={{ padding: '6px 8px' }}>Focus KW</th><th style={{ padding: '6px 8px' }}>Status</th><th style={{ padding: '6px 8px' }}>Preview</th>
+                </tr></thead>
+                <tbody>
+                  {results.map((r, i) => (
+                    <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>/{r.slug || '—'}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.title || '—'}</td>
+                      <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{r.focus_keyword || '—'}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.status === 'error' ? <span style={{ color: '#ef4444' }} title={r.error}>error</span> : r.status === 'published' ? <span style={{ color: '#22c55e' }}>published</span> : <span style={{ color: '#f59e0b' }}>draft</span>}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.link ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>open</a> : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function SEOMigrationPage() {
       var [migrations, setMigrations] = React.useState([]);
       var [activeMigration, setActiveMigration] = React.useState(null);
@@ -38120,6 +38224,8 @@ case 'action-plan':
             return <NewWebsitePipelinePage stage="publish" project={buildMode ? buildProject : project} setPage={setActiveTab} />;
           case 'nw-migration':
             return <SEOMigrationPage />;
+          case 'page-builder':
+            return <PageBuilderPage project={project} />;
           case 'kw-research':
             return <KeywordResearchStandalonePage allProjects={allProjects} />;
           case 'ow-project':
@@ -38273,6 +38379,9 @@ case 'action-plan':
               </button>
               <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('nw-migration'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'nw-migration' ? '1px solid #f97316' : '1px dashed var(--border)', background: activeTab === 'nw-migration' ? 'rgba(249,115,22,0.1)' : 'transparent', color: '#f97316', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                 <i className="fas fa-exchange-alt" style={{ fontSize: 13 }}></i> SEO Migration
+              </button>
+              <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('page-builder'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'page-builder' ? '1px solid #8b5cf6' : '1px dashed var(--border)', background: activeTab === 'page-builder' ? 'rgba(139,92,246,0.1)' : 'transparent', color: '#8b5cf6', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                <i className="fas fa-layer-group" style={{ fontSize: 13 }}></i> Page Builder
               </button>
               <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('kw-research'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'kw-research' ? '1px solid #06b6d4' : '1px dashed var(--border)', background: activeTab === 'kw-research' ? 'rgba(6,182,212,0.1)' : 'transparent', color: '#06b6d4', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                 <i className="fas fa-search" style={{ fontSize: 13 }}></i> Keyword Research

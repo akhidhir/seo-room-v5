@@ -6283,6 +6283,71 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==================== STANDALONE PAGE BUILDER ====================
+// Bulk-build empty-copy pages on the CURRENT project's WP site from an uploaded Elementor template JSON,
+// carrying each source URL's slug + SEO title + meta description + (derived) focus keyword. Reuses the proven
+// migration engine (extractOldPageBlocks for meta + createNewElementorPage for the template page + Yoast write).
+app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: "Set this project's WordPress URL + Application Password in Project Settings first." });
+
+    let { urls, template } = req.body || {};
+    urls = (Array.isArray(urls) ? urls : String(urls || '').split(/[\s,]+/)).map(u => (u || '').trim()).filter(Boolean);
+    if (!urls.length) return res.status(400).json({ error: 'No URLs provided.' });
+    let tpl = template;
+    if (typeof tpl === 'string') { try { tpl = JSON.parse(tpl); } catch { return res.status(400).json({ error: 'Template is not valid JSON.' }); } }
+    const tree = Array.isArray(tpl) ? tpl : (tpl?.content || tpl?.elements || null);
+    if (!Array.isArray(tree) || !tree.length) return res.status(400).json({ error: 'Template JSON has no Elementor content (expected the "content" array from an Elementor template export).' });
+    const elMeta = (tpl && !Array.isArray(tpl) && tpl.page_settings) ? { _elementor_page_settings: JSON.stringify(tpl.page_settings) } : {};
+
+    const axios = require('axios');
+    const results = [];
+    for (const url of urls) {
+      try {
+        let meta = {}, title = '';
+        try { const ex = await extractOldPageBlocks(url); title = ex.title || ''; meta = ex.meta || {}; } catch (e) {}
+        const slug = (() => { try { return new URL(url).pathname.replace(/^\/|\/$/g, '').split('/').pop() || ('page-' + Date.now()); } catch { return 'page-' + Date.now(); } })();
+        const pageTitle = meta.metaTitle || title || slug.replace(/-/g, ' ');
+        const focusKw = meta.focusKw || slug.replace(/-/g, ' ');
+        const created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, tree, elMeta, 'elementor_header_footer', 'draft', slug);
+        try {
+          const yoastMeta = {};
+          if (meta.metaTitle) yoastMeta._yoast_wpseo_title = meta.metaTitle;
+          if (meta.metaDesc) yoastMeta._yoast_wpseo_metadesc = meta.metaDesc;
+          if (focusKw) yoastMeta._yoast_wpseo_focuskw = focusKw;
+          await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${created.id}`, { meta: yoastMeta }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
+        } catch (mErr) { /* meta write best-effort */ }
+        results.push({ url, slug, page_id: created.id, link: created.link, title: pageTitle, meta_title: meta.metaTitle || '', meta_desc: meta.metaDesc || '', focus_keyword: focusKw, status: 'draft' });
+      } catch (e) {
+        results.push({ url, status: 'error', error: (e.response?.data?.message || e.message || 'failed').slice(0, 200) });
+      }
+    }
+    res.json({ ok: true, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required.' });
+    const axios = require('axios');
+    const ids = (req.body.page_ids || []).map(n => parseInt(n, 10)).filter(Boolean);
+    let published = 0; const errors = [];
+    for (const id of ids) {
+      try { await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${id}`, { status: 'publish' }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 }); published++; }
+      catch (e) { errors.push({ id, error: e.message }); }
+    }
+    res.json({ ok: true, published, errors });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Publish selected cloned drafts on the new site
 app.post('/api/migrations/:migrationId/clones/publish', async (req, res) => {
   try {
