@@ -6332,24 +6332,36 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
-    const authHeaders = getWpAuthHeaders(project);
-    if (!wpUrl || !authHeaders) return res.status(400).json({ error: "Set this project's WordPress URL + Application Password in Project Settings first." });
     const url = (req.body.url || '').trim();
     if (!url) return res.status(400).json({ error: 'Template page URL required.' });
 
-    let slug = '';
-    try { slug = new URL(url).pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
-    if (!slug) return res.status(400).json({ error: 'Could not read a slug from that URL.' });
+    let host = '', slug = '';
+    try { const u = new URL(url); host = u.host; slug = u.pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
+    if (!slug || !host) return res.status(400).json({ error: 'Could not read that URL.' });
+
+    // The template may live on a DIFFERENT site than the one we build on.
+    // Find which project owns the template's host and use that site's WP credentials to read it.
+    const hostNorm = (h) => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
+    const target = hostNorm(host);
+    let srcWpUrl = '', srcAuth = null, srcName = '';
+    const matches = (p) => hostNorm(p.wordpress_url) === target || hostNorm(p.domain) === target;
+    if (matches(project)) { srcWpUrl = (project.wordpress_url || '').replace(/\/$/, '') || ('https://' + host); srcAuth = getWpAuthHeaders(project); srcName = project.name; }
+    if (!srcAuth) {
+      const all = (await pool.query('SELECT * FROM projects')).rows;
+      for (const p of all) {
+        if (matches(p)) { const a = getWpAuthHeaders(p); if (a) { srcWpUrl = (p.wordpress_url || '').replace(/\/$/, '') || ('https://' + host); srcAuth = a; srcName = p.name; break; } }
+      }
+    }
+    if (!srcWpUrl || !srcAuth) return res.status(400).json({ error: `No WordPress credentials found for ${host}. Add that site as a project (with its WP URL + Application Password) to use it as a template source — or use the "upload a JSON export" option.` });
 
     let page = null;
     for (const pt of ['pages', 'posts']) {
       try {
-        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&context=edit&per_page=1`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+        const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&context=edit&per_page=1`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
         if (r.ok) { const arr = await r.json(); if (Array.isArray(arr) && arr.length) { page = arr[0]; break; } }
       } catch {}
     }
-    if (!page) return res.status(404).json({ error: `No page found on this site with slug "${slug}". The template page must live on this project's WordPress site.` });
+    if (!page) return res.status(404).json({ error: `No page with slug "${slug}" found on ${srcName || host}. Check the URL.` });
 
     let tree = null;
     const rawEl = page.meta && page.meta._elementor_data;

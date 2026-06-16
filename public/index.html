@@ -20040,7 +20040,7 @@
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>1. Source URLs <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(one per line)</span></div>
             <textarea value={urls} onChange={e => setUrls(e.target.value)} placeholder={'https://oldsite.com/page-one\nhttps://oldsite.com/page-two'} style={{ width: '100%', minHeight: 120, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 13, fontFamily: 'monospace', boxSizing: 'border-box' }} />
 
-            <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>2. Template page <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(an existing Elementor page on this site)</span></div>
+            <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>2. Template page <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(an Elementor page on any connected site)</span></div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input type="text" value={templateUrl} onChange={e => setTemplateUrl(e.target.value)} placeholder={'https://' + (project.domain || 'yoursite.com') + '/suburb-wireframe/'} style={{ flex: 1, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box' }} />
               <button onClick={parseTemplate} disabled={parsing || !templateUrl.trim()} style={{ background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', cursor: parsing ? 'wait' : 'pointer' }}>
