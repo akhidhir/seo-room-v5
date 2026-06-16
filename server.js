@@ -16754,6 +16754,57 @@ Rules:
   }
 });
 
+// Map GSC Low-CTR / Quick-Win findings to the WordPress pages behind them, with each page's highest-impression
+// keyword as the rewrite target — so the GSC Audit can hand them straight to the On-Page meta fixer in one batch.
+app.get('/api/projects/:projectId/gsc-audit/ctr-fix-pages', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const fr = await pool.query(
+      `SELECT title, description, page_url FROM audit_findings
+       WHERE project_id=$1 AND pillar IN ('gsc_agent','gsc')
+         AND lower(category) IN ('low ctr','low ctr pages','quick win','quick wins')
+         AND (status IS NULL OR status NOT IN ('fixed','dismissed','resolved'))`,
+      [projectId]
+    );
+    let cachePages = [];
+    try {
+      const c = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
+      cachePages = c.rows[0] ? (typeof c.rows[0].results === 'string' ? JSON.parse(c.rows[0].results) : c.rows[0].results) : [];
+    } catch {}
+    const norm = (u) => (u || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+    const byUrl = new Map();
+    for (const p of (cachePages || [])) { const k = norm(p.url || p.link); if (k) byUrl.set(k, p); }
+
+    const pages = new Map(); // normalized url -> page payload (keeps the highest-impression keyword)
+    for (const f of fr.rows) {
+      const url = f.page_url;
+      if (!url) continue;
+      const kwMatch = (f.title || '').match(/"([^"]+)"/);
+      const keyword = kwMatch ? kwMatch[1] : '';
+      const imprMatch = (f.title || '').match(/([\d,]+)\s*impression/i);
+      const impressions = imprMatch ? parseInt(imprMatch[1].replace(/,/g, '')) : 0;
+      const key = norm(url);
+      const cp = byUrl.get(key);
+      const cur = pages.get(key);
+      if (!cur || impressions > cur.impressions) {
+        pages.set(key, {
+          url, id: cp ? cp.id : null,
+          title: cp ? (cp.title || cp.metaTitle || url) : url,
+          metaTitle: cp ? (cp.metaTitle || cp.title || '') : '',
+          target_keyword: keyword, impressions,
+        });
+      }
+    }
+    const list = [...pages.values()].filter(p => p.id != null).sort((a, b) => b.impressions - a.impressions);
+    res.json({
+      pages: list,
+      total_pages: pages.size,
+      fixable: list.length,
+      unmatched: pages.size - list.length, // pages with a finding but no On-Page cache match (run On-Page audit first)
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // AI-generate suggested meta fixes for a page
 app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
   const { projectId } = req.params;
