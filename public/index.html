@@ -19977,7 +19977,38 @@
       const [results, setResults] = useState(null);
       const [building, setBuilding] = useState(false);
       const [publishing, setPublishing] = useState(false);
+      const [saving, setSaving] = useState(false);
+      const [savedAt, setSavedAt] = useState('');
       const [msg, setMsg] = useState('');
+
+      useEffect(() => {
+        let live = true;
+        (async () => {
+          try {
+            const r = await api('/projects/' + project.id + '/page-builder/state');
+            if (live && r && r.state) {
+              const s = r.state;
+              if (s.urls) setUrls(s.urls);
+              if (s.template_url) setTemplateUrl(s.template_url);
+              if (s.template) setTemplateText(s.template);
+              if (s.sections && s.sections.length) setSections(s.sections);
+              if (s.tmpl_title) setTmplTitle(s.tmpl_title);
+              if (s.updated_at) setSavedAt(new Date(s.updated_at).toLocaleString());
+            }
+          } catch (e) {}
+        })();
+        return () => { live = false; };
+      }, [project.id]);
+
+      const saveState = async () => {
+        setSaving(true); setMsg('');
+        try {
+          await api('/projects/' + project.id + '/page-builder/state', { method: 'POST', body: { urls, template_url: templateUrl, template: templateText, sections: sections || [], tmpl_title: tmplTitle } });
+          setSavedAt(new Date().toLocaleString());
+          setMsg('Saved.');
+        } catch (e) { setMsg('Save failed: ' + e.message); }
+        setSaving(false);
+      };
 
       const parseTemplate = async () => {
         if (!templateUrl.trim()) { setMsg('Enter your template page URL.'); return; }
@@ -20072,6 +20103,10 @@
               <button onClick={build} disabled={building} style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 20px', fontSize: 14, fontWeight: 600, cursor: building ? 'wait' : 'pointer' }}>
                 {building ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Building...</> : <><i className="fas fa-hammer" style={{ marginRight: 6 }} />Build Drafts</>}
               </button>
+              <button onClick={saveState} disabled={saving} style={{ background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 600, cursor: saving ? 'wait' : 'pointer' }}>
+                {saving ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Saving...</> : <><i className="fas fa-save" style={{ marginRight: 6 }} />Save</>}
+              </button>
+              {savedAt && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Saved {savedAt}</span>}
               {results && results.some(x => x.page_id) && <button onClick={publishAll} disabled={publishing} style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)', borderRadius: 8, padding: '9px 20px', fontSize: 14, fontWeight: 600, cursor: publishing ? 'wait' : 'pointer' }}>
                 {publishing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Publishing...</> : <><i className="fas fa-globe" style={{ marginRight: 6 }} />Publish All</>}
               </button>}

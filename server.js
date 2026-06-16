@@ -6458,6 +6458,39 @@ app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Page Builder: save / load the working state (URLs + parsed template) per project
+async function ensurePageBuilderStateTable() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS page_builder_state (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    urls TEXT DEFAULT '',
+    template_url TEXT DEFAULT '',
+    template TEXT DEFAULT '',
+    sections JSONB DEFAULT '[]',
+    tmpl_title TEXT DEFAULT '',
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )`);
+}
+app.get('/api/projects/:projectId/page-builder/state', async (req, res) => {
+  try {
+    await ensurePageBuilderStateTable();
+    const r = (await pool.query('SELECT urls, template_url, template, sections, tmpl_title, updated_at FROM page_builder_state WHERE project_id=$1', [req.params.projectId])).rows[0];
+    res.json({ ok: true, state: r || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/projects/:projectId/page-builder/state', async (req, res) => {
+  try {
+    await ensurePageBuilderStateTable();
+    const { urls = '', template_url = '', template = '', sections = [], tmpl_title = '' } = req.body || {};
+    await pool.query(
+      `INSERT INTO page_builder_state (project_id, urls, template_url, template, sections, tmpl_title, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,NOW())
+       ON CONFLICT (project_id) DO UPDATE SET urls=$2, template_url=$3, template=$4, sections=$5, tmpl_title=$6, updated_at=NOW()`,
+      [req.params.projectId, urls, template_url, template, JSON.stringify(sections || []), tmpl_title]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Publish selected cloned drafts on the new site
 app.post('/api/migrations/:migrationId/clones/publish', async (req, res) => {
   try {
