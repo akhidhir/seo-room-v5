@@ -6209,6 +6209,7 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
     const { wpUrl, authHeaders } = await getMigrationWp(migration);
     if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'New-site WordPress credentials not set on this migration (Settings tab).' });
     const templates = migration.clone_templates || {};
+    const emptyCopy = req.body.empty_copy === true; // create the template page WITHOUT migrating old content — keep only slug + SEO meta + focus keyword
     const ids = (req.body.ids || []).map(n => parseInt(n, 10)).filter(Boolean);
     const where = ids.length ? 'AND id = ANY($2)' : '';
     const rows = (await pool.query(`SELECT * FROM migration_clones WHERE migration_id=$1 ${where} ORDER BY created_at ASC`, ids.length ? [migration.id, ids] : [migration.id])).rows;
@@ -6218,8 +6219,13 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
         const tplRef = templates[clone.page_type];
         if (!tplRef || !tplRef.page_id) throw new Error(`No ${clone.page_type} template set — add one in the Templates section.`);
         const { title, blocks, meta: oldMeta } = await extractOldPageBlocks(clone.old_url);
-        if (!blocks.length) throw new Error('No readable text found on the old page.');
+        if (!emptyCopy && !blocks.length) throw new Error('No readable text found on the old page.');
         const pageTitle = title || clone.old_url;
+        // Focus keyword isn't in public HTML — derive one from the slug (or SEO title) so the new page still gets it.
+        if (oldMeta && !oldMeta.focusKw) {
+          const slugKw = (() => { try { return new URL(clone.old_url).pathname.replace(/^\/|\/$/g, '').split('/').pop().replace(/-/g, ' ').trim(); } catch { return ''; } })();
+          oldMeta.focusKw = slugKw || (oldMeta.metaTitle || title || '').split(/[|\-–—:]/)[0].trim().toLowerCase();
+        }
         let created;
 
         if (tplRef.is_styled_html) {
@@ -6228,7 +6234,7 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
           const tplPage = await axios.get(`${wpUrl}/wp-json/wp/v2/${tplRef.post_type}/${tplRef.page_id}?_fields=content`, { headers: authHeaders, timeout: 30000 });
           const templateHTML = tplPage.data.content?.rendered || tplPage.data.content?.raw || '';
           if (!templateHTML) throw new Error('Template page has no content.');
-          const swapped = swapStyledHTML(templateHTML, blocks);
+          const swapped = emptyCopy ? { html: templateHTML, headingsSwapped: 0, textsSwapped: 0 } : swapStyledHTML(templateHTML, blocks);
           const oldSlugHTML = clone.old_url ? new URL(clone.old_url).pathname.replace(/^\/|\/$/g, '').split('/').pop() : null;
           const slug = oldSlugHTML || (pageTitle || 'clone').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
           const newPage = await axios.post(`${wpUrl}/wp-json/wp/v2/${tplRef.post_type}`, {
@@ -6244,7 +6250,7 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
           // Elementor template: swap in Elementor JSON
           const tpl = await readElementorTemplate(wpUrl, authHeaders, tplRef.post_type, tplRef.page_id);
           if (!tpl.tree) throw new Error('Template page has no Elementor data.');
-          const swapped = swapElementorText(tpl.tree, blocks);
+          const swapped = emptyCopy ? { tree: tpl.tree, slots: 0, headingSlots: 0, textSlots: 0, headingsTotal: 0, textsTotal: 0 } : swapElementorText(tpl.tree, blocks);
           // Extract slug from old URL path to preserve URL structure
           const oldSlug = clone.old_url ? new URL(clone.old_url).pathname.replace(/^\/|\/$/g, '').split('/').pop() : null;
           created = await createNewElementorPage(wpUrl, authHeaders, tplRef.post_type, pageTitle, swapped.tree, tpl.elMeta, tpl.template, 'draft', oldSlug);
@@ -6257,7 +6263,7 @@ app.post('/api/migrations/:migrationId/clones/run', async (req, res) => {
             headingsTotal: swapped.headingsTotal, textsTotal: swapped.textsTotal });
         }
         // Write Yoast meta tags from old page to new page
-        if (oldMeta && created && (oldMeta.metaTitle || oldMeta.metaDesc)) {
+        if (oldMeta && created && (oldMeta.metaTitle || oldMeta.metaDesc || oldMeta.focusKw)) {
           try {
             const axios = require('axios');
             const yoastMeta = {};

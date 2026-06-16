@@ -20020,6 +20020,7 @@
       var [previewClone, setPreviewClone] = React.useState(null);
       var [addType, setAddType] = React.useState('auto');
       var [useAiMap, setUseAiMap] = React.useState(true);
+      var [cloneEmptyCopy, setCloneEmptyCopy] = React.useState(false);
       var [cloneModel, setCloneModel] = React.useState('sonnet-4.6');
 
       var PHASES = ['crawl', 'match', 'redirects', 'clone', 'monitor', 'settings'];
@@ -20100,7 +20101,7 @@
       function runClones(ids) {
         var m = activeMigration; if (!m) return;
         setRunningClones(true); setCloneMsg(useAiMap ? 'Cloning with AI mapping — this takes a few seconds per page...' : 'Cloning pages — this can take a few seconds each...');
-        api('/migrations/' + m.id + '/clones/run', { method: 'POST', body: { ids: ids || [], ai: useAiMap, model: cloneModel } })
+        api('/migrations/' + m.id + '/clones/run', { method: 'POST', body: { ids: ids || [], ai: useAiMap, model: cloneModel, empty_copy: cloneEmptyCopy } })
           .then(function(r) { loadClones(m.id); var rs = r.results || []; var ok = rs.filter(function(x) { return x.status === 'cloned'; }).length; var err = rs.filter(function(x) { return x.status === 'error'; }).length; var fb = rs.filter(function(x) { return x.method === 'sequential-fallback'; }).length; setCloneMsg('Cloned ' + ok + (err ? ' · ' + err + ' failed (see Error rows)' : '') + (fb ? ' · ' + fb + ' fell back to sequential' : '') + '. Open the drafts to review, then Publish.'); })
           .catch(function(e) { setCloneMsg('Error: ' + e.message); })
           .finally(function() { setRunningClones(false); setCloneSel({}); });
@@ -20794,6 +20795,10 @@
                   e('option', { value: 'opus-4.6' }, 'Opus 4.6 (max quality)'),
                   e('option', { value: 'haiku-4.5' }, 'Haiku 4.5 (fast/cheap)')
                 ) : e('span', { style: { color: 'var(--text3)' } }, 'Off — text fills template slots in order'),
+                e('label', { style: { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }, title: 'Build the template page with NO migrated content — only the slug + SEO title/meta + focus keyword from the old URL.' },
+                  e('input', { type: 'checkbox', checked: cloneEmptyCopy, onChange: function() { setCloneEmptyCopy(!cloneEmptyCopy); } }),
+                  e('span', null, e('i', { className: 'fas fa-file', style: { marginRight: 4, color: '#f59e0b' } }), 'Empty copy (meta only)')
+                ),
                 selIds.length ? e('span', { style: { display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' } },
                   e('span', { style: { color: 'var(--text3)' } }, 'Set ' + selIds.length + ' to:'),
                   ['home', 'service', 'suburb', 'blog'].map(function(t) { return e('button', { key: t, onClick: function() { setTypeBulk(selIds, t); }, style: { background: 'transparent', border: '1px solid ' + typeMeta[t].c, color: typeMeta[t].c, borderRadius: 5, padding: '3px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer' } }, typeMeta[t].l); })
