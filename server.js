@@ -35398,13 +35398,23 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     // ---- FIX TYPE 5: Missing H1 — inject from page title ----
     if (title.includes('missing h1') || title.includes('no h1')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
-      // Extract page paths from description (e.g. "Pages: /blocked-drains, /hot-water-systems")
-      const desc = (finding.description || '') + ' ' + (finding.title || '');
-      const pathMatches = desc.match(/\/[a-z0-9-]+/gi) || [];
-      const slugs = [...new Set(pathMatches.map(p => p.replace(/^\//, '')).filter(s => s.length > 1 && !s.includes('h1')))];
+      // Pull the affected page(s) from the finding — check description, title, AND current_value (findings often
+      // store the page list there as a JSON array of URLs). Accept both full URLs and "/slug" paths.
+      const domainHost = (domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+      let fromCv = [];
+      try { const cv = JSON.parse(finding.current_value || 'null'); if (Array.isArray(cv)) fromCv = cv.map(String); } catch {}
+      const desc = [finding.description || '', finding.title || '', finding.recommended_value || '', ...fromCv].join(' ');
+      const slugs = [...new Set(
+        (desc.match(/https?:\/\/[^\s",)]+|\/[a-z0-9][a-z0-9-]*/gi) || [])
+          .map(m => {
+            try { return new URL(m.startsWith('http') ? m : `https://${domainHost}${m}`).pathname.replace(/^\/|\/$/g, '').split('/').pop(); }
+            catch { return m.replace(/^\//, '').split('/').pop(); }
+          })
+          .filter(s => s && s.length > 1 && !/^h1$/i.test(s) && !s.includes('.') && s !== domainHost)
+      )];
 
       if (slugs.length === 0) {
-        return res.json({ success: false, error: 'Could not extract page paths from finding description' });
+        return res.json({ success: false, error: 'This finding didn\'t record which page is missing an H1. Re-run the Website Audit so it stores the page URL, then Fix again (or add the H1 in WordPress directly).' });
       }
 
       let allFixed = true;
