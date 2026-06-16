@@ -6410,7 +6410,11 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
-    if (!wpUrl || !authHeaders) return res.status(400).json({ error: "Set this project's WordPress URL + Application Password in Project Settings first." });
+    // Sites that strip the Authorization header (e.g. sureflow.seoroom.au) use the seoroom-api plugin + API key instead.
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const wpHost = (() => { try { return new URL(project.wordpress_url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+    const apiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key || null;
+    if (!wpUrl || (!apiKey && !authHeaders)) return res.status(400).json({ error: "Set this project's WordPress URL + Application Password (or seoroom-api key) in Project Settings first." });
 
     let { urls, template } = req.body || {};
     urls = (Array.isArray(urls) ? urls : String(urls || '').split(/[\s,]+/)).map(u => (u || '').trim()).filter(Boolean);
@@ -6430,17 +6434,30 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
         const slug = (() => { try { return new URL(url).pathname.replace(/^\/|\/$/g, '').split('/').pop() || ('page-' + Date.now()); } catch { return 'page-' + Date.now(); } })();
         const pageTitle = meta.metaTitle || title || slug.replace(/-/g, ' ');
         const focusKw = meta.focusKw || slug.replace(/-/g, ' ');
-        const created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, tree, elMeta, 'elementor_header_footer', 'draft', slug);
-        try {
-          const yoastMeta = {};
-          if (meta.metaTitle) yoastMeta._yoast_wpseo_title = meta.metaTitle;
-          if (meta.metaDesc) yoastMeta._yoast_wpseo_metadesc = meta.metaDesc;
-          if (focusKw) yoastMeta._yoast_wpseo_focuskw = focusKw;
-          await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${created.id}`, { meta: yoastMeta }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
-        } catch (mErr) { /* meta write best-effort */ }
-        results.push({ url, slug, page_id: created.id, link: created.link, title: pageTitle, meta_title: meta.metaTitle || '', meta_desc: meta.metaDesc || '', focus_keyword: focusKw, status: 'draft' });
+        let created;
+        if (apiKey) {
+          // seoroom-api plugin path (bypasses hosts that strip auth headers)
+          const r = await axios.post(`${wpUrl}/wp-json/seoroom/v1/create-page`, {
+            api_key: apiKey, title: pageTitle, slug, tree_json: JSON.stringify(tree), status: 'draft'
+          }, { headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
+          const newId = r.data.id || r.data.page_id || r.data.ID;
+          created = { id: newId, link: r.data.link || r.data.permalink || (wpUrl + '/?page_id=' + newId) };
+        } else {
+          created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, tree, elMeta, 'elementor_header_footer', 'draft', slug);
+        }
+        // Yoast meta write — only possible where the Authorization header is accepted (best-effort)
+        if (authHeaders && !apiKey) {
+          try {
+            const yoastMeta = {};
+            if (meta.metaTitle) yoastMeta._yoast_wpseo_title = meta.metaTitle;
+            if (meta.metaDesc) yoastMeta._yoast_wpseo_metadesc = meta.metaDesc;
+            if (focusKw) yoastMeta._yoast_wpseo_focuskw = focusKw;
+            await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${created.id}`, { meta: yoastMeta }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
+          } catch (mErr) { /* meta write best-effort */ }
+        }
+        results.push({ url, slug, page_id: created.id, link: created.link, title: pageTitle, meta_title: meta.metaTitle || '', meta_desc: meta.metaDesc || '', focus_keyword: focusKw, status: 'draft', via: apiKey ? 'seoroom-api' : 'wp-rest' });
       } catch (e) {
-        results.push({ url, status: 'error', error: (e.response?.data?.message || e.message || 'failed').slice(0, 200) });
+        results.push({ url, status: 'error', error: (e.response?.data?.message || e.response?.data?.error || e.message || 'failed').slice(0, 200) });
       }
     }
     res.json({ ok: true, results });
@@ -6453,7 +6470,15 @@ app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
-    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required.' });
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const wpHost = (() => { try { return new URL(project.wordpress_url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+    const apiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key || null;
+    if (!wpUrl) return res.status(400).json({ error: 'WordPress connection required.' });
+    // Auth-stripping sites use the seoroom-api plugin, which can't toggle status yet → publish them in WP admin.
+    if (apiKey && !authHeaders) {
+      return res.status(400).json({ error: `Publishing on ${wpHost} isn't supported over the seoroom-api plugin yet — open each draft in WordPress and hit Publish. (Building drafts works.)`, needs_wp_admin: true });
+    }
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress connection required.' });
     const axios = require('axios');
     const ids = (req.body.page_ids || []).map(n => parseInt(n, 10)).filter(Boolean);
     let published = 0; const errors = [];
