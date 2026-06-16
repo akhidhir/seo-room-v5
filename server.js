@@ -30724,32 +30724,36 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
       for (const r of prevGscRows) prevMap[r.keyword] = r;
 
       const declining = gscRows
-        .filter(r => {
-          const prev = prevMap[r.keyword];
-          if (!prev || prev.impressions < 20) return false;
-          const impDrop = ((r.impressions - prev.impressions) / prev.impressions) * 100;
-          const posDrop = r.position - prev.position;
-          return (impDrop <= -30 && prev.impressions >= 30) || (posDrop >= 3 && prev.impressions >= 20);
-        })
         .map(r => {
           const prev = prevMap[r.keyword];
-          return { keyword: r.keyword, curImp: r.impressions, prevImp: prev.impressions, curPos: r.position, prevPos: prev.position, curClicks: r.clicks, prevClicks: prev.clicks,
-            impChange: ((r.impressions - prev.impressions) / prev.impressions * 100), posChange: r.position - prev.position };
+          if (!prev) return null;
+          return { keyword: r.keyword, curImp: r.impressions, prevImp: prev.impressions, curPos: r.position, prevPos: prev.position,
+            curClicks: r.clicks || 0, prevClicks: prev.clicks || 0, clicksLost: (prev.clicks || 0) - (r.clicks || 0), posChange: r.position - prev.position };
         })
-        .sort((a, b) => a.impChange - b.impChange)
+        .filter(d => d && (
+          // A REAL decline = lost actual clicks, OR fell meaningfully in rank while it was a visible (page-1/2)
+          // keyword. Impression-only drops on 0-click keywords are noise (Google just showed the result fewer
+          // times) — and a ranking IMPROVEMENT is never a decline. Those are no longer flagged.
+          d.clicksLost >= 2 ||
+          (d.posChange >= 5 && d.prevPos <= 20 && d.prevImp >= 50)
+        ))
+        .sort((a, b) => (b.clicksLost - a.clicksLost) || (b.posChange - a.posChange))
         .slice(0, 15);
 
       for (const d of declining) {
-        const impDir = d.impChange < 0 ? `↓${Math.abs(d.impChange).toFixed(0)}%` : `↑${d.impChange.toFixed(0)}%`;
-        const posDir = d.posChange > 0 ? `dropped ${d.posChange.toFixed(1)} positions` : `improved ${Math.abs(d.posChange).toFixed(1)} positions`;
+        const isClickLoss = d.clicksLost >= 2;
         findings.push({
           pillar: 'gsc', category: 'Declining Keyword',
-          title: `"${d.keyword}" impressions ${impDir} (${d.prevImp}→${d.curImp})`,
-          description: `This keyword ${posDir} and went from ${d.prevImp} to ${d.curImp} impressions vs the previous 28 days. Clicks: ${d.prevClicks}→${d.curClicks}.`,
-          recommendation: 'Check if competitors have published new content targeting this keyword. Review and refresh your page content, update the publish date, and add internal links.',
-          severity: d.impChange <= -50 ? 'Critical' : 'Medium',
-          current_value: `Pos ${d.curPos.toFixed(1)} | ${d.curImp} imp | ${d.curClicks} clicks`,
-          recommended_value: `Recover to ${d.prevImp} imp | Pos ${d.prevPos.toFixed(1)}`
+          title: isClickLoss
+            ? `"${d.keyword}" lost ${d.clicksLost} clicks (${d.prevClicks}→${d.curClicks})`
+            : `"${d.keyword}" fell ${d.posChange.toFixed(1)} positions (#${Math.round(d.prevPos)}→#${Math.round(d.curPos)})`,
+          description: isClickLoss
+            ? `Lost ${d.clicksLost} clicks vs the previous 28 days (${d.prevClicks}→${d.curClicks}); position moved #${Math.round(d.prevPos)}→#${Math.round(d.curPos)}.`
+            : `Dropped from #${Math.round(d.prevPos)} to #${Math.round(d.curPos)} (${d.posChange.toFixed(1)} positions) vs the previous 28 days while it was a visible page-1/2 keyword — losing ground.`,
+          recommendation: 'Refresh the ranking page: update the content + publish date, strengthen the section targeting this keyword, and add internal links to it. Check whether a competitor published newer content for the term.',
+          severity: d.clicksLost >= 5 ? 'Critical' : (isClickLoss ? 'High' : 'Medium'),
+          current_value: `Pos ${d.curPos.toFixed(1)} | ${d.curClicks} clicks | ${d.curImp} imp`,
+          recommended_value: `Recover to #${Math.round(d.prevPos)} | ${d.prevClicks} clicks`
         });
       }
 
