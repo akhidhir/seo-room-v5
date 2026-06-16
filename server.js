@@ -16759,8 +16759,10 @@ Rules:
 app.get('/api/projects/:projectId/gsc-audit/ctr-fix-pages', async (req, res) => {
   const { projectId } = req.params;
   try {
+    // Findings store the keyword (in the title), not a page URL — so we match each keyword to its best page
+    // via the On-Page audit cache (slug + meta title + focus keyword overlap).
     const fr = await pool.query(
-      `SELECT title, description, page_url FROM audit_findings
+      `SELECT title FROM audit_findings
        WHERE project_id=$1 AND pillar IN ('gsc_agent','gsc')
          AND lower(category) IN ('low ctr','low ctr pages','quick win','quick wins')
          AND (status IS NULL OR status NOT IN ('fixed','dismissed','resolved'))`,
@@ -16771,37 +16773,34 @@ app.get('/api/projects/:projectId/gsc-audit/ctr-fix-pages', async (req, res) => 
       const c = await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId]);
       cachePages = c.rows[0] ? (typeof c.rows[0].results === 'string' ? JSON.parse(c.rows[0].results) : c.rows[0].results) : [];
     } catch {}
-    const norm = (u) => (u || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
-    const byUrl = new Map();
-    for (const p of (cachePages || [])) { const k = norm(p.url || p.link); if (k) byUrl.set(k, p); }
+    cachePages = (cachePages || []).filter(p => p && p.id != null);
 
-    const pages = new Map(); // normalized url -> page payload (keeps the highest-impression keyword)
+    const STOP = new Set(['the', 'and', 'for', 'with', 'your', 'that', 'near', 'com', 'www']);
+    const words = (s) => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !STOP.has(w));
+    const pageWords = cachePages.map(p => ({ p, set: new Set(words(`${p.url || ''} ${p.metaTitle || p.title || ''} ${p.focusKeyword || p.focus_keyword || ''}`)) }));
+    const bestPage = (kw) => {
+      const kws = words(kw); if (!kws.length) return null;
+      let best = null, bestScore = 0;
+      for (const { p, set } of pageWords) { let s = 0; for (const w of kws) if (set.has(w)) s++; if (s > bestScore) { bestScore = s; best = p; } }
+      return bestScore >= 2 ? best : null; // require ≥2 shared significant words to avoid bad matches
+    };
+
+    const pages = new Map(); // page id -> payload (keeps the highest-impression keyword as the rewrite target)
+    let unmatched = 0;
     for (const f of fr.rows) {
-      const url = f.page_url;
-      if (!url) continue;
       const kwMatch = (f.title || '').match(/"([^"]+)"/);
-      const keyword = kwMatch ? kwMatch[1] : '';
+      const keyword = kwMatch ? kwMatch[1] : (f.title || '');
       const imprMatch = (f.title || '').match(/([\d,]+)\s*impression/i);
       const impressions = imprMatch ? parseInt(imprMatch[1].replace(/,/g, '')) : 0;
-      const key = norm(url);
-      const cp = byUrl.get(key);
-      const cur = pages.get(key);
+      const cp = bestPage(keyword);
+      if (!cp) { unmatched++; continue; }
+      const cur = pages.get(cp.id);
       if (!cur || impressions > cur.impressions) {
-        pages.set(key, {
-          url, id: cp ? cp.id : null,
-          title: cp ? (cp.title || cp.metaTitle || url) : url,
-          metaTitle: cp ? (cp.metaTitle || cp.title || '') : '',
-          target_keyword: keyword, impressions,
-        });
+        pages.set(cp.id, { url: cp.url, id: cp.id, title: cp.title || cp.metaTitle || cp.url, metaTitle: cp.metaTitle || cp.title || '', target_keyword: keyword, impressions });
       }
     }
-    const list = [...pages.values()].filter(p => p.id != null).sort((a, b) => b.impressions - a.impressions);
-    res.json({
-      pages: list,
-      total_pages: pages.size,
-      fixable: list.length,
-      unmatched: pages.size - list.length, // pages with a finding but no On-Page cache match (run On-Page audit first)
-    });
+    const list = [...pages.values()].sort((a, b) => b.impressions - a.impressions);
+    res.json({ pages: list, fixable: list.length, unmatched });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
