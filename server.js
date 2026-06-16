@@ -4333,10 +4333,20 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
   const meta = Object.assign({}, elMeta || {}, {
     _elementor_data: JSON.stringify(tree),
     _elementor_edit_mode: 'builder',
-    _elementor_page_settings: JSON.stringify({ hide_title: 'yes' }),
+    _elementor_page_settings: { hide_title: 'yes' },
   });
   const payload = { title: title || 'Cloned page', status: status || 'draft', slug, meta, template: template || 'elementor_header_footer' };
-  const r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, payload, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
+  let r;
+  try {
+    r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, payload, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
+  } catch (e) {
+    // Some sites register _elementor_page_settings differently (string) or not at all — retry without it.
+    const msg = e.response?.data?.message || '';
+    if (/_elementor_page_settings/i.test(msg) || e.response?.status === 400) {
+      const meta2 = Object.assign({}, elMeta || {}, { _elementor_data: JSON.stringify(tree), _elementor_edit_mode: 'builder' });
+      r = await axios.post(`${wpUrl}/wp-json/wp/v2/${postType}`, Object.assign({}, payload, { meta: meta2 }), { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 60000 });
+    } else { throw e; }
+  }
   return { id: r.data.id, link: r.data.link, slug: r.data.slug, post_type: postType };
 }
 
@@ -6449,7 +6459,7 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
     if (typeof tpl === 'string') { try { tpl = JSON.parse(tpl); } catch { return res.status(400).json({ error: 'Template is not valid JSON.' }); } }
     const tree = Array.isArray(tpl) ? tpl : (tpl?.content || tpl?.elements || null);
     if (!Array.isArray(tree) || !tree.length) return res.status(400).json({ error: 'Template JSON has no Elementor content (expected the "content" array from an Elementor template export).' });
-    const elMeta = (tpl && !Array.isArray(tpl) && tpl.page_settings) ? { _elementor_page_settings: JSON.stringify(tpl.page_settings) } : {};
+    const elMeta = (tpl && !Array.isArray(tpl) && tpl.page_settings && typeof tpl.page_settings === 'object') ? { _elementor_page_settings: tpl.page_settings } : {};
 
     const axios = require('axios');
     const results = [];
