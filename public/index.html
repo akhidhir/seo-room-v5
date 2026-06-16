@@ -19965,8 +19965,11 @@
     }
 
     // ============ SEO MIGRATION WIZARD ============
-    function PageBuilderPage({ project }) {
+    function PageBuilderPage({ project, allProjects }) {
       const card = { background: 'var(--card, #161922)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
+      const projects = (allProjects && allProjects.length) ? allProjects : [project];
+      const [destId, setDestId] = useState(project.id);
+      const destProject = projects.find(p => String(p.id) === String(destId)) || project;
       const [urls, setUrls] = useState('');
       const [templateText, setTemplateText] = useState('');
       const [templateName, setTemplateName] = useState('');
@@ -20039,7 +20042,7 @@
         if (!templateText.trim()) { setMsg('Parse a template page first (or upload a JSON export).'); return; }
         setBuilding(true); setMsg('Building ' + list.length + ' draft(s) — scraping meta + creating from template...');
         try {
-          const r = await api('/projects/' + project.id + '/page-builder/build', { method: 'POST', body: { urls: list, template: templateText } });
+          const r = await api('/projects/' + project.id + '/page-builder/build', { method: 'POST', body: { urls: list, template: templateText, destination_project_id: destId } });
           if (r.error) { setMsg('Error: ' + r.error); setBuilding(false); return; }
           setResults(r.results || []);
           const ok = (r.results || []).filter(x => x.status === 'draft').length;
@@ -20052,10 +20055,10 @@
       const publishAll = async () => {
         const ids = (results || []).filter(x => x.page_id).map(x => x.page_id);
         if (!ids.length) return;
-        if (!confirm('Publish ' + ids.length + ' page(s) live on ' + (project.domain || 'the site') + '?')) return;
+        if (!confirm('Publish ' + ids.length + ' page(s) live on ' + (destProject.domain || 'the site') + '?')) return;
         setPublishing(true);
         try {
-          const r = await api('/projects/' + project.id + '/page-builder/publish', { method: 'POST', body: { page_ids: ids } });
+          const r = await api('/projects/' + project.id + '/page-builder/publish', { method: 'POST', body: { page_ids: ids, destination_project_id: destId } });
           setMsg('Published ' + (r.published || 0) + ' page(s)' + ((r.errors && r.errors.length) ? ' · ' + r.errors.length + ' failed' : '') + '.');
           setResults((results || []).map(x => x.page_id ? Object.assign({}, x, { status: 'published' }) : x));
         } catch (e) { setMsg('Publish error: ' + e.message); }
@@ -20065,10 +20068,16 @@
       return (
         <div>
           <div className="page-title"><i className="fas fa-layer-group" style={{ marginRight: 10, color: '#6366f1' }} />Page Builder</div>
-          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>Bulk-create pages on <b>{project.domain || 'this project'}</b> from an Elementor template. Each new page keeps the source URL's <b>slug, SEO title, meta description and focus keyword</b> — with empty copy. Builds as drafts first; you publish when ready.</div>
+          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>Bulk-create pages on the <b>destination site</b> below from an Elementor template. Each new page keeps the source URL's <b>slug, SEO title, meta description and focus keyword</b> — with empty copy. Builds as drafts first; you publish when ready.</div>
 
           <div style={{ ...card, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>1. Source URLs <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(one per line)</span></div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Destination site <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(where the new pages are built)</span></div>
+            <select value={destId} onChange={e => setDestId(e.target.value)} style={{ width: '100%', maxWidth: 420, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', fontSize: 13, marginBottom: 4 }}>
+              {projects.map(p => <option key={p.id} value={p.id}>{(p.business_name || p.name)}{p.domain ? ' — ' + p.domain : ''}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--text3)' }}>Pages will be created on <b>{destProject.domain || destProject.wordpress_url || 'this site'}</b>.</div>
+
+            <div style={{ fontSize: 13, fontWeight: 700, margin: '16px 0 6px' }}>1. Source URLs <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(one per line)</span></div>
             <textarea value={urls} onChange={e => setUrls(e.target.value)} placeholder={'https://oldsite.com/page-one\nhttps://oldsite.com/page-two'} style={{ width: '100%', minHeight: 120, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: 10, fontSize: 13, fontFamily: 'monospace', boxSizing: 'border-box' }} />
 
             <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>2. Template page <span style={{ color: 'var(--text3)', fontWeight: 400 }}>(an Elementor page on any connected site)</span></div>
@@ -20125,7 +20134,7 @@
                   {results.map((r, i) => (
                     <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>/{r.slug || '—'}</td>
-                      <td style={{ padding: '6px 8px' }}>{r.title || '—'}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.status === 'error' ? <span style={{ color: '#ef4444', fontSize: 12 }}>{r.error || 'failed'}</span> : (r.title || '—')}</td>
                       <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{r.focus_keyword || '—'}</td>
                       <td style={{ padding: '6px 8px' }}>{r.status === 'error' ? <span style={{ color: '#ef4444' }} title={r.error}>error</span> : r.status === 'published' ? <span style={{ color: '#22c55e' }}>published</span> : <span style={{ color: '#f59e0b' }}>draft</span>}</td>
                       <td style={{ padding: '6px 8px' }}>{r.link ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>open</a> : '—'}</td>
@@ -38295,7 +38304,7 @@ case 'action-plan':
           case 'nw-migration':
             return <SEOMigrationPage />;
           case 'page-builder':
-            return <PageBuilderPage project={project} />;
+            return <PageBuilderPage project={project} allProjects={allProjects} />;
           case 'kw-research':
             return <KeywordResearchStandalonePage allProjects={allProjects} />;
           case 'ow-project':

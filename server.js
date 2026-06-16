@@ -6431,8 +6431,9 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
 
 app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
   try {
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
-    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const destId = req.body.destination_project_id || req.params.projectId;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [destId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Destination project not found' });
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
     // Sites that strip the Authorization header (e.g. sureflow.seoroom.au) use the seoroom-api plugin + API key instead.
@@ -6491,8 +6492,9 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
 
 app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
   try {
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
-    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const destId = req.body.destination_project_id || req.params.projectId;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [destId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Destination project not found' });
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
     const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
