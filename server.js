@@ -6345,16 +6345,18 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
     const srcWpUrl = (() => { try { return new URL(url).origin; } catch { return 'https://' + host; } })();
     const hostNorm = (h) => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     const target = hostNorm(host);
-    let srcAuth = null, srcName = '';
+    // Sites that strip the Authorization header use the seoroom-reader plugin + API key instead.
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    let srcAuth = null, srcName = '', srcApiKey = SEOROOM_API_KEYS[target] || null;
     const matches = (p) => hostNorm(p.wordpress_url) === target || hostNorm(p.domain) === target;
-    if (matches(project)) { srcAuth = getWpAuthHeaders(project); srcName = project.name; }
-    if (!srcAuth) {
+    if (matches(project)) { srcAuth = getWpAuthHeaders(project); srcName = project.name; if (!srcApiKey) srcApiKey = project.wp_api_key || null; }
+    if (!srcAuth || !srcApiKey) {
       const all = (await pool.query('SELECT * FROM projects')).rows;
       for (const p of all) {
-        if (matches(p)) { const a = getWpAuthHeaders(p); if (a) { srcAuth = a; srcName = p.name; break; } }
+        if (matches(p)) { if (!srcAuth) { const a = getWpAuthHeaders(p); if (a) srcAuth = a; } if (!srcApiKey) srcApiKey = p.wp_api_key || null; if (!srcName) srcName = p.name; break; }
       }
     }
-    if (!srcAuth) return res.status(400).json({ error: `No WordPress credentials found for ${host}. Add that site as a project (with its WP URL + Application Password) to use it as a template source — or use the "upload a JSON export" option.` });
+    if (!srcAuth && !srcApiKey) return res.status(400).json({ error: `No WordPress credentials or seoroom-api key found for ${host}. Add that site as a project (WP URL + Application Password, or a seoroom-api key) — or use the "upload a JSON export" option.` });
 
     const postTypes = ['pages', 'posts', 'elementor_library'];
     const diag = [];
@@ -6363,7 +6365,7 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
     // A) Resolve the page ID via the PUBLIC slug lookup (context=view — no auth needed, works even if the host strips Basic auth)
     for (const pt of postTypes) {
       try {
-        const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&status=publish,draft,private,pending,future&per_page=1`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
+        const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&per_page=1`, { headers: srcAuth || undefined, signal: AbortSignal.timeout(15000) });
         diag.push(`${pt}?slug=${r.status}`);
         if (r.ok) { const arr = await r.json(); if (Array.isArray(arr) && arr.length) { pageId = arr[0].id; pageType = pt; break; } }
       } catch (e) { diag.push(`${pt}?slug=ERR`); }
@@ -6375,28 +6377,51 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
         if (hr.ok) { const html = await hr.text(); const m = html.match(/(?:page-id-|postid-|elementor-page-)(\d+)/); if (m) pageId = parseInt(m[1], 10); }
       } catch {}
     }
+    // C) Fallback: resolve the slug via the seoroom-reader plugin (api key) for hosts that hide drafts/private from public REST
+    if (!pageId && srcApiKey) {
+      try {
+        const rr = await fetch(`${srcWpUrl}/wp-json/seoroom-reader/v1/resolve?slug=${encodeURIComponent(slug)}&api_key=${encodeURIComponent(srcApiKey)}`, { signal: AbortSignal.timeout(15000) });
+        diag.push(`reader-resolve=${rr.status}`);
+        if (rr.ok) { const o = await rr.json(); if (o && o.id) pageId = o.id; }
+      } catch { diag.push('reader-resolve=ERR'); }
+    }
     if (!pageId) return res.status(404).json({ error: `Couldn't find a page at ${host} for "${slug}". [${diag.join(', ')}]` });
 
-    // C) Read the Elementor data. Try authenticated context=edit first (needed if _elementor_data is protected),
-    //    then plain context=view (works if the seoroom plugin exposes _elementor_data via show_in_rest).
+    // D) Read the Elementor data. Preferred path = seoroom-reader plugin (API key) — works on hosts that strip auth.
     let page = null, tree = null;
-    const tryTypes = [pageType, ...postTypes.filter(p => p !== pageType)];
-    for (const ctx of ['edit', 'view']) {
-      for (const pt of tryTypes) {
-        try {
-          const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}/${pageId}?context=${ctx}`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
-          diag.push(`${pt}/${pageId}?${ctx}=${r.status}`);
-          if (!r.ok) continue;
-          const obj = await r.json();
-          const raw = obj && obj.meta && obj.meta._elementor_data;
+    if (srcApiKey) {
+      try {
+        const rr = await fetch(`${srcWpUrl}/wp-json/seoroom-reader/v1/elementor/${pageId}?api_key=${encodeURIComponent(srcApiKey)}`, { signal: AbortSignal.timeout(20000) });
+        diag.push(`reader/${pageId}=${rr.status}`);
+        if (rr.ok) {
+          const obj = await rr.json();
+          const raw = obj && obj.elementor_data;
           if (raw) { try { tree = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {} }
-          if (Array.isArray(tree) && tree.length) { page = obj; break; }
-        } catch (e) { diag.push(`${pt}/${pageId}?${ctx}=ERR`); }
+          if (Array.isArray(tree) && tree.length) page = { title: { rendered: (obj && obj.title) || slug } };
+        }
+      } catch { diag.push(`reader/${pageId}=ERR`); }
+    }
+    // Fallback: authenticated context=edit (protected meta), then plain context=view (if exposed via show_in_rest).
+    if (!(Array.isArray(tree) && tree.length)) {
+      const tryTypes = [pageType, ...postTypes.filter(p => p !== pageType)];
+      for (const ctx of ['edit', 'view']) {
+        for (const pt of tryTypes) {
+          try {
+            const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}/${pageId}?context=${ctx}`, { headers: srcAuth || undefined, signal: AbortSignal.timeout(15000) });
+            diag.push(`${pt}/${pageId}?${ctx}=${r.status}`);
+            if (!r.ok) continue;
+            const obj = await r.json();
+            const raw = obj && obj.meta && obj.meta._elementor_data;
+            if (raw) { try { tree = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {} }
+            if (Array.isArray(tree) && tree.length) { page = obj; break; }
+          } catch (e) { diag.push(`${pt}/${pageId}?${ctx}=ERR`); }
+        }
+        if (Array.isArray(tree) && tree.length) break;
       }
-      if (Array.isArray(tree) && tree.length) break;
     }
     if (!Array.isArray(tree) || !tree.length) {
-      return res.status(400).json({ error: `Reached ${srcName || host} (page ${pageId}) but couldn't read its Elementor data — the WordPress Application Password may be rejected by the host, or the page isn't built with Elementor. Use "upload a JSON export" instead. [${diag.join(', ')}]` });
+      const hint = srcApiKey ? 'Install the SEO Room Reader plugin on that site (it returns the Elementor data via the API key), or use "upload a JSON export".' : 'The host rejects the Application Password, or the page isn\'t Elementor. Use "upload a JSON export" instead.';
+      return res.status(400).json({ error: `Reached ${srcName || host} (page ${pageId}) but couldn't read its Elementor data. ${hint} [${diag.join(', ')}]` });
     }
 
     const sections = summarizeElementorSections(tree);
