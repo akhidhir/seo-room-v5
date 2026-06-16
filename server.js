@@ -6357,40 +6357,47 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
     if (!srcAuth) return res.status(400).json({ error: `No WordPress credentials found for ${host}. Add that site as a project (with its WP URL + Application Password) to use it as a template source — or use the "upload a JSON export" option.` });
 
     const postTypes = ['pages', 'posts', 'elementor_library'];
-    let page = null;
-    // 1) Look up by slug across post types, including non-published statuses
+    const diag = [];
+    let pageId = null, pageType = 'pages';
+
+    // A) Resolve the page ID via the PUBLIC slug lookup (context=view — no auth needed, works even if the host strips Basic auth)
     for (const pt of postTypes) {
       try {
-        const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&status=publish,draft,private,pending,future&context=edit&per_page=1`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
-        if (r.ok) { const arr = await r.json(); if (Array.isArray(arr) && arr.length) { page = arr[0]; break; } }
-      } catch {}
+        const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&status=publish,draft,private,pending,future&per_page=1`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
+        diag.push(`${pt}?slug=${r.status}`);
+        if (r.ok) { const arr = await r.json(); if (Array.isArray(arr) && arr.length) { pageId = arr[0].id; pageType = pt; break; } }
+      } catch (e) { diag.push(`${pt}?slug=ERR`); }
     }
-    // 2) Fallback: read the page ID from the live HTML (body class page-id-N / postid-N / elementor-page-N), then GET by ID
-    if (!page) {
-      let foundId = null;
+    // B) Fallback: read the page ID straight from the live HTML (body class page-id-N / postid-N / elementor-page-N)
+    if (!pageId) {
       try {
         const hr = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(15000) });
-        if (hr.ok) {
-          const html = await hr.text();
-          const m = html.match(/(?:page-id-|postid-|elementor-page-|page_id=|\bp=)(\d+)/);
-          if (m) foundId = parseInt(m[1], 10);
-        }
+        if (hr.ok) { const html = await hr.text(); const m = html.match(/(?:page-id-|postid-|elementor-page-)(\d+)/); if (m) pageId = parseInt(m[1], 10); }
       } catch {}
-      if (foundId) {
-        for (const pt of postTypes) {
-          try {
-            const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}/${foundId}?context=edit`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
-            if (r.ok) { const obj = await r.json(); if (obj && obj.id) { page = obj; break; } }
-          } catch {}
-        }
-      }
     }
-    if (!page) return res.status(404).json({ error: `Found ${srcName || host}, but couldn't load the page "${slug}". If it's a private Elementor template, try its public page URL instead — or use "upload a JSON export".` });
+    if (!pageId) return res.status(404).json({ error: `Couldn't find a page at ${host} for "${slug}". [${diag.join(', ')}]` });
 
-    let tree = null;
-    const rawEl = page.meta && page.meta._elementor_data;
-    if (rawEl) { try { tree = typeof rawEl === 'string' ? JSON.parse(rawEl) : rawEl; } catch {} }
-    if (!Array.isArray(tree) || !tree.length) return res.status(400).json({ error: 'That page has no Elementor data — pick a page built with Elementor.' });
+    // C) Read the Elementor data. Try authenticated context=edit first (needed if _elementor_data is protected),
+    //    then plain context=view (works if the seoroom plugin exposes _elementor_data via show_in_rest).
+    let page = null, tree = null;
+    const tryTypes = [pageType, ...postTypes.filter(p => p !== pageType)];
+    for (const ctx of ['edit', 'view']) {
+      for (const pt of tryTypes) {
+        try {
+          const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}/${pageId}?context=${ctx}`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
+          diag.push(`${pt}/${pageId}?${ctx}=${r.status}`);
+          if (!r.ok) continue;
+          const obj = await r.json();
+          const raw = obj && obj.meta && obj.meta._elementor_data;
+          if (raw) { try { tree = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {} }
+          if (Array.isArray(tree) && tree.length) { page = obj; break; }
+        } catch (e) { diag.push(`${pt}/${pageId}?${ctx}=ERR`); }
+      }
+      if (Array.isArray(tree) && tree.length) break;
+    }
+    if (!Array.isArray(tree) || !tree.length) {
+      return res.status(400).json({ error: `Reached ${srcName || host} (page ${pageId}) but couldn't read its Elementor data — the WordPress Application Password may be rejected by the host, or the page isn't built with Elementor. Use "upload a JSON export" instead. [${diag.join(', ')}]` });
+    }
 
     const sections = summarizeElementorSections(tree);
     res.json({ ok: true, page_title: (page.title && (page.title.raw || page.title.rendered)) || slug, tree, sections, section_count: sections.length });
