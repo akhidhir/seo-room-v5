@@ -6491,7 +6491,8 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
             await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${created.id}`, { meta: yoastMeta }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
           } catch (mErr) { /* meta write best-effort */ }
         }
-        results.push({ url, slug, page_id: created.id, link: created.link, title: pageTitle, meta_title: meta.metaTitle || '', meta_desc: meta.metaDesc || '', focus_keyword: focusKw, status: 'draft', via: apiKey ? 'seoroom-api' : 'wp-rest' });
+        const editLink = `${wpUrl}/wp-admin/post.php?post=${created.id}&action=edit`;
+        results.push({ url, slug, page_id: created.id, link: created.link, edit_link: editLink, title: pageTitle, meta_title: meta.metaTitle || '', meta_desc: meta.metaDesc || '', focus_keyword: focusKw, status: 'draft', via: apiKey ? 'seoroom-api' : 'wp-rest' });
       } catch (e) {
         results.push({ url, status: 'error', error: (e.response?.data?.message || e.response?.data?.error || e.message || 'failed').slice(0, 200) });
       }

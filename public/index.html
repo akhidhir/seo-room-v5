@@ -20137,7 +20137,7 @@
                       <td style={{ padding: '6px 8px' }}>{r.status === 'error' ? <span style={{ color: '#ef4444', fontSize: 12 }}>{r.error || 'failed'}</span> : (r.title || '—')}</td>
                       <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{r.focus_keyword || '—'}</td>
                       <td style={{ padding: '6px 8px' }}>{r.status === 'error' ? <span style={{ color: '#ef4444' }} title={r.error}>error</span> : r.status === 'published' ? <span style={{ color: '#22c55e' }}>published</span> : <span style={{ color: '#f59e0b' }}>draft</span>}</td>
-                      <td style={{ padding: '6px 8px' }}>{r.link ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>open</a> : '—'}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.status === 'error' ? '—' : (r.status === 'published' && r.link) ? <a href={r.link} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>view</a> : (r.edit_link ? <a href={r.edit_link} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>edit in WP</a> : '—')}</td>
                     </tr>
                   ))}
                 </tbody>
