@@ -22905,19 +22905,23 @@ app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId
 
     const allOrganic = (serpData.organic_results || []).slice(0, 20);
     const filteredOut = [];
+    // The project's OWN domain is not a competitor — exclude it (and www / sub-paths) so we never benchmark the
+    // client against itself (e.g. Sureflow's own pages showing up as its "top 3 competitors").
+    const ownDomain = (project?.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+    const isOwn = (d) => ownDomain && (d === ownDomain || d.replace(/^www\./, '') === ownDomain || d.endsWith('.' + ownDomain));
     // Keep each result's REAL SERP rank so the UI shows true positions (#1, #3, #4…) after filtering.
-    // Pull a deeper SERP (20) and drop directories/job-boards/etc., then keep the top 6 REAL competitors to fetch.
+    // Pull a deeper SERP (20) and drop our own site + directories/job-boards/etc., then keep the top 6 REAL competitors.
     const organicResults = allOrganic
       .map((r, i) => ({ ...r, _serpPos: r.position || i + 1 }))
       .filter(r => {
         const d = (r.link || '').replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
+        if (isOwn(d)) { filteredOut.push(d + ' (own site)'); return false; }
         if (isNonCompetitor(d)) { filteredOut.push(d); return false; }
         return true;
       })
       .slice(0, 6);
     if (filteredOut.length) console.log(`[competitor-wordcount] Excluded ${filteredOut.length} non-competitor domains: ${[...new Set(filteredOut)].join(', ')}`);
     const competitors = [];
-    const ownDomain = (project?.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase();
 
     // Fetch each competitor page and count words (parallel, 10s timeout each)
     const fetchPromises = organicResults.map(async (result, idx) => {
