@@ -6341,27 +6341,51 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
 
     // The template may live on a DIFFERENT site than the one we build on.
     // Find which project owns the template's host and use that site's WP credentials to read it.
+    // The page lives at the URL's own origin — always query there. Credentials come from whichever project owns that host.
+    const srcWpUrl = (() => { try { return new URL(url).origin; } catch { return 'https://' + host; } })();
     const hostNorm = (h) => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     const target = hostNorm(host);
-    let srcWpUrl = '', srcAuth = null, srcName = '';
+    let srcAuth = null, srcName = '';
     const matches = (p) => hostNorm(p.wordpress_url) === target || hostNorm(p.domain) === target;
-    if (matches(project)) { srcWpUrl = (project.wordpress_url || '').replace(/\/$/, '') || ('https://' + host); srcAuth = getWpAuthHeaders(project); srcName = project.name; }
+    if (matches(project)) { srcAuth = getWpAuthHeaders(project); srcName = project.name; }
     if (!srcAuth) {
       const all = (await pool.query('SELECT * FROM projects')).rows;
       for (const p of all) {
-        if (matches(p)) { const a = getWpAuthHeaders(p); if (a) { srcWpUrl = (p.wordpress_url || '').replace(/\/$/, '') || ('https://' + host); srcAuth = a; srcName = p.name; break; } }
+        if (matches(p)) { const a = getWpAuthHeaders(p); if (a) { srcAuth = a; srcName = p.name; break; } }
       }
     }
-    if (!srcWpUrl || !srcAuth) return res.status(400).json({ error: `No WordPress credentials found for ${host}. Add that site as a project (with its WP URL + Application Password) to use it as a template source — or use the "upload a JSON export" option.` });
+    if (!srcAuth) return res.status(400).json({ error: `No WordPress credentials found for ${host}. Add that site as a project (with its WP URL + Application Password) to use it as a template source — or use the "upload a JSON export" option.` });
 
+    const postTypes = ['pages', 'posts', 'elementor_library'];
     let page = null;
-    for (const pt of ['pages', 'posts']) {
+    // 1) Look up by slug across post types, including non-published statuses
+    for (const pt of postTypes) {
       try {
-        const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&context=edit&per_page=1`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
+        const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}?slug=${encodeURIComponent(slug)}&status=publish,draft,private,pending,future&context=edit&per_page=1`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
         if (r.ok) { const arr = await r.json(); if (Array.isArray(arr) && arr.length) { page = arr[0]; break; } }
       } catch {}
     }
-    if (!page) return res.status(404).json({ error: `No page with slug "${slug}" found on ${srcName || host}. Check the URL.` });
+    // 2) Fallback: read the page ID from the live HTML (body class page-id-N / postid-N / elementor-page-N), then GET by ID
+    if (!page) {
+      let foundId = null;
+      try {
+        const hr = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(15000) });
+        if (hr.ok) {
+          const html = await hr.text();
+          const m = html.match(/(?:page-id-|postid-|elementor-page-|page_id=|\bp=)(\d+)/);
+          if (m) foundId = parseInt(m[1], 10);
+        }
+      } catch {}
+      if (foundId) {
+        for (const pt of postTypes) {
+          try {
+            const r = await fetch(`${srcWpUrl}/wp-json/wp/v2/${pt}/${foundId}?context=edit`, { headers: srcAuth, signal: AbortSignal.timeout(15000) });
+            if (r.ok) { const obj = await r.json(); if (obj && obj.id) { page = obj; break; } }
+          } catch {}
+        }
+      }
+    }
+    if (!page) return res.status(404).json({ error: `Found ${srcName || host}, but couldn't load the page "${slug}". If it's a private Elementor template, try its public page URL instead — or use "upload a JSON export".` });
 
     let tree = null;
     const rawEl = page.meta && page.meta._elementor_data;
