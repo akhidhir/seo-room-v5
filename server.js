@@ -6470,19 +6470,21 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
         const slug = (() => { try { return new URL(url).pathname.replace(/^\/|\/$/g, '').split('/').pop() || ('page-' + Date.now()); } catch { return 'page-' + Date.now(); } })();
         const pageTitle = meta.metaTitle || title || slug.replace(/-/g, ' ');
         const focusKw = meta.focusKw || slug.replace(/-/g, ' ');
+        const yoast = {};
+        if (meta.metaTitle) yoast.title = meta.metaTitle;
+        if (meta.metaDesc) yoast.metadesc = meta.metaDesc;
+        if (focusKw) yoast.focuskw = focusKw;
         let created;
         if (apiKey) {
-          // seoroom-api plugin path (bypasses hosts that strip auth headers)
-          const r = await axios.post(`${wpUrl}/wp-json/seoroom/v1/create-page`, {
-            api_key: apiKey, title: pageTitle, slug, tree_json: JSON.stringify(tree), status: 'draft'
-          }, { headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
-          const newId = r.data.id || r.data.page_id || r.data.ID;
-          created = { id: newId, link: r.data.link || r.data.permalink || (wpUrl + '/?page_id=' + newId) };
+          // seoroom-reader plugin path — creates the Elementor page AND writes Yoast meta, all via the API key
+          // (bypasses hosts that strip the Authorization header and WAFs that block standard REST writes).
+          const r = await axios.post(`${wpUrl}/wp-json/seoroom-reader/v1/build-page`, {
+            api_key: apiKey, title: pageTitle, slug, status: 'draft', elementor_data: JSON.stringify(tree), yoast
+          }, { headers: { 'Content-Type': 'application/json' }, timeout: 45000 });
+          created = { id: r.data.id, link: r.data.link || (wpUrl + '/?page_id=' + r.data.id), edit_link: r.data.edit_link };
         } else {
           created = await createNewElementorPage(wpUrl, authHeaders, 'pages', pageTitle, tree, elMeta, 'elementor_header_footer', 'draft', slug);
-        }
-        // Yoast meta write — only possible where the Authorization header is accepted (best-effort)
-        if (authHeaders && !apiKey) {
+          // Yoast meta via standard REST (where the host accepts the Authorization header)
           try {
             const yoastMeta = {};
             if (meta.metaTitle) yoastMeta._yoast_wpseo_title = meta.metaTitle;
@@ -6491,8 +6493,8 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
             await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${created.id}`, { meta: yoastMeta }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 });
           } catch (mErr) { /* meta write best-effort */ }
         }
-        const editLink = `${wpUrl}/wp-admin/post.php?post=${created.id}&action=edit`;
-        results.push({ url, slug, page_id: created.id, link: created.link, edit_link: editLink, title: pageTitle, meta_title: meta.metaTitle || '', meta_desc: meta.metaDesc || '', focus_keyword: focusKw, status: 'draft', via: apiKey ? 'seoroom-api' : 'wp-rest' });
+        const editLink = created.edit_link || `${wpUrl}/wp-admin/post.php?post=${created.id}&action=edit`;
+        results.push({ url, slug, page_id: created.id, link: created.link, edit_link: editLink, title: pageTitle, meta_title: meta.metaTitle || '', meta_desc: meta.metaDesc || '', focus_keyword: focusKw, status: 'draft', via: apiKey ? 'seoroom-reader' : 'wp-rest' });
       } catch (e) {
         results.push({ url, status: 'error', error: (e.response?.data?.message || e.response?.data?.error || e.message || 'failed').slice(0, 200) });
       }
@@ -6512,13 +6514,16 @@ app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
     const wpHost = (() => { try { return new URL(project.wordpress_url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
     const apiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key || null;
     if (!wpUrl) return res.status(400).json({ error: 'WordPress connection required.' });
-    // Auth-stripping sites use the seoroom-api plugin, which can't toggle status yet → publish them in WP admin.
-    if (apiKey && !authHeaders) {
-      return res.status(400).json({ error: `Publishing on ${wpHost} isn't supported over the seoroom-api plugin yet — open each draft in WordPress and hit Publish. (Building drafts works.)`, needs_wp_admin: true });
-    }
-    if (!authHeaders) return res.status(400).json({ error: 'WordPress connection required.' });
     const axios = require('axios');
     const ids = (req.body.page_ids || []).map(n => parseInt(n, 10)).filter(Boolean);
+    // Auth-stripping sites publish via the seoroom-reader plugin (API key).
+    if (apiKey) {
+      try {
+        const r = await axios.post(`${wpUrl}/wp-json/seoroom-reader/v1/publish`, { api_key: apiKey, ids }, { headers: { 'Content-Type': 'application/json' }, timeout: 45000 });
+        return res.json({ ok: true, published: (r.data.published || []).length, errors: r.data.errors || [] });
+      } catch (e) { return res.status(500).json({ error: e.response?.data?.error || e.message }); }
+    }
+    if (!authHeaders) return res.status(400).json({ error: 'WordPress connection required.' });
     let published = 0; const errors = [];
     for (const id of ids) {
       try { await axios.post(`${wpUrl}/wp-json/wp/v2/pages/${id}`, { status: 'publish' }, { headers: Object.assign({}, authHeaders, { 'Content-Type': 'application/json' }), timeout: 15000 }); published++; }
