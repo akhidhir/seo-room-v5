@@ -1546,6 +1546,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/indexing\/gsc-debug$/) && req.query.key === 'gscdebug2026') return next();
   // Allow internal-links approved pull + confirm (WP plugin pulls/reports without JWT; no sensitive data)
   if (req.path.match(/^\/api\/projects\/\d+\/internal-links\/(approved|confirm)$/)) return next();
+  // Allow the Elementor AI Writer extension (called from the browser, no JWT; resolves project by host)
+  if (req.path === '/api/elementor/ai-fill') return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
