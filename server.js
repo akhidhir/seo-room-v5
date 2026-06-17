@@ -6553,15 +6553,17 @@ Rules:
 - Replace every {{placeholder}}: {{suburb}}="${suburb}", {{company}}="${company}", {{surrounding suburbs}}=${surrounding.length ? surrounding.slice(0,5).join(', ') : 'nearby suburbs'}. Infer {{offered service}}/{{tradies}} from the industry "${industry}".
 - Follow any embedded instruction exactly (e.g. "On the 2nd paragraph write about...").
 - Weave the focus keyword "${focusKw}" and the suburb name naturally into headings and the first paragraph. Don't keyword-stuff.
-- For widgetType "heading": return a SHORT line (no HTML), e.g. a real H1/H2 like "${focusKw.replace(/\b\w/g, c=>c.toUpperCase())}".
+- For widgetType "heading": return a SHORT real heading (no HTML). ALWAYS convert template headings into a finished heading with the suburb/service — e.g. "H1(KEYWORD + SUBURB)" → "${focusKw.replace(/\b\w/g, c=>c.toUpperCase())}", "TOP SERVICE IN DEMAND IN THE SUBURB + SUBURB" → "Top ${industry} Services in Demand in ${suburb}", "SERVICE KW + SUBURB" → "<a real service> in ${suburb}".
 - For widgetType "text-editor": return valid HTML using <p> (and <ul><li> if listing). Keep length close to the original.
+- TREAT AS A PLACEHOLDER TO REPLACE (never leave as-is) any text that contains: SUBURB, KEYWORD, SERVICE KW, "{{" , "lorem ipsum", "Paragraph (", the word "blurb", or that starts with "Write ". Turn each into finished, real copy.
 - Make the copy specific and UNIQUE to ${suburb} (mention local context) so it doesn't read like a duplicate of other suburb pages. Natural, human, Australian English. No emojis, no fake statistics, no invented awards.
-- If a section is just a label/structural with no real instruction (e.g. a single word, a phone placeholder), return it sensibly or unchanged.
+- Only leave text unchanged if it is already real, finished copy with no placeholder tokens. Otherwise rewrite it.
+- Return a new_text for EVERY section id you were given — never omit one.
 
 Return ONLY a JSON array: [{"id":"<id>","field":"<field>","new_text":"<copy>"}] — one object per input section, same ids.`;
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
+      max_tokens: 16000,
       system: sys,
       messages: [{ role: 'user', content: JSON.stringify(sections.map(s => ({ id: s.id, field: s.field, widgetType: s.widgetType, text: String(s.text || '').slice(0, 1500) }))) }]
     });
