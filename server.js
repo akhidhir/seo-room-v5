@@ -6561,17 +6561,41 @@ Rules:
 - Return a new_text for EVERY section id you were given — never omit one.
 
 Return ONLY a JSON array: [{"id":"<id>","field":"<field>","new_text":"<copy>"}] — one object per input section, same ids.`;
-    const aiResp = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 16000,
-      system: sys,
-      messages: [{ role: 'user', content: JSON.stringify(sections.map(s => ({ id: s.id, field: s.field, widgetType: s.widgetType, text: String(s.text || '').slice(0, 1500) }))) }]
-    });
-    let txt = aiResp.content[0].text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
-    const m = txt.match(/\[[\s\S]*\]/);
-    let filled = [];
-    if (m) { try { filled = JSON.parse(m[0]); } catch {} }
-    res.json({ ok: true, suburb, surrounding, sections: filled });
+    // Per-section copywriter: one focused AI call per section (nothing gets skipped).
+    const surb = surrounding.slice(0, 5).join(', ') || 'nearby suburbs';
+    const perSys = `You are an Australian local-SEO copywriter writing ONE section of a suburb landing page for "${company}" (${industry}) targeting the suburb "${suburb}", Perth WA. Nearby suburbs: ${surb}. Focus keyword: "${focusKw}".
+
+You are given ONE section's template text — it may be a placeholder, a brief like "Write a description about...", lorem ipsum, or a label like "H1(KEYWORD + SUBURB)", "TOP SERVICE IN DEMAND IN THE SUBURB + SUBURB", "SERVICE KW + SUBURB", or "Paragraph (short blurb - an appeal to the customers)". Write the FINISHED, publish-ready copy for it.
+
+Rules:
+- Replace {{suburb}}="${suburb}", {{company}}="${company}", {{surrounding suburbs}}="${surb}"; infer {{offered service}}/{{tradies}} from "${industry}".
+- If the widget is a HEADING (field title/title_text): return a SHORT real heading containing the suburb and/or service — NO HTML, NO quotes. e.g. "TOP SERVICE IN DEMAND IN THE SUBURB + SUBURB" -> "Top ${industry} Services in Demand in ${suburb}".
+- If the widget is a TEXT-EDITOR (field editor): return real HTML using <p> (and <ul><li> if listing), similar length to the input.
+- Otherwise return a clean sentence/short paragraph (no HTML) appropriate to the label.
+- Weave "${focusKw}" and "${suburb}" in naturally; make it specific & UNIQUE to ${suburb}; Australian English; no emojis, no fake stats, no invented awards.
+- If the text is ALREADY finished real copy with NO placeholder tokens or instructions, return it unchanged.
+Return ONLY the copy itself — no JSON, no surrounding quotes, no commentary.`;
+
+    const MODEL = 'claude-haiku-4-5-20251001';
+    const writeOne = async (s) => {
+      try {
+        const r = await anthropic.messages.create({
+          model: MODEL, max_tokens: 1500, system: perSys,
+          messages: [{ role: 'user', content: `widgetType: ${s.widgetType || 'text'}\nfield: ${s.field}\ntemplate text:\n"""${String(s.text || '').slice(0, 1800)}"""` }]
+        });
+        let t = (r.content[0] && r.content[0].text || '').trim();
+        t = t.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/i, '').trim();
+        const isHeading = s.field === 'title' || s.field === 'title_text' || s.widgetType === 'heading';
+        if (isHeading && /^(["'].*["'])$/.test(t)) t = t.slice(1, -1).trim();
+        return { id: s.id, field: s.field, new_text: t };
+      } catch (e) { return { id: s.id, field: s.field, error: (e.message || 'failed').slice(0, 120) }; }
+    };
+    const filled = [];
+    for (let i = 0; i < sections.length; i += 4) {
+      const part = await Promise.all(sections.slice(i, i + 4).map(writeOne));
+      filled.push(...part);
+    }
+    res.json({ ok: true, suburb, surrounding, sections: filled.filter(f => f.new_text != null && f.new_text !== '') });
   } catch (e) { pbCors(res); res.status(500).json({ error: e.message }); }
 });
 
