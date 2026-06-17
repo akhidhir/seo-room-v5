@@ -6503,6 +6503,74 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Elementor AI Writer (Chrome extension) — fill suburb-page sections with SEO copy ──
+function pbDeriveSuburb(slug, project) {
+  const STOP = new Set(['plumber','plumbing','gas','electrician','electrical','locksmith','roofing','roofer','painter','painting','services','service','near','me','in','the','and','best','local','emergency','24','7','perth','wa']);
+  const indWords = String(project && project.industry || '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  indWords.forEach(w => STOP.add(w));
+  const parts = String(slug || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).filter(w => !STOP.has(w) && !/^\d+$/.test(w));
+  const name = parts.join(' ').trim();
+  return name ? name.replace(/\b\w/g, c => c.toUpperCase()) : '';
+}
+function pbNearestSuburbs(suburb, n) {
+  const key = String(suburb || '').toLowerCase();
+  const here = SUBURB_GPS[key];
+  if (!here) return [];
+  return Object.keys(SUBURB_GPS)
+    .filter(k => k !== key)
+    .map(k => ({ k, d: haversineKm(here.lat, here.lng, SUBURB_GPS[k].lat, SUBURB_GPS[k].lng) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, n || 6)
+    .map(o => o.k.replace(/\b\w/g, c => c.toUpperCase()));
+}
+const pbCors = (res) => res.set('Access-Control-Allow-Origin', '*').set('Access-Control-Allow-Methods', 'POST,OPTIONS').set('Access-Control-Allow-Headers', 'Content-Type');
+app.options('/api/elementor/ai-fill', (req, res) => { pbCors(res).sendStatus(204); });
+app.post('/api/elementor/ai-fill', async (req, res) => {
+  pbCors(res);
+  try {
+    const { permalink, host, sections } = req.body || {};
+    if (!Array.isArray(sections) || !sections.length) return res.status(400).json({ error: 'No sections provided.' });
+    const hostNorm = h => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
+    let targetHost = hostNorm(host);
+    let slug = '';
+    try { const u = new URL(permalink); if (!targetHost) targetHost = hostNorm(u.host); slug = u.pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
+    const all = (await pool.query('SELECT * FROM projects')).rows;
+    const project = all.find(p => hostNorm(p.wordpress_url) === targetHost || hostNorm(p.domain) === targetHost) || {};
+    const suburb = pbDeriveSuburb(slug, project) || 'this suburb';
+    const surrounding = pbNearestSuburbs(suburb, 6);
+    const company = project.business_name || project.name || 'the business';
+    const industry = project.industry || 'local services';
+    const focusKw = (slug || '').replace(/-/g, ' ');
+
+    if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+    const sys = `You are an Australian local-SEO copywriter. You are filling a SUBURB LANDING PAGE template for "${company}" (${industry}) targeting the suburb "${suburb}", Perth WA.
+
+You receive an array of page sections. Each has the wireframe placeholder text or copywriting instruction (it may contain {{suburb}}, {{tradies}}, {{company}}, {{offered service}}, {{surrounding suburbs}}, lorem ipsum, or instructions like "Write a description about..."). Rewrite EACH into finished, publish-ready copy.
+
+Rules:
+- Replace every {{placeholder}}: {{suburb}}="${suburb}", {{company}}="${company}", {{surrounding suburbs}}=${surrounding.length ? surrounding.slice(0,5).join(', ') : 'nearby suburbs'}. Infer {{offered service}}/{{tradies}} from the industry "${industry}".
+- Follow any embedded instruction exactly (e.g. "On the 2nd paragraph write about...").
+- Weave the focus keyword "${focusKw}" and the suburb name naturally into headings and the first paragraph. Don't keyword-stuff.
+- For widgetType "heading": return a SHORT line (no HTML), e.g. a real H1/H2 like "${focusKw.replace(/\b\w/g, c=>c.toUpperCase())}".
+- For widgetType "text-editor": return valid HTML using <p> (and <ul><li> if listing). Keep length close to the original.
+- Make the copy specific and UNIQUE to ${suburb} (mention local context) so it doesn't read like a duplicate of other suburb pages. Natural, human, Australian English. No emojis, no fake statistics, no invented awards.
+- If a section is just a label/structural with no real instruction (e.g. a single word, a phone placeholder), return it sensibly or unchanged.
+
+Return ONLY a JSON array: [{"id":"<id>","field":"<field>","new_text":"<copy>"}] — one object per input section, same ids.`;
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 8000,
+      system: sys,
+      messages: [{ role: 'user', content: JSON.stringify(sections.map(s => ({ id: s.id, field: s.field, widgetType: s.widgetType, text: String(s.text || '').slice(0, 1500) }))) }]
+    });
+    let txt = aiResp.content[0].text.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+    const m = txt.match(/\[[\s\S]*\]/);
+    let filled = [];
+    if (m) { try { filled = JSON.parse(m[0]); } catch {} }
+    res.json({ ok: true, suburb, surrounding, sections: filled });
+  } catch (e) { pbCors(res); res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
   try {
     const destId = req.body.destination_project_id || req.params.projectId;
