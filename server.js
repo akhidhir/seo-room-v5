@@ -6571,6 +6571,7 @@ Rules:
 - Replace {{suburb}}="${suburb}", {{company}}="${company}", {{surrounding suburbs}}="${surb}"; infer {{offered service}}/{{tradies}} from "${industry}".
 - If the widget is a HEADING (field title/title_text): return a SHORT real heading containing the suburb and/or service — NO HTML, NO quotes. e.g. "TOP SERVICE IN DEMAND IN THE SUBURB + SUBURB" -> "Top ${industry} Services in Demand in ${suburb}".
 - If the widget is a TEXT-EDITOR (field editor): return real HTML using <p> (and <ul><li> if listing), similar length to the input.
+- If the field is "icon_list" (a selling-points / benefits list): return EXACTLY the same number of lines as the input, ONE short benefit per line (3-7 words, e.g. "Same-day emergency callouts"), no bullets, no numbering, no HTML. Make them specific to ${suburb}/${industry}.
 - Otherwise return a clean sentence/short paragraph (no HTML) appropriate to the label.
 - Weave "${focusKw}" and "${suburb}" in naturally; make it specific & UNIQUE to ${suburb}; Australian English; no emojis, no fake stats, no invented awards.
 - If the text is ALREADY finished real copy with NO placeholder tokens or instructions, return it unchanged.
