@@ -1547,7 +1547,7 @@ function optionalAuth(req, res, next) {
   // Allow internal-links approved pull + confirm (WP plugin pulls/reports without JWT; no sensitive data)
   if (req.path.match(/^\/api\/projects\/\d+\/internal-links\/(approved|confirm)$/)) return next();
   // Allow the Elementor AI Writer extension (called from the browser, no JWT; resolves project by host)
-  if (req.path === '/api/elementor/ai-fill') return next();
+  if (req.path === '/api/elementor/ai-fill' || req.path === '/api/elementor/resolve') return next();
   if (whitelistPaths.includes(req.path)) return next();
   // Skip auth for non-API routes (static files, index.html)
   if (!req.path.startsWith('/api/')) return next();
@@ -6525,17 +6525,55 @@ function pbNearestSuburbs(suburb, n) {
     .slice(0, n || 6)
     .map(o => o.k.replace(/\b\w/g, c => c.toUpperCase()));
 }
+// Resolve a page's real slug/title from its post ID via the seoroom-reader plugin (works for drafts).
+async function pbResolvePage(host, postId) {
+  try {
+    const norm = h => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
+    const target = norm(host);
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    let apiKey = SEOROOM_API_KEYS[target] || null;
+    if (!apiKey) {
+      const all = (await pool.query('SELECT * FROM projects')).rows;
+      const p = all.find(p => norm(p.wordpress_url) === target || norm(p.domain) === target);
+      apiKey = (p && p.wp_api_key) || null;
+    }
+    const wpUrl = 'https://' + (host || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!apiKey || !postId || !wpUrl) return {};
+    const r = await fetch(`${wpUrl}/wp-json/seoroom-reader/v1/elementor/${postId}?api_key=${encodeURIComponent(apiKey)}`, { signal: AbortSignal.timeout(15000) });
+    if (r.ok) { const o = await r.json(); return { slug: o.slug || '', title: o.title || '' }; }
+  } catch (e) {}
+  return {};
+}
 const pbCors = (res) => res.set('Access-Control-Allow-Origin', '*').set('Access-Control-Allow-Methods', 'POST,OPTIONS').set('Access-Control-Allow-Headers', 'Content-Type');
+app.options('/api/elementor/resolve', (req, res) => { pbCors(res).sendStatus(204); });
+app.post('/api/elementor/resolve', async (req, res) => {
+  pbCors(res);
+  try {
+    const { host, post_id, permalink } = req.body || {};
+    const hostNorm = h => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
+    const target = hostNorm(host);
+    const all = (await pool.query('SELECT * FROM projects')).rows;
+    const project = all.find(p => hostNorm(p.wordpress_url) === target || hostNorm(p.domain) === target) || {};
+    let slug = '', title = '';
+    try { const u = new URL(permalink); if (!/[?&]page_id=/.test(u.search)) slug = u.pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
+    if (!slug && post_id) { const rp = await pbResolvePage(host, post_id); slug = rp.slug || ''; title = rp.title || ''; }
+    let suburb = pbDeriveSuburb(slug, project);
+    if (!suburb && title) suburb = pbDeriveSuburb(title.toLowerCase().replace(/\s+/g, '-'), project);
+    res.json({ ok: true, suburb: suburb || '', slug, company: project.business_name || project.name || '' });
+  } catch (e) { pbCors(res); res.status(500).json({ error: e.message }); }
+});
 app.options('/api/elementor/ai-fill', (req, res) => { pbCors(res).sendStatus(204); });
 app.post('/api/elementor/ai-fill', async (req, res) => {
   pbCors(res);
   try {
-    const { permalink, host, sections, suburb: suburbIn } = req.body || {};
+    const { permalink, host, sections, suburb: suburbIn, post_id } = req.body || {};
     if (!Array.isArray(sections) || !sections.length) return res.status(400).json({ error: 'No sections provided.' });
     const hostNorm = h => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     let targetHost = hostNorm(host);
     let slug = '';
-    try { const u = new URL(permalink); if (!targetHost) targetHost = hostNorm(u.host); slug = u.pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
+    try { const u = new URL(permalink); if (!targetHost) targetHost = hostNorm(u.host); if (!/[?&]page_id=/.test(u.search)) slug = u.pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
+    // Drafts have an ugly ?page_id= permalink with no slug — fetch the real slug from the post ID via the reader plugin.
+    if (!slug && post_id) { const rp = await pbResolvePage(host, post_id); slug = rp.slug || ''; }
     const all = (await pool.query('SELECT * FROM projects')).rows;
     const project = all.find(p => hostNorm(p.wordpress_url) === targetHost || hostNorm(p.domain) === targetHost) || {};
     const suburb = (suburbIn && String(suburbIn).trim())
