@@ -6530,7 +6530,7 @@ app.options('/api/elementor/ai-fill', (req, res) => { pbCors(res).sendStatus(204
 app.post('/api/elementor/ai-fill', async (req, res) => {
   pbCors(res);
   try {
-    const { permalink, host, sections } = req.body || {};
+    const { permalink, host, sections, suburb: suburbIn } = req.body || {};
     if (!Array.isArray(sections) || !sections.length) return res.status(400).json({ error: 'No sections provided.' });
     const hostNorm = h => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     let targetHost = hostNorm(host);
@@ -6538,11 +6538,13 @@ app.post('/api/elementor/ai-fill', async (req, res) => {
     try { const u = new URL(permalink); if (!targetHost) targetHost = hostNorm(u.host); slug = u.pathname.replace(/^\/|\/$/g, '').split('/').pop() || ''; } catch {}
     const all = (await pool.query('SELECT * FROM projects')).rows;
     const project = all.find(p => hostNorm(p.wordpress_url) === targetHost || hostNorm(p.domain) === targetHost) || {};
-    const suburb = pbDeriveSuburb(slug, project) || 'this suburb';
+    const suburb = (suburbIn && String(suburbIn).trim())
+      ? String(suburbIn).trim().replace(/\b\w/g, c => c.toUpperCase())
+      : (pbDeriveSuburb(slug, project) || 'this suburb');
     const surrounding = pbNearestSuburbs(suburb, 6);
     const company = project.business_name || project.name || 'the business';
     const industry = project.industry || 'local services';
-    const focusKw = (slug || '').replace(/-/g, ' ');
+    const focusKw = ((slug || '').replace(/-/g, ' ').trim()) || ((industry + ' ' + suburb).toLowerCase());
 
     if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
     const sys = `You are an Australian local-SEO copywriter. You are filling a SUBURB LANDING PAGE template for "${company}" (${industry}) targeting the suburb "${suburb}", Perth WA.
