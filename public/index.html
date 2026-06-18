@@ -6664,13 +6664,25 @@
       const [pageClassifications, setPageClassifications] = useState({}); // { normalizedPath: label }
       const [tileDetail, setTileDetail] = useState(null);
 
-      // Click a health tile -> show the affected pages + how to fix.
+      // Build a full URL from a relative path using the project's domain.
+      const fullUrl = (p) => {
+        let d = (project && (project.wordpress_url || project.domain)) || '';
+        d = String(d).replace(/\/+$/, '');
+        if (d && !/^https?:\/\//.test(d)) d = 'https://' + d;
+        const path = String(p || '');
+        return d ? d + (path.startsWith('/') ? path : '/' + path) : path;
+      };
+      // Click a health tile -> show the affected page URLs + how to fix.
       const tileInfo = (k, s) => {
         if (!s) return null;
-        if (k === 'thin') return { label: 'Thin pages (under 300 words)', items: (s.thinPagesList || []).map(p => `${p.path} — ${p.words} words`), fix: 'Expand each page to 500+ words with helpful, relevant content. Use the Copywriter / Optimise Website Copy.', count: s.thinPages };
-        if (k === 'dup') return { label: 'Duplicate page titles', items: (s.dupTitlesList || []).map(d => `"${d.title}" → ${(d.pages || []).join(', ')}`), fix: 'Give every page a unique <title>. Fix the meta title per page in On-Page Audit & Fix.', count: s.dupTitles };
-        if (k === 'https') return { label: 'Pages not on HTTPS', items: (s.nonHttpsList || []), fix: 'Install an SSL certificate and force HTTPS (301 redirect http → https).', count: s.successful - s.httpsPages };
-        if (k === 'mobile') return { label: 'Pages not mobile-ready', items: (s.nonMobileList || []), fix: 'Add a responsive viewport meta tag and confirm the theme is mobile-friendly.', count: s.successful - s.mobileReady };
+        if (k === 'thin') return { label: 'Thin pages (under 300 words)', items: (s.thinPagesList || []).map(p => `${fullUrl(p.path)} — ${p.words} words`), fix: 'Expand each page to 500+ words with helpful, relevant content. Use the Copywriter / Optimise Website Copy.', count: s.thinPages };
+        if (k === 'dup') {
+          const items = [];
+          (s.dupTitlesList || []).forEach(d => (d.pages || []).forEach(p => items.push(`${fullUrl(p)}  —  shares title: "${d.title}"`)));
+          return { label: 'Duplicate page titles — every affected URL', items, fix: 'Give every page a unique <title>. Fix the meta title per page in On-Page Audit & Fix.', count: s.dupTitles };
+        }
+        if (k === 'https') return { label: 'Pages not on HTTPS', items: (s.nonHttpsList || []).map(fullUrl), fix: 'Install an SSL certificate and force HTTPS (301 redirect http → https).', count: s.successful - s.httpsPages };
+        if (k === 'mobile') return { label: 'Pages not mobile-ready', items: (s.nonMobileList || []).map(fullUrl), fix: 'Add a responsive viewport meta tag and confirm the theme is mobile-friendly.', count: s.successful - s.mobileReady };
         if (k === 'robots') return { label: 'Robots.txt', items: s.hasRobotsTxt ? [] : ['No robots.txt found'], fix: 'Create /robots.txt and reference your XML sitemap.' };
         if (k === 'sitemap') return { label: 'XML Sitemap', items: s.hasSitemap ? [] : ['No XML sitemap found'], fix: 'Generate an XML sitemap (Yoast/RankMath) and submit it in Search Console.' };
         if (k === 'schema') return { label: 'Schema markup', items: (s.schemaTypes && s.schemaTypes.length) ? ['Detected: ' + s.schemaTypes.join(', ')] : ['No structured data detected'], fix: 'Add LocalBusiness + Service JSON-LD schema (use the Schema fix on a finding below).' };
@@ -7463,7 +7475,10 @@
                   <button onClick={() => setTileDetail(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}>✕</button>
                 </div>
                 {info.items.length
-                  ? <ul style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 13, color: 'var(--text2)', maxHeight: 220, overflow: 'auto' }}>{info.items.map((it, i) => <li key={i} style={{ marginBottom: 4 }}>{it}</li>)}</ul>
+                  ? <ul style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 13, color: 'var(--text2)', maxHeight: 260, overflow: 'auto' }}>{info.items.map((it, i) => {
+                      const m = String(it).match(/^(https?:\/\/\S+?)(\s.*)?$/);
+                      return <li key={i} style={{ marginBottom: 5 }}>{m ? <><a href={m[1]} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>{m[1]}</a>{m[2] || ''}</> : it}</li>;
+                    })}</ul>
                   : (expectedCount > 0
                     ? <div style={{ fontSize: 13, color: '#f59e0b', marginBottom: 12 }}><i className="fas fa-sync-alt" style={{ marginRight: 6 }} />{expectedCount} found in the last audit, but the page list isn't stored yet — click <strong>Run Audit</strong> to list them here.</div>
                     : <div style={{ fontSize: 13, color: '#22c55e', marginBottom: 12 }}><i className="fas fa-check" style={{ marginRight: 6 }} />No issues found.</div>)}
