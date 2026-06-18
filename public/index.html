@@ -2068,6 +2068,8 @@
     // Allowed sections per audit type (whitelist)
     const GSC_ALLOWED_SECTIONS = ['Quick Wins', 'Low CTR Pages', 'Cannibalization', 'Zero-Click Pages', 'Underperforming Pages'];
     const WEBSITE_ALLOWED_SECTIONS = ['Site Health', 'Crawlability', 'Content Quality', 'Core Web Vitals', 'Schema & Data'];
+    // Friendlier display names for website-audit categories (storage keys stay the same).
+    const WS_CAT_LABEL = (c) => ({ 'Site Health': 'Technical SEO' }[c] || c);
     const GBP_ALLOWED_SECTIONS = ['Profile Completeness', 'NAP Consistency', 'Reviews & Reputation', 'Competitor Analysis', 'Directory & Citations', 'Photos & Media', 'Suburb Coverage', '30-Day Strategy'];
 
     // Detect execution type / assignee from action text + category context
@@ -6554,7 +6556,7 @@
           {findings.length > 0 && (<div style={{ marginBottom: 16 }}>
             {/* Category tabs */}
             <div style={{ display: 'flex', gap: 0, marginBottom: 12, flexWrap: 'wrap' }}>
-              {[{ key: 'all', label: 'All Categories', color: '#3b82f6' }, ...categories.map(c => ({ key: c, label: c, color: catColors[c] || '#6366f1' }))].map((tab, i, arr) => {
+              {[{ key: 'all', label: 'All Categories', color: '#3b82f6' }, ...categories.map(c => ({ key: c, label: WS_CAT_LABEL(c), color: catColors[c] || '#6366f1' }))].map((tab, i, arr) => {
                 const count = tab.key === 'all' ? findings.length : findings.filter(f => f.category === tab.key).length;
                 const active = filterCat === tab.key;
                 return (<button key={tab.key} onClick={() => setFilterCat(tab.key)}
@@ -6620,7 +6622,7 @@
                     return React.createElement(React.Fragment, { key: f.id },
                       showHeader && (<tr style={{ background: cc + '10' }}>
                         <td colSpan={8} style={{ padding: '12px 14px', fontWeight: 700, fontSize: 16, color: cc, borderBottom: `2px solid ${cc}30` }}>
-                          {f.category} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
+                          {WS_CAT_LABEL(f.category)} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
                           {typeof catFixPages !== 'undefined' && catFixPages[f.category] && setActiveTab && <button onClick={(e) => { e.stopPropagation(); setActiveTab(catFixPages[f.category].page); }} style={{ marginLeft: 12, background: 'none', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 5, padding: '3px 10px', fontSize: 11, color: '#6366f1', cursor: 'pointer', verticalAlign: 'middle' }}><i className={`fas ${catFixPages[f.category].icon}`} style={{ marginRight: 4, fontSize: 10 }} />{catFixPages[f.category].label} <i className="fas fa-arrow-right" style={{ fontSize: 8, marginLeft: 2 }} /></button>}
                         </td></tr>),
                       <tr style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
@@ -6630,7 +6632,7 @@
                         <td style={{ padding: '14px', fontWeight: 600, fontSize: 16 }}><span style={{ display: 'inline-block', width: 4, height: 20, borderRadius: 2, background: cc, marginRight: 10, verticalAlign: 'middle' }} />{f.title}</td>
                         <td style={{ padding: '14px 10px' }}>{sevBadge(f.severity)}</td>
                         <td style={{ padding: '14px', fontSize: 14, color: 'var(--text2)', maxWidth: 400, lineHeight: 1.5 }}>{(f.description || '').substring(0, 150)}{(f.description || '').length > 150 ? '...' : ''}</td>
-                        <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: cc + '15', color: cc }}>{f.category}</span></td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: cc + '15', color: cc }}>{WS_CAT_LABEL(f.category)}</span></td>
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}><button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }} style={{ fontSize: 14 }}><i className="fas fa-search" style={{ marginRight: 4 }} /> Review</button></td>
                       </tr>
@@ -7505,7 +7507,7 @@
 
           {findings.length > 0 && (<div style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 0, marginBottom: 12, flexWrap: 'wrap' }}>
-              {[{ key: 'all', label: 'All Categories', color: '#8b5cf6' }, ...categories.map(c => ({ key: c, label: c, color: catColors[c] || '#6366f1' }))].map((tab, i, arr) => {
+              {[{ key: 'all', label: 'All Categories', color: '#8b5cf6' }, ...categories.map(c => ({ key: c, label: WS_CAT_LABEL(c), color: catColors[c] || '#6366f1' }))].map((tab, i, arr) => {
                 const inCat = tab.key === 'all' ? findings : findings.filter(f => f.category === tab.key);
                 const open = inCat.filter(f => f.status !== 'fixed' && f.status !== 'rejected').length;
                 const fixed = inCat.filter(f => f.status === 'fixed').length;
@@ -7686,7 +7688,7 @@
                     return React.createElement(React.Fragment, { key: f.id },
                       showHeader && (<tr style={{ background: cc + '10' }}>
                         <td colSpan={7} style={{ padding: '12px 14px', fontWeight: 700, fontSize: 16, color: cc, borderBottom: `2px solid ${cc}30` }}>
-                          {f.category} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
+                          {WS_CAT_LABEL(f.category)} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
                           {typeof catFixPages !== 'undefined' && catFixPages[f.category] && setActiveTab && <button onClick={(e) => { e.stopPropagation(); setActiveTab(catFixPages[f.category].page); }} style={{ marginLeft: 12, background: 'none', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 5, padding: '3px 10px', fontSize: 11, color: '#6366f1', cursor: 'pointer', verticalAlign: 'middle' }}><i className={`fas ${catFixPages[f.category].icon}`} style={{ marginRight: 4, fontSize: 10 }} />{catFixPages[f.category].label} <i className="fas fa-arrow-right" style={{ fontSize: 8, marginLeft: 2 }} /></button>}
                         </td></tr>),
                       <tr style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
@@ -7771,7 +7773,7 @@
                           })()}
                         </td>
                         <td style={{ padding: '14px 10px' }}>{sevBadge(f.severity)}</td>
-                        <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: cc + '15', color: cc }}>{f.category}</span></td>
+                        <td style={{ padding: '14px 10px', textAlign: 'center' }}><span style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, background: cc + '15', color: cc }}>{WS_CAT_LABEL(f.category)}</span></td>
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}>{statusBadge(f.status || 'new')}</td>
                         <td style={{ padding: '14px 10px', textAlign: 'center' }}>
                           {f.status === 'fixed' ? (

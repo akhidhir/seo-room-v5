@@ -33916,7 +33916,7 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
         for (const pth of paths) {
           const others = paths.filter(x => x !== pth);
           findings.push({
-            pillar: 'website', category: 'On-Page',
+            pillar: 'website', category: 'Content Quality',
             title: `${pth} — duplicate title`,
             description: `This page shares the title "${t}" with ${others.length} other page(s): ${others.join(', ')}. Duplicate titles make it hard for Google to know which page to rank.`,
             recommendation: `Write a unique, descriptive title (50-60 chars) for this page with its own focus keyword. Send to the Copywriter to rewrite.`,
