@@ -6676,15 +6676,25 @@
         if (k === 'schema') return { label: 'Schema markup', items: (s.schemaTypes && s.schemaTypes.length) ? ['Detected: ' + s.schemaTypes.join(', ')] : ['No structured data detected'], fix: 'Add LocalBusiness + Service JSON-LD schema (use the Schema fix on a finding below).' };
         return null;
       };
+      // Live counts: prefer the actual findings (so they drop as you fix/ignore), fall back to the audit summary.
+      const isOpenFinding = (f) => !['fixed', 'dismissed', 'rejected', 'ignored', 'excluded', 'done'].includes(String(f.status || '').toLowerCase());
+      const thinFindingCount = findings.filter(f => isOpenFinding(f) && /thin content/i.test(f.title || '')).length;
+      const dupFindingCount = findings.filter(f => isOpenFinding(f) && /duplicate title/i.test(f.title || '')).length;
+      const thinCount = thinFindingCount || (summary ? (summary.thinPages || 0) : 0);
+      const dupCount = dupFindingCount || (summary ? ((summary.dupTitlesList && summary.dupTitlesList.length) || summary.dupTitles || 0) : 0);
+
       const toggleTile = (k) => {
         const willOpen = tileDetail !== k;
         setTileDetail(willOpen ? k : null);
-        if (willOpen) {
-          const kw = { thin: 'thin', dup: 'duplicate', https: 'https', mobile: 'mobile', robots: 'robots', sitemap: 'sitemap', schema: 'schema' }[k] || '';
+        if (!willOpen) { setSearchQ(''); return; }
+        const kw = { thin: 'thin content', dup: 'duplicate title', https: 'https', mobile: 'mobile', robots: 'robots', sitemap: 'sitemap', schema: 'schema' }[k] || '';
+        const hasFindings = kw && findings.some(f => isOpenFinding(f) && (f.title || '').toLowerCase().includes(kw));
+        if (hasFindings) {
           setFilterCat('all'); setFilterStatus('all'); setSearchQ(kw);
           setTimeout(() => { const el = document.getElementById('wa-findings'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 90);
         } else {
           setSearchQ('');
+          setTimeout(() => { const el = document.getElementById('wa-tile-detail'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 90);
         }
       };
 
@@ -7430,13 +7440,13 @@
                 <span style={{ fontSize: 13, fontWeight: 600, color: h.ok ? '#22c55e' : '#ef4444' }}>{h.label}</span>
               </div>
             ))}
-            {summary.thinPages > 0 && <div onClick={() => toggleTile('thin')} title="Click for details & fix" style={{ background: tileDetail === 'thin' ? 'var(--bg)' : 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            {thinCount > 0 && <div onClick={() => toggleTile('thin')} title="Click for details & fix" style={{ background: tileDetail === 'thin' ? 'var(--bg)' : 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <i className="fas fa-exclamation-triangle" style={{ color: '#f59e0b' }} />
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{summary.thinPages} thin pages</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{thinCount} thin pages</span>
             </div>}
-            {summary.dupTitles > 0 && <div onClick={() => toggleTile('dup')} title="Click for details & fix" style={{ background: tileDetail === 'dup' ? 'var(--bg)' : 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            {dupCount > 0 && <div onClick={() => toggleTile('dup')} title="Click for details & fix" style={{ background: tileDetail === 'dup' ? 'var(--bg)' : 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <i className="fas fa-copy" style={{ color: '#f59e0b' }} />
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{summary.dupTitles} duplicate titles</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{dupCount} duplicate titles</span>
             </div>}
           </div>)}
 
@@ -7444,8 +7454,9 @@
           {summary && tileDetail && (() => {
             const info = tileInfo(tileDetail, summary);
             if (!info) return null;
+            const expectedCount = info.count || 0;
             return (
-              <div style={{ marginBottom: 20, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
+              <div id="wa-tile-detail" style={{ marginBottom: 20, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, scrollMarginTop: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                   <strong style={{ fontSize: 14, color: 'var(--text1)' }}>{info.label}</strong>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>{info.items.length ? `(${info.items.length})` : ''}</span>
@@ -7453,7 +7464,9 @@
                 </div>
                 {info.items.length
                   ? <ul style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 13, color: 'var(--text2)', maxHeight: 220, overflow: 'auto' }}>{info.items.map((it, i) => <li key={i} style={{ marginBottom: 4 }}>{it}</li>)}</ul>
-                  : <div style={{ fontSize: 13, color: '#22c55e', marginBottom: 12 }}><i className="fas fa-check" style={{ marginRight: 6 }} />No issues found.</div>}
+                  : (expectedCount > 0
+                    ? <div style={{ fontSize: 13, color: '#f59e0b', marginBottom: 12 }}><i className="fas fa-sync-alt" style={{ marginRight: 6 }} />{expectedCount} found in the last audit, but the page list isn't stored yet — click <strong>Run Audit</strong> to list them here.</div>
+                    : <div style={{ fontSize: 13, color: '#22c55e', marginBottom: 12 }}><i className="fas fa-check" style={{ marginRight: 6 }} />No issues found.</div>)}
                 <div style={{ fontSize: 13, color: 'var(--text2)', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 6, padding: '8px 10px' }}>
                   <i className="fas fa-lightbulb" style={{ color: '#22c55e', marginRight: 6 }} /><strong>Fix:</strong> {info.fix}
                 </div>
