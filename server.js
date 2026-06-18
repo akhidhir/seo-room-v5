@@ -33910,6 +33910,23 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       }
     }
 
+    // Duplicate titles — one ticketed finding per affected page (routes to Copywriter)
+    for (const [t, paths] of Object.entries(titleMap)) {
+      if (paths.length > 1) {
+        for (const pth of paths) {
+          const others = paths.filter(x => x !== pth);
+          findings.push({
+            pillar: 'website', category: 'On-Page',
+            title: `${pth} — duplicate title`,
+            description: `This page shares the title "${t}" with ${others.length} other page(s): ${others.join(', ')}. Duplicate titles make it hard for Google to know which page to rank.`,
+            recommendation: `Write a unique, descriptive title (50-60 chars) for this page with its own focus keyword. Send to the Copywriter to rewrite.`,
+            severity: 'Medium',
+            current_value: t, recommended_value: 'Unique title per page'
+          });
+        }
+      }
+    }
+
     // Low internal linking — per-page findings
     const lowLinks = successPages.filter(p => (p.internalLinks || 0) < 3);
     for (const p of lowLinks.slice(0, 30)) {

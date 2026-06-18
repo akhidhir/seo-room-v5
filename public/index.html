@@ -6712,7 +6712,8 @@
 
       const isCopywriterFinding = (f) => {
         const c = (f.category || '').toLowerCase();
-        return c.includes('content quality');
+        const t = (f.title || '').toLowerCase();
+        return c.includes('content quality') || /duplicate title|meta title|thin content/.test(t);
       };
 
       // Generate clear, non-technical copywriter instructions from a finding
