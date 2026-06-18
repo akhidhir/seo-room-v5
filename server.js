@@ -34224,7 +34224,12 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       return schemaTopicKeywords.filter(k => t.includes(k.keyword)).map(k => k.topic);
     };
     // Per-page findings have slugs in the title — detect them
-    const isPerPageTitle = (title) => /schema on [a-z0-9]/.test((title || '').toLowerCase());
+    const isPerPageTitle = (title) => {
+      const t = (title || '').toLowerCase();
+      // Per-page findings dedup by EXACT title (one per URL) instead of by topic,
+      // so we keep one finding per affected page rather than collapsing them all into one.
+      return /schema on [a-z0-9]/.test(t) || /—\s*(duplicate title|thin content)/.test(t);
+    };
 
     // Pre-dedup: remove findings with duplicate topics in the same batch
     // This prevents two code paths from creating findings about the same issue
