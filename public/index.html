@@ -6676,7 +6676,17 @@
         if (k === 'schema') return { label: 'Schema markup', items: (s.schemaTypes && s.schemaTypes.length) ? ['Detected: ' + s.schemaTypes.join(', ')] : ['No structured data detected'], fix: 'Add LocalBusiness + Service JSON-LD schema (use the Schema fix on a finding below).' };
         return null;
       };
-      const toggleTile = (k) => setTileDetail(prev => prev === k ? null : k);
+      const toggleTile = (k) => {
+        const willOpen = tileDetail !== k;
+        setTileDetail(willOpen ? k : null);
+        if (willOpen) {
+          const kw = { thin: 'thin', dup: 'duplicate', https: 'https', mobile: 'mobile', robots: 'robots', sitemap: 'sitemap', schema: 'schema' }[k] || '';
+          setFilterCat('all'); setFilterStatus('all'); setSearchQ(kw);
+          setTimeout(() => { const el = document.getElementById('wa-findings'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 90);
+        } else {
+          setSearchQ('');
+        }
+      };
 
       const isCopywriterFinding = (f) => {
         const c = (f.category || '').toLowerCase();
@@ -7608,7 +7618,7 @@
             );
           })()}
 
-          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div id="wa-findings" style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center', scrollMarginTop: 16 }}>
             <input type="text" placeholder="Search findings..." value={searchQ} onChange={e => setSearchQ(e.target.value)}
               style={{ flex: 1, minWidth: 200, background: 'var(--card)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 14px', fontSize: 15 }} />
             {['all', 'pending', 'fixed'].map(s => {
@@ -7862,20 +7872,6 @@
         { key: 'sitemap', label: 'Sitemap & Robots.txt', icon: 'fas fa-sitemap', color: '#6366f1' },
         { key: 'structure', label: 'Internal Link Structure', icon: 'fas fa-project-diagram', color: '#14b8a6' },
       ];
-
-      // Click a health tile -> show the affected pages + how to fix.
-      const tileInfo = (k, s) => {
-        if (!s) return null;
-        if (k === 'thin') return { label: 'Thin pages (under 300 words)', items: (s.thinPagesList || []).map(p => `${p.path} — ${p.words} words`), fix: 'Expand each page to 500+ words with helpful, relevant content. Use the Copywriter or On-Page Audit & Fix.' };
-        if (k === 'dup') return { label: 'Duplicate page titles', items: (s.dupTitlesList || []).map(d => `"${d.title}" → ${(d.pages || []).join(', ')}`), fix: 'Give every page a unique <title>. Fix the meta title per page in On-Page Audit & Fix.' };
-        if (k === 'https') return { label: 'Pages not on HTTPS', items: (s.nonHttpsList || []), fix: 'Install an SSL certificate and force HTTPS (301 redirect http → https).' };
-        if (k === 'mobile') return { label: 'Pages not mobile-ready', items: (s.nonMobileList || []), fix: 'Add a responsive viewport meta tag and confirm the theme is mobile-friendly.' };
-        if (k === 'robots') return { label: 'Robots.txt', items: s.hasRobotsTxt ? [] : ['No robots.txt found'], fix: 'Create /robots.txt and reference your XML sitemap.' };
-        if (k === 'sitemap') return { label: 'XML Sitemap', items: s.hasSitemap ? [] : ['No XML sitemap found'], fix: 'Generate an XML sitemap (Yoast/RankMath) and submit it in Search Console.' };
-        if (k === 'schema') return { label: 'Schema markup', items: (s.schemaTypes && s.schemaTypes.length) ? ['Detected: ' + s.schemaTypes.join(', ')] : ['No structured data detected'], fix: 'Add LocalBusiness + Service JSON-LD schema (use the Schema fix on a finding below).' };
-        return null;
-      };
-      const toggleTile = (k) => setTileDetail(prev => prev === k ? null : k);
 
       // Load previous findings on mount, clean up poll on unmount
       useEffect(() => {
