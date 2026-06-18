@@ -34176,6 +34176,10 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       schemaTypes, dupTitles: dupTitles.length,
       thinPages: thinPages.length,
       mobileReady, redirectCount,
+      thinPagesList: thinPages.slice(0, 50).map(p => ({ path: p.path, words: p.wordCount })),
+      dupTitlesList: dupTitles.slice(0, 50).map(([title, paths]) => ({ title, pages: paths })),
+      nonHttpsList: successPages.filter(p => !p.isHttps).slice(0, 50).map(p => p.path),
+      nonMobileList: successPages.filter(p => !p.hasViewport).slice(0, 50).map(p => p.path),
     };
 
     // Topic-based dedup helpers (used in merge + old-finding cleanup)
