@@ -6702,9 +6702,12 @@
         setTileDetail(willOpen ? k : null);
         if (!willOpen) { setSearchQ(''); return; }
         const kw = { thin: 'thin content', dup: 'duplicate title', https: 'https', mobile: 'mobile', robots: 'robots', sitemap: 'sitemap', schema: 'schema' }[k] || '';
-        const hasFindings = kw && findings.some(f => isOpenFinding(f) && (f.title || '').toLowerCase().includes(kw));
-        if (hasFindings) {
-          setFilterCat('all'); setFilterStatus('all'); setSearchQ(kw);
+        const catFor = { thin: 'Content Quality', dup: 'Content Quality', schema: 'Schema & Data' }[k];
+        const matching = findings.filter(f => isOpenFinding(f) && (f.title || '').toLowerCase().includes(kw));
+        if (matching.length) {
+          // Narrow to the exact issue: jump to its category tab AND search, so you see ONLY these findings.
+          const cat = catFor && categories.includes(catFor) ? catFor : (matching[0].category || 'all');
+          setFilterCat(cat); setFilterStatus('all'); setSearchQ(kw);
           setTimeout(() => { const el = document.getElementById('wa-findings'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 90);
         } else {
           setSearchQ('');
