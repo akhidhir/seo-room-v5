@@ -7390,25 +7390,26 @@
             ))}
           </div>)}
 
-          {/* Health indicators */}
+          {/* Health indicators — click to jump to the issue + fix */}
           {summary && (<div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
             {[
-              { label: 'HTTPS', ok: summary.httpsPages === summary.successful, icon: 'fa-lock' },
-              { label: 'Robots.txt', ok: summary.hasRobotsTxt, icon: 'fa-robot' },
-              { label: 'Sitemap', ok: summary.hasSitemap, icon: 'fa-sitemap' },
-              { label: 'Schema', ok: summary.schemaTypes?.length > 0 && !findings.some(f => f.category === 'Schema & Data' && f.status !== 'fixed' && f.status !== 'rejected'), icon: 'fa-code' },
-              { label: 'Mobile', ok: summary.mobileReady === summary.successful, icon: 'fa-mobile-alt' },
+              { label: 'HTTPS', ok: summary.httpsPages === summary.successful, icon: 'fa-lock', cat: 'security', kw: /https|ssl|mixed content/i },
+              { label: 'Robots.txt', ok: summary.hasRobotsTxt, icon: 'fa-robot', cat: 'sitemap', kw: /robots/i },
+              { label: 'Sitemap', ok: summary.hasSitemap, icon: 'fa-sitemap', cat: 'sitemap', kw: /sitemap/i },
+              { label: 'Schema', ok: summary.schemaTypes?.length > 0 && !findings.some(f => f.category === 'Schema & Data' && f.status !== 'fixed' && f.status !== 'rejected'), icon: 'fa-code', cat: 'schema', kw: /schema/i },
+              { label: 'Mobile', ok: summary.mobileReady === summary.successful, icon: 'fa-mobile-alt', cat: 'mobile', kw: /mobile|viewport|responsive/i },
             ].map((h, i) => (
-              <div key={i} style={{ background: 'var(--card)', border: `1px solid ${h.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div key={i} onClick={() => jumpToIssue(h.kw, h.cat)} title="Go to issue & fix"
+                style={{ background: 'var(--card)', border: `1px solid ${h.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <i className={`fas ${h.ok ? 'fa-check-circle' : 'fa-times-circle'}`} style={{ color: h.ok ? '#22c55e' : '#ef4444' }} />
                 <span style={{ fontSize: 13, fontWeight: 600, color: h.ok ? '#22c55e' : '#ef4444' }}>{h.label}</span>
               </div>
             ))}
-            {summary.thinPages > 0 && <div style={{ background: 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {summary.thinPages > 0 && <div onClick={() => jumpToIssue(/thin|word count|low content/i, 'crawl')} title="Go to issue & fix" style={{ background: 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <i className="fas fa-exclamation-triangle" style={{ color: '#f59e0b' }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{summary.thinPages} thin pages</span>
             </div>}
-            {summary.dupTitles > 0 && <div style={{ background: 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {summary.dupTitles > 0 && <div onClick={() => jumpToIssue(/duplicate/i, 'crawl')} title="Go to issue & fix" style={{ background: 'var(--card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
               <i className="fas fa-copy" style={{ color: '#f59e0b' }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: '#f59e0b' }}>{summary.dupTitles} duplicate titles</span>
             </div>}
@@ -7825,6 +7826,15 @@
         { key: 'structure', label: 'Internal Link Structure', icon: 'fas fa-project-diagram', color: '#14b8a6' },
       ];
 
+      // Click a health tile -> expand the matching category and scroll to the finding (with its Fix button)
+      const jumpToIssue = (kw, fallbackCat) => {
+        const f = findings.find(x => kw && (kw.test(x.title || '') || kw.test(x.description || '')));
+        const cat = (f && f.category) || fallbackCat;
+        if (!cat) return;
+        setExpandedCats(prev => { const s = new Set(prev); s.add(cat); return s; });
+        setTimeout(() => { const el = document.getElementById('wa-cat-' + cat); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 80);
+      };
+
       // Load previous findings on mount, clean up poll on unmount
       useEffect(() => {
         if (project) loadExisting();
@@ -8073,7 +8083,7 @@
               const medCount = allCatFindings.filter(f => f.severity === 'Medium').length;
               const lowCount = allCatFindings.filter(f => f.severity === 'Low').length;
               return (
-                <div key={cat.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                <div key={cat.key} id={'wa-cat-' + cat.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
                   <div onClick={() => setExpandedCats(prev => { const s = new Set(prev); s.has(cat.key) ? s.delete(cat.key) : s.add(cat.key); return s; })}
                     style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 18px', background: `${cat.color}12`, borderBottom: isOpen ? `2px solid ${cat.color}` : 'none', cursor: 'pointer' }}>
                     <i className={cat.icon} style={{ color: cat.color, fontSize: 20 }} />
