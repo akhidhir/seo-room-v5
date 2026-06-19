@@ -12688,11 +12688,18 @@ app.get('/api/template-test', async (req, res) => {
     const lcp = (aud['largest-contentful-paint']?.numericValue || 0) / 1000;
     const cls = aud['cumulative-layout-shift']?.numericValue || 0;
     const weightMB = (aud['total-byte-weight']?.numericValue || 0) / 1024 / 1024;
-    const dom = aud['dom-size']?.numericValue || 0;
+    let dom = aud['dom-size']?.numericValue || 0;
+    if (!dom) {
+      // Fallback: parse the displayValue (e.g. "1,234 elements") when numericValue is absent.
+      const dv = aud['dom-size']?.displayValue || '';
+      const n = parseInt(String(dv).replace(/[^0-9]/g, ''), 10);
+      if (n) dom = n;
+    }
 
     const band = (v, good, warn) => v <= good ? 'g' : (v <= warn ? 'a' : 'r');
     const sBand = s => s >= 90 ? 'g' : (s >= 60 ? 'a' : 'r');
-    const bands = [sBand(perf), sBand(seo), band(lcp, 2.5, 4), band(cls, 0.1, 0.25), band(weightMB, 1, 2.5), band(dom, 800, 1500)];
+    const bands = [sBand(perf), sBand(seo), band(lcp, 2.5, 4), band(cls, 0.1, 0.25), band(weightMB, 1, 2.5)];
+    if (dom) bands.push(band(dom, 800, 1500));
     const fails = bands.filter(b => b === 'r').length;
     const warns = bands.filter(b => b === 'a').length;
     let verdict, verdictKey;
@@ -12710,7 +12717,7 @@ app.get('/api/template-test', async (req, res) => {
         lcp: { value: lcp.toFixed(1) + 's', band: band(lcp, 2.5, 4) },
         cls: { value: cls.toFixed(2), band: band(cls, 0.1, 0.25) },
         weight: { value: weightMB.toFixed(2) + ' MB', band: band(weightMB, 1, 2.5) },
-        dom: { value: Math.round(dom).toLocaleString(), band: band(dom, 800, 1500) },
+        dom: { value: dom ? Math.round(dom).toLocaleString() : '—', band: dom ? band(dom, 800, 1500) : 'g' },
       },
       verdictKey, verdict,
     });
