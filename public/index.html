@@ -9497,6 +9497,94 @@
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     // ============ INDEXING PAGE ============
     const _indexingCache = {};
+    // ============ TEMPLATE ELIGIBILITY TESTER ============
+    function TemplateTesterPage() {
+      const [url, setUrl] = React.useState('');
+      const [loading, setLoading] = React.useState(false);
+      const [result, setResult] = React.useState(null);
+      const [error, setError] = React.useState('');
+
+      const run = async () => {
+        if (!url.trim()) { setError('Enter a template URL.'); return; }
+        setError(''); setLoading(true); setResult(null);
+        try {
+          const data = await api('/template-test?url=' + encodeURIComponent(url.trim()));
+          if (data && data.error) setError(data.error);
+          else setResult(data);
+        } catch (e) { setError(e.message); }
+        setLoading(false);
+      };
+
+      const bandColor = b => b === 'g' ? '#22c55e' : b === 'a' ? '#f59e0b' : '#ef4444';
+      const bandWord = b => b === 'g' ? 'Good' : b === 'a' ? 'Okay' : 'Poor';
+      const vColor = { pass: '#22c55e', warn: '#f59e0b', reject: '#ef4444' };
+      const order = ['perf', 'seo', 'lcp', 'cls', 'weight', 'dom', 'bp'];
+      const labels = { perf: 'Performance', seo: 'SEO basics', bp: 'Best practices', lcp: 'LCP', cls: 'CLS', weight: 'Page weight', dom: 'DOM nodes' };
+      const manualChecks = [
+        'Builder type — clean HTML / Gutenberg-friendly, not a heavy Elementor export?',
+        'Rebrandable — uses CSS variables / consistent colour tokens?',
+        'Schema — structured data present, or we add LocalBusiness ourselves?',
+        'Design fit — right look for a trades client?',
+        'Licensing — cloning for inspiration with our own assets, not lifting a paid template?',
+      ];
+
+      return (
+        <div style={{ padding: 24, maxWidth: 900 }}>
+          <div className="page-title" style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
+            <i className="fas fa-vial" style={{ marginRight: 10, color: '#8b5cf6' }} />Template Eligibility Tester
+          </div>
+          <div style={{ color: 'var(--text3)', marginBottom: 20, fontSize: 14 }}>Score any template before you rebuild it. Uses your PageSpeed key automatically.</div>
+
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 18 }}>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://template-demo-url.com/"
+                onKeyDown={e => { if (e.key === 'Enter') run(); }}
+                style={{ flex: 1, padding: '11px 13px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
+              <button onClick={run} disabled={loading} style={{ padding: '11px 22px', border: 'none', borderRadius: 8, background: '#8b5cf6', color: '#fff', fontWeight: 600, fontSize: 14, cursor: loading ? 'wait' : 'pointer' }}>
+                {loading ? <><span className="spinner"></span> Testing…</> : 'Run test'}
+              </button>
+            </div>
+            {error && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 10 }}>{error}</div>}
+            {loading && <div style={{ color: '#8b5cf6', fontSize: 13, marginTop: 10 }}>Running PageSpeed analysis — can take 20–40s.</div>}
+          </div>
+
+          {result && (
+            <div>
+              <div style={{ padding: '16px 20px', borderRadius: 12, marginBottom: 18, fontWeight: 700, fontSize: 17,
+                background: vColor[result.verdictKey] + '18', border: '1px solid ' + vColor[result.verdictKey] + '55', color: vColor[result.verdictKey] }}>
+                {result.verdict}
+              </div>
+
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 18 }}>
+                <div style={{ fontWeight: 600, marginBottom: 14, textTransform: 'uppercase', fontSize: 13, letterSpacing: 0.5, color: 'var(--text2)' }}>Automated checks</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+                  {order.map(k => {
+                    const m = result.metrics[k]; if (!m) return null;
+                    return (
+                      <div key={k} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{labels[k]}</div>
+                        <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{m.value}{m.suffix || ''}</div>
+                        <div style={{ fontSize: 12, fontWeight: 600, marginTop: 4, color: bandColor(m.band) }}>{bandWord(m.band)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 }}>
+                <div style={{ fontWeight: 600, marginBottom: 12, textTransform: 'uppercase', fontSize: 13, letterSpacing: 0.5, color: 'var(--text2)' }}>Manual checks (what an API can't see)</div>
+                {manualChecks.map((c, i) => (
+                  <label key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 0', fontSize: 14, color: 'var(--text)' }}>
+                    <input type="checkbox" style={{ marginTop: 3 }} /> <span>{c}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function IndexingPage({ project, setActiveTab }) {
       const _ixck = project?.id + ':indexing';
       // (GSC URL-Inspection deep links 404 outside an active SC session — see openGscInspect below, which
@@ -38387,6 +38475,8 @@ case 'action-plan':
             return <SEOMigrationPage />;
           case 'page-builder':
             return <PageBuilderPage project={project} allProjects={allProjects} />;
+          case 'template-tester':
+            return <TemplateTesterPage />;
           case 'kw-research':
             return <KeywordResearchStandalonePage allProjects={allProjects} />;
           case 'ow-project':
@@ -38474,6 +38564,9 @@ case 'action-plan':
             { id: 'competing-pages', label: 'Competing Pages', icon: 'fas fa-clone' },
           ] },
           { id: 'security-audit', label: 'Security Audit', icon: 'fas fa-shield-halved' },
+        ]},
+        { section: 'TEMPLATES', items: [
+          { id: 'template-tester', label: 'Template Tester', icon: 'fas fa-vial' },
         ]},
         { section: 'BACKLINKS', items: [
           { id: 'backlinks', label: 'Backlinks', icon: 'fas fa-external-link-alt' },

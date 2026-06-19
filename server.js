@@ -12671,6 +12671,54 @@ app.get('/api/speed-audit/:projectId/pagespeed', async (req, res) => {
   }
 });
 
+// ==================== TEMPLATE ELIGIBILITY TESTER ====================
+// Scores any template/URL for eligibility (performance, SEO, page weight, DOM)
+// using Google PageSpeed. Reuses runPageSpeedAudit (server-side PAGESPEED_API_KEY).
+app.get('/api/template-test', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url parameter required' });
+  try {
+    const data = await runPageSpeedAudit(url, 'mobile');
+    const lh = data.lighthouseResult || {};
+    const cats = lh.categories || {};
+    const aud = lh.audits || {};
+    const perf = Math.round((cats.performance?.score || 0) * 100);
+    const seo = Math.round((cats.seo?.score || 0) * 100);
+    const bp = Math.round((cats['best-practices']?.score || 0) * 100);
+    const lcp = (aud['largest-contentful-paint']?.numericValue || 0) / 1000;
+    const cls = aud['cumulative-layout-shift']?.numericValue || 0;
+    const weightMB = (aud['total-byte-weight']?.numericValue || 0) / 1024 / 1024;
+    const dom = aud['dom-size']?.numericValue || 0;
+
+    const band = (v, good, warn) => v <= good ? 'g' : (v <= warn ? 'a' : 'r');
+    const sBand = s => s >= 90 ? 'g' : (s >= 60 ? 'a' : 'r');
+    const bands = [sBand(perf), sBand(seo), band(lcp, 2.5, 4), band(cls, 0.1, 0.25), band(weightMB, 1, 2.5), band(dom, 800, 1500)];
+    const fails = bands.filter(b => b === 'r').length;
+    const warns = bands.filter(b => b === 'a').length;
+    let verdict, verdictKey;
+    if (fails >= 2) { verdictKey = 'reject'; verdict = 'Reject — too heavy/messy to be worth rebuilding'; }
+    else if (fails === 1 || warns >= 3) { verdictKey = 'warn'; verdict = 'Needs work — usable but check the amber items'; }
+    else { verdictKey = 'pass'; verdict = 'Eligible — clean and fast enough to rebuild'; }
+
+    res.json({
+      url,
+      finalUrl: lh.finalUrl || url,
+      metrics: {
+        perf: { value: perf, band: sBand(perf), suffix: '/100' },
+        seo: { value: seo, band: sBand(seo), suffix: '/100' },
+        bp: { value: bp, band: sBand(bp), suffix: '/100' },
+        lcp: { value: lcp.toFixed(1) + 's', band: band(lcp, 2.5, 4) },
+        cls: { value: cls.toFixed(2), band: band(cls, 0.1, 0.25) },
+        weight: { value: weightMB.toFixed(2) + ' MB', band: band(weightMB, 1, 2.5) },
+        dom: { value: Math.round(dom).toLocaleString(), band: band(dom, 800, 1500) },
+      },
+      verdictKey, verdict,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Re-test a single page's PageSpeed score and update stored audit data
 app.post('/api/speed-audit/:projectId/retest-page', async (req, res) => {
   const { page_url } = req.body;
