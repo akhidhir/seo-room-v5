@@ -12832,17 +12832,32 @@ app.get('/api/asset-extract', async (req, res) => {
       if (!m) m = html.match(new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']' + prop + '["\']', 'i'));
       return m ? m[1].trim() : '';
     };
-    const tag = (re) => { const m = html.match(re); return m ? m[1].replace(/<[^>]+>/g, '').trim() : ''; };
+    // Decode common HTML entities so text fields read cleanly.
+    const ent = (s) => (s || '')
+      .replace(/&amp;/g, '&').replace(/&#0?38;/g, '&')
+      .replace(/&quot;|&#0?34;/g, '"')
+      .replace(/&#0?39;|&#x27;|&apos;|&rsquo;|&lsquo;/g, "'")
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+      .replace(/&#(\d+);/g, (m, d) => { try { return String.fromCharCode(+d); } catch { return m; } })
+      .trim();
+    const tag = (re) => { const m = html.match(re); return m ? ent(m[1].replace(/<[^>]+>/g, '').trim()) : ''; };
 
     const title = tag(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const h1 = tag(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-    const desc = meta('description') || meta('og:description');
-    const siteName = meta('og:site_name');
+    const desc = ent(meta('description') || meta('og:description'));
+    const siteName = ent(meta('og:site_name'));
     const themeColor = meta('theme-color');
     const ogImage = abs(meta('og:image'));
     const tel = (html.match(/href=["']tel:([^"']+)["']/i) || [])[1] || (html.match(/(\+?\d[\d\s().\-]{7,}\d)/) || [])[1] || '';
     const email = (html.match(/href=["']mailto:([^"'?]+)["']/i) || [])[1] || (html.match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/i) || [])[0] || '';
-    const font = ((html.match(/fonts\.googleapis\.com\/css2?\?family=([^:"&'\\]+)/i) || [])[1] || '').replace(/\+/g, ' ');
+    // Google Fonts: decode the query, then take the FIRST family name only (drop weights/styles).
+    let font = '';
+    const fontQ = (html.match(/fonts\.googleapis\.com\/css2?\?([^"'>]+)/i) || [])[1];
+    if (fontQ) {
+      let q = fontQ; try { q = decodeURIComponent(q); } catch (e) {}
+      const fam = q.match(/family=([^&:@;]+)/i);
+      if (fam) font = fam[1].replace(/\+/g, ' ').trim();
+    }
 
     // JSON-LD structured data — the best source for NAP + logo + socials
     let ld = {};
