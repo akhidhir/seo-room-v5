@@ -9503,6 +9503,12 @@
       const [loading, setLoading] = React.useState(false);
       const [result, setResult] = React.useState(null);
       const [error, setError] = React.useState('');
+      const [saved, setSaved] = React.useState([]);
+
+      const loadSaved = async () => {
+        try { const d = await api('/template-tests'); if (d && d.tests) setSaved(d.tests); } catch (e) {}
+      };
+      React.useEffect(() => { loadSaved(); }, []);
 
       const run = async () => {
         if (!url.trim()) { setError('Enter a template URL.'); return; }
@@ -9510,9 +9516,14 @@
         try {
           const data = await api('/template-test?url=' + encodeURIComponent(url.trim()));
           if (data && data.error) setError(data.error);
-          else setResult(data);
+          else { setResult(data); loadSaved(); }
         } catch (e) { setError(e.message); }
         setLoading(false);
+      };
+
+      const del = async (id) => {
+        if (!window.confirm('Delete this saved test?')) return;
+        try { await api('/template-tests/' + id, { method: 'DELETE' }); if (result && result.id === id) setResult(null); loadSaved(); } catch (e) {}
       };
 
       const bandColor = b => b === 'g' ? '#22c55e' : b === 'a' ? '#f59e0b' : '#ef4444';
@@ -9579,6 +9590,30 @@
                   </label>
                 ))}
               </div>
+            </div>
+          )}
+
+          {saved.length > 0 && (
+            <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginTop: 18 }}>
+              <div style={{ fontWeight: 600, marginBottom: 12, textTransform: 'uppercase', fontSize: 13, letterSpacing: 0.5, color: 'var(--text2)' }}>Saved tests ({saved.length})</div>
+              {saved.map(t => (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: '50%', flex: 'none', background: vColor[t.verdict_key] || '#888' }}></span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div onClick={() => setResult({ id: t.id, url: t.url, finalUrl: t.final_url, metrics: t.metrics, verdict: t.verdict, verdictKey: t.verdict_key })}
+                      style={{ cursor: 'pointer', color: 'var(--text)', fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={t.url}>{t.url}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                      {(t.metrics && t.metrics.perf ? t.metrics.perf.value : '?')}/100 perf · {(t.metrics && t.metrics.weight ? t.metrics.weight.value : '?')} · {new Date(t.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: vColor[t.verdict_key] || '#888', whiteSpace: 'nowrap' }}>
+                    {t.verdict_key === 'pass' ? 'Eligible' : t.verdict_key === 'warn' ? 'Needs work' : 'Reject'}
+                  </span>
+                  <button onClick={() => del(t.id)} title="Delete" style={{ background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14, padding: 4 }}>
+                    <i className="fas fa-trash"></i>
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>

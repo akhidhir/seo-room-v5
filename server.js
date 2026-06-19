@@ -476,6 +476,19 @@ async function initDb() {
       )
     `);
 
+    // Template eligibility tests — saved results for the Template Tester (shared library)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS template_tests (
+        id SERIAL PRIMARY KEY,
+        url TEXT NOT NULL,
+        final_url TEXT,
+        verdict_key TEXT,
+        verdict TEXT,
+        metrics JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // WordPress change history — universal rollback for ALL WP writes
     await client.query(`
       CREATE TABLE IF NOT EXISTS wp_change_history (
@@ -12707,20 +12720,43 @@ app.get('/api/template-test', async (req, res) => {
     else if (fails === 1 || warns >= 3) { verdictKey = 'warn'; verdict = 'Needs work — usable but check the amber items'; }
     else { verdictKey = 'pass'; verdict = 'Eligible — clean and fast enough to rebuild'; }
 
-    res.json({
-      url,
-      finalUrl: lh.finalUrl || url,
-      metrics: {
-        perf: { value: perf, band: sBand(perf), suffix: '/100' },
-        seo: { value: seo, band: sBand(seo), suffix: '/100' },
-        bp: { value: bp, band: sBand(bp), suffix: '/100' },
-        lcp: { value: lcp.toFixed(1) + 's', band: band(lcp, 2.5, 4) },
-        cls: { value: cls.toFixed(2), band: band(cls, 0.1, 0.25) },
-        weight: { value: weightMB.toFixed(2) + ' MB', band: band(weightMB, 1, 2.5) },
-        dom: { value: dom ? Math.round(dom).toLocaleString() : '—', band: dom ? band(dom, 800, 1500) : 'g' },
-      },
-      verdictKey, verdict,
-    });
+    const metrics = {
+      perf: { value: perf, band: sBand(perf), suffix: '/100' },
+      seo: { value: seo, band: sBand(seo), suffix: '/100' },
+      bp: { value: bp, band: sBand(bp), suffix: '/100' },
+      lcp: { value: lcp.toFixed(1) + 's', band: band(lcp, 2.5, 4) },
+      cls: { value: cls.toFixed(2), band: band(cls, 0.1, 0.25) },
+      weight: { value: weightMB.toFixed(2) + ' MB', band: band(weightMB, 1, 2.5) },
+      dom: { value: dom ? Math.round(dom).toLocaleString() : '—', band: dom ? band(dom, 800, 1500) : 'g' },
+    };
+    const finalUrl = lh.finalUrl || url;
+    // Save the result so it persists across navigation.
+    const saved = await pool.query(
+      `INSERT INTO template_tests (url, final_url, verdict_key, verdict, metrics)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+      [url, finalUrl, verdictKey, verdict, JSON.stringify(metrics)]
+    );
+    res.json({ id: saved.rows[0].id, created_at: saved.rows[0].created_at, url, finalUrl, metrics, verdictKey, verdict });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// List saved template tests (most recent first)
+app.get('/api/template-tests', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT id, url, final_url, verdict_key, verdict, metrics, created_at FROM template_tests ORDER BY created_at DESC LIMIT 200');
+    res.json({ tests: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete a saved template test
+app.delete('/api/template-tests/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM template_tests WHERE id = $1', [parseInt(req.params.id, 10)]);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
