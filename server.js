@@ -12816,6 +12816,70 @@ app.delete('/api/asset-bundles/:id', async (req, res) => {
   }
 });
 
+// Auto-extract a draft asset bundle from an existing website URL (best effort).
+app.get('/api/asset-extract', async (req, res) => {
+  let { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'url parameter required' });
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  try {
+    const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(20000) });
+    const html = await resp.text();
+    const base = new URL(resp.url || url);
+    const abs = (u) => { if (!u) return ''; try { return new URL(u, base).href; } catch { return u; } };
+
+    const meta = (prop) => {
+      let m = html.match(new RegExp('<meta[^>]+(?:property|name)=["\']' + prop + '["\'][^>]*content=["\']([^"\']+)["\']', 'i'));
+      if (!m) m = html.match(new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']' + prop + '["\']', 'i'));
+      return m ? m[1].trim() : '';
+    };
+    const tag = (re) => { const m = html.match(re); return m ? m[1].replace(/<[^>]+>/g, '').trim() : ''; };
+
+    const title = tag(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const h1 = tag(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+    const desc = meta('description') || meta('og:description');
+    const siteName = meta('og:site_name');
+    const themeColor = meta('theme-color');
+    const ogImage = abs(meta('og:image'));
+    const tel = (html.match(/href=["']tel:([^"']+)["']/i) || [])[1] || (html.match(/(\+?\d[\d\s().\-]{7,}\d)/) || [])[1] || '';
+    const email = (html.match(/href=["']mailto:([^"'?]+)["']/i) || [])[1] || (html.match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/i) || [])[0] || '';
+    const font = ((html.match(/fonts\.googleapis\.com\/css2?\?family=([^:"&'\\]+)/i) || [])[1] || '').replace(/\+/g, ' ');
+
+    // JSON-LD structured data — the best source for NAP + logo + socials
+    let ld = {};
+    for (const m of html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+      try {
+        const j = JSON.parse(m[1].trim());
+        const nodes = Array.isArray(j) ? j : (j['@graph'] || [j]);
+        for (const n of nodes) {
+          const t = JSON.stringify(n['@type'] || '');
+          if (/Organization|LocalBusiness|Plumber|Electrician|Roofing|HVAC|HomeAndConstruction|ProfessionalService/i.test(t)) { ld = n; break; }
+        }
+        if (ld.name) break;
+      } catch (e) {}
+    }
+
+    const name = ld.name || siteName || (title.split(/[|\-–—]/)[0] || '').trim();
+    let address = '';
+    if (ld.address) { const a = ld.address; address = typeof a === 'string' ? a : [a.streetAddress, a.addressLocality, a.addressRegion, a.postalCode].filter(Boolean).join(', '); }
+    const logo = abs((ld.logo && (typeof ld.logo === 'string' ? ld.logo : ld.logo.url)) || ogImage || '');
+    const sameAs = ld.sameAs ? (Array.isArray(ld.sameAs) ? ld.sameAs : [ld.sameAs]) : [];
+    const social = { facebook: '', instagram: '' };
+    sameAs.forEach(u => { if (/facebook/i.test(u)) social.facebook = u; if (/instagram/i.test(u)) social.instagram = u; });
+    let areas = '';
+    if (ld.areaServed) { const a = ld.areaServed; areas = (Array.isArray(a) ? a : [a]).map(x => typeof x === 'string' ? x : (x.name || '')).filter(Boolean).join(', '); }
+
+    res.json({ extracted: {
+      client: (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      brand: { primary_color: themeColor || '', heading_font: font || '', body_font: font || '', logo_light: logo || '' },
+      business: { name: name || '', phone: ld.telephone || tel || '', email: ld.email || email || '', address: address || '', service_areas: areas || '', gbp_url: '', social },
+      slots: { headline: h1 || name || '', subtext: desc || '' },
+      media: { hero_image: ogImage || '' },
+    } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Re-test a single page's PageSpeed score and update stored audit data
 app.post('/api/speed-audit/:projectId/retest-page', async (req, res) => {
   const { page_url } = req.body;

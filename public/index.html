@@ -9510,6 +9510,8 @@
       const [editId, setEditId] = React.useState(null);
       const [saved, setSaved] = React.useState([]);
       const [msg, setMsg] = React.useState('');
+      const [grabUrl, setGrabUrl] = React.useState('');
+      const [grabbing, setGrabbing] = React.useState(false);
 
       const loadSaved = async () => { try { const d = await api('/asset-bundles'); if (d && d.bundles) setSaved(d.bundles); } catch (e) {} };
       React.useEffect(() => { loadSaved(); }, []);
@@ -9535,6 +9537,27 @@
       const newBundle = () => { setB(blank()); setEditId(null); };
       const del = async (id) => { if (!window.confirm('Delete this bundle?')) return; try { await api('/asset-bundles/' + id, { method: 'DELETE' }); if (editId === id) newBundle(); loadSaved(); } catch (e) {} };
       const copyJson = () => { try { navigator.clipboard.writeText(JSON.stringify(canonical(), null, 2)); msgShow('Bundle JSON copied — paste into the plugin.'); } catch (e) { msgShow('Copy failed.'); } };
+      const onlyFilled = (obj, skip) => Object.fromEntries(Object.entries(obj || {}).filter(([k, v]) => v && k !== skip));
+      const grab = async () => {
+        if (!grabUrl.trim()) { msgShow('Enter a website URL.'); return; }
+        setGrabbing(true);
+        try {
+          const d = await api('/asset-extract?url=' + encodeURIComponent(grabUrl.trim()));
+          if (d && d.error) { msgShow('Error: ' + d.error); }
+          else if (d && d.extracted) {
+            const x = d.extracted;
+            setB(prev => ({
+              client: x.client || prev.client,
+              brand: { ...prev.brand, ...onlyFilled(x.brand) },
+              business: { ...prev.business, ...onlyFilled(x.business, 'social') },
+              slots: { ...prev.slots, ...onlyFilled(x.slots) },
+              media: { ...prev.media, ...onlyFilled(x.media) },
+            }));
+            msgShow('Grabbed — review and adjust the fields, then Save.');
+          }
+        } catch (e) { msgShow('Error: ' + e.message); }
+        setGrabbing(false);
+      };
 
       const inpStyle = { width: '100%', padding: '9px 11px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 };
       const lab = { display: 'block', fontSize: 12, color: 'var(--text3)', margin: '10px 0 4px' };
@@ -9553,6 +9576,15 @@
             <i className="fas fa-box-open" style={{ marginRight: 10, color: '#8b5cf6' }} />Asset Intake {editId ? <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 400 }}>· editing #{editId}</span> : null}
           </div>
           <div style={{ color: 'var(--text3)', marginBottom: 20, fontSize: 14 }}>Build a client's brand + content bundle. Saved for reuse; copy the JSON into the Trades Integrator plugin.</div>
+
+          <div style={{ ...card, borderColor: '#06b6d4' }}>
+            <div style={{ fontWeight: 600, marginBottom: 8, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Grab from an existing website</div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <input value={grabUrl} onChange={e => setGrabUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') grab(); }} placeholder="https://client-existing-site.com" style={inpStyle} />
+              <button onClick={grab} disabled={grabbing} style={{ padding: '9px 18px', border: 'none', borderRadius: 8, background: '#06b6d4', color: '#fff', fontWeight: 600, fontSize: 14, cursor: grabbing ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{grabbing ? 'Grabbing…' : 'Grab'}</button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>Auto-fills name, phone, email, logo, colour, fonts, headline &amp; address where available. Review before saving.</div>
+          </div>
 
           <div style={card}>
             <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Client</div>
