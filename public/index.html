@@ -9497,6 +9497,140 @@
     // ============ ON-PAGE AUDIT PAGE (with Yoast) ============
     // ============ INDEXING PAGE ============
     const _indexingCache = {};
+    // ============ ASSET INTAKE (reusable client bundle store) ============
+    function AssetIntakePage() {
+      const blank = () => ({
+        client: '',
+        brand: { primary_color: '#185fa5', secondary_color: '#13a152', dark_color: '#0b2a1a', heading_font: 'Poppins', body_font: 'Inter', logo_light: '' },
+        business: { name: '', phone: '', email: '', address: '', hours: '24/7', service_areas: '', gbp_url: '' },
+        slots: { badge_text: 'Trusted by 40+ local clients', headline: '', subtext: '', cta_text: 'Get a free quote', cta_link: '', services_title: 'Our services', services_subtitle: 'Licensed, insured, and available around the clock.', service_1_title: '', service_1_desc: '', service_2_title: '', service_2_desc: '', service_3_title: '', service_3_desc: '' },
+        media: { hero_image: '' },
+      });
+      const [b, setB] = React.useState(blank());
+      const [editId, setEditId] = React.useState(null);
+      const [saved, setSaved] = React.useState([]);
+      const [msg, setMsg] = React.useState('');
+
+      const loadSaved = async () => { try { const d = await api('/asset-bundles'); if (d && d.bundles) setSaved(d.bundles); } catch (e) {} };
+      React.useEffect(() => { loadSaved(); }, []);
+      const msgShow = t => { setMsg(t); setTimeout(() => setMsg(''), 3000); };
+      const set = (section, key, val) => setB(prev => ({ ...prev, [section]: { ...prev[section], [key]: val } }));
+
+      const canonical = () => {
+        const areas = (b.business.service_areas || '').split(',').map(s => s.trim()).filter(Boolean);
+        return { client: b.client || 'client', updated: new Date().toISOString().slice(0, 10), brand: { ...b.brand }, business: { ...b.business, service_areas: areas }, slots: { ...b.slots, primary_color: b.brand.primary_color }, media: { ...b.media, gallery: [] } };
+      };
+      const save = async () => {
+        try {
+          const data = { ...b, slots: { ...b.slots, primary_color: b.brand.primary_color } };
+          const r = await api('/asset-bundles', { method: 'POST', body: { id: editId, client_name: b.client, data } });
+          if (r && r.bundle) { setEditId(r.bundle.id); msgShow('Saved.'); loadSaved(); } else if (r && r.error) { msgShow('Error: ' + r.error); }
+        } catch (e) { msgShow('Error: ' + e.message); }
+      };
+      const loadBundle = (row) => {
+        const d = row.data || {}; const bl = blank();
+        setB({ client: d.client || row.client_name || '', brand: { ...bl.brand, ...(d.brand || {}) }, business: { ...bl.business, ...(d.business || {}), service_areas: Array.isArray(d.business && d.business.service_areas) ? d.business.service_areas.join(', ') : ((d.business && d.business.service_areas) || '') }, slots: { ...bl.slots, ...(d.slots || {}) }, media: { ...bl.media, ...(d.media || {}) } });
+        setEditId(row.id); window.scrollTo(0, 0);
+      };
+      const newBundle = () => { setB(blank()); setEditId(null); };
+      const del = async (id) => { if (!window.confirm('Delete this bundle?')) return; try { await api('/asset-bundles/' + id, { method: 'DELETE' }); if (editId === id) newBundle(); loadSaved(); } catch (e) {} };
+      const copyJson = () => { try { navigator.clipboard.writeText(JSON.stringify(canonical(), null, 2)); msgShow('Bundle JSON copied — paste into the plugin.'); } catch (e) { msgShow('Copy failed.'); } };
+
+      const inpStyle = { width: '100%', padding: '9px 11px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 };
+      const lab = { display: 'block', fontSize: 12, color: 'var(--text3)', margin: '10px 0 4px' };
+      const card = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16 };
+      const inp = (section, key, ph) => <input value={b[section][key] || ''} onChange={e => set(section, key, e.target.value)} placeholder={ph || ''} style={inpStyle} />;
+      const txt = (section, key, ph) => <textarea value={b[section][key] || ''} onChange={e => set(section, key, e.target.value)} placeholder={ph || ''} style={{ ...inpStyle, minHeight: 62, resize: 'vertical' }} />;
+      const colr = (key) => <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input type="color" value={b.brand[key]} onChange={e => set('brand', key, e.target.value)} style={{ width: 42, height: 38, padding: 2, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg)' }} />
+        <input value={b.brand[key]} onChange={e => set('brand', key, e.target.value)} style={inpStyle} />
+      </div>;
+      const half = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
+
+      return (
+        <div style={{ padding: 24, maxWidth: 900 }}>
+          <div className="page-title" style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
+            <i className="fas fa-box-open" style={{ marginRight: 10, color: '#8b5cf6' }} />Asset Intake {editId ? <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 400 }}>· editing #{editId}</span> : null}
+          </div>
+          <div style={{ color: 'var(--text3)', marginBottom: 20, fontSize: 14 }}>Build a client's brand + content bundle. Saved for reuse; copy the JSON into the Trades Integrator plugin.</div>
+
+          <div style={card}>
+            <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Client</div>
+            <label style={lab}>Client key</label>
+            <input value={b.client} onChange={e => setB(p => ({ ...p, client: e.target.value }))} placeholder="acme-plumbing" style={inpStyle} />
+          </div>
+
+          <div style={card}>
+            <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Brand</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+              <div><label style={lab}>Primary</label>{colr('primary_color')}</div>
+              <div><label style={lab}>Secondary</label>{colr('secondary_color')}</div>
+              <div><label style={lab}>Dark</label>{colr('dark_color')}</div>
+            </div>
+            <div style={half}>
+              <div><label style={lab}>Heading font</label>{inp('brand', 'heading_font')}</div>
+              <div><label style={lab}>Body font</label>{inp('brand', 'body_font')}</div>
+            </div>
+            <label style={lab}>Logo URL</label>{inp('brand', 'logo_light', 'https://…/logo.png')}
+          </div>
+
+          <div style={card}>
+            <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Business</div>
+            <div style={half}><div><label style={lab}>Name</label>{inp('business', 'name')}</div><div><label style={lab}>Phone</label>{inp('business', 'phone')}</div></div>
+            <div style={half}><div><label style={lab}>Email</label>{inp('business', 'email')}</div><div><label style={lab}>Hours</label>{inp('business', 'hours')}</div></div>
+            <label style={lab}>Address</label>{inp('business', 'address')}
+            <label style={lab}>Service areas (comma separated)</label>{inp('business', 'service_areas', 'Brisbane, Logan, Ipswich')}
+            <label style={lab}>Google Business Profile URL</label>{inp('business', 'gbp_url')}
+          </div>
+
+          <div style={card}>
+            <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Hero</div>
+            <label style={lab}>Badge text</label>{inp('slots', 'badge_text')}
+            <label style={lab}>Headline</label>{inp('slots', 'headline')}
+            <label style={lab}>Subtext</label>{txt('slots', 'subtext')}
+            <div style={half}><div><label style={lab}>CTA text</label>{inp('slots', 'cta_text')}</div><div><label style={lab}>CTA link</label>{inp('slots', 'cta_link', 'tel:+61…')}</div></div>
+            <label style={lab}>Hero image URL</label>{inp('media', 'hero_image')}
+          </div>
+
+          <div style={card}>
+            <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Services</div>
+            <label style={lab}>Section title</label>{inp('slots', 'services_title')}
+            <label style={lab}>Section subtitle</label>{inp('slots', 'services_subtitle')}
+            {[1, 2, 3].map(n => (
+              <div key={n} style={half}>
+                <div><label style={lab}>Service {n} title</label>{inp('slots', 'service_' + n + '_title')}</div>
+                <div><label style={lab}>Service {n} description</label>{inp('slots', 'service_' + n + '_desc')}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 24 }}>
+            <button onClick={save} style={{ padding: '11px 22px', border: 'none', borderRadius: 8, background: '#8b5cf6', color: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>{editId ? 'Update bundle' : 'Save bundle'}</button>
+            <button onClick={copyJson} style={{ padding: '11px 18px', border: '1px solid var(--border)', borderRadius: 8, background: 'transparent', color: 'var(--text)', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>Copy JSON</button>
+            <button onClick={newBundle} style={{ padding: '11px 18px', border: '1px solid var(--border)', borderRadius: 8, background: 'transparent', color: 'var(--text3)', fontSize: 14, cursor: 'pointer' }}>New</button>
+            {msg && <span style={{ color: '#22c55e', fontSize: 13 }}>{msg}</span>}
+          </div>
+
+          {saved.length > 0 && (
+            <div style={card}>
+              <div style={{ fontWeight: 600, marginBottom: 12, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Saved bundles ({saved.length})</div>
+              {saved.map(row => (
+                <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                  <i className="fas fa-box" style={{ color: '#8b5cf6' }}></i>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div onClick={() => loadBundle(row)} style={{ cursor: 'pointer', color: 'var(--text)', fontSize: 14 }}>{row.client_name || 'client'}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>updated {new Date(row.updated_at).toLocaleDateString()}</div>
+                  </div>
+                  <button onClick={() => loadBundle(row)} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', cursor: 'pointer', fontSize: 12, padding: '5px 10px' }}>Load</button>
+                  <button onClick={() => del(row.id)} title="Delete" style={{ background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14, padding: 4 }}><i className="fas fa-trash"></i></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ============ TEMPLATE ELIGIBILITY TESTER ============
     function TemplateTesterPage() {
       const [url, setUrl] = React.useState('');
@@ -38512,6 +38646,8 @@ case 'action-plan':
             return <PageBuilderPage project={project} allProjects={allProjects} />;
           case 'template-tester':
             return <TemplateTesterPage />;
+          case 'asset-intake':
+            return <AssetIntakePage />;
           case 'kw-research':
             return <KeywordResearchStandalonePage allProjects={allProjects} />;
           case 'ow-project':
@@ -38602,6 +38738,7 @@ case 'action-plan':
         ]},
         { section: 'TEMPLATES', items: [
           { id: 'template-tester', label: 'Template Tester', icon: 'fas fa-vial' },
+          { id: 'asset-intake', label: 'Asset Intake', icon: 'fas fa-box-open' },
         ]},
         { section: 'BACKLINKS', items: [
           { id: 'backlinks', label: 'Backlinks', icon: 'fas fa-external-link-alt' },

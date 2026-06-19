@@ -489,6 +489,17 @@ async function initDb() {
       )
     `);
 
+    // Client asset bundles — reusable brand/content store for the Asset Intake page
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS asset_bundles (
+        id SERIAL PRIMARY KEY,
+        client_name TEXT,
+        data JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // WordPress change history — universal rollback for ALL WP writes
     await client.query(`
       CREATE TABLE IF NOT EXISTS wp_change_history (
@@ -12756,6 +12767,49 @@ app.get('/api/template-tests', async (req, res) => {
 app.delete('/api/template-tests/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM template_tests WHERE id = $1', [parseInt(req.params.id, 10)]);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== CLIENT ASSET BUNDLES (reusable store) ====================
+// List saved bundles
+app.get('/api/asset-bundles', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT id, client_name, data, created_at, updated_at FROM asset_bundles ORDER BY updated_at DESC LIMIT 200');
+    res.json({ bundles: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create or update a bundle
+app.post('/api/asset-bundles', async (req, res) => {
+  try {
+    const { id, client_name, data } = req.body || {};
+    const name = (client_name || (data && data.client) || 'client').toString();
+    if (id) {
+      const r = await pool.query(
+        'UPDATE asset_bundles SET client_name = $1, data = $2, updated_at = NOW() WHERE id = $3 RETURNING id, client_name, data, created_at, updated_at',
+        [name, JSON.stringify(data || {}), parseInt(id, 10)]
+      );
+      return res.json({ bundle: r.rows[0] });
+    }
+    const r = await pool.query(
+      'INSERT INTO asset_bundles (client_name, data) VALUES ($1, $2) RETURNING id, client_name, data, created_at, updated_at',
+      [name, JSON.stringify(data || {})]
+    );
+    res.json({ bundle: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete a bundle
+app.delete('/api/asset-bundles/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM asset_bundles WHERE id = $1', [parseInt(req.params.id, 10)]);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
