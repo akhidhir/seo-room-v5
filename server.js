@@ -489,6 +489,16 @@ async function initDb() {
       )
     `);
 
+    // Shortlisted templates from Template Discovery (persists across navigation)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS template_shortlist (
+        item_id BIGINT PRIMARY KEY,
+        niche TEXT,
+        data JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // Client asset bundles — reusable brand/content store for the Asset Intake page
     await client.query(`
       CREATE TABLE IF NOT EXISTS asset_bundles (
@@ -12765,7 +12775,7 @@ app.get('/api/template-discovery', async (req, res) => {
   const size = Math.min(parseInt(req.query.size || '3', 10), 10);
   try {
     const term = encodeURIComponent(niche + ' elementor');
-    const api = `https://api.envato.com/v1/discovery/search/search/item?site=themeforest.net&term=${term}&page=${page}&page_size=${size}&sort_by=sales`;
+    const api = `https://api.envato.com/v1/discovery/search/search/item?site=themeforest.net&category=wordpress&term=${term}&page_size=40&page=1&sort_by=sales`;
     const resp = await fetch(api, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(20000) });
     if (!resp.ok) {
       const t = await resp.text();
@@ -12773,20 +12783,40 @@ app.get('/api/template-discovery', async (req, res) => {
     }
     const data = await resp.json();
     const matches = data.matches || [];
-    const items = matches.map(m => ({
-      id: m.id,
-      name: m.name,
-      sales: m.number_of_sales || 0,
-      updated: m.updated_at ? m.updated_at.slice(0, 10) : null,
-      rating: m.rating && m.rating.rating ? Math.round(m.rating.rating * 10) / 10 : null,
-      rating_count: m.rating && m.rating.count ? m.rating.count : 0,
-      price: m.price_cents ? '$' + (m.price_cents / 100).toFixed(0) : null,
-      market_url: m.url,
-      preview_url: (m.previews && m.previews.live_site && m.previews.live_site.url) || (m.previews && m.previews.landing_page_url) || null,
-      thumb: (m.previews && m.previews.icon_with_landscape_preview && m.previews.icon_with_landscape_preview.landscape_url) || m.image || null,
-      author: m.author_username || '',
+    // Tighten relevance: keep only items whose NAME contains the niche stem (kills
+    // "construction" etc when searching "plumber"). Fall back to all if filter is too strict.
+    const stem = niche.toLowerCase().slice(0, Math.min(5, niche.length));
+    const relevant = matches.filter(m => (m.name || '').toLowerCase().includes(stem));
+    const useList = relevant.length ? relevant : matches;
+    const batch = useList.slice((page - 1) * size, (page - 1) * size + size);
+    // Fetch full details per item so sales / last-update / rating / preview are reliable.
+    const hdr = { Authorization: 'Bearer ' + token };
+    const items = await Promise.all(batch.map(async m => {
+      let d = m;
+      try {
+        const dr = await fetch(`https://api.envato.com/v3/market/catalog/item?id=${m.id}`, { headers: hdr, signal: AbortSignal.timeout(15000) });
+        if (dr.ok) d = await dr.json();
+      } catch (e) {}
+      const pv = d.previews || m.previews || {};
+      const ratingVal = (d.rating && typeof d.rating === 'object') ? d.rating.rating : (typeof d.rating === 'number' ? d.rating : (m.rating && m.rating.rating));
+      const ratingCount = (d.rating && d.rating.count) || (m.rating && m.rating.count) || 0;
+      const updatedRaw = d.updated_at || m.updated_at;
+      const priceCents = d.price_cents || m.price_cents;
+      return {
+        id: m.id,
+        name: d.name || m.name,
+        sales: (d.number_of_sales != null) ? d.number_of_sales : (m.number_of_sales || 0),
+        updated: updatedRaw ? String(updatedRaw).slice(0, 10) : null,
+        rating: ratingVal ? Math.round(ratingVal * 10) / 10 : null,
+        rating_count: ratingCount,
+        price: priceCents ? '$' + (priceCents / 100).toFixed(0) : null,
+        market_url: d.url || m.url,
+        preview_url: (pv.live_site && pv.live_site.url) || pv.landing_page_url || null,
+        thumb: (pv.icon_with_landscape_preview && pv.icon_with_landscape_preview.landscape_url) || (pv.landscape_preview && pv.landscape_preview.landscape_url) || d.image || m.image || null,
+        author: d.author_username || m.author_username || '',
+      };
     }));
-    res.json({ niche, page, total: data.total_hits || items.length, items });
+    res.json({ niche, page, total: useList.length, items });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -12835,6 +12865,32 @@ app.post('/api/projects/:projectId/template-to-copywriter', async (req, res) => 
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Template Discovery shortlist — list / add / remove
+app.get('/api/template-shortlist', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT item_id, niche, data, created_at FROM template_shortlist ORDER BY created_at DESC LIMIT 200');
+    res.json({ items: r.rows.map(x => ({ ...x.data, id: Number(x.item_id), niche: x.niche, created_at: x.created_at })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/template-shortlist', async (req, res) => {
+  try {
+    const { item, niche } = req.body || {};
+    if (!item || !item.id) return res.status(400).json({ error: 'item with id required' });
+    await pool.query(
+      `INSERT INTO template_shortlist (item_id, niche, data) VALUES ($1,$2,$3)
+       ON CONFLICT (item_id) DO UPDATE SET niche = EXCLUDED.niche, data = EXCLUDED.data`,
+      [item.id, niche || '', JSON.stringify(item)]
+    );
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/template-shortlist/:itemId', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM template_shortlist WHERE item_id = $1', [parseInt(req.params.itemId, 10)]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // List saved template tests (most recent first)
@@ -19389,12 +19445,18 @@ app.post('/api/projects/:projectId/onpage-audit/fix-content', async (req, res) =
       sourceMode = 'elementor';
       let tree; try { tree = typeof elRaw === 'string' ? JSON.parse(elRaw) : elRaw; } catch { tree = []; }
       const texts = [];
+      let h1Fallback = '';
       const walk = (els) => (els || []).forEach(el => {
-        if (el && el.widgetType === 'heading' && el.settings && el.settings.title && !h1Text) h1Text = String(el.settings.title);
+        if (el && el.widgetType === 'heading' && el.settings && el.settings.title) {
+          const sz = String(el.settings.header_size || '').toLowerCase();
+          if (sz === 'h1' && !h1Text) h1Text = String(el.settings.title); // the real H1
+          if (!h1Fallback) h1Fallback = String(el.settings.title);
+        }
         if (el && el.widgetType === 'text-editor' && el.settings && el.settings.editor) texts.push(String(el.settings.editor).replace(/<[^>]+>/g, ' '));
         if (el && el.elements) walk(el.elements);
       });
       walk(tree);
+      if (!h1Text) h1Text = h1Fallback; // no explicit h1-sized heading → use the first heading
       contentPlain = texts.join(' ').replace(/\s+/g, ' ').trim();
     } else {
       const content = page.content?.raw || page.content?.rendered || '';
@@ -19469,12 +19531,18 @@ app.post('/api/projects/:projectId/onpage-audit/fix-all', async (req, res) => {
       sourceMode = 'elementor';
       try { tree = typeof elRaw === 'string' ? JSON.parse(elRaw) : JSON.parse(JSON.stringify(elRaw)); } catch { tree = []; }
       const texts = [];
+      let h1Fallback = '';
       const walk = (els) => (els || []).forEach(el => {
-        if (el && el.widgetType === 'heading' && el.settings && el.settings.title && !h1Text) h1Text = String(el.settings.title);
+        if (el && el.widgetType === 'heading' && el.settings && el.settings.title) {
+          const sz = String(el.settings.header_size || '').toLowerCase();
+          if (sz === 'h1' && !h1Text) h1Text = String(el.settings.title); // the real H1
+          if (!h1Fallback) h1Fallback = String(el.settings.title);
+        }
         if (el && el.widgetType === 'text-editor' && el.settings && el.settings.editor) texts.push(String(el.settings.editor).replace(/<[^>]+>/g, ' '));
         if (el && el.elements) walk(el.elements);
       });
       walk(tree);
+      if (!h1Text) h1Text = h1Fallback; // no explicit h1-sized heading → use the first heading
       contentPlain = texts.join(' ').replace(/\s+/g, ' ').trim();
     } else {
       const content = page.content?.raw || page.content?.rendered || '';
@@ -19494,6 +19562,9 @@ Page heading: "${h1Text || pageTitle}". Current focus keyword: "${focusKw || 'no
 Content: ${contentPlain.substring(0, 800)}
 Return ONLY JSON: {"title":"SEO title 50-60 chars incl. focus keyword","metadesc":"meta description 120-155 chars","focuskw":"primary focus keyword phrase"}` }] });
       const mp = JSON.parse(mResp.content[0].text.match(/\{[\s\S]*\}/)[0]);
+      // Enforce SEO length limits so we don't introduce a "too long" warning.
+      if (mp.title && mp.title.length > 60) mp.title = mp.title.slice(0, 60).replace(/\s+\S*$/, '').trim();
+      if (mp.metadesc && mp.metadesc.length > 155) mp.metadesc = mp.metadesc.slice(0, 155).replace(/\s+\S*$/, '').trim();
       const ymeta = {};
       if (mp.title) ymeta._yoast_wpseo_title = mp.title;
       if (mp.metadesc) ymeta._yoast_wpseo_metadesc = mp.metadesc;
@@ -19556,8 +19627,15 @@ Return ONLY JSON: {"title":"SEO title 50-60 chars incl. focus keyword","metadesc
       }
     }
 
+    // Purge origin (BerqWP/WP) + Cloudflare edge cache so the live page reflects the changes immediately
+    // (the on-page scanner reads the LIVE HTML for page-builder sites, which is otherwise cached).
+    if (fixed.length) {
+      try { await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/clear-cache/${page_id}`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000) }); } catch (e) {}
+      try { await purgeCloudflareCache(project, [pageUrl].filter(Boolean)); } catch (e) {}
+    }
+
     res.json({ ok: true, fixed, count: fixed.length, source: sourceMode,
-      message: fixed.length ? `Fixed: ${fixed.join('; ')}. (Each change has a rollback in Change History.)` : 'Nothing to fix — page already looks good.' });
+      message: fixed.length ? `Fixed: ${fixed.join('; ')}. (Cache cleared. Each change has a rollback in Change History.)` : 'Nothing to fix — page already looks good.' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
