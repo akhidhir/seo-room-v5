@@ -9700,7 +9700,21 @@
       };
       const loadShortlist = async () => { try { const d = await api('/template-shortlist'); if (d && d.items) { setSaved(d.items); setShortlist(d.items.map(x => x.id)); } } catch (e) {} };
       const saveLastSearch = (its, nch, pg) => { api('/template-discovery-last', { method: 'POST', body: { niche: nch, page: pg, items: its } }).catch(() => {}); };
-      const restoreLastSearch = async () => { try { const d = await api('/template-discovery-last'); if (d && d.items && d.items.length) { let ex = []; try { ex = JSON.parse(localStorage.getItem('tplDiscExcluded') || '[]'); } catch (e) {} setItems(d.items.filter(x => !ex.includes(x.id))); setNiche(d.niche || ''); setPage(d.page || 1); } } catch (e) {} };
+      const restoreLastSearch = async () => {
+        try {
+          const d = await api('/template-discovery-last');
+          if (d && d.items && d.items.length) {
+            let ex = []; try { ex = JSON.parse(localStorage.getItem('tplDiscExcluded') || '[]'); } catch (e) {}
+            // Dedupe by id (old saved batches contain duplicates) and drop excluded ones.
+            const seen = new Set();
+            const clean = d.items.filter(x => { if (seen.has(x.id) || ex.includes(x.id)) return false; seen.add(x.id); return true; });
+            setItems(clean);
+            setNiche(d.niche || ''); setPage(d.page || 1);
+            // Re-save the cleaned list so the duplicates are gone for good.
+            if (clean.length !== d.items.length) saveLastSearch(clean, d.niche || '', d.page || 1);
+          }
+        } catch (e) {}
+      };
       React.useEffect(() => { loadShortlist(); restoreLastSearch(); }, []);
 
       const runTest = async (it) => {
