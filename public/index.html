@@ -14076,15 +14076,17 @@
 
       const handleFixSingle = (page) => openFixModal([page]);
 
-      // AI-fix the two content issues (H1 + exact keyword phrase) — queues to the Review AI Changes gate.
+      // Fix ALL AI-fixable on-page issues for this page: meta + H1 + exact keyword phrase (applied with rollback).
       const handleFixContent = async (page) => {
+        if (!confirm('AI-fix all on-page issues for "' + (page.title || page.url) + '"? Updates the SEO meta, the H1, and weaves the focus keyword into the content. Every change is rollback-able in Change History.')) return;
         setFixingContent(page.id);
         try {
-          const data = await api('/projects/' + project.id + '/onpage-audit/fix-content', { method: 'POST', body: { page_id: page.id } });
+          const data = await api('/projects/' + project.id + '/onpage-audit/fix-all', { method: 'POST', body: { page_id: page.id } });
           if (data && data.error) { alert('Error: ' + data.error); }
           else {
-            alert(data && data.message ? data.message : ('Queued ' + ((data && data.queued) || 0) + ' change(s) for review.'));
+            alert(data && data.message ? data.message : 'Done.');
             if (typeof loadHistory === 'function') loadHistory();
+            if (typeof loadPages === 'function') loadPages();
           }
         } catch (e) { alert('Error: ' + e.message); }
         setFixingContent(null);
@@ -15118,8 +15120,8 @@
                                       <i className="fas fa-magic" style={{ marginRight: 4 }} />Generate AI Fix
                                     </button>
                                   )}
-                                  <button className="btn" onClick={() => handleFixContent(page)} disabled={fixingContent === page.id} title="Fixes 'keyword not in H1' and 'keyword not exact phrase' — queued for review" style={{ fontSize: 11, padding: '6px 12px' }}>
-                                    <i className="fas fa-pen-fancy" style={{ marginRight: 4 }} />{fixingContent === page.id ? 'Queuing…' : 'AI Fix Content (H1 + keyword)'}
+                                  <button className="btn btn-primary" onClick={() => handleFixContent(page)} disabled={fixingContent === page.id} title="AI-fix every on-page issue: meta, H1 and the exact keyword phrase in content (rollback-able)" style={{ fontSize: 11, padding: '6px 12px' }}>
+                                    <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }} />{fixingContent === page.id ? 'Fixing all…' : 'Fix All with AI'}
                                   </button>
                                   <button className="btn" onClick={() => handleAddOutboundLinks(page)}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#3b82f6', borderColor: '#3b82f6' }}

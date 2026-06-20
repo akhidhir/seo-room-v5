@@ -19434,6 +19434,133 @@ app.post('/api/projects/:projectId/onpage-audit/fix-content', async (req, res) =
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Fix ALL AI-fixable on-page issues for a page in one shot: meta (title/desc/keyword) + H1 + exact
+// keyword phrase in content. Applies directly (Elementor-aware) with a rollback snapshot per change.
+app.post('/api/projects/:projectId/onpage-audit/fix-all', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id } = req.body;
+    if (!page_id) return res.status(400).json({ error: 'page_id required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const auth = getWpAuthHeaders(project);
+    if (!wpUrl || !auth) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing)' });
+    const MODEL = 'claude-haiku-4-5-20251001';
+
+    let page = null, type = 'pages';
+    let r = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}?context=edit`, { headers: auth, signal: AbortSignal.timeout(20000) });
+    if (r.ok) page = await r.json();
+    else { r = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: auth, signal: AbortSignal.timeout(20000) }); if (r.ok) { page = await r.json(); type = 'posts'; } }
+    if (!page) return res.status(404).json({ error: 'Page not found in WordPress' });
+
+    const pageUrl = page.link || '';
+    const pageTitle = page.title?.rendered || page.title?.raw || '';
+    let focusKw = String(page.meta?._yoast_wpseo_focuskw || '').trim();
+    const snap = (field, oldV, newV) => pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'fix-all',$5,$6,$7)`,
+      [projectId, page_id, pageUrl, pageTitle, field, oldV, newV]);
+
+    // Gather H1 + content (Elementor widgets or classic)
+    let h1Text = '', contentPlain = '', sourceMode = 'classic', tree = null;
+    const elRaw = page.meta?._elementor_data;
+    if (elRaw) {
+      sourceMode = 'elementor';
+      try { tree = typeof elRaw === 'string' ? JSON.parse(elRaw) : JSON.parse(JSON.stringify(elRaw)); } catch { tree = []; }
+      const texts = [];
+      const walk = (els) => (els || []).forEach(el => {
+        if (el && el.widgetType === 'heading' && el.settings && el.settings.title && !h1Text) h1Text = String(el.settings.title);
+        if (el && el.widgetType === 'text-editor' && el.settings && el.settings.editor) texts.push(String(el.settings.editor).replace(/<[^>]+>/g, ' '));
+        if (el && el.elements) walk(el.elements);
+      });
+      walk(tree);
+      contentPlain = texts.join(' ').replace(/\s+/g, ' ').trim();
+    } else {
+      const content = page.content?.raw || page.content?.rendered || '';
+      const h1m = content.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+      h1Text = h1m ? h1m[1].replace(/<[^>]+>/g, '').trim() : '';
+      contentPlain = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    const fixed = [];
+
+    // ---- 1) META (title / description / focus keyword) — safe, applied immediately ----
+    try {
+      const mResp = await anthropic.messages.create({ model: MODEL, max_tokens: 400,
+        messages: [{ role: 'user', content: `Write SEO meta for this page.
+Business: "${project.business_name || project.name || ''}" in ${project.location || 'its area'}.
+Page heading: "${h1Text || pageTitle}". Current focus keyword: "${focusKw || 'none'}".
+Content: ${contentPlain.substring(0, 800)}
+Return ONLY JSON: {"title":"SEO title 50-60 chars incl. focus keyword","metadesc":"meta description 120-155 chars","focuskw":"primary focus keyword phrase"}` }] });
+      const mp = JSON.parse(mResp.content[0].text.match(/\{[\s\S]*\}/)[0]);
+      const ymeta = {};
+      if (mp.title) ymeta._yoast_wpseo_title = mp.title;
+      if (mp.metadesc) ymeta._yoast_wpseo_metadesc = mp.metadesc;
+      if (mp.focuskw) { ymeta._yoast_wpseo_focuskw = mp.focuskw; focusKw = mp.focuskw; }
+      if (Object.keys(ymeta).length) {
+        await snap('meta', JSON.stringify({ title: page.meta?._yoast_wpseo_title, desc: page.meta?._yoast_wpseo_metadesc, kw: page.meta?._yoast_wpseo_focuskw }), JSON.stringify(ymeta));
+        const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${page_id}`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ meta: ymeta }), timeout: 30000, signal: AbortSignal.timeout(30000) });
+        if (w.ok) fixed.push('meta title, description & focus keyword');
+      }
+    } catch (e) { /* meta best-effort */ }
+
+    const kwLc = (focusKw || '').toLowerCase();
+
+    // ---- 2) H1 + 3) content exact phrase ----
+    if (focusKw) {
+      let newH1 = null, sentencePatch = null;
+      if (h1Text && !h1Text.toLowerCase().includes(kwLc)) {
+        try {
+          const hr = await anthropic.messages.create({ model: MODEL, max_tokens: 120, messages: [{ role: 'user', content: `Rewrite this heading so it naturally includes the exact phrase "${focusKw}". Concise (max ~10 words), natural. Current: "${h1Text}". Return ONLY the new heading text, no quotes.` }] });
+          const v = String(hr.content[0].text || '').trim().replace(/^["']|["']$/g, '');
+          if (v && v !== h1Text && v.toLowerCase().includes(kwLc)) newH1 = v;
+        } catch (e) {}
+      }
+      if (contentPlain.length > 80 && !contentPlain.toLowerCase().includes(kwLc)) {
+        try {
+          const cr = await anthropic.messages.create({ model: MODEL, max_tokens: 600, messages: [{ role: 'user', content: `Rewrite ONE sentence from this page so it naturally contains the exact phrase "${focusKw}". Pick a sentence from the first half. Natural, not stuffed. Return ONLY JSON: {"find":"exact original sentence character-for-character","replace":"rewritten sentence with the exact phrase"}\n\nPAGE TEXT:\n${contentPlain.substring(0, 2000)}` }] });
+          const p = JSON.parse(cr.content[0].text.match(/\{[\s\S]*\}/)[0]);
+          if (p && p.find && p.replace && String(p.replace).toLowerCase().includes(kwLc)) sentencePatch = p;
+        } catch (e) {}
+      }
+
+      if (sourceMode === 'elementor' && (newH1 || sentencePatch)) {
+        let changed = false;
+        const walk = (els) => (els || []).forEach(el => {
+          if (!el) return;
+          if (newH1 && el.widgetType === 'heading' && el.settings && el.settings.title === h1Text) { el.settings.title = newH1; changed = true; }
+          if (sentencePatch && el.widgetType === 'text-editor' && el.settings && typeof el.settings.editor === 'string') {
+            const idx = el.settings.editor.indexOf(sentencePatch.find);
+            if (idx !== -1) { el.settings.editor = el.settings.editor.slice(0, idx) + sentencePatch.replace + el.settings.editor.slice(idx + sentencePatch.find.length); changed = true; }
+          }
+          if (el.elements) walk(el.elements);
+        });
+        walk(tree);
+        if (changed) {
+          const newJson = JSON.stringify(tree);
+          await snap('_elementor_data', (typeof elRaw === 'string' ? elRaw : JSON.stringify(elRaw)), newJson);
+          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${page_id}`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ meta: { _elementor_data: newJson, _elementor_css: '' } }), signal: AbortSignal.timeout(45000) });
+          if (w.ok) { if (newH1) fixed.push('H1 (added focus keyword)'); if (sentencePatch) fixed.push('content (woven exact phrase)'); }
+        }
+      } else if (sourceMode === 'classic' && (newH1 || sentencePatch)) {
+        let content = page.content?.raw || page.content?.rendered || '';
+        const original = content;
+        if (newH1 && h1Text) content = content.replace(new RegExp('(<h1[^>]*>)([\\s\\S]*?)(</h1>)', 'i'), `$1${newH1}$3`);
+        if (sentencePatch) { const idx = content.indexOf(sentencePatch.find); if (idx !== -1) content = content.slice(0, idx) + sentencePatch.replace + content.slice(idx + sentencePatch.find.length); }
+        if (content !== original) {
+          await snap('content', original, content);
+          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${page_id}`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ content }), signal: AbortSignal.timeout(45000) });
+          if (w.ok) { if (newH1) fixed.push('H1 (added focus keyword)'); if (sentencePatch) fixed.push('content (woven exact phrase)'); }
+        }
+      }
+    }
+
+    res.json({ ok: true, fixed, count: fixed.length, source: sourceMode,
+      message: fixed.length ? `Fixed: ${fixed.join('; ')}. (Each change has a rollback in Change History.)` : 'Nothing to fix — page already looks good.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Matches utility pages by URL SEGMENT (must start a path segment) — avoids false positives
 // like /blog/how-to-contact-your-plumber or /product-search-tips being excluded from scoring
 const UTILITY_PAGE_RE = /(^|\/)(thank[-_]?you|privacy[^/]*|terms[^/]*|conditions|contact(-us)?|checkout|cart|my-account|sitemap[^/]*|search|404)(\/|\.|\?|$)/i;
