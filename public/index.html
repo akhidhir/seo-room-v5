@@ -9706,10 +9706,9 @@
         try {
           const d = await api('/template-discovery?niche=' + encodeURIComponent(niche.trim()) + '&page=' + p + '&size=3');
           if (d && d.error) { setError(d.error); setLoading(false); return; }
-          const newItems = (d.items || []).map(it => ({ ...it, test: { loading: !!it.preview_url } }));
+          const newItems = (d.items || []).map(it => ({ ...it, test: {} }));
           setItems(reset ? newItems : items.concat(newItems));
           setPage(p + 1);
-          newItems.forEach(it => runTest(it));
         } catch (e) { setError(e.message); }
         setLoading(false);
       };
@@ -9723,7 +9722,7 @@
         } else {
           setShortlist(prev => prev.concat(id));
           setSaved(prev => prev.find(x => x.id === id) ? prev : prev.concat({ ...it, niche: niche.trim() }));
-          try { await api('/template-shortlist', { method: 'POST', body: { item: it, niche: niche.trim() } }); } catch (e) {}
+          try { const r = await api('/template-shortlist', { method: 'POST', body: { item: it, niche: niche.trim() } }); if (r && r.error) alert('Save failed: ' + r.error); } catch (e) { alert('Save failed: ' + e.message); }
         }
       };
       const vColor = { pass: '#22c55e', warn: '#f59e0b', reject: '#ef4444' };
