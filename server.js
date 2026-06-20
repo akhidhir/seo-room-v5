@@ -19357,6 +19357,83 @@ app.post('/api/projects/:projectId/onpage-audit/add-inbound-links', async (req, 
   }
 });
 
+// AI-fix the two content-level keyword issues (H1 + exact phrase in content). Queues to the QA gate.
+app.post('/api/projects/:projectId/onpage-audit/fix-content', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_id } = req.body;
+    if (!page_id) return res.status(400).json({ error: 'page_id required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const auth = getWpAuthHeaders(project);
+    if (!wpUrl || !auth) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing)' });
+
+    let page = null, type = 'pages';
+    let r = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${page_id}?context=edit`, { headers: auth, signal: AbortSignal.timeout(20000) });
+    if (r.ok) page = await r.json();
+    else { r = await fetch(`${wpUrl}/wp-json/wp/v2/posts/${page_id}?context=edit`, { headers: auth, signal: AbortSignal.timeout(20000) }); if (r.ok) { page = await r.json(); type = 'posts'; } }
+    if (!page) return res.status(404).json({ error: 'Page not found in WordPress' });
+
+    const focusKw = String(page.meta?._yoast_wpseo_focuskw || '').trim();
+    if (!focusKw) return res.status(400).json({ error: 'No focus keyword set for this page — set one first.' });
+    const pageUrl = page.link || '';
+    const pageTitle = page.title?.rendered || page.title?.raw || '';
+    const kwLc = focusKw.toLowerCase();
+
+    // Gather H1 + content text (Elementor heading/text widgets, or classic content)
+    let h1Text = '', contentPlain = '', sourceMode = 'classic';
+    const elRaw = page.meta?._elementor_data;
+    if (elRaw) {
+      sourceMode = 'elementor';
+      let tree; try { tree = typeof elRaw === 'string' ? JSON.parse(elRaw) : elRaw; } catch { tree = []; }
+      const texts = [];
+      const walk = (els) => (els || []).forEach(el => {
+        if (el && el.widgetType === 'heading' && el.settings && el.settings.title && !h1Text) h1Text = String(el.settings.title);
+        if (el && el.widgetType === 'text-editor' && el.settings && el.settings.editor) texts.push(String(el.settings.editor).replace(/<[^>]+>/g, ' '));
+        if (el && el.elements) walk(el.elements);
+      });
+      walk(tree);
+      contentPlain = texts.join(' ').replace(/\s+/g, ' ').trim();
+    } else {
+      const content = page.content?.raw || page.content?.rendered || '';
+      const h1m = content.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+      h1Text = h1m ? h1m[1].replace(/<[^>]+>/g, '').trim() : '';
+      contentPlain = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    const queued = [];
+
+    // 1) H1 — add the focus keyword if missing
+    if (h1Text && !h1Text.toLowerCase().includes(kwLc)) {
+      const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 120,
+        messages: [{ role: 'user', content: `Rewrite this page heading so it naturally includes the exact phrase "${focusKw}". Keep it concise (max ~10 words) and natural. Current heading: "${h1Text}". Return ONLY the new heading text — no quotes, no explanation.` }] });
+      const newH1 = String(resp.content[0].text || '').trim().replace(/^["']|["']$/g, '');
+      if (newH1 && newH1 !== h1Text && newH1.toLowerCase().includes(kwLc)) {
+        await pool.query(`INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,'keyword-h1',$5,$6,$7)`,
+          [projectId, page_id, pageUrl, pageTitle, h1Text, newH1, `Add focus keyword "${focusKw}" to the H1`]);
+        queued.push({ kind: 'H1', find: h1Text, replace: newH1 });
+      }
+    }
+
+    // 2) Content — weave the exact phrase into one sentence if missing
+    if (contentPlain.length > 80 && !contentPlain.toLowerCase().includes(kwLc)) {
+      const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 600,
+        messages: [{ role: 'user', content: `Rewrite ONE sentence from this page so it naturally contains the exact phrase "${focusKw}". Pick a sentence from the first half. It must read naturally, not keyword-stuffed. Return ONLY JSON: {"find":"the exact original sentence copied character-for-character","replace":"the rewritten sentence containing the exact phrase"}\n\nPAGE TEXT:\n${contentPlain.substring(0, 2000)}` }] });
+      let patch = null; try { patch = JSON.parse(resp.content[0].text.match(/\{[\s\S]*\}/)[0]); } catch {}
+      if (patch && patch.find && patch.replace && String(patch.replace).toLowerCase().includes(kwLc)) {
+        await pool.query(`INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,'keyword-content',$5,$6,$7)`,
+          [projectId, page_id, pageUrl, pageTitle, patch.find, patch.replace, `Weave focus keyword "${focusKw}" into content`]);
+        queued.push({ kind: 'Content', find: patch.find, replace: patch.replace });
+      }
+    }
+
+    res.json({ ok: true, queued: queued.length, changes: queued, source: sourceMode,
+      message: queued.length ? `${queued.length} change(s) queued — open "Review AI Changes" to approve` : 'Focus keyword already in the H1 and content — nothing to fix.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Matches utility pages by URL SEGMENT (must start a path segment) — avoids false positives
 // like /blog/how-to-contact-your-plumber or /product-search-tips being excluded from scoring
 const UTILITY_PAGE_RE = /(^|\/)(thank[-_]?you|privacy[^/]*|terms[^/]*|conditions|contact(-us)?|checkout|cart|my-account|sitemap[^/]*|search|404)(\/|\.|\?|$)/i;
@@ -19483,22 +19560,52 @@ async function applyPendingChange(project, ch) {
   }
   if (!page) throw new Error('Page not found in WordPress');
   const content = page.content?.raw || page.content?.rendered || '';
-  let idx = content.indexOf(ch.find_text);
-  if (idx === -1) {
-    const ci = content.toLowerCase().indexOf(String(ch.find_text).toLowerCase());
-    if (ci !== -1) idx = ci;
+  const findInStr = (hay) => {
+    let i = hay.indexOf(ch.find_text);
+    if (i === -1) i = hay.toLowerCase().indexOf(String(ch.find_text).toLowerCase());
+    return i;
+  };
+
+  // 1) Classic editor content
+  let idx = content ? findInStr(content) : -1;
+  if (idx !== -1) {
+    const newContent = content.substring(0, idx) + ch.replace_text + content.substring(idx + ch.find_text.length);
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,'content',$6,$7)`,
+      [ch.project_id, ch.page_id, ch.page_url, ch.page_title, ch.change_type || 'keyword-content', content, newContent]
+    );
+    const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${ch.page_id}`, {
+      method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(45000)
+    });
+    if (!w.ok) throw new Error('WordPress write failed (HTTP ' + w.status + ')');
+    return;
   }
-  if (idx === -1) throw new Error('Original text no longer found — page content changed since this was queued');
-  const newContent = content.substring(0, idx) + ch.replace_text + content.substring(idx + ch.find_text.length);
-  await pool.query(
-    `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'keyword-content','content',$5,$6)`,
-    [ch.project_id, ch.page_id, ch.page_url, ch.page_title, content, newContent]
-  );
-  const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${ch.page_id}`, {
-    method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(45000)
-  });
-  if (!w.ok) throw new Error('WordPress write failed (HTTP ' + w.status + ')');
+
+  // 2) Elementor — the text lives inside _elementor_data (heading title / text-editor HTML)
+  const elRaw = page.meta?._elementor_data;
+  if (elRaw) {
+    const elStr = typeof elRaw === 'string' ? elRaw : JSON.stringify(elRaw);
+    // _elementor_data stores HTML with escaped quotes; match against both raw and JSON-escaped find text
+    const jsonEsc = JSON.stringify(ch.find_text).slice(1, -1);
+    let ei = elStr.indexOf(jsonEsc);
+    let needle = jsonEsc, repl = JSON.stringify(ch.replace_text).slice(1, -1);
+    if (ei === -1) { ei = findInStr(elStr); needle = ch.find_text; repl = ch.replace_text; }
+    if (ei === -1) throw new Error('Original text no longer found in Elementor data — page changed since queued');
+    const newEl = elStr.substring(0, ei) + repl + elStr.substring(ei + needle.length);
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,'_elementor_data',$6,$7)`,
+      [ch.project_id, ch.page_id, ch.page_url, ch.page_title, ch.change_type || 'keyword-content', elStr, newEl]
+    );
+    const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${ch.page_id}`, {
+      method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ meta: { _elementor_data: newEl, _elementor_css: '' } }), signal: AbortSignal.timeout(45000)
+    });
+    if (!w.ok) throw new Error('WordPress write failed (HTTP ' + w.status + ')');
+    return;
+  }
+
+  throw new Error('Original text no longer found — page content changed since this was queued');
 }
 
 app.get('/api/projects/:projectId/pending-changes', async (req, res) => {

@@ -14075,6 +14075,20 @@
       };
 
       const handleFixSingle = (page) => openFixModal([page]);
+
+      // AI-fix the two content issues (H1 + exact keyword phrase) — queues to the Review AI Changes gate.
+      const handleFixContent = async (page) => {
+        setFixingContent(page.id);
+        try {
+          const data = await api('/projects/' + project.id + '/onpage-audit/fix-content', { method: 'POST', body: { page_id: page.id } });
+          if (data && data.error) { alert('Error: ' + data.error); }
+          else {
+            alert(data && data.message ? data.message : ('Queued ' + ((data && data.queued) || 0) + ' change(s) for review.'));
+            if (typeof loadHistory === 'function') loadHistory();
+          }
+        } catch (e) { alert('Error: ' + e.message); }
+        setFixingContent(null);
+      };
       const handleFixBulk = () => {
         const targetPages = pages.filter(p => selected.has(p.id));
         if (targetPages.length === 0) return;
@@ -14315,6 +14329,7 @@
       };
 
       const [addingLinks, setAddingLinks] = React.useState(null); // 'outbound-123' or 'inbound-123'
+      const [fixingContent, setFixingContent] = React.useState(null); // page id while content-fix queues
       const [linksResult, setLinksResult] = React.useState(null); // { pageId, type, links: [] }
 
       const [linkPreview, setLinkPreview] = useState(null); // { page, type, links, applying }
@@ -15103,6 +15118,9 @@
                                       <i className="fas fa-magic" style={{ marginRight: 4 }} />Generate AI Fix
                                     </button>
                                   )}
+                                  <button className="btn" onClick={() => handleFixContent(page)} disabled={fixingContent === page.id} title="Fixes 'keyword not in H1' and 'keyword not exact phrase' — queued for review" style={{ fontSize: 11, padding: '6px 12px' }}>
+                                    <i className="fas fa-pen-fancy" style={{ marginRight: 4 }} />{fixingContent === page.id ? 'Queuing…' : 'AI Fix Content (H1 + keyword)'}
+                                  </button>
                                   <button className="btn" onClick={() => handleAddOutboundLinks(page)}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#3b82f6', borderColor: '#3b82f6' }}
                                     disabled={addingLinks === 'outbound-' + page.id}>
