@@ -9688,6 +9688,7 @@
       const [error, setError] = React.useState('');
       const [shortlist, setShortlist] = React.useState([]);
       const [saved, setSaved] = React.useState([]);
+      const [source, setSource] = React.useState('');
       const loadShortlist = async () => { try { const d = await api('/template-shortlist'); if (d && d.items) { setSaved(d.items); setShortlist(d.items.map(x => x.id)); } } catch (e) {} };
       const saveLastSearch = (its, nch, pg) => { api('/template-discovery-last', { method: 'POST', body: { niche: nch, page: pg, items: its } }).catch(() => {}); };
       const restoreLastSearch = async () => { try { const d = await api('/template-discovery-last'); if (d && d.items && d.items.length) { setItems(d.items); setNiche(d.niche || ''); setPage(d.page || 1); } } catch (e) {} };
@@ -9711,12 +9712,16 @@
         try {
           const d = await api('/template-discovery?niche=' + encodeURIComponent(niche.trim()) + '&page=' + p + '&size=3');
           if (d && d.error) { setError(d.error); setLoading(false); return; }
-          const newItems = (d.items || []).map(it => ({ ...it, test: { loading: !!(it.demo_url || it.preview_url) } }));
-          const merged = reset ? newItems : items.concat(newItems);
+          if (d.source) setSource(d.source);
+          const mapped = (d.items || []).map(it => ({ ...it, test: { loading: !!(it.demo_url || it.preview_url) } }));
+          const base = reset ? [] : items;
+          const seen = new Set(base.map(x => x.id));
+          const fresh = mapped.filter(it => !seen.has(it.id));
+          const merged = base.concat(fresh);
           setItems(merged);
           setPage(p + 1);
           saveLastSearch(merged, niche.trim(), p + 1);
-          newItems.forEach(it => runTest(it));
+          fresh.forEach(it => runTest(it));
         } catch (e) { setError(e.message); }
         setLoading(false);
       };
@@ -9771,6 +9776,11 @@
             </div>
           )}
 
+          {items.length > 0 && source && (
+            <div style={{ fontSize: 13, marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: source === 'template-kits' ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)', color: source === 'template-kits' ? '#22c55e' : '#f59e0b', border: '1px solid ' + (source === 'template-kits' ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)') }}>
+              {source === 'template-kits' ? '✓ Showing clean Elementor Template Kits — lightweight, single-purpose, built to import.' : '△ No Template Kits for this niche — falling back to full Elementor WordPress themes (heavier).'}
+            </div>
+          )}
           {items.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
               {items.map(it => {

@@ -12785,15 +12785,23 @@ app.get('/api/template-discovery', async (req, res) => {
   const page = parseInt(req.query.page || '1', 10);
   const size = Math.min(parseInt(req.query.size || '3', 10), 10);
   try {
-    const term = encodeURIComponent(niche + ' elementor');
-    const api = `https://api.envato.com/v1/discovery/search/search/item?site=themeforest.net&category=wordpress&term=${term}&page_size=40&page=1&sort_by=sales`;
-    const resp = await fetch(api, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(20000) });
-    if (!resp.ok) {
-      const t = await resp.text();
-      return res.status(resp.status).json({ error: 'Envato API ' + resp.status + ': ' + t.slice(0, 200) });
+    // Prefer clean, single-purpose Elementor TEMPLATE KITS over bloated full themes.
+    // ThemeForest sells these under the template-kits category — far closer to what we want.
+    const runSearch = async (category, termStr) => {
+      const url = `https://api.envato.com/v1/discovery/search/search/item?site=themeforest.net&category=${encodeURIComponent(category)}&term=${encodeURIComponent(termStr)}&page_size=40&page=1&sort_by=sales`;
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(20000) });
+      if (!r.ok) return [];
+      const j = await r.json();
+      return j.matches || [];
+    };
+    let matches = [];
+    let source = 'template-kits';
+    for (const cat of ['template-kits/elementor', 'template-kits']) {
+      matches = await runSearch(cat, niche);
+      if (matches.length) break;
     }
-    const data = await resp.json();
-    const matches = data.matches || [];
+    // Fall back to full Elementor WordPress themes only if no kits exist for this niche.
+    if (!matches.length) { source = 'wordpress'; matches = await runSearch('wordpress', niche + ' elementor'); }
     // Tighten relevance: keep only items whose NAME contains the niche stem (kills
     // "construction" etc when searching "plumber"). Fall back to all if filter is too strict.
     const stem = niche.toLowerCase().slice(0, Math.min(5, niche.length));
@@ -12858,7 +12866,7 @@ app.get('/api/template-discovery', async (req, res) => {
         author: d.author_username || m.author_username || '',
       };
     }));
-    res.json({ niche, page, total: useList.length, items });
+    res.json({ niche, page, total: useList.length, items, source });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
