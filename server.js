@@ -12802,6 +12802,25 @@ app.get('/api/template-discovery', async (req, res) => {
       const ratingCount = (d.rating && d.rating.count) || (m.rating && m.rating.count) || 0;
       const updatedRaw = d.updated_at || m.updated_at;
       const priceCents = d.price_cents || m.price_cents;
+      const marketUrl = d.url || m.url || '';
+      // Resolve a real, testable demo URL. The API rarely returns one directly, so fall
+      // back to ThemeForest's full-screen preview and pull the demo out of its iframe.
+      let previewUrl = (pv.live_site && (pv.live_site.url || pv.live_site.href)) || pv.landing_page_url || null;
+      if (!previewUrl) {
+        const slugMatch = marketUrl.match(/\/item\/([^\/]+)\//);
+        const fsp = slugMatch ? `https://preview.themeforest.net/item/${slugMatch[1]}/full_screen_preview/${m.id}` : null;
+        if (fsp) {
+          previewUrl = fsp;
+          try {
+            const pr = await fetch(fsp, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' } });
+            if (pr.ok) {
+              const html = await pr.text();
+              const ifr = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+              if (ifr && ifr[1] && /^https?:/i.test(ifr[1])) previewUrl = ifr[1];
+            }
+          } catch (e) {}
+        }
+      }
       return {
         id: m.id,
         name: d.name || m.name,
@@ -12810,8 +12829,8 @@ app.get('/api/template-discovery', async (req, res) => {
         rating: ratingVal ? Math.round(ratingVal * 10) / 10 : null,
         rating_count: ratingCount,
         price: priceCents ? '$' + (priceCents / 100).toFixed(0) : null,
-        market_url: d.url || m.url,
-        preview_url: (pv.live_site && pv.live_site.url) || pv.landing_page_url || null,
+        market_url: marketUrl,
+        preview_url: previewUrl,
         thumb: (pv.icon_with_landscape_preview && pv.icon_with_landscape_preview.landscape_url) || (pv.landscape_preview && pv.landscape_preview.landscape_url) || d.image || m.image || null,
         author: d.author_username || m.author_username || '',
       };
