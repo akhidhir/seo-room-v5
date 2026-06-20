@@ -9663,6 +9663,106 @@
       );
     }
 
+    // ============ TEMPLATE DISCOVERY (ThemeForest niche search + batch test) ============
+    function TemplateDiscoveryPage() {
+      const [niche, setNiche] = React.useState('');
+      const [page, setPage] = React.useState(1);
+      const [items, setItems] = React.useState([]);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState('');
+      const [shortlist, setShortlist] = React.useState([]);
+
+      const runTest = async (it) => {
+        if (!it.preview_url) { setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: false, err: 'no preview' } } : x)); return; }
+        try {
+          const r = await api('/template-test?url=' + encodeURIComponent(it.preview_url));
+          setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: false, result: (r && !r.error) ? r : null, err: (r && r.error) ? r.error : null } } : x));
+        } catch (e) { setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: false, err: e.message } } : x)); }
+      };
+
+      const search = async (reset) => {
+        if (!niche.trim()) { setError('Enter a niche, e.g. plumber'); return; }
+        setError(''); setLoading(true);
+        const p = reset ? 1 : page;
+        try {
+          const d = await api('/template-discovery?niche=' + encodeURIComponent(niche.trim()) + '&page=' + p + '&size=3');
+          if (d && d.error) { setError(d.error); setLoading(false); return; }
+          const newItems = (d.items || []).map(it => ({ ...it, test: { loading: !!it.preview_url } }));
+          setItems(reset ? newItems : items.concat(newItems));
+          setPage(p + 1);
+          newItems.forEach(it => runTest(it));
+        } catch (e) { setError(e.message); }
+        setLoading(false);
+      };
+
+      const toggleShort = (id) => setShortlist(prev => prev.includes(id) ? prev.filter(i => i !== id) : prev.concat(id));
+      const vColor = { pass: '#22c55e', warn: '#f59e0b', reject: '#ef4444' };
+      const card = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
+      const chip = (label, val) => <span style={{ fontSize: 12, color: 'var(--text2)', marginRight: 12 }}><span style={{ color: 'var(--text3)' }}>{label} </span><b>{val}</b></span>;
+
+      return (
+        <div style={{ padding: 24, maxWidth: 1100 }}>
+          <div className="page-title" style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
+            <i className="fas fa-magnifying-glass-chart" style={{ marginRight: 10, color: '#8b5cf6' }} />Template Discovery
+          </div>
+          <div style={{ color: 'var(--text3)', marginBottom: 18, fontSize: 14 }}>Search ThemeForest for Elementor templates by niche, 3 at a time, each auto-tested. Shortlist the good ones, load more, pick a winner.</div>
+
+          <div style={{ ...card, marginBottom: 18 }}>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <input value={niche} onChange={e => setNiche(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') search(true); }} placeholder="Niche, e.g. plumber, solar, dentist"
+                style={{ flex: 1, padding: '11px 13px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }} />
+              <button onClick={() => search(true)} disabled={loading} style={{ padding: '11px 22px', border: 'none', borderRadius: 8, background: '#8b5cf6', color: '#fff', fontWeight: 600, fontSize: 14, cursor: loading ? 'wait' : 'pointer' }}>{loading ? 'Searching…' : 'Find templates'}</button>
+            </div>
+            {error && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 10 }}>{error}</div>}
+          </div>
+
+          {items.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+              {items.map(it => {
+                const t = it.test || {};
+                const r = t.result;
+                const isShort = shortlist.includes(it.id);
+                return (
+                  <div key={it.id} style={{ ...card, border: isShort ? '2px solid #22c55e' : card.border, display: 'flex', flexDirection: 'column' }}>
+                    {it.thumb && <img src={it.thumb} alt="" style={{ width: '100%', height: 150, objectFit: 'cover', borderRadius: 8, marginBottom: 10 }} />}
+                    <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>{it.name}</div>
+                    <div style={{ marginBottom: 8 }}>
+                      {chip('Sales', (it.sales || 0).toLocaleString())}
+                      {chip('Updated', it.updated || '—')}
+                      {chip('Rating', it.rating ? it.rating + '★ (' + it.rating_count + ')' : '—')}
+                      {it.price && chip('Price', it.price)}
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 'auto' }}>
+                      {t.loading && <div style={{ fontSize: 13, color: '#8b5cf6' }}><span className="spinner"></span> Testing speed…</div>}
+                      {t.err && <div style={{ fontSize: 12, color: '#ef4444' }}>Test failed: {t.err}</div>}
+                      {r && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 700, fontSize: 13, color: vColor[r.verdictKey] }}>{r.verdictKey === 'pass' ? '✓ Eligible' : r.verdictKey === 'warn' ? '△ Needs work' : '✗ Reject'}</span>
+                          <span style={{ fontSize: 12, color: 'var(--text2)' }}>Perf {r.metrics.perf.value} · SEO {r.metrics.seo.value} · {r.metrics.weight.value}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <button onClick={() => toggleShort(it.id)} style={{ flex: 1, padding: '8px', border: 'none', borderRadius: 6, background: isShort ? '#22c55e' : 'var(--bg)', color: isShort ? '#fff' : 'var(--text)', border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{isShort ? '✓ Shortlisted' : 'Shortlist'}</button>
+                      {it.preview_url && <a href={it.preview_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Preview</a>}
+                      {it.market_url && <a href={it.market_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Buy</a>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {items.length > 0 && (
+            <div style={{ textAlign: 'center', marginTop: 20 }}>
+              <button onClick={() => search(false)} disabled={loading} style={{ padding: '11px 24px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--card)', color: 'var(--text)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{loading ? 'Loading…' : 'Load 3 more'}</button>
+              {shortlist.length > 0 && <div style={{ marginTop: 12, fontSize: 13, color: 'var(--text2)' }}>{shortlist.length} shortlisted</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ============ TEMPLATE ELIGIBILITY TESTER ============
     function TemplateTesterPage() {
       const [url, setUrl] = React.useState('');
@@ -14223,9 +14323,9 @@
         try {
           var data;
           if (linkPreview.type === 'inbound') {
-            var chosenIds = chosen.map(function(l) { return l.source_page_id; });
+            var chosenObjs = chosen.map(function(l) { return { id: l.source_page_id, anchor: l.anchor, reason: l.reason }; });
             data = await api('/projects/' + project.id + '/onpage-audit/add-inbound-links', {
-              method: 'POST', body: { page_id: linkPreview.page.id, selected_links: chosenIds },
+              method: 'POST', body: { page_id: linkPreview.page.id, selected_links: chosenObjs },
             });
           } else if (linkPreview.type === 'external') {
             data = await api('/projects/' + project.id + '/onpage-audit/add-external-links', {
@@ -14270,8 +14370,8 @@
             loadHistory();
             setLinkPreview(null);
             setSelectedPreviewLinks([]);
-          } else { alert(data.message || data.error || 'Failed to add links'); }
-        } catch (e) { alert('Error: ' + e.message); }
+          } else { setLinkPreview(function(prev) { return prev ? Object.assign({}, prev, { applying: false }) : prev; }); alert(data.message || data.error || 'Failed to add links'); }
+        } catch (e) { setLinkPreview(function(prev) { return prev ? Object.assign({}, prev, { applying: false }) : prev; }); alert('Error: ' + e.message); }
       };
 
       const handleAddInboundLinks = async (page) => {
@@ -38676,6 +38776,8 @@ case 'action-plan':
             return <SEOMigrationPage />;
           case 'page-builder':
             return <PageBuilderPage project={project} allProjects={allProjects} />;
+          case 'template-discovery':
+            return <TemplateDiscoveryPage />;
           case 'template-tester':
             return <TemplateTesterPage />;
           case 'asset-intake':
@@ -38769,6 +38871,7 @@ case 'action-plan':
           { id: 'security-audit', label: 'Security Audit', icon: 'fas fa-shield-halved' },
         ]},
         { section: 'TEMPLATES', items: [
+          { id: 'template-discovery', label: 'Template Discovery', icon: 'fas fa-magnifying-glass-chart' },
           { id: 'template-tester', label: 'Template Tester', icon: 'fas fa-vial' },
           { id: 'asset-intake', label: 'Asset Intake', icon: 'fas fa-box-open' },
         ]},

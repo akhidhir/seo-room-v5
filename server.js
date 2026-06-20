@@ -12753,6 +12753,45 @@ app.get('/api/template-test', async (req, res) => {
   }
 });
 
+// ==================== TEMPLATE DISCOVERY (ThemeForest via Envato API) ====================
+// Searches ThemeForest for Elementor templates matching a niche, returns a batch with
+// downloads/last-update/rating/preview URL so the tester can score each.
+app.get('/api/template-discovery', async (req, res) => {
+  const token = process.env.ENVATO_API_TOKEN;
+  if (!token) return res.status(400).json({ error: 'ENVATO_API_TOKEN not set in environment' });
+  const niche = (req.query.niche || '').toString().trim();
+  if (!niche) return res.status(400).json({ error: 'niche parameter required' });
+  const page = parseInt(req.query.page || '1', 10);
+  const size = Math.min(parseInt(req.query.size || '3', 10), 10);
+  try {
+    const term = encodeURIComponent(niche + ' elementor');
+    const api = `https://api.envato.com/v1/discovery/search/search/item?site=themeforest.net&term=${term}&page=${page}&page_size=${size}&sort_by=sales`;
+    const resp = await fetch(api, { headers: { Authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(20000) });
+    if (!resp.ok) {
+      const t = await resp.text();
+      return res.status(resp.status).json({ error: 'Envato API ' + resp.status + ': ' + t.slice(0, 200) });
+    }
+    const data = await resp.json();
+    const matches = data.matches || [];
+    const items = matches.map(m => ({
+      id: m.id,
+      name: m.name,
+      sales: m.number_of_sales || 0,
+      updated: m.updated_at ? m.updated_at.slice(0, 10) : null,
+      rating: m.rating && m.rating.rating ? Math.round(m.rating.rating * 10) / 10 : null,
+      rating_count: m.rating && m.rating.count ? m.rating.count : 0,
+      price: m.price_cents ? '$' + (m.price_cents / 100).toFixed(0) : null,
+      market_url: m.url,
+      preview_url: (m.previews && m.previews.live_site && m.previews.live_site.url) || (m.previews && m.previews.landing_page_url) || null,
+      thumb: (m.previews && m.previews.icon_with_landscape_preview && m.previews.icon_with_landscape_preview.landscape_url) || m.image || null,
+      author: m.author_username || '',
+    }));
+    res.json({ niche, page, total: data.total_hits || items.length, items });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // List saved template tests (most recent first)
 app.get('/api/template-tests', async (req, res) => {
   try {
@@ -19055,17 +19094,30 @@ async function runAddInboundLinks(projectId, page_id, opts = {}) {
     const targetUrl = targetPage.link || '';
     const targetTitle = targetPage.title?.rendered || targetPage.title?.raw || '';
 
-    // Fetch all other pages with content (reliable, retrying crawl)
+    const isElementor = project.is_elementor_site;
+    // APPLY mode (anchors already chosen): fetch ONLY the selected source pages.
+    // A full-site crawl here is what made "Apply" hang on large sites. Preview still crawls everything.
+    const applyObjects = !preview && Array.isArray(selected_links) && selected_links.length > 0 && typeof selected_links[0] === 'object' && !!selected_links[0].anchor;
     const otherPages = [];
-    for (const type of ['pages', 'posts']) {
-      const items = await fetchAllWpItems(wpUrl, authHeaders, type, '&context=edit');
-      otherPages.push(...items.filter(p => p.id !== page_id).map(p => ({ ...p, _type: type })));
+    if (applyObjects) {
+      for (const sl of selected_links) {
+        const sid = sl.id || sl.source_page_id; if (!sid) continue;
+        for (const type of ['pages', 'posts']) {
+          try { const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${sid}?context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(15000) }); if (r.ok) { const p = await r.json(); otherPages.push({ ...p, _type: type }); break; } } catch {}
+        }
+      }
+    } else {
+      for (const type of ['pages', 'posts']) {
+        const items = await fetchAllWpItems(wpUrl, authHeaders, type, '&context=edit');
+        otherPages.push(...items.filter(p => p.id !== page_id).map(p => ({ ...p, _type: type })));
+      }
+      if (otherPages.length === 0) return { success: false, message: 'No other pages found', links_added: [] };
     }
 
-    if (otherPages.length === 0) return { success: false, message: 'No other pages found', links_added: [] };
-
-    const isElementor = project.is_elementor_site;
-
+    let picks;
+    if (applyObjects) {
+      picks = { pages: selected_links.map(sl => ({ id: sl.id || sl.source_page_id, anchor: sl.anchor, reason: sl.reason || '' })) };
+    } else {
     // Build page summaries for AI to pick the most relevant ones
     const pageSummaries = otherPages.map(p => {
       const content = p.content?.rendered || p.content?.raw || '';
@@ -19104,7 +19156,6 @@ Candidate pages (pick which ones should link to the target):
 ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n')}` }],
     });
 
-    let picks;
     try {
       const jsonMatch = pickResp.content[0].text.match(/\{[\s\S]*\}/);
       picks = JSON.parse(jsonMatch[0]);
@@ -19116,9 +19167,10 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
       return { success: false, message: 'AI found no suitable pages for inbound links', links_added: [] };
     }
 
-    // If selected_links provided, filter picks to only those source page IDs
+    // If selected_links provided (as IDs), filter picks to only those source pages
     if (Array.isArray(selected_links) && selected_links.length > 0) {
-      picks.pages = picks.pages.filter(p => selected_links.includes(p.id));
+      const ids = selected_links.map(s => (typeof s === 'object' ? (s.id || s.source_page_id) : s));
+      picks.pages = picks.pages.filter(p => ids.includes(p.id));
       console.log(`[add-inbound] Filtered to ${picks.pages.length} selected source pages`);
     }
 
@@ -19136,6 +19188,7 @@ ${pageSummaries.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n
         };
       });
       return { success: true, preview: true, links_added: previewLinks, count: previewLinks.length };
+    }
     }
 
     // Now process each selected page — add the link
