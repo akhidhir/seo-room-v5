@@ -12792,6 +12792,51 @@ app.get('/api/template-discovery', async (req, res) => {
   }
 });
 
+// Bridge: turn a chosen template into a copywriter brief (content_queue item with a
+// section wireframe). The existing copywriter pipeline (generate-sections → competitors
+// → humanize) then fills it using the project's tone/persona.
+app.post('/api/projects/:projectId/template-to-copywriter', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { template_name, page_title, focus_keyword, sections } = req.body || {};
+    // Default local-business wireframe if the template's own sections aren't supplied.
+    const defaultWire = [
+      { type: 'hero', heading: 'Hero', purpose: 'Headline + subheadline + primary CTA. Lead with the main service and location, with a strong value proposition.', has_image: true },
+      { type: 'about', heading: 'About', purpose: 'Who the business is, years of experience, trust signals and local credibility.', has_image: true },
+      { type: 'services', heading: 'Services', purpose: 'Core services with short, benefit-led descriptions. Target service + suburb keywords.', has_list: true },
+      { type: 'why', heading: 'Why choose us', purpose: 'Key differentiators: licensed, insured, fast response, upfront pricing, guarantees.', has_list: true },
+      { type: 'testimonials', heading: 'Testimonials', purpose: 'Customer reviews and social proof. Keep authentic and specific.' },
+      { type: 'faq', heading: 'FAQ', purpose: 'Common customer questions with clear answers. Target long-tail and "near me" intent.', has_list: true },
+      { type: 'contact', heading: 'Contact / CTA', purpose: 'Closing call to action with phone, service areas and a booking prompt.', has_form: true },
+    ];
+    const src = (Array.isArray(sections) && sections.length) ? sections : defaultWire;
+    const pageSections = src.map((s, i) => ({
+      id: `section_${i + 1}`,
+      order: i + 1,
+      type: s.type || 'content',
+      heading: s.heading || null,
+      original_text: s.purpose || s.original_text || '',
+      draft_text: null,
+      word_count: 0,
+      has_image: !!s.has_image,
+      has_form: !!s.has_form,
+      has_list: !!s.has_list,
+      css_identifier: `section-${i + 1}`,
+      locked: !!s.has_form,
+    }));
+    const title = (page_title || 'Home') + (template_name ? ' — ' + template_name : '');
+    const brief = `New page from template "${template_name || 'selected template'}". Fill each section per its purpose using the project's tone of voice and customer persona, target the focus keyword and local intent, then run Check Competitors and Humanize.`;
+    const r = await pool.query(
+      `INSERT INTO content_queue (project_id, page_title, content_type, source, priority, brief, current_focus_keyword, draft_focus_keyword, page_sections, stage)
+       VALUES ($1,$2,'new','template','medium',$3,$4,$4,$5,'queue') RETURNING id`,
+      [projectId, title, brief, focus_keyword || '', JSON.stringify(pageSections)]
+    );
+    res.json({ id: r.rows[0].id, sections: pageSections.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // List saved template tests (most recent first)
 app.get('/api/template-tests', async (req, res) => {
   try {

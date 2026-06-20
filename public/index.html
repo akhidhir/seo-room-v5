@@ -9664,8 +9664,24 @@
     }
 
     // ============ TEMPLATE DISCOVERY (ThemeForest niche search + batch test) ============
-    function TemplateDiscoveryPage() {
+    function TemplateDiscoveryPage({ project, setActiveTab }) {
       const [niche, setNiche] = React.useState('');
+      const [sending, setSending] = React.useState(null);
+
+      const sendToCopywriter = async (it) => {
+        if (!project || !project.id) { alert('Select a project first.'); return; }
+        setSending(it.id);
+        try {
+          const r = await api('/projects/' + project.id + '/template-to-copywriter', { method: 'POST', body: { template_name: it.name, page_title: 'Home', focus_keyword: niche.trim() } });
+          if (r && r.id) {
+            if (window.confirm('Brief created with ' + r.sections + ' sections in the Copywriter queue. Open it now?')) {
+              if (setActiveTab) setActiveTab('ow-queue');
+            }
+          } else if (r && r.error) { alert('Error: ' + r.error); }
+        } catch (e) { alert('Error: ' + e.message); }
+        setSending(null);
+      };
+
       const [page, setPage] = React.useState(1);
       const [items, setItems] = React.useState([]);
       const [loading, setLoading] = React.useState(false);
@@ -9747,6 +9763,9 @@
                       {it.preview_url && <a href={it.preview_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Preview</a>}
                       {it.market_url && <a href={it.market_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Buy</a>}
                     </div>
+                    <button onClick={() => sendToCopywriter(it)} disabled={sending === it.id} style={{ marginTop: 8, width: '100%', padding: '9px', border: 'none', borderRadius: 6, background: '#14b8a6', color: '#fff', fontSize: 13, fontWeight: 600, cursor: sending === it.id ? 'wait' : 'pointer' }}>
+                      <i className="fas fa-pen-nib" style={{ marginRight: 6 }} />{sending === it.id ? 'Sending…' : 'Send to Copywriter'}
+                    </button>
                   </div>
                 );
               })}
@@ -38777,7 +38796,7 @@ case 'action-plan':
           case 'page-builder':
             return <PageBuilderPage project={project} allProjects={allProjects} />;
           case 'template-discovery':
-            return <TemplateDiscoveryPage />;
+            return <TemplateDiscoveryPage project={project} setActiveTab={setActiveTab} />;
           case 'template-tester':
             return <TemplateTesterPage />;
           case 'asset-intake':
