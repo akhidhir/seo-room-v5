@@ -12816,7 +12816,11 @@ app.get('/api/template-discovery', async (req, res) => {
             if (pr.ok) {
               const html = await pr.text();
               const ifr = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-              if (ifr && ifr[1] && /^https?:/i.test(ifr[1])) previewUrl = ifr[1];
+              if (ifr && ifr[1]) {
+                let u = ifr[1].replace(/&amp;/g, '&').trim();
+                if (u.startsWith('//')) u = 'https:' + u;
+                if (/^https?:\/\//i.test(u)) previewUrl = u;
+              }
             }
           } catch (e) {}
         }
