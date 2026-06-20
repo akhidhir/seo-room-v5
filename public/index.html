@@ -9687,6 +9687,9 @@
       const [loading, setLoading] = React.useState(false);
       const [error, setError] = React.useState('');
       const [shortlist, setShortlist] = React.useState([]);
+      const [saved, setSaved] = React.useState([]);
+      const loadShortlist = async () => { try { const d = await api('/template-shortlist'); if (d && d.items) { setSaved(d.items); setShortlist(d.items.map(x => x.id)); } } catch (e) {} };
+      React.useEffect(() => { loadShortlist(); }, []);
 
       const runTest = async (it) => {
         if (!it.preview_url) { setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: false, err: 'no preview' } } : x)); return; }
@@ -9711,7 +9714,18 @@
         setLoading(false);
       };
 
-      const toggleShort = (id) => setShortlist(prev => prev.includes(id) ? prev.filter(i => i !== id) : prev.concat(id));
+      const toggleShort = async (it) => {
+        const id = it.id;
+        if (shortlist.includes(id)) {
+          setShortlist(prev => prev.filter(i => i !== id));
+          setSaved(prev => prev.filter(x => x.id !== id));
+          try { await api('/template-shortlist/' + id, { method: 'DELETE' }); } catch (e) {}
+        } else {
+          setShortlist(prev => prev.concat(id));
+          setSaved(prev => prev.find(x => x.id === id) ? prev : prev.concat({ ...it, niche: niche.trim() }));
+          try { await api('/template-shortlist', { method: 'POST', body: { item: it, niche: niche.trim() } }); } catch (e) {}
+        }
+      };
       const vColor = { pass: '#22c55e', warn: '#f59e0b', reject: '#ef4444' };
       const card = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
       const chip = (label, val) => <span style={{ fontSize: 12, color: 'var(--text2)', marginRight: 12 }}><span style={{ color: 'var(--text3)' }}>{label} </span><b>{val}</b></span>;
@@ -9731,6 +9745,24 @@
             </div>
             {error && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 10 }}>{error}</div>}
           </div>
+
+          {saved.length > 0 && (
+            <div style={{ ...card, marginBottom: 18, borderColor: '#22c55e' }}>
+              <div style={{ fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Shortlisted ({saved.length})</div>
+              {saved.map(s => (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                  <i className="fas fa-bookmark" style={{ color: '#22c55e' }}></i>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{s.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.niche ? s.niche + ' · ' : ''}{(s.sales || 0).toLocaleString()} sales{s.updated ? ' · updated ' + s.updated : ''}</div>
+                  </div>
+                  {s.preview_url && <a href={s.preview_url} target="_blank" rel="noopener" style={{ fontSize: 13, color: 'var(--text)' }}>Preview</a>}
+                  <button onClick={() => sendToCopywriter(s)} disabled={sending === s.id} style={{ padding: '6px 12px', border: 'none', borderRadius: 6, background: '#14b8a6', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>{sending === s.id ? '…' : 'Copywriter'}</button>
+                  <button onClick={() => toggleShort(s)} title="Remove" style={{ background: 'transparent', border: 'none', color: 'var(--text3)', cursor: 'pointer' }}><i className="fas fa-trash"></i></button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {items.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
@@ -9759,7 +9791,7 @@
                       )}
                     </div>
                     <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                      <button onClick={() => toggleShort(it.id)} style={{ flex: 1, padding: '8px', border: 'none', borderRadius: 6, background: isShort ? '#22c55e' : 'var(--bg)', color: isShort ? '#fff' : 'var(--text)', border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{isShort ? '✓ Shortlisted' : 'Shortlist'}</button>
+                      <button onClick={() => toggleShort(it)} style={{ flex: 1, padding: '8px', borderRadius: 6, background: isShort ? '#22c55e' : 'var(--bg)', color: isShort ? '#fff' : 'var(--text)', border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{isShort ? '✓ Shortlisted' : 'Shortlist'}</button>
                       {it.preview_url && <a href={it.preview_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Preview</a>}
                       {it.market_url && <a href={it.market_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Buy</a>}
                     </div>
