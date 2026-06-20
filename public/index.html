@@ -9828,9 +9828,12 @@
 
       const run = async () => {
         if (!url.trim()) { setError('Enter a template URL.'); return; }
+        let u = url.trim();
+        if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+        if (!/^https?:\/\/[^\s/]+\.[^\s/]+/i.test(u)) { setError('That looks like a keyword, not a URL. Paste the template’s demo address (e.g. https://demo.example.com). To search by niche, use Template Discovery.'); return; }
         setError(''); setLoading(true); setResult(null);
         try {
-          const data = await api('/template-test?url=' + encodeURIComponent(url.trim()));
+          const data = await api('/template-test?url=' + encodeURIComponent(u));
           if (data && data.error) setError(data.error);
           else { setResult(data); loadSaved(); }
         } catch (e) { setError(e.message); }

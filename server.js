@@ -12806,24 +12806,11 @@ app.get('/api/template-discovery', async (req, res) => {
       // Resolve a real, testable demo URL. The API rarely returns one directly, so fall
       // back to ThemeForest's full-screen preview and pull the demo out of its iframe.
       let previewUrl = (pv.live_site && (pv.live_site.url || pv.live_site.href)) || pv.landing_page_url || null;
+      if (previewUrl && previewUrl.startsWith('//')) previewUrl = 'https:' + previewUrl;
       if (!previewUrl) {
+        // Clean, absolute ThemeForest full-screen preview URL (always opens the demo).
         const slugMatch = marketUrl.match(/\/item\/([^\/]+)\//);
-        const fsp = slugMatch ? `https://preview.themeforest.net/item/${slugMatch[1]}/full_screen_preview/${m.id}` : null;
-        if (fsp) {
-          previewUrl = fsp;
-          try {
-            const pr = await fetch(fsp, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' } });
-            if (pr.ok) {
-              const html = await pr.text();
-              const ifr = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-              if (ifr && ifr[1]) {
-                let u = ifr[1].replace(/&amp;/g, '&').trim();
-                if (u.startsWith('//')) u = 'https:' + u;
-                if (/^https?:\/\//i.test(u)) previewUrl = u;
-              }
-            }
-          } catch (e) {}
-        }
+        previewUrl = slugMatch ? `https://preview.themeforest.net/item/${slugMatch[1]}/full_screen_preview/${m.id}` : marketUrl;
       }
       return {
         id: m.id,
