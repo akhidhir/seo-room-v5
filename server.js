@@ -12812,6 +12812,26 @@ app.get('/api/template-discovery', async (req, res) => {
         const slugMatch = marketUrl.match(/\/item\/([^\/]+)\//);
         previewUrl = slugMatch ? `https://preview.themeforest.net/item/${slugMatch[1]}/full_screen_preview/${m.id}` : (marketUrl || null);
       }
+      // Resolve the REAL demo URL for speed testing (the wrapper page itself is meaningless to test).
+      // If we already have a real live_site URL, use it; otherwise pull the demo out of the
+      // full-screen preview page's iframe.
+      let demoUrl = null;
+      if (previewUrl && !/preview\.themeforest\.net/.test(previewUrl) && /^https?:\/\//i.test(previewUrl)) {
+        demoUrl = previewUrl; // already a real live demo
+      } else if (previewUrl) {
+        try {
+          const pr = await fetch(previewUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) });
+          if (pr.ok) {
+            const html = await pr.text();
+            const mIf = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+            if (mIf) {
+              let u = mIf[1].replace(/&amp;/g, '&');
+              if (u.startsWith('//')) u = 'https:' + u;
+              if (/^https?:\/\//i.test(u) && !/themeforest\.net|envato/.test(u)) demoUrl = u;
+            }
+          }
+        } catch (e) {}
+      }
       return {
         id: m.id,
         name: d.name || m.name,
@@ -12822,6 +12842,7 @@ app.get('/api/template-discovery', async (req, res) => {
         price: priceCents ? '$' + (priceCents / 100).toFixed(0) : null,
         market_url: marketUrl,
         preview_url: previewUrl,
+        demo_url: demoUrl,
         thumb: (pv.icon_with_landscape_preview && pv.icon_with_landscape_preview.landscape_url) || (pv.landscape_preview && pv.landscape_preview.landscape_url) || d.image || m.image || null,
         author: d.author_username || m.author_username || '',
       };
