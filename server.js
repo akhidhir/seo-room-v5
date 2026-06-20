@@ -19574,10 +19574,19 @@ app.post('/api/projects/:projectId/onpage-audit/fix-all', async (req, res) => {
       contentPlain = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
+    // Most reliable H1 source: the actual rendered <h1> on the live page.
+    try {
+      const lr = await fetch(pageUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) });
+      if (lr.ok) { const html = await lr.text(); const hm = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i); if (hm) { const t = hm[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim(); if (t) h1Text = t; } }
+    } catch (e) {}
+
     const fixed = [];
 
-    // ---- 1) META (title / description / focus keyword) — safe, applied immediately ----
-    try {
+    // ---- 1) META (title / description / focus keyword) — only when it actually needs fixing ----
+    const curTitle = String(page.meta?._yoast_wpseo_title || '');
+    const curDesc = String(page.meta?._yoast_wpseo_metadesc || '');
+    const metaNeedsFix = !focusKw || !curTitle || !curTitle.toLowerCase().includes(focusKw.toLowerCase()) || curTitle.length > 60 || !curDesc || curDesc.length > 155 || curDesc.length < 120;
+    if (metaNeedsFix) try {
       const mResp = await anthropic.messages.create({ model: MODEL, max_tokens: 400,
         messages: [{ role: 'user', content: `Write SEO meta for this page.
 Business: "${project.business_name || project.name || ''}" in ${project.location || 'its area'}.
@@ -19623,7 +19632,10 @@ Return ONLY JSON: {"title":"SEO title 50-60 chars incl. focus keyword","metadesc
         let changed = false;
         const walk = (els) => (els || []).forEach(el => {
           if (!el) return;
-          if (newH1 && el.widgetType === 'heading' && el.settings && el.settings.title === h1Text) { el.settings.title = newH1; changed = true; }
+          if (newH1 && el.widgetType === 'heading' && el.settings && el.settings.title) {
+            const t = String(el.settings.title).replace(/\s+/g, ' ').trim();
+            if (t === h1Text || t.toLowerCase() === h1Text.toLowerCase()) { el.settings.title = newH1; changed = true; }
+          }
           if (sentencePatch && el.widgetType === 'text-editor' && el.settings && typeof el.settings.editor === 'string') {
             const idx = el.settings.editor.indexOf(sentencePatch.find);
             if (idx !== -1) { el.settings.editor = el.settings.editor.slice(0, idx) + sentencePatch.replace + el.settings.editor.slice(idx + sentencePatch.find.length); changed = true; }
