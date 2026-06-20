@@ -9689,9 +9689,18 @@
       const [shortlist, setShortlist] = React.useState([]);
       const [saved, setSaved] = React.useState([]);
       const [source, setSource] = React.useState('');
+      const [excluded, setExcluded] = React.useState(() => { try { return JSON.parse(localStorage.getItem('tplDiscExcluded') || '[]'); } catch (e) { return []; } });
+      const exclude = (it) => {
+        const next = excluded.includes(it.id) ? excluded : excluded.concat(it.id);
+        setExcluded(next);
+        try { localStorage.setItem('tplDiscExcluded', JSON.stringify(next)); } catch (e) {}
+        const remaining = items.filter(x => x.id !== it.id);
+        setItems(remaining);
+        saveLastSearch(remaining, niche.trim(), page);
+      };
       const loadShortlist = async () => { try { const d = await api('/template-shortlist'); if (d && d.items) { setSaved(d.items); setShortlist(d.items.map(x => x.id)); } } catch (e) {} };
       const saveLastSearch = (its, nch, pg) => { api('/template-discovery-last', { method: 'POST', body: { niche: nch, page: pg, items: its } }).catch(() => {}); };
-      const restoreLastSearch = async () => { try { const d = await api('/template-discovery-last'); if (d && d.items && d.items.length) { setItems(d.items); setNiche(d.niche || ''); setPage(d.page || 1); } } catch (e) {} };
+      const restoreLastSearch = async () => { try { const d = await api('/template-discovery-last'); if (d && d.items && d.items.length) { let ex = []; try { ex = JSON.parse(localStorage.getItem('tplDiscExcluded') || '[]'); } catch (e) {} setItems(d.items.filter(x => !ex.includes(x.id))); setNiche(d.niche || ''); setPage(d.page || 1); } } catch (e) {} };
       React.useEffect(() => { loadShortlist(); restoreLastSearch(); }, []);
 
       const runTest = async (it) => {
@@ -9716,7 +9725,7 @@
           const mapped = (d.items || []).map(it => ({ ...it, test: { loading: !!(it.demo_url || it.preview_url) } }));
           const base = reset ? [] : items;
           const seen = new Set(base.map(x => x.id));
-          const fresh = mapped.filter(it => !seen.has(it.id));
+          const fresh = mapped.filter(it => !seen.has(it.id) && !excluded.includes(it.id));
           const merged = base.concat(fresh);
           setItems(merged);
           setPage(p + 1);
@@ -9756,6 +9765,7 @@
               <button onClick={() => search(true)} disabled={loading} style={{ padding: '11px 22px', border: 'none', borderRadius: 8, background: '#8b5cf6', color: '#fff', fontWeight: 600, fontSize: 14, cursor: loading ? 'wait' : 'pointer' }}>{loading ? 'Searching…' : 'Find templates'}</button>
             </div>
             {error && <div style={{ color: '#ef4444', fontSize: 13, marginTop: 10 }}>{error}</div>}
+            {excluded.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>{excluded.length} hidden · <a onClick={() => { setExcluded([]); try { localStorage.removeItem('tplDiscExcluded'); } catch (e) {} }} style={{ color: '#8b5cf6', cursor: 'pointer' }}>reset</a></div>}
           </div>
 
           {saved.length > 0 && (
@@ -9787,6 +9797,12 @@
                 const t = it.test || {};
                 const r = t.result;
                 const isShort = shortlist.includes(it.id);
+                const bColor = { g: '#22c55e', a: '#f59e0b', r: '#ef4444' };
+                const M = (r && r.metrics) || {};
+                const chips = [
+                  { label: 'Speed', m: M.perf }, { label: 'SEO', m: M.seo }, { label: 'LCP', m: M.lcp }, { label: 'Shift', m: M.cls }, { label: 'Weight', m: M.weight }, { label: 'DOM', m: M.dom }
+                ].filter(c => c.m);
+                const flagged = chips.filter(c => c.m.band !== 'g').map(c => c.label);
                 return (
                   <div key={it.id} style={{ ...card, border: isShort ? '2px solid #22c55e' : card.border, display: 'flex', flexDirection: 'column' }}>
                     {it.thumb && <img src={it.thumb} alt="" style={{ width: '100%', height: 150, objectFit: 'cover', borderRadius: 8, marginBottom: 10 }} />}
@@ -9802,9 +9818,18 @@
                       {t.err && <div style={{ fontSize: 12, color: '#ef4444' }}>Test failed: {t.err} <a onClick={() => runTest(it)} style={{ color: '#8b5cf6', cursor: 'pointer', marginLeft: 6 }}>retry</a></div>}
                       {!t.loading && !t.err && !r && <a onClick={() => runTest(it)} style={{ fontSize: 13, color: '#8b5cf6', cursor: 'pointer' }}>Test speed</a>}
                       {r && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 700, fontSize: 13, color: vColor[r.verdictKey] }}>{r.verdictKey === 'pass' ? '✓ Eligible' : r.verdictKey === 'warn' ? '△ Needs work' : '✗ Reject'}</span>
-                          <span style={{ fontSize: 12, color: 'var(--text2)' }}>Perf {r.metrics.perf.value} · SEO {r.metrics.seo.value} · {r.metrics.weight.value}</span>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, color: vColor[r.verdictKey] }}>{r.verdictKey === 'pass' ? '✓ Eligible' : r.verdictKey === 'warn' ? '△ Needs work' : '✗ Reject'}</span>
+                            {flagged.length > 0 && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· weak: {flagged.join(', ')}</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {chips.map(c => (
+                              <span key={c.label} title={c.label} style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, background: 'var(--bg)', border: '1px solid var(--border)', color: bColor[c.m.band] }}>
+                                <span style={{ color: 'var(--text3)' }}>{c.label} </span>{c.m.value}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -9812,6 +9837,7 @@
                       <button onClick={() => toggleShort(it)} style={{ flex: 1, padding: '8px', borderRadius: 6, background: isShort ? '#22c55e' : 'var(--bg)', color: isShort ? '#fff' : 'var(--text)', border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{isShort ? '✓ Shortlisted' : 'Shortlist'}</button>
                       {it.preview_url && <a href={it.preview_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Preview</a>}
                       {it.market_url && <a href={it.market_url} target="_blank" rel="noopener" style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }}>Buy</a>}
+                      <button onClick={() => exclude(it)} title="Hide this one — won't show again" style={{ padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'transparent', color: 'var(--text3)', fontSize: 13, cursor: 'pointer' }}><i className="fas fa-times"></i></button>
                     </div>
                     <button onClick={() => sendToCopywriter(it)} disabled={sending === it.id} style={{ marginTop: 8, width: '100%', padding: '9px', border: 'none', borderRadius: 6, background: '#14b8a6', color: '#fff', fontSize: 13, fontWeight: 600, cursor: sending === it.id ? 'wait' : 'pointer' }}>
                       <i className="fas fa-pen-nib" style={{ marginRight: 6 }} />{sending === it.id ? 'Sending…' : 'Send to Copywriter'}
