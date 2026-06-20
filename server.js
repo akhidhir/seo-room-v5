@@ -44086,13 +44086,36 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     }
     const avgDelta = (a) => a.length ? parseFloat((a.reduce((x, y) => x + y, 0) / a.length).toFixed(1)) : null;
 
+    // Change vs comparison point: previous month's report first, else the baseline snapshot (for the first report).
+    // Positions: lower is better, so improvement = comparison − current (positive = improved).
+    let cmpSerpAvg = null, cmpMapsAvg = null, comparedTo = null;
+    try {
+      const pd = new Date(now); pd.setMonth(pd.getMonth() - 1);
+      const pm = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+      const pr = await pool.query('SELECT report_data FROM monthly_reports WHERE project_id=$1 AND month=$2', [projectId, pm]);
+      const prev = pr.rows[0] ? (typeof pr.rows[0].report_data === 'string' ? JSON.parse(pr.rows[0].report_data) : pr.rows[0].report_data) : null;
+      if (prev && (prev.serpRankings || prev.mapsRankings)) {
+        cmpSerpAvg = prev.serpRankings?.avgPosition ?? null;
+        cmpMapsAvg = prev.mapsRankings?.avgArp ?? null;
+        comparedTo = 'last month';
+      } else {
+        const br = await pool.query(`SELECT report_data FROM baseline_reports WHERE project_id=$1 AND status='completed'`, [projectId]);
+        const base = br.rows[0] ? (typeof br.rows[0].report_data === 'string' ? JSON.parse(br.rows[0].report_data) : br.rows[0].report_data) : null;
+        if (base) { cmpSerpAvg = base.serpRankings?.avgPosition ?? null; cmpMapsAvg = base.mapsRankings?.avgArp ?? null; comparedTo = 'baseline'; }
+      }
+    } catch (e) { console.log('[reports] comparison lookup skipped:', e.message); }
+    const r1c = (x) => x == null ? null : parseFloat(Number(x).toFixed(1));
+    const serpChangeFinal = (cmpSerpAvg != null && avgSerp != null) ? r1c(cmpSerpAvg - avgSerp) : avgDelta(serpDeltas);
+    const mapsChangeFinal = (cmpMapsAvg != null && avgArp != null) ? r1c(cmpMapsAvg - avgArp) : avgDelta(mapsDeltas);
+
     const mapsRankings = {
       totalKeywords: gridEntries.length || mapsPositions.length,
       avgArp: avgArp,
       avgAtrp: avgAtrp,
       avgVisibility: avgSolv != null ? parseFloat(avgSolv.toFixed(1)) : null,
-      serpChange: avgDelta(serpDeltas),
-      mapsChange: avgDelta(mapsDeltas),
+      comparedTo,
+      serpChange: serpChangeFinal,
+      mapsChange: mapsChangeFinal,
       dominant: gridEntries.filter(r => r.solv >= 60).length,
       competitive: gridEntries.filter(r => r.solv >= 30 && r.solv < 60).length,
       needsWork: gridEntries.filter(r => r.solv > 0 && r.solv < 30).length,

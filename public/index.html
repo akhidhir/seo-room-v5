@@ -33597,6 +33597,7 @@
           mapsVis: r1(report.mapsRankings?.avgVisibility),
           mapsChange: r1(report.mapsRankings?.mapsChange),
           serpChange: r1(report.mapsRankings?.serpChange),
+          comparedTo: report.mapsRankings?.comparedTo || null,
           kwTracked: report.mapsRankings?.totalKeywords ?? 0,
           kwDominant: report.mapsRankings?.dominant ?? 0,
           kwCompetitive: report.mapsRankings?.competitive ?? 0,
@@ -33683,6 +33684,7 @@
                         ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.serpChange)}</span>
                         : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.serpChange)}</span>}
                   </div>
+                  {d.comparedTo && <div style={{ fontSize: 10, color: 'var(--text3)', textAlign: 'center', marginTop: 4 }}>vs {d.comparedTo}</div>}
                 </div>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
@@ -33695,6 +33697,7 @@
                         ? <span style={{ color: '#22c55e' }}>&#9650; {Math.abs(d.mapsChange)}</span>
                         : <span style={{ color: '#ef4444' }}>&#9660; {Math.abs(d.mapsChange)}</span>}
                   </div>
+                  {d.comparedTo && <div style={{ fontSize: 10, color: 'var(--text3)', textAlign: 'center', marginTop: 4 }}>vs {d.comparedTo}</div>}
                 </div>
               </div>
 
