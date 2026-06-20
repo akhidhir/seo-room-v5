@@ -12805,12 +12805,12 @@ app.get('/api/template-discovery', async (req, res) => {
       const marketUrl = d.url || m.url || '';
       // Resolve a real, testable demo URL. The API rarely returns one directly, so fall
       // back to ThemeForest's full-screen preview and pull the demo out of its iframe.
-      let previewUrl = (pv.live_site && (pv.live_site.url || pv.live_site.href)) || pv.landing_page_url || null;
-      if (previewUrl && previewUrl.startsWith('//')) previewUrl = 'https:' + previewUrl;
-      if (!previewUrl) {
-        // Clean, absolute ThemeForest full-screen preview URL (always opens the demo).
+      let previewUrl = (pv.live_site && (pv.live_site.url || pv.live_site.href)) || pv.landing_page_url || '';
+      if (previewUrl.startsWith('//')) previewUrl = 'https:' + previewUrl;
+      // Only trust it if it's a real absolute URL; otherwise build the absolute ThemeForest preview.
+      if (!/^https?:\/\//i.test(previewUrl)) {
         const slugMatch = marketUrl.match(/\/item\/([^\/]+)\//);
-        previewUrl = slugMatch ? `https://preview.themeforest.net/item/${slugMatch[1]}/full_screen_preview/${m.id}` : marketUrl;
+        previewUrl = slugMatch ? `https://preview.themeforest.net/item/${slugMatch[1]}/full_screen_preview/${m.id}` : (marketUrl || null);
       }
       return {
         id: m.id,
