@@ -9689,16 +9689,19 @@
       const [shortlist, setShortlist] = React.useState([]);
       const [saved, setSaved] = React.useState([]);
       const loadShortlist = async () => { try { const d = await api('/template-shortlist'); if (d && d.items) { setSaved(d.items); setShortlist(d.items.map(x => x.id)); } } catch (e) {} };
-      React.useEffect(() => { loadShortlist(); }, []);
+      const saveLastSearch = (its, nch, pg) => { api('/template-discovery-last', { method: 'POST', body: { niche: nch, page: pg, items: its } }).catch(() => {}); };
+      const restoreLastSearch = async () => { try { const d = await api('/template-discovery-last'); if (d && d.items && d.items.length) { setItems(d.items); setNiche(d.niche || ''); setPage(d.page || 1); } } catch (e) {} };
+      React.useEffect(() => { loadShortlist(); restoreLastSearch(); }, []);
 
       const runTest = async (it) => {
         const testUrl = it.demo_url || it.preview_url;
         if (!testUrl) { setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: false, err: 'no demo to test' } } : x)); return; }
         setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: true } } : x));
+        const apply = (patch) => setItems(prev => { const next = prev.map(x => x.id === it.id ? { ...x, test: patch } : x); saveLastSearch(next, niche.trim(), page); return next; });
         try {
           const r = await api('/template-test?url=' + encodeURIComponent(testUrl));
-          setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: false, result: (r && !r.error) ? r : null, err: (r && r.error) ? r.error : null } } : x));
-        } catch (e) { setItems(prev => prev.map(x => x.id === it.id ? { ...x, test: { loading: false, err: e.message } } : x)); }
+          apply({ loading: false, result: (r && !r.error) ? r : null, err: (r && r.error) ? r.error : null });
+        } catch (e) { apply({ loading: false, err: e.message }); }
       };
 
       const search = async (reset) => {
@@ -9709,8 +9712,10 @@
           const d = await api('/template-discovery?niche=' + encodeURIComponent(niche.trim()) + '&page=' + p + '&size=3');
           if (d && d.error) { setError(d.error); setLoading(false); return; }
           const newItems = (d.items || []).map(it => ({ ...it, test: { loading: !!(it.demo_url || it.preview_url) } }));
-          setItems(reset ? newItems : items.concat(newItems));
+          const merged = reset ? newItems : items.concat(newItems);
+          setItems(merged);
           setPage(p + 1);
+          saveLastSearch(merged, niche.trim(), p + 1);
           newItems.forEach(it => runTest(it));
         } catch (e) { setError(e.message); }
         setLoading(false);

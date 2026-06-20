@@ -499,6 +499,17 @@ async function initDb() {
       )
     `);
 
+    // Last Template Discovery search batch (single global row) — so results survive reload/navigation
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS template_discovery_last (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        niche TEXT,
+        page INTEGER DEFAULT 1,
+        items JSONB DEFAULT '[]',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // Client asset bundles — reusable brand/content store for the Asset Intake page
     await client.query(`
       CREATE TABLE IF NOT EXISTS asset_bundles (
@@ -12920,6 +12931,27 @@ app.post('/api/template-shortlist', async (req, res) => {
 app.delete('/api/template-shortlist/:itemId', async (req, res) => {
   try {
     await pool.query('DELETE FROM template_shortlist WHERE item_id = $1', [parseInt(req.params.itemId, 10)]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Last Template Discovery search batch — restore results after reload/navigation
+app.get('/api/template-discovery-last', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT niche, page, items FROM template_discovery_last WHERE id = 1');
+    if (!r.rows.length) return res.json({ niche: '', page: 1, items: [] });
+    res.json({ niche: r.rows[0].niche || '', page: r.rows[0].page || 1, items: r.rows[0].items || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/template-discovery-last', async (req, res) => {
+  try {
+    const { niche, page, items } = req.body || {};
+    await pool.query(
+      `INSERT INTO template_discovery_last (id, niche, page, items, updated_at)
+       VALUES (1, $1, $2, $3, NOW())
+       ON CONFLICT (id) DO UPDATE SET niche = EXCLUDED.niche, page = EXCLUDED.page, items = EXCLUDED.items, updated_at = NOW()`,
+      [niche || '', page || 1, JSON.stringify(items || [])]
+    );
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
