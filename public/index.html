@@ -20609,9 +20609,13 @@
         <button onClick={() => setTab(k)} style={{ background: tab === k ? '#8b5cf6' : 'transparent', color: tab === k ? '#fff' : 'var(--text2)', border: '1px solid ' + (tab === k ? '#8b5cf6' : 'var(--border)'), borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
       );
       const confChip = (a) => {
-        const map = { high: ['Measured — high confidence', '#22c55e'], medium: ['Measured', '#22c55e'], low: ['Measured — small sample', '#84cc16'], inferred: ['Inferred — low confidence', '#94a3b8'], none: ['No data', '#64748b'] };
+        const map = { high: ['Measured — high confidence', '#22c55e'], medium: ['Measured', '#22c55e'], low: ['Measured — small sample', '#84cc16'], correlation: ['Site-wide correlation — not isolated', '#f59e0b'], none: ['No tracked page', '#64748b'] };
         const [label, color] = map[a.confidence] || map.none;
-        return <span title={a.confidence === 'inferred' ? 'No before/after rank data for these fixes — estimated from overall site movement. Treat as a hint, not proof.' : 'Measured from the page/keyword rank before vs after each fix.'} style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: color + '22', color, whiteSpace: 'nowrap' }}>{label}</span>;
+        const tip = a.confidence === 'correlation'
+          ? "We couldn't tie this tactic to specific tracked pages, so this only reflects overall site movement while many changes ran at once. It is NOT proof this tactic worked."
+          : a.confidence === 'none' ? 'No tracked page could be tied to these fixes.'
+          : "Measured from the actual page's rank before vs after each fix — the only truly isolated signal.";
+        return <span title={tip} style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: color + '22', color, whiteSpace: 'nowrap' }}>{label}</span>;
       };
       const posColor = v => v == null ? 'var(--text3)' : v > 0 ? '#22c55e' : v < 0 ? '#ef4444' : 'var(--text3)';
       const row = (a) => (
@@ -20627,29 +20631,29 @@
               <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4, lineHeight: 1.5 }}>{a.recommendation}</div>
               <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.evidence}</div>
             </div>
-            <div style={{ textAlign: 'right', minWidth: 110 }}>
+            <div style={{ textAlign: 'right', minWidth: 120 }}>
               <div style={{ fontSize: 20, fontWeight: 800, color: a.successRate == null ? 'var(--text3)' : a.successRate >= 60 ? '#22c55e' : a.successRate >= 40 ? '#f59e0b' : '#ef4444' }}>{a.successRate == null ? '—' : a.successRate + '%'}</div>
-              <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>success rate</div>
+              <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{a.measured ? 'pages improved' : 'projects improved'}</div>
               <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end' }}>
-                {a.serpCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>SERP </span><span style={{ color: posColor(a.serpAvg) }}>{a.serpAvg > 0 ? '▲' : a.serpAvg < 0 ? '▼' : '–'} {Math.abs(a.serpAvg).toFixed(1)}</span></div>}
-                {a.mapsCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>Maps </span><span style={{ color: posColor(a.mapsAvg) }}>{a.mapsAvg > 0 ? '▲' : a.mapsAvg < 0 ? '▼' : '–'} {Math.abs(a.mapsAvg).toFixed(1)}</span></div>}
-                {!a.serpCount && !a.mapsCount && <div style={{ fontSize: 11, color: 'var(--text3)' }}>no rank data</div>}
+                {a.measured && a.pageSerpCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>page rank </span><span style={{ color: posColor(a.pageSerpAvg) }}>{a.pageSerpAvg > 0 ? '▲' : a.pageSerpAvg < 0 ? '▼' : '–'} {Math.abs(a.pageSerpAvg).toFixed(1)}</span></div>}
+                {a.mapsCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>Maps{a.measured ? '' : '*'} </span><span style={{ color: posColor(a.mapsAvg) }}>{a.mapsAvg > 0 ? '▲' : a.mapsAvg < 0 ? '▼' : '–'} {Math.abs(a.mapsAvg).toFixed(1)}</span></div>}
+                {!a.measured && <div style={{ fontSize: 10, color: '#f59e0b' }}>site-wide only</div>}
               </div>
             </div>
           </div>
           {open[a.type] && (
             <div style={{ padding: '4px 16px 16px 38px', background: 'rgba(255,255,255,0.02)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', margin: '4px 0 6px' }}><span>Per-project results</span><span style={{ display: 'flex', gap: 18 }}><span style={{ width: 56, textAlign: 'right' }}>SERP</span><span style={{ width: 56, textAlign: 'right' }}>Maps</span></span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', margin: '4px 0 6px' }}><span>Per-project results</span><span style={{ display: 'flex', gap: 18 }}><span style={{ width: 64, textAlign: 'right' }}>Page rank</span><span style={{ width: 56, textAlign: 'right' }}>Maps</span></span></div>
               {(a.details || []).map(d => {
                 const cell = (v) => v == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <span style={{ color: posColor(v), fontWeight: 600 }}>{v > 0 ? '▲' : v < 0 ? '▼' : '–'} {Math.abs(v).toFixed(1)}</span>;
                 return (
                   <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                    <span style={{ flex: 1 }}>{d.name} <span style={{ color: 'var(--text3)' }}>· done {d.times}×</span></span>
-                    <span style={{ display: 'flex', gap: 18 }}><span style={{ width: 56, textAlign: 'right' }}>{cell(d.serpAvg)}</span><span style={{ width: 56, textAlign: 'right' }}>{cell(d.mapsAvg)}</span></span>
+                    <span style={{ flex: 1 }}>{d.name} <span style={{ color: 'var(--text3)' }}>· done {d.times}×{d.pageCount ? '' : ' · no tracked page'}</span></span>
+                    <span style={{ display: 'flex', gap: 18 }}><span style={{ width: 64, textAlign: 'right' }}>{cell(d.pageSerpAvg)}</span><span style={{ width: 56, textAlign: 'right' }}>{cell(d.mapsAvg)}</span></span>
                   </div>
                 );
               })}
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>Numbers = average positions gained (▲) or lost (▼) on that surface after the fix.</div>
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>Page rank = the exact page this fix touched, organic position before vs after (the trustworthy number). Maps = the whole business profile's position — shared by every local action that month, so it's context, not proof.</div>
               <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}><i className="fas fa-arrow-right" style={{ color: '#8b5cf6', marginRight: 6 }} /><b>Next action:</b> {a.nextAction}</div>
             </div>
           )}
@@ -20658,7 +20662,7 @@
       return (
         <div>
           <div className="page-title"><i className="fas fa-brain" style={{ marginRight: 10, color: '#8b5cf6' }} />Learnings</div>
-          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>What's actually working — each fix is <b>measured against its own page's ranking before vs after</b> the fix date (not the whole site's movement). Rows marked <b>Measured</b> are based on real before/after rank data; <b>Inferred</b> rows lack that history and are a weaker hint. {data ? '(Analysed ' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + (data.measuredTactics != null ? ' · ' + data.measuredTactics + '/' + data.totalTactics + ' tactics measured' : '') + '.)' : ''}</div>
+          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>Two tiers, kept honest: <b style={{ color: '#22c55e' }}>Measured</b> = the fix was tied to a specific tracked page and that page's rank moved before vs after (real proof). <b style={{ color: '#f59e0b' }}>Site-wide correlation</b> = we couldn't tie it to a page, so it only reflects overall movement while many changes ran at once (a hint, not proof). {data ? '(' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + (data.measuredTactics != null ? ' · only ' + data.measuredTactics + '/' + data.totalTactics + ' tactics truly measured' : '') + '.)' : ''}</div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             {tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}
             <button onClick={runAllReports} disabled={running} style={{ marginLeft: 'auto', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: running ? 'wait' : 'pointer' }}>

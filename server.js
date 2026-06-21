@@ -44022,123 +44022,116 @@ async function computeLearnings(onlyProjectId) {
     if (!before.length || !after.length) return null;
     return Math.max(-CAP, Math.min(CAP, mean(before) - mean(after))); // +ve = improved (smaller position)
   }
-  // Measure EVERY action on both surfaces. SERP is page-targeted when we know the URL; Maps is business-level (all keywords).
+  // Measure an action. SERP is credited ONLY when the action names a page we actually track (true isolation).
+  // Maps is business-level (shared by every local action that month) so it's context, never proof of one tactic.
   function measureAction(a) {
     const t = a.acted_at ? new Date(a.acted_at).getTime() : null;
     if (!t) return null;
     const ph = hist[a.project_id]; if (!ph) return null;
     const all = Object.values(ph);
     const target = actionTargetPath(a);
-    let serpSeries = all;
+    let serp = null; // page-level only — NO whole-site fallback
     if (target) {
       const matched = all.filter(arr => {
         const lastUrl = arr.map(x => x.url).filter(Boolean).slice(-1)[0] || '';
         const p = _pathOf(lastUrl);
         return p && (p === target || p.endsWith(target) || target.endsWith(p));
       });
-      if (matched.length) serpSeries = matched; // else fall back to whole-site organic
+      if (matched.length) serp = surfaceDelta(matched, x => x.serp, t);
     }
-    return { serp: surfaceDelta(serpSeries, x => x.serp, t), maps: surfaceDelta(all, x => x.maps, t) };
+    return { serp, maps: surfaceDelta(all, x => x.maps, t) };
   }
 
-  // 4) Group by tactic; prefer measured outcomes, fall back to inferred.
+  // 4) Group by tactic. Two tiers: page-level SERP = real measurement; everything else = site-wide correlation.
   const projName = {}; projRows.forEach(p => projName[p.id] = p.business_name || p.name);
   const byType = {};
   for (const a of acts) {
     const type = normActionType(a);
-    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), measured: [], serp: [], maps: [], projSet: new Set(), byProject: {} };
+    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), pageSerp: [], maps: [], projSet: new Set(), byProject: {} };
     const b = byType[type];
     b.timesDone++; b.projects.add(a.project_id); b.projSet.add(a.project_id);
-    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, measured: [], serp: [], maps: [] };
+    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, pageSerp: [], maps: [] };
     const bp = b.byProject[a.project_id]; bp.times++;
     const m = measureAction(a);
     if (m) {
-      if (m.serp != null) { b.serp.push(m.serp); bp.serp.push(m.serp); }
-      if (m.maps != null) { b.maps.push(m.maps); bp.maps.push(m.maps); }
-      // Primary surface drives the verdict (local actions judged on Maps, the rest on SERP); both shown in detail.
-      const primary = actionChannel(a) === 'maps' ? m.maps : m.serp;
-      if (primary != null) { b.measured.push(primary); bp.measured.push(primary); }
+      if (m.serp != null) { b.pageSerp.push(m.serp); bp.pageSerp.push(m.serp); } // real per-page signal
+      if (m.maps != null) { b.maps.push(m.maps); bp.maps.push(m.maps); }          // business-level context
     }
   }
 
+  const mean2 = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+  const r1 = v => v == null ? null : parseFloat(v.toFixed(1));
   const GENERIC = new Set(['serp', 'website', 'gbp', 'gbp_external', 'gsc', 'gsc_agent', 'technical', 'links', 'maps', 'other']);
   const learnings = Object.values(byType)
     .filter(b => !GENERIC.has((b.type || '').toLowerCase()))
     .map(b => {
-      const measured = b.measured.length > 0;
-      const sample = measured ? b.measured : [...b.projSet].map(pid => projComposite[pid]).filter(v => v != null);
+      const measured = b.pageSerp.length > 0; // only page-level SERP counts as truly measured
+      // Trustworthy sample = per-page SERP deltas. Otherwise fall back to per-PROJECT site outcome (not per-action — avoids inflation).
+      const sample = measured ? b.pageSerp : [...b.projSet].map(pid => projComposite[pid]).filter(v => v != null);
       const n = sample.length;
       const positive = sample.filter(o => o > 0).length;
       const avg = n ? mean(sample) : 0;
-      const consistency = n ? Math.round((positive / n) * 100) : 0;
+      const successRate = n ? Math.round((positive / n) * 100) : null;
       const value = parseFloat((avg * (n ? positive / n : 0) * Math.log2(b.projects.size + 1)).toFixed(2));
-      // Confidence: measured + sample size
       let confidence;
       if (!n) confidence = 'none';
-      else if (measured && b.measured.length >= 5) confidence = 'high';
-      else if (measured && b.measured.length >= 2) confidence = 'medium';
+      else if (measured && b.pageSerp.length >= 5) confidence = 'high';
+      else if (measured && b.pageSerp.length >= 2) confidence = 'medium';
       else if (measured) confidence = 'low';
-      else confidence = 'inferred';
+      else confidence = 'correlation';
       const pos = x => `${x > 0 ? 'up' : 'down'} ~${Math.abs(x).toFixed(1)} position${Math.abs(x).toFixed(1) === '1.0' ? '' : 's'}`;
+      const pageSerpAvg = r1(mean2(b.pageSerp));
+      const mapsAvg = r1(mean2(b.maps));
       let verdict, recommendation;
-      if (!n) { verdict = 'No data'; recommendation = 'Not enough ranking history around these fixes yet — needs more rank-tracking snapshots.'; }
-      else if (avg <= 0 || consistency < 25) {
+      if (!n) {
+        verdict = 'No data';
+        recommendation = 'No tracked page can be tied to these fixes yet — record the target page on the action, or add rank-tracking for those pages.';
+      } else if (!measured) {
+        // Correlation tier — be explicit we can't isolate this tactic.
+        if (avg > 0 && successRate >= 50) { verdict = 'Promising'; recommendation = `Sites that got this moved up ${pos(avg)} overall (${positive}/${n} projects) — but other changes ran at the same time, so this isn't proof. Test it in isolation.`; }
+        else { verdict = 'Not helping'; recommendation = `Sites that got this didn't clearly improve overall (${positive}/${n} projects). Correlation only — can't isolate this tactic.`; }
+      } else if (avg <= 0 || successRate < 25) {
         verdict = 'Not helping';
-        recommendation = measured
-          ? `Tracked pages moved ${pos(avg)} on average after this — no benefit; deprioritise or change the approach.`
-          : 'No clear benefit on sites where this was done — deprioritise, or change how it\'s done.';
-      } else if (consistency >= 60) {
+        recommendation = `Tracked pages moved ${pos(avg)} after this — no benefit; deprioritise or change the approach.`;
+      } else if (successRate >= 60) {
         verdict = 'Working';
-        recommendation = measured
-          ? `Tracked pages moved ${pos(avg)} on average after this, improving ${positive}/${n} times — keep doing it and roll it out.`
-          : `Improved on ${positive}/${n} sites — keep doing it and roll it out to the rest.`;
-      } else if (consistency >= 40) {
+        recommendation = `The actual pages this touched moved ${pos(avg)} on average, improving ${positive}/${n} of them — keep doing it and roll it out.`;
+      } else if (successRate >= 40) {
         verdict = 'Promising';
-        recommendation = measured
-          ? `Mixed: ${positive}/${n} measured fixes improved (avg ${pos(avg)}) — do more to confirm.`
-          : `Helped on ${positive}/${n} sites — looks promising; do more to confirm.`;
+        recommendation = `Mixed: ${positive}/${n} touched pages improved (avg ${pos(avg)}) — do more to confirm.`;
       } else {
         verdict = 'Little effect';
-        recommendation = `Only ${positive}/${n} ${measured ? 'measured fixes' : 'sites'} improved — minor or inconsistent.`;
+        recommendation = `Only ${positive}/${n} touched pages improved — minor or inconsistent.`;
       }
       const basisNote = measured
-        ? `measured on ${b.measured.length} fix${b.measured.length !== 1 ? 'es' : ''} (page rank before vs after)`
-        : `no before/after rank data — inferred from overall site movement`;
-      // Per-project breakdown (where it was done + how it moved that site, on BOTH SERP and Maps)
-      const mean2 = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
-      const r1 = v => v == null ? null : parseFloat(v.toFixed(1));
-      const serpAvg = r1(mean2(b.serp));   // organic position change
-      const mapsAvg = r1(mean2(b.maps));   // Google Maps position change
-      const details = Object.values(b.byProject).map(pp => {
-        const pm = pp.measured.length ? mean2(pp.measured) : null;
-        return {
-          name: pp.name, times: pp.times, measuredCount: pp.measured.length,
-          avg: pm == null ? null : parseFloat(pm.toFixed(1)),
-          serpAvg: r1(mean2(pp.serp)), mapsAvg: r1(mean2(pp.maps)),
-        };
-      }).sort((x, y) => (y.avg == null ? -99 : y.avg) - (x.avg == null ? -99 : x.avg));
+        ? `measured on ${b.pageSerp.length} page-level fix${b.pageSerp.length !== 1 ? 'es' : ''} (that page's rank before vs after)`
+        : `site-wide correlation across ${n} project${n !== 1 ? 's' : ''} — couldn't tie it to specific tracked pages`;
+      // Per-project breakdown
+      const details = Object.values(b.byProject).map(pp => ({
+        name: pp.name, times: pp.times, pageCount: pp.pageSerp.length,
+        pageSerpAvg: r1(mean2(pp.pageSerp)), mapsAvg: r1(mean2(pp.maps)),
+        siteAvg: projComposite[pp.id] != null ? parseFloat(projComposite[pp.id].toFixed(1)) : null,
+      })).sort((x, y) => (y.pageSerpAvg == null ? -99 : y.pageSerpAvg) - (x.pageSerpAvg == null ? -99 : x.pageSerpAvg));
       const doneIds = new Set(Object.keys(b.byProject).map(Number));
       const notApplied = projRows.filter(p => !doneIds.has(p.id)).map(p => projName[p.id]);
-      // Concrete next step
       let nextAction;
       const good = verdict === 'Working' || verdict === 'Promising';
-      if (good && notApplied.length) nextAction = `Roll out to ${notApplied.length} project${notApplied.length !== 1 ? 's' : ''} that haven't had it: ${notApplied.slice(0, 6).join(', ')}${notApplied.length > 6 ? ` +${notApplied.length - 6} more` : ''}.`;
+      if (!measured && verdict !== 'No data') nextAction = 'To trust this, attach the target page URL to these actions so rank movement can be measured per page.';
+      else if (good && notApplied.length) nextAction = `Roll out to ${notApplied.length} project${notApplied.length !== 1 ? 's' : ''} that haven't had it: ${notApplied.slice(0, 6).join(', ')}${notApplied.length > 6 ? ` +${notApplied.length - 6} more` : ''}.`;
       else if (good) nextAction = 'Already applied across all projects — keep maintaining it.';
-      else if (verdict === 'No data') nextAction = 'Run more rank-tracking snapshots so fixes here can be measured before vs after.';
+      else if (verdict === 'No data') nextAction = 'Record the target page on the action, or add rank-tracking for those pages.';
       else nextAction = 'Pause new effort on this until the approach changes — it isn\'t moving rankings.';
-      // Success rate % = share of measured fixes (or sites) that improved
-      const successRate = n ? Math.round((positive / n) * 100) : null;
       return {
         type: b.type, timesDone: b.timesDone, projects: b.projects.size,
-        sitesPositive: positive, sitesTotal: n, consistency, successRate, avgOutcome: parseFloat(avg.toFixed(2)),
-        value, verdict, recommendation, confidence, measured, measuredCount: b.measured.length,
-        serpAvg, mapsAvg, serpCount: b.serp.length, mapsCount: b.maps.length,
+        sitesPositive: positive, sitesTotal: n, successRate, avgOutcome: parseFloat(avg.toFixed(2)),
+        value, verdict, recommendation, confidence, measured,
+        pageSerpAvg, pageSerpCount: b.pageSerp.length, mapsAvg, mapsCount: b.maps.length,
         details, notApplied, nextAction,
         evidence: `Done ${b.timesDone}× across ${b.projects.size} project${b.projects.size !== 1 ? 's' : ''} · ${basisNote}`,
       };
     })
     .sort((a, b) => {
-      const rank = c => ({ high: 4, medium: 3, low: 2, inferred: 1, none: 0 }[c.confidence] || 0);
+      const rank = c => ({ high: 4, medium: 3, low: 2, correlation: 1, none: 0 }[c.confidence] || 0);
       if (rank(b) !== rank(a)) return rank(b) - rank(a);
       return b.value - a.value;
     });
