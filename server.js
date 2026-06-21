@@ -43953,65 +43953,161 @@ function normActionType(item) {
   if (/ctr|click.?through/.test(t)) return 'Improve CTR';
   return (item.pillar || 'other').toString();
 }
+// Pull a target page path out of an action (so we can measure that page's keywords).
+function actionTargetPath(item) {
+  const blob = `${item.title || ''} ${item.description || ''} ${item.new_value || ''} ${item.current_value || ''}`;
+  const m = blob.match(/https?:\/\/[^\s"'<>)]+/);
+  if (m) { try { return (new URL(m[0]).pathname || '/').replace(/\/+$/, '').toLowerCase() || '/'; } catch (e) { } }
+  return null;
+}
+// Which ranking surface does this action affect — local Maps or organic SERP?
+function actionChannel(item) {
+  const t = `${item.pillar || ''} ${item.type || ''} ${item.title || ''} ${item.category || ''}`.toLowerCase();
+  if (/gbp|maps|review|citation|profile|local|business description|hours|photo/.test(t)) return 'maps';
+  return 'serp';
+}
+function _pathOf(u) { try { return (new URL(u).pathname || '/').replace(/\/+$/, '').toLowerCase() || '/'; } catch (e) { return ''; } }
+
 async function computeLearnings(onlyProjectId) {
-  // 1) Each project's outcome = its latest report's SERP/Maps change (positive = improved).
   const projRows = (await pool.query(
     onlyProjectId ? 'SELECT id, name, business_name FROM projects WHERE id=$1' : 'SELECT id, name, business_name FROM projects'
     , onlyProjectId ? [onlyProjectId] : [])).rows;
-  const outcomes = {}; // projectId -> { name, serp, maps, score }
+  const ids = projRows.map(p => p.id);
+  if (!ids.length) return { actions: [], projectsAnalysed: 0 };
+
+  // 1) Ranking history per project: keyword -> sorted [{t, serp, url, maps}]
+  const rtRows = (await pool.query(
+    `SELECT project_id, keyword, serp_position, serp_url, maps_position, checked_at
+       FROM rank_tracking
+      WHERE project_id = ANY($1::int[]) AND checked_at IS NOT NULL
+      ORDER BY checked_at ASC`, [ids])).rows;
+  const hist = {}; // pid -> { kw -> [{t, serp, url, maps}] }
+  for (const r of rtRows) {
+    (hist[r.project_id] || (hist[r.project_id] = {}));
+    (hist[r.project_id][r.keyword] || (hist[r.project_id][r.keyword] = [])).push({
+      t: new Date(r.checked_at).getTime(), serp: r.serp_position, url: r.serp_url || '', maps: r.maps_position,
+    });
+  }
+
+  // 2) Fallback composite (latest monthly report) — used only when there's no before/after rank data.
+  const projComposite = {};
   for (const p of projRows) {
     const rr = (await pool.query('SELECT report_data FROM monthly_reports WHERE project_id=$1 ORDER BY month DESC LIMIT 1', [p.id])).rows[0];
     if (!rr) continue;
     const d = typeof rr.report_data === 'string' ? JSON.parse(rr.report_data) : rr.report_data;
-    const serp = d?.mapsRankings?.serpChange; const maps = d?.mapsRankings?.mapsChange;
-    if (serp == null && maps == null) continue;
-    // Composite, clamped so one skewed average doesn't dominate.
-    const clamp = (x) => x == null ? null : Math.max(-10, Math.min(10, x));
-    const parts = [clamp(serp), clamp(maps)].filter(x => x != null);
-    outcomes[p.id] = { name: p.business_name || p.name, serp, maps, score: parts.reduce((a, b) => a + b, 0) / parts.length };
+    const serp = d?.mapsRankings?.serpChange, maps = d?.mapsRankings?.mapsChange;
+    const cl = x => x == null ? null : Math.max(-10, Math.min(10, x));
+    const parts = [cl(serp), cl(maps)].filter(x => x != null);
+    if (parts.length) projComposite[p.id] = parts.reduce((a, b) => a + b, 0) / parts.length;
   }
-  // 2) Completed actions per project, grouped by normalized type.
-  const ids = Object.keys(outcomes).map(Number);
-  if (!ids.length) return { actions: [], projectsAnalysed: 0 };
+
+  // 3) Completed actions (dated). Measure each against the page/keyword it touched.
   const acts = (await pool.query(
-    `SELECT project_id, pillar, type, title FROM action_items
-     WHERE project_id = ANY($1::int[]) AND (status IN ('done','fixed','applied','executed','completed') OR executed_at IS NOT NULL)`,
+    `SELECT project_id, pillar, type, title, description, new_value, current_value, category,
+            COALESCE(executed_at, approved_at, created_at) AS acted_at
+       FROM action_items
+      WHERE project_id = ANY($1::int[]) AND (status IN ('done','fixed','applied','executed','completed') OR executed_at IS NOT NULL)`,
     [ids])).rows;
-  // type -> { byProject: { pid: count }, outcomes: [score...] }
-  const byType = {};
-  const seenProjType = new Set();
-  for (const a of acts) {
-    const t = normActionType(a);
-    if (!byType[t]) byType[t] = { type: t, projects: new Set(), timesDone: 0, outcomes: [] };
-    byType[t].timesDone++;
-    byType[t].projects.add(a.project_id);
-    const key = t + '|' + a.project_id;
-    if (!seenProjType.has(key)) { seenProjType.add(key); byType[t].outcomes.push(outcomes[a.project_id].score); }
+
+  const DAY = 86400000, BEFORE = 60 * DAY, AFTER = 75 * DAY;
+  const mean = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
+  function measureAction(a) {
+    const t = a.acted_at ? new Date(a.acted_at).getTime() : null;
+    if (!t) return null;
+    const ph = hist[a.project_id]; if (!ph) return null;
+    const channel = actionChannel(a);
+    const target = channel === 'serp' ? actionTargetPath(a) : null;
+    // Which keyword series to measure
+    let series;
+    if (target) {
+      series = Object.values(ph).filter(arr => {
+        const lastUrl = arr.map(x => x.url).filter(Boolean).slice(-1)[0] || '';
+        const p = _pathOf(lastUrl);
+        return p && (p === target || p.endsWith(target) || target.endsWith(p));
+      });
+      if (!series.length) series = Object.values(ph); // page not tracked → fall back to whole-site organic
+    } else {
+      series = Object.values(ph);
+    }
+    const pick = x => channel === 'maps' ? x.maps : x.serp;
+    const before = [], after = [];
+    for (const arr of series) for (const x of arr) {
+      const pos = pick(x); if (pos == null) continue;
+      if (x.t >= t - BEFORE && x.t < t) before.push(pos);
+      else if (x.t > t && x.t <= t + AFTER) after.push(pos);
+    }
+    if (!before.length || !after.length) return null;
+    return mean(before) - mean(after); // smaller position = better, so positive = improved
   }
-  // Drop generic pillar buckets — they're not real, actionable tactics.
+
+  // 4) Group by tactic; prefer measured outcomes, fall back to inferred.
+  const byType = {};
+  for (const a of acts) {
+    const type = normActionType(a);
+    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), measured: [], projSet: new Set() };
+    const b = byType[type];
+    b.timesDone++; b.projects.add(a.project_id); b.projSet.add(a.project_id);
+    const m = measureAction(a);
+    if (m != null) b.measured.push(m);
+  }
+
   const GENERIC = new Set(['serp', 'website', 'gbp', 'gbp_external', 'gsc', 'gsc_agent', 'technical', 'links', 'maps', 'other']);
   const learnings = Object.values(byType)
     .filter(b => !GENERIC.has((b.type || '').toLowerCase()))
     .map(b => {
-      const n = b.outcomes.length || 1;          // # of sites where this was done (with a result)
-      const positive = b.outcomes.filter(o => o > 0).length;
-      const avg = b.outcomes.reduce((a, c) => a + c, 0) / n;
-      const consistency = Math.round((positive / n) * 100);
-      const value = parseFloat((avg * (positive / n) * Math.log2(b.projects.size + 1)).toFixed(2));
+      const measured = b.measured.length > 0;
+      const sample = measured ? b.measured : [...b.projSet].map(pid => projComposite[pid]).filter(v => v != null);
+      const n = sample.length;
+      const positive = sample.filter(o => o > 0).length;
+      const avg = n ? mean(sample) : 0;
+      const consistency = n ? Math.round((positive / n) * 100) : 0;
+      const value = parseFloat((avg * (n ? positive / n : 0) * Math.log2(b.projects.size + 1)).toFixed(2));
+      // Confidence: measured + sample size
+      let confidence;
+      if (!n) confidence = 'none';
+      else if (measured && b.measured.length >= 5) confidence = 'high';
+      else if (measured && b.measured.length >= 2) confidence = 'medium';
+      else if (measured) confidence = 'low';
+      else confidence = 'inferred';
+      const pos = x => `${x > 0 ? 'up' : 'down'} ~${Math.abs(x).toFixed(1)} position${Math.abs(x).toFixed(1) === '1.0' ? '' : 's'}`;
       let verdict, recommendation;
-      if (avg <= 0 || consistency < 25) { verdict = 'Not helping'; recommendation = "No clear ranking benefit so far — deprioritise this, or change how it's done."; }
-      else if (consistency >= 60 && b.projects.size >= 2) { verdict = 'Working'; recommendation = `Rankings improved on ${positive} of ${n} sites where you did this — keep it up and roll it out to the rest.`; }
-      else if (consistency >= 40) { verdict = 'Promising'; recommendation = `Helped on ${positive} of ${n} sites — looks promising; do it on more sites to confirm.`; }
-      else { verdict = 'Little effect'; recommendation = `Only helped on ${positive} of ${n} sites — minor or inconsistent impact.`; }
+      if (!n) { verdict = 'No data'; recommendation = 'Not enough ranking history around these fixes yet — needs more rank-tracking snapshots.'; }
+      else if (avg <= 0 || consistency < 25) {
+        verdict = 'Not helping';
+        recommendation = measured
+          ? `Tracked pages moved ${pos(avg)} on average after this — no benefit; deprioritise or change the approach.`
+          : 'No clear benefit on sites where this was done — deprioritise, or change how it\'s done.';
+      } else if (consistency >= 60) {
+        verdict = 'Working';
+        recommendation = measured
+          ? `Tracked pages moved ${pos(avg)} on average after this, improving ${positive}/${n} times — keep doing it and roll it out.`
+          : `Improved on ${positive}/${n} sites — keep doing it and roll it out to the rest.`;
+      } else if (consistency >= 40) {
+        verdict = 'Promising';
+        recommendation = measured
+          ? `Mixed: ${positive}/${n} measured fixes improved (avg ${pos(avg)}) — do more to confirm.`
+          : `Helped on ${positive}/${n} sites — looks promising; do more to confirm.`;
+      } else {
+        verdict = 'Little effect';
+        recommendation = `Only ${positive}/${n} ${measured ? 'measured fixes' : 'sites'} improved — minor or inconsistent.`;
+      }
+      const basisNote = measured
+        ? `measured on ${b.measured.length} fix${b.measured.length !== 1 ? 'es' : ''} (page rank before vs after)`
+        : `no before/after rank data — inferred from overall site movement`;
       return {
         type: b.type, timesDone: b.timesDone, projects: b.projects.size,
         sitesPositive: positive, sitesTotal: n, consistency, avgOutcome: parseFloat(avg.toFixed(2)),
-        value, verdict, recommendation,
-        evidence: `Done ${b.timesDone}× across ${b.projects.size} project${b.projects.size !== 1 ? 's' : ''} · rankings up on ${positive}/${n}`,
+        value, verdict, recommendation, confidence, measured, measuredCount: b.measured.length,
+        evidence: `Done ${b.timesDone}× across ${b.projects.size} project${b.projects.size !== 1 ? 's' : ''} · ${basisNote}`,
       };
     })
-    .sort((a, b) => b.value - a.value);
-  return { actions: learnings, projectsAnalysed: ids.length };
+    .sort((a, b) => {
+      const rank = c => ({ high: 4, medium: 3, low: 2, inferred: 1, none: 0 }[c.confidence] || 0);
+      if (rank(b) !== rank(a)) return rank(b) - rank(a);
+      return b.value - a.value;
+    });
+  const measuredTotal = learnings.filter(l => l.measured).length;
+  return { actions: learnings, projectsAnalysed: ids.length, measuredTactics: measuredTotal, totalTactics: learnings.length };
 }
 app.get('/api/learnings', async (req, res) => {
   try { res.json(await computeLearnings(null)); } catch (e) { res.status(500).json({ error: e.message }); }

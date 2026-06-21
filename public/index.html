@@ -20607,25 +20607,26 @@
       const tabBtn = (k, label) => (
         <button onClick={() => setTab(k)} style={{ background: tab === k ? '#8b5cf6' : 'transparent', color: tab === k ? '#fff' : 'var(--text2)', border: '1px solid ' + (tab === k ? '#8b5cf6' : 'var(--border)'), borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
       );
+      const confChip = (a) => {
+        const map = { high: ['Measured — high confidence', '#22c55e'], medium: ['Measured', '#22c55e'], low: ['Measured — small sample', '#84cc16'], inferred: ['Inferred — low confidence', '#94a3b8'], none: ['No data', '#64748b'] };
+        const [label, color] = map[a.confidence] || map.none;
+        return <span title={a.confidence === 'inferred' ? 'No before/after rank data for these fixes — estimated from overall site movement. Treat as a hint, not proof.' : 'Measured from the page/keyword rank before vs after each fix.'} style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: color + '22', color, whiteSpace: 'nowrap' }}>{label}</span>;
+      };
       const row = (a) => (
-        <div key={a.type} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{a.type}</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Done <b>{a.timesDone}×</b> across <b>{a.projects}</b> project{a.projects !== 1 ? 's' : ''} · {a.consistency}% positive · avg result {a.avgOutcome > 0 ? '+' : ''}{a.avgOutcome}</div>
+        <div key={a.type} style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>{a.type}</span>
+            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, background: (verdictColor[a.verdict] || '#64748b') + '22', color: verdictColor[a.verdict] || '#94a3b8' }}>{a.verdict}</span>
+            {confChip(a)}
           </div>
-          <div style={{ width: 90, height: 7, background: 'var(--border)', borderRadius: 4, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: Math.min(100, Math.abs(a.value) * 12) + '%', background: a.value > 0 ? '#22c55e' : '#ef4444' }} />
-          </div>
-          <div style={{ textAlign: 'right', minWidth: 56 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: a.value > 0 ? '#22c55e' : '#ef4444' }}>{a.value > 0 ? '+' : ''}{a.value}</div>
-            <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase' }}>value</div>
-          </div>
+          <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4, lineHeight: 1.5 }}>{a.recommendation}</div>
+          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.evidence}</div>
         </div>
       );
       return (
         <div>
           <div className="page-title"><i className="fas fa-brain" style={{ marginRight: 10, color: '#8b5cf6' }} />Learnings</div>
-          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>What's working across your projects, <b>weighted by evidence</b> — the more an action is done and consistently moves rankings, the higher its <b>value</b>. Wins on one site become rules for the rest. {data ? '(Analysed ' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + '.)' : ''}</div>
+          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>What's actually working — each fix is <b>measured against its own page's ranking before vs after</b> the fix date (not the whole site's movement). Rows marked <b>Measured</b> are based on real before/after rank data; <b>Inferred</b> rows lack that history and are a weaker hint. {data ? '(Analysed ' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + (data.measuredTactics != null ? ' · ' + data.measuredTactics + '/' + data.totalTactics + ' tactics measured' : '') + '.)' : ''}</div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             {tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}
             <button onClick={runAllReports} disabled={running} style={{ marginLeft: 'auto', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: running ? 'wait' : 'pointer' }}>
