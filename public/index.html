@@ -20579,6 +20579,19 @@
       const [tab, setTab] = useState('global');
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(false);
+      const [running, setRunning] = useState(false);
+      const [runMsg, setRunMsg] = useState('');
+      const runAllReports = async () => {
+        if (!confirm("Generate this month's report for ALL projects? This can take a few minutes.")) return;
+        setRunning(true); setRunMsg('Generating reports for all projects…');
+        try {
+          const r = await api('/reports/generate-all', { method: 'POST' });
+          setRunMsg('Done — ' + (r.generated || 0) + '/' + (r.total || 0) + ' reports' + (r.errors && r.errors.length ? (' · ' + r.errors.length + ' failed') : ''));
+          const url = tab === 'global' ? '/learnings' : (project ? ('/projects/' + project.id + '/learnings') : null);
+          if (url) { const d = await api(url); setData(d); }
+        } catch (e) { setRunMsg('Error: ' + e.message); }
+        setRunning(false);
+      };
       useEffect(() => {
         let live = true; setLoading(true);
         const url = tab === 'global' ? '/learnings' : (project ? ('/projects/' + project.id + '/learnings') : null);
@@ -20612,7 +20625,13 @@
         <div>
           <div className="page-title"><i className="fas fa-brain" style={{ marginRight: 10, color: '#8b5cf6' }} />Learnings</div>
           <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>What's working across your projects, <b>weighted by evidence</b> — the more an action is done and consistently moves rankings, the higher its <b>value</b>. Wins on one site become rules for the rest. {data ? '(Analysed ' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + '.)' : ''}</div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>{tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            {tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}
+            <button onClick={runAllReports} disabled={running} style={{ marginLeft: 'auto', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: running ? 'wait' : 'pointer' }}>
+              {running ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Running…</> : <><i className="fas fa-rotate" style={{ marginRight: 6 }} />Run monthly report (all projects)</>}
+            </button>
+            {runMsg && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{runMsg}</span>}
+          </div>
           {loading ? <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner-large" style={{ margin: '0 auto 12px' }} />Crunching results…</div>
             : acts.length === 0 ? <div style={{ ...card, padding: 24, fontSize: 14, color: 'var(--text3)' }}>No learnings yet. Generate monthly reports (so rankings results exist) and complete some actions — then the engine can correlate what worked.</div>
             : (<>

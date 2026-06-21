@@ -44096,11 +44096,9 @@ app.get('/report/:token', async (req, res) => {
 });
 
 // Generate monthly report
-app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
-  const { projectId } = req.params;
-  try {
+async function buildMonthlyReportFor(projectId, userId) {
     const proj = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
-    if (proj.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    if (proj.rows.length === 0) throw new Error('Project not found');
     const project = proj.rows[0];
 
     const now = new Date();
@@ -44220,7 +44218,7 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     // 2. GSC — pull live data if connected
     let gscData = { clicks: 0, impressions: 0, ctr: 0, avgPosition: null, topPages: [], topQueries: [], totalKeywords: 0 };
     try {
-      const token = await getGscAccessToken(req.auth?.userId);
+      const token = await getGscAccessToken(userId);
       if (token && project.gsc_property) {
         const endDate = now.toISOString().split('T')[0];
         const startDate = new Date(now - 30 * 86400000).toISOString().split('T')[0];
@@ -44512,11 +44510,30 @@ app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
     }
 
     console.log(`[reports] Generated v2 ${month} report for project ${projectId}`);
-    res.json({ report: { id: r.rows[0].id, month, createdAt: r.rows[0].created_at, share_token: shareToken, ...reportData } });
+    return { id: r.rows[0].id, month, createdAt: r.rows[0].created_at, share_token: shareToken, ...reportData };
+}
+
+app.post('/api/projects/:projectId/reports/generate', async (req, res) => {
+  try {
+    const report = await buildMonthlyReportFor(req.params.projectId, req.auth?.userId);
+    res.json({ report });
   } catch (e) {
     console.error('[reports] Error:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(e.message === 'Project not found' ? 404 : 500).json({ error: e.message });
   }
+});
+
+// Generate this month's report for EVERY project (powers the Learnings engine)
+app.post('/api/reports/generate-all', async (req, res) => {
+  try {
+    const ids = (await pool.query('SELECT id FROM projects ORDER BY id')).rows.map(r => r.id);
+    let generated = 0; const errors = [];
+    for (const id of ids) {
+      try { await buildMonthlyReportFor(id, req.auth?.userId); generated++; }
+      catch (e) { errors.push({ id, error: (e.message || 'failed').slice(0, 120) }); }
+    }
+    res.json({ ok: true, generated, total: ids.length, errors });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ==================== 13. GBP POSTS ====================
