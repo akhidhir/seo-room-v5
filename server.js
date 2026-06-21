@@ -44009,27 +44009,10 @@ async function computeLearnings(onlyProjectId) {
       WHERE project_id = ANY($1::int[]) AND (status IN ('done','fixed','applied','executed','completed') OR executed_at IS NOT NULL)`,
     [ids])).rows;
 
-  const DAY = 86400000, BEFORE = 60 * DAY, AFTER = 75 * DAY;
+  const DAY = 86400000, BEFORE = 60 * DAY, AFTER = 75 * DAY, CAP = 15;
   const mean = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
-  function measureAction(a) {
-    const t = a.acted_at ? new Date(a.acted_at).getTime() : null;
-    if (!t) return null;
-    const ph = hist[a.project_id]; if (!ph) return null;
-    const channel = actionChannel(a);
-    const target = channel === 'serp' ? actionTargetPath(a) : null;
-    // Which keyword series to measure
-    let series;
-    if (target) {
-      series = Object.values(ph).filter(arr => {
-        const lastUrl = arr.map(x => x.url).filter(Boolean).slice(-1)[0] || '';
-        const p = _pathOf(lastUrl);
-        return p && (p === target || p.endsWith(target) || target.endsWith(p));
-      });
-      if (!series.length) series = Object.values(ph); // page not tracked → fall back to whole-site organic
-    } else {
-      series = Object.values(ph);
-    }
-    const pick = x => channel === 'maps' ? x.maps : x.serp;
+  // Average position before vs after a date, over a set of keyword series. Capped so one wild swing can't dominate.
+  function surfaceDelta(series, pick, t) {
     const before = [], after = [];
     for (const arr of series) for (const x of arr) {
       const pos = pick(x); if (pos == null) continue;
@@ -44037,7 +44020,25 @@ async function computeLearnings(onlyProjectId) {
       else if (x.t > t && x.t <= t + AFTER) after.push(pos);
     }
     if (!before.length || !after.length) return null;
-    return mean(before) - mean(after); // smaller position = better, so positive = improved
+    return Math.max(-CAP, Math.min(CAP, mean(before) - mean(after))); // +ve = improved (smaller position)
+  }
+  // Measure EVERY action on both surfaces. SERP is page-targeted when we know the URL; Maps is business-level (all keywords).
+  function measureAction(a) {
+    const t = a.acted_at ? new Date(a.acted_at).getTime() : null;
+    if (!t) return null;
+    const ph = hist[a.project_id]; if (!ph) return null;
+    const all = Object.values(ph);
+    const target = actionTargetPath(a);
+    let serpSeries = all;
+    if (target) {
+      const matched = all.filter(arr => {
+        const lastUrl = arr.map(x => x.url).filter(Boolean).slice(-1)[0] || '';
+        const p = _pathOf(lastUrl);
+        return p && (p === target || p.endsWith(target) || target.endsWith(p));
+      });
+      if (matched.length) serpSeries = matched; // else fall back to whole-site organic
+    }
+    return { serp: surfaceDelta(serpSeries, x => x.serp, t), maps: surfaceDelta(all, x => x.maps, t) };
   }
 
   // 4) Group by tactic; prefer measured outcomes, fall back to inferred.
@@ -44045,13 +44046,19 @@ async function computeLearnings(onlyProjectId) {
   const byType = {};
   for (const a of acts) {
     const type = normActionType(a);
-    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), measured: [], projSet: new Set(), byProject: {} };
+    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), measured: [], serp: [], maps: [], projSet: new Set(), byProject: {} };
     const b = byType[type];
     b.timesDone++; b.projects.add(a.project_id); b.projSet.add(a.project_id);
-    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, measured: [] };
-    b.byProject[a.project_id].times++;
+    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, measured: [], serp: [], maps: [] };
+    const bp = b.byProject[a.project_id]; bp.times++;
     const m = measureAction(a);
-    if (m != null) { b.measured.push(m); b.byProject[a.project_id].measured.push(m); }
+    if (m) {
+      if (m.serp != null) { b.serp.push(m.serp); bp.serp.push(m.serp); }
+      if (m.maps != null) { b.maps.push(m.maps); bp.maps.push(m.maps); }
+      // Primary surface drives the verdict (local actions judged on Maps, the rest on SERP); both shown in detail.
+      const primary = actionChannel(a) === 'maps' ? m.maps : m.serp;
+      if (primary != null) { b.measured.push(primary); bp.measured.push(primary); }
+    }
   }
 
   const GENERIC = new Set(['serp', 'website', 'gbp', 'gbp_external', 'gsc', 'gsc_agent', 'technical', 'links', 'maps', 'other']);
@@ -44097,11 +44104,18 @@ async function computeLearnings(onlyProjectId) {
       const basisNote = measured
         ? `measured on ${b.measured.length} fix${b.measured.length !== 1 ? 'es' : ''} (page rank before vs after)`
         : `no before/after rank data — inferred from overall site movement`;
-      // Per-project breakdown (where it was done + how it moved that site's tracked pages)
+      // Per-project breakdown (where it was done + how it moved that site, on BOTH SERP and Maps)
       const mean2 = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+      const r1 = v => v == null ? null : parseFloat(v.toFixed(1));
+      const serpAvg = r1(mean2(b.serp));   // organic position change
+      const mapsAvg = r1(mean2(b.maps));   // Google Maps position change
       const details = Object.values(b.byProject).map(pp => {
         const pm = pp.measured.length ? mean2(pp.measured) : null;
-        return { name: pp.name, times: pp.times, measuredCount: pp.measured.length, avg: pm == null ? null : parseFloat(pm.toFixed(1)) };
+        return {
+          name: pp.name, times: pp.times, measuredCount: pp.measured.length,
+          avg: pm == null ? null : parseFloat(pm.toFixed(1)),
+          serpAvg: r1(mean2(pp.serp)), mapsAvg: r1(mean2(pp.maps)),
+        };
       }).sort((x, y) => (y.avg == null ? -99 : y.avg) - (x.avg == null ? -99 : x.avg));
       const doneIds = new Set(Object.keys(b.byProject).map(Number));
       const notApplied = projRows.filter(p => !doneIds.has(p.id)).map(p => projName[p.id]);
@@ -44118,6 +44132,7 @@ async function computeLearnings(onlyProjectId) {
         type: b.type, timesDone: b.timesDone, projects: b.projects.size,
         sitesPositive: positive, sitesTotal: n, consistency, successRate, avgOutcome: parseFloat(avg.toFixed(2)),
         value, verdict, recommendation, confidence, measured, measuredCount: b.measured.length,
+        serpAvg, mapsAvg, serpCount: b.serp.length, mapsCount: b.maps.length,
         details, notApplied, nextAction,
         evidence: `Done ${b.timesDone}× across ${b.projects.size} project${b.projects.size !== 1 ? 's' : ''} · ${basisNote}`,
       };

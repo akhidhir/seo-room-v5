@@ -20627,21 +20627,29 @@
               <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4, lineHeight: 1.5 }}>{a.recommendation}</div>
               <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.evidence}</div>
             </div>
-            <div style={{ textAlign: 'right', minWidth: 92 }}>
+            <div style={{ textAlign: 'right', minWidth: 110 }}>
               <div style={{ fontSize: 20, fontWeight: 800, color: a.successRate == null ? 'var(--text3)' : a.successRate >= 60 ? '#22c55e' : a.successRate >= 40 ? '#f59e0b' : '#ef4444' }}>{a.successRate == null ? '—' : a.successRate + '%'}</div>
               <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>success rate</div>
-              {a.measured && <div style={{ fontSize: 12, fontWeight: 700, color: posColor(a.avgOutcome), marginTop: 4 }}>{a.avgOutcome > 0 ? '▲' : a.avgOutcome < 0 ? '▼' : ''} {Math.abs(a.avgOutcome).toFixed(1)} pos</div>}
+              <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end' }}>
+                {a.serpCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>SERP </span><span style={{ color: posColor(a.serpAvg) }}>{a.serpAvg > 0 ? '▲' : a.serpAvg < 0 ? '▼' : '–'} {Math.abs(a.serpAvg).toFixed(1)}</span></div>}
+                {a.mapsCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>Maps </span><span style={{ color: posColor(a.mapsAvg) }}>{a.mapsAvg > 0 ? '▲' : a.mapsAvg < 0 ? '▼' : '–'} {Math.abs(a.mapsAvg).toFixed(1)}</span></div>}
+                {!a.serpCount && !a.mapsCount && <div style={{ fontSize: 11, color: 'var(--text3)' }}>no rank data</div>}
+              </div>
             </div>
           </div>
           {open[a.type] && (
             <div style={{ padding: '4px 16px 16px 38px', background: 'rgba(255,255,255,0.02)' }}>
-              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', margin: '4px 0 6px' }}>Per-project results</div>
-              {(a.details || []).map(d => (
-                <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                  <span>{d.name} <span style={{ color: 'var(--text3)' }}>· done {d.times}×{d.measuredCount ? '' : ' · no rank data'}</span></span>
-                  <span style={{ color: posColor(d.avg), fontWeight: 600 }}>{d.measuredCount ? ((d.avg > 0 ? '▲ up ' : d.avg < 0 ? '▼ down ' : '– ') + Math.abs(d.avg).toFixed(1) + ' pos') : '—'}</span>
-                </div>
-              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', margin: '4px 0 6px' }}><span>Per-project results</span><span style={{ display: 'flex', gap: 18 }}><span style={{ width: 56, textAlign: 'right' }}>SERP</span><span style={{ width: 56, textAlign: 'right' }}>Maps</span></span></div>
+              {(a.details || []).map(d => {
+                const cell = (v) => v == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <span style={{ color: posColor(v), fontWeight: 600 }}>{v > 0 ? '▲' : v < 0 ? '▼' : '–'} {Math.abs(v).toFixed(1)}</span>;
+                return (
+                  <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                    <span style={{ flex: 1 }}>{d.name} <span style={{ color: 'var(--text3)' }}>· done {d.times}×</span></span>
+                    <span style={{ display: 'flex', gap: 18 }}><span style={{ width: 56, textAlign: 'right' }}>{cell(d.serpAvg)}</span><span style={{ width: 56, textAlign: 'right' }}>{cell(d.mapsAvg)}</span></span>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>Numbers = average positions gained (▲) or lost (▼) on that surface after the fix.</div>
               <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}><i className="fas fa-arrow-right" style={{ color: '#8b5cf6', marginRight: 6 }} /><b>Next action:</b> {a.nextAction}</div>
             </div>
           )}
