@@ -38898,6 +38898,8 @@
         }
       }, [project?.id]);
       const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+      const [navActionsOpen, setNavActionsOpen] = useState(() => { try { return localStorage.getItem('navActionsOpen') !== '0'; } catch (e) { return true; } });
+      const toggleNavActions = () => setNavActionsOpen(v => { const nv = !v; try { localStorage.setItem('navActionsOpen', nv ? '1' : '0'); } catch (e) {} return nv; });
       const [appLoading, setAppLoading] = useState(true);
       const [allProjects, setAllProjects] = useState([]);
       const [pluginWarning, setPluginWarning] = useState(null); // { installed, reason }
@@ -39248,7 +39250,12 @@ case 'action-plan':
                 <i className="fas fa-rocket"></i>
                 <span>SEO Room</span>
               </div>
-              {/* Top action buttons — always visible */}
+              {/* Top action buttons — collapsible */}
+              <button onClick={toggleNavActions} style={{ width: '100%', marginTop: 2, padding: '4px 6px', borderRadius: 6, border: 'none', background: 'transparent', color: 'var(--text3)', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between' }}>
+                <span>Quick actions</span>
+                <i className={'fas fa-chevron-' + (navActionsOpen ? 'up' : 'down')} style={{ fontSize: 10 }}></i>
+              </button>
+              {navActionsOpen && (<>
               <button onClick={() => { if (buildMode) exitBuildMode(); else enterBuildMode(); }} style={{ width: '100%', marginTop: 2, padding: '10px 10px', borderRadius: 6, border: activeTab === 'build-list' || buildMode ? '1px solid #22c55e' : '1px dashed var(--border)', background: buildMode ? 'rgba(34,197,94,0.1)' : 'transparent', color: '#22c55e', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                 <i className="fas fa-plus" style={{ fontSize: 13 }}></i> New Website
               </button>
@@ -39273,6 +39280,7 @@ case 'action-plan':
               <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('asset-intake'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'asset-intake' ? '1px solid #14b8a6' : '1px dashed var(--border)', background: activeTab === 'asset-intake' ? 'rgba(20,184,166,0.1)' : 'transparent', color: '#14b8a6', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                 <i className="fas fa-box-open" style={{ fontSize: 13 }}></i> Asset Intake
               </button>
+              </>)}
               {/* Project selector / back button */}
               {buildMode ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
