@@ -6688,6 +6688,11 @@
         if (k === 'robots') return { label: 'Robots.txt', items: s.hasRobotsTxt ? [] : ['No robots.txt found'], fix: 'Create /robots.txt and reference your XML sitemap.' };
         if (k === 'sitemap') return { label: 'XML Sitemap', items: s.hasSitemap ? [] : ['No XML sitemap found'], fix: 'Generate an XML sitemap (Yoast/RankMath) and submit it in Search Console.' };
         if (k === 'schema') return { label: 'Schema markup', items: (s.schemaTypes && s.schemaTypes.length) ? ['Detected: ' + s.schemaTypes.join(', ')] : ['No structured data detected'], fix: 'Add LocalBusiness + Service JSON-LD schema (use the Schema fix on a finding below).' };
+        if (k === 'alt') {
+          const open = (f) => !['fixed', 'dismissed', 'rejected', 'ignored', 'excluded', 'done'].includes(String(f.status || '').toLowerCase());
+          const items = findings.filter(f => (/alt text/i.test(f.category || '') || /missing alt/i.test(f.title || '')) && open(f)).map(f => { const m = String(f.current_value || f.description || '').match(/https?:\/\/\S+/); return m ? m[0] : (f.title || ''); });
+          return { label: 'Images missing alt text', items, fix: 'Click an Alt Text finding below → Generate Alt Text (AI), or use the “Fix All Alt Text” banner. If 0, every image already has alt text.', count: (s && s.totalMissingAlt) || items.length };
+        }
         return null;
       };
       // Live counts: prefer the actual findings (so they drop as you fix/ignore), fall back to the audit summary.
@@ -6697,6 +6702,8 @@
       // Count only what's actionable: real open findings, or a stored page list. No bare scalar fallback (it goes stale and has nothing to click).
       const thinCount = thinFindingCount || (summary && summary.thinPagesList ? summary.thinPagesList.length : 0);
       const dupCount = dupFindingCount || (summary && summary.dupTitlesList ? summary.dupTitlesList.length : 0);
+      const altOpenCount = findings.filter(f => isOpenFinding(f) && (/alt text/i.test(f.category || '') || /missing alt/i.test(f.title || ''))).length;
+      const altCount = altOpenCount || (summary ? (summary.totalMissingAlt || 0) : 0);
 
       const toggleTile = (k) => {
         const willOpen = tileDetail !== k;
@@ -7452,6 +7459,7 @@
               { label: 'Sitemap', ok: summary.hasSitemap, icon: 'fa-sitemap', key: 'sitemap' },
               { label: 'Schema', ok: summary.schemaTypes?.length > 0 && !findings.some(f => f.category === 'Schema & Data' && f.status !== 'fixed' && f.status !== 'rejected'), icon: 'fa-code', key: 'schema' },
               { label: 'Mobile', ok: !((summary.nonMobileList || []).length), icon: 'fa-mobile-alt', key: 'mobile' },
+              { label: altCount > 0 ? `Alt text (${altCount})` : 'Alt text', ok: !(altCount > 0), icon: 'fa-image', key: 'alt' },
             ].map((h, i) => (
               <div key={i} onClick={() => toggleTile(h.key)} title="Click for details & fix"
                 style={{ background: tileDetail === h.key ? 'var(--bg)' : 'var(--card)', border: `1px solid ${h.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
