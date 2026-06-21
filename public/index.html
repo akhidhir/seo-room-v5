@@ -38898,7 +38898,7 @@
         }
       }, [project?.id]);
       const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-      const [navActionsOpen, setNavActionsOpen] = useState(() => { try { return localStorage.getItem('navActionsOpen') !== '0'; } catch (e) { return true; } });
+      const [navActionsOpen, setNavActionsOpen] = useState(() => { try { return localStorage.getItem('navActionsOpen') === '1'; } catch (e) { return false; } });
       const toggleNavActions = () => setNavActionsOpen(v => { const nv = !v; try { localStorage.setItem('navActionsOpen', nv ? '1' : '0'); } catch (e) {} return nv; });
       const [appLoading, setAppLoading] = useState(true);
       const [allProjects, setAllProjects] = useState([]);
