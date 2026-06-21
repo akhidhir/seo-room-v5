@@ -44041,14 +44041,17 @@ async function computeLearnings(onlyProjectId) {
   }
 
   // 4) Group by tactic; prefer measured outcomes, fall back to inferred.
+  const projName = {}; projRows.forEach(p => projName[p.id] = p.business_name || p.name);
   const byType = {};
   for (const a of acts) {
     const type = normActionType(a);
-    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), measured: [], projSet: new Set() };
+    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), measured: [], projSet: new Set(), byProject: {} };
     const b = byType[type];
     b.timesDone++; b.projects.add(a.project_id); b.projSet.add(a.project_id);
+    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, measured: [] };
+    b.byProject[a.project_id].times++;
     const m = measureAction(a);
-    if (m != null) b.measured.push(m);
+    if (m != null) { b.measured.push(m); b.byProject[a.project_id].measured.push(m); }
   }
 
   const GENERIC = new Set(['serp', 'website', 'gbp', 'gbp_external', 'gsc', 'gsc_agent', 'technical', 'links', 'maps', 'other']);
@@ -44094,10 +44097,28 @@ async function computeLearnings(onlyProjectId) {
       const basisNote = measured
         ? `measured on ${b.measured.length} fix${b.measured.length !== 1 ? 'es' : ''} (page rank before vs after)`
         : `no before/after rank data — inferred from overall site movement`;
+      // Per-project breakdown (where it was done + how it moved that site's tracked pages)
+      const mean2 = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+      const details = Object.values(b.byProject).map(pp => {
+        const pm = pp.measured.length ? mean2(pp.measured) : null;
+        return { name: pp.name, times: pp.times, measuredCount: pp.measured.length, avg: pm == null ? null : parseFloat(pm.toFixed(1)) };
+      }).sort((x, y) => (y.avg == null ? -99 : y.avg) - (x.avg == null ? -99 : x.avg));
+      const doneIds = new Set(Object.keys(b.byProject).map(Number));
+      const notApplied = projRows.filter(p => !doneIds.has(p.id)).map(p => projName[p.id]);
+      // Concrete next step
+      let nextAction;
+      const good = verdict === 'Working' || verdict === 'Promising';
+      if (good && notApplied.length) nextAction = `Roll out to ${notApplied.length} project${notApplied.length !== 1 ? 's' : ''} that haven't had it: ${notApplied.slice(0, 6).join(', ')}${notApplied.length > 6 ? ` +${notApplied.length - 6} more` : ''}.`;
+      else if (good) nextAction = 'Already applied across all projects — keep maintaining it.';
+      else if (verdict === 'No data') nextAction = 'Run more rank-tracking snapshots so fixes here can be measured before vs after.';
+      else nextAction = 'Pause new effort on this until the approach changes — it isn\'t moving rankings.';
+      // Success rate % = share of measured fixes (or sites) that improved
+      const successRate = n ? Math.round((positive / n) * 100) : null;
       return {
         type: b.type, timesDone: b.timesDone, projects: b.projects.size,
-        sitesPositive: positive, sitesTotal: n, consistency, avgOutcome: parseFloat(avg.toFixed(2)),
+        sitesPositive: positive, sitesTotal: n, consistency, successRate, avgOutcome: parseFloat(avg.toFixed(2)),
         value, verdict, recommendation, confidence, measured, measuredCount: b.measured.length,
+        details, notApplied, nextAction,
         evidence: `Done ${b.timesDone}× across ${b.projects.size} project${b.projects.size !== 1 ? 's' : ''} · ${basisNote}`,
       };
     })

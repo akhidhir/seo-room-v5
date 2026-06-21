@@ -20581,6 +20581,7 @@
       const [loading, setLoading] = useState(false);
       const [running, setRunning] = useState(false);
       const [runMsg, setRunMsg] = useState('');
+      const [open, setOpen] = useState({});
       const runAllReports = async () => {
         if (!confirm("Generate this month's report for ALL projects? This can take a few minutes.")) return;
         setRunning(true); setRunMsg('Generating reports for all projects…');
@@ -20612,15 +20613,38 @@
         const [label, color] = map[a.confidence] || map.none;
         return <span title={a.confidence === 'inferred' ? 'No before/after rank data for these fixes — estimated from overall site movement. Treat as a hint, not proof.' : 'Measured from the page/keyword rank before vs after each fix.'} style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: color + '22', color, whiteSpace: 'nowrap' }}>{label}</span>;
       };
+      const posColor = v => v == null ? 'var(--text3)' : v > 0 ? '#22c55e' : v < 0 ? '#ef4444' : 'var(--text3)';
       const row = (a) => (
-        <div key={a.type} style={{ padding: '14px 16px', borderTop: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, fontSize: 14 }}>{a.type}</span>
-            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, background: (verdictColor[a.verdict] || '#64748b') + '22', color: verdictColor[a.verdict] || '#94a3b8' }}>{a.verdict}</span>
-            {confChip(a)}
+        <div key={a.type} style={{ borderTop: '1px solid var(--border)' }}>
+          <div onClick={() => setOpen(o => ({ ...o, [a.type]: !o[a.type] }))} style={{ padding: '14px 16px', cursor: 'pointer', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
+                <i className={'fas fa-chevron-' + (open[a.type] ? 'down' : 'right')} style={{ fontSize: 11, color: 'var(--text3)' }} />
+                <span style={{ fontWeight: 700, fontSize: 14 }}>{a.type}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, background: (verdictColor[a.verdict] || '#64748b') + '22', color: verdictColor[a.verdict] || '#94a3b8' }}>{a.verdict}</span>
+                {confChip(a)}
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4, lineHeight: 1.5 }}>{a.recommendation}</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.evidence}</div>
+            </div>
+            <div style={{ textAlign: 'right', minWidth: 92 }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: a.successRate == null ? 'var(--text3)' : a.successRate >= 60 ? '#22c55e' : a.successRate >= 40 ? '#f59e0b' : '#ef4444' }}>{a.successRate == null ? '—' : a.successRate + '%'}</div>
+              <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>success rate</div>
+              {a.measured && <div style={{ fontSize: 12, fontWeight: 700, color: posColor(a.avgOutcome), marginTop: 4 }}>{a.avgOutcome > 0 ? '▲' : a.avgOutcome < 0 ? '▼' : ''} {Math.abs(a.avgOutcome).toFixed(1)} pos</div>}
+            </div>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4, lineHeight: 1.5 }}>{a.recommendation}</div>
-          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.evidence}</div>
+          {open[a.type] && (
+            <div style={{ padding: '4px 16px 16px 38px', background: 'rgba(255,255,255,0.02)' }}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', margin: '4px 0 6px' }}>Per-project results</div>
+              {(a.details || []).map(d => (
+                <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                  <span>{d.name} <span style={{ color: 'var(--text3)' }}>· done {d.times}×{d.measuredCount ? '' : ' · no rank data'}</span></span>
+                  <span style={{ color: posColor(d.avg), fontWeight: 600 }}>{d.measuredCount ? ((d.avg > 0 ? '▲ up ' : d.avg < 0 ? '▼ down ' : '– ') + Math.abs(d.avg).toFixed(1) + ' pos') : '—'}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}><i className="fas fa-arrow-right" style={{ color: '#8b5cf6', marginRight: 6 }} /><b>Next action:</b> {a.nextAction}</div>
+            </div>
+          )}
         </div>
       );
       return (
