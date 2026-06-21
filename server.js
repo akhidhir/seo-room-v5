@@ -44039,7 +44039,8 @@ async function computeLearnings(onlyProjectId) {
       });
       if (matched.length) serp = surfaceDelta(matched, x => x.serp, t);
     }
-    return { serp, maps: surfaceDelta(all, x => x.maps, t) };
+    // siteSerp/maps = business-level (all keywords) — context, shared by every action that month.
+    return { serp, siteSerp: surfaceDelta(all, x => x.serp, t), maps: surfaceDelta(all, x => x.maps, t) };
   }
 
   // 4) Group by tactic. Two tiers: page-level SERP = real measurement; everything else = site-wide correlation.
@@ -44047,15 +44048,16 @@ async function computeLearnings(onlyProjectId) {
   const byType = {};
   for (const a of acts) {
     const type = normActionType(a);
-    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), pageSerp: [], maps: [], projSet: new Set(), byProject: {} };
+    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), pageSerp: [], siteSerp: [], maps: [], projSet: new Set(), byProject: {} };
     const b = byType[type];
     b.timesDone++; b.projects.add(a.project_id); b.projSet.add(a.project_id);
-    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, pageSerp: [], maps: [] };
+    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, pageSerp: [], siteSerp: [], maps: [] };
     const bp = b.byProject[a.project_id]; bp.times++;
     const m = measureAction(a);
     if (m) {
-      if (m.serp != null) { b.pageSerp.push(m.serp); bp.pageSerp.push(m.serp); } // real per-page signal
-      if (m.maps != null) { b.maps.push(m.maps); bp.maps.push(m.maps); }          // business-level context
+      if (m.serp != null) { b.pageSerp.push(m.serp); bp.pageSerp.push(m.serp); }       // real per-page signal
+      if (m.siteSerp != null) { b.siteSerp.push(m.siteSerp); bp.siteSerp.push(m.siteSerp); } // site-wide SERP context
+      if (m.maps != null) { b.maps.push(m.maps); bp.maps.push(m.maps); }                // site-wide Maps context
     }
   }
 
@@ -44081,6 +44083,7 @@ async function computeLearnings(onlyProjectId) {
       else confidence = 'correlation';
       const pos = x => `${x > 0 ? 'up' : 'down'} ~${Math.abs(x).toFixed(1)} position${Math.abs(x).toFixed(1) === '1.0' ? '' : 's'}`;
       const pageSerpAvg = r1(mean2(b.pageSerp));
+      const siteSerpAvg = r1(mean2(b.siteSerp));
       const mapsAvg = r1(mean2(b.maps));
       let verdict, recommendation;
       if (!n) {
@@ -44109,8 +44112,7 @@ async function computeLearnings(onlyProjectId) {
       // Per-project breakdown
       const details = Object.values(b.byProject).map(pp => ({
         name: pp.name, times: pp.times, pageCount: pp.pageSerp.length,
-        pageSerpAvg: r1(mean2(pp.pageSerp)), mapsAvg: r1(mean2(pp.maps)),
-        siteAvg: projComposite[pp.id] != null ? parseFloat(projComposite[pp.id].toFixed(1)) : null,
+        pageSerpAvg: r1(mean2(pp.pageSerp)), siteSerpAvg: r1(mean2(pp.siteSerp)), mapsAvg: r1(mean2(pp.maps)),
       })).sort((x, y) => (y.pageSerpAvg == null ? -99 : y.pageSerpAvg) - (x.pageSerpAvg == null ? -99 : x.pageSerpAvg));
       const doneIds = new Set(Object.keys(b.byProject).map(Number));
       const notApplied = projRows.filter(p => !doneIds.has(p.id)).map(p => projName[p.id]);
@@ -44125,7 +44127,7 @@ async function computeLearnings(onlyProjectId) {
         type: b.type, timesDone: b.timesDone, projects: b.projects.size,
         sitesPositive: positive, sitesTotal: n, successRate, avgOutcome: parseFloat(avg.toFixed(2)),
         value, verdict, recommendation, confidence, measured,
-        pageSerpAvg, pageSerpCount: b.pageSerp.length, mapsAvg, mapsCount: b.maps.length,
+        pageSerpAvg, pageSerpCount: b.pageSerp.length, siteSerpAvg, siteSerpCount: b.siteSerp.length, mapsAvg, mapsCount: b.maps.length,
         details, notApplied, nextAction,
         evidence: `Done ${b.timesDone}× across ${b.projects.size} project${b.projects.size !== 1 ? 's' : ''} · ${basisNote}`,
       };

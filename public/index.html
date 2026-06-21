@@ -20636,24 +20636,26 @@
               <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{a.measured ? 'pages improved' : 'projects improved'}</div>
               <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end' }}>
                 {a.measured && a.pageSerpCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>page rank </span><span style={{ color: posColor(a.pageSerpAvg) }}>{a.pageSerpAvg > 0 ? '▲' : a.pageSerpAvg < 0 ? '▼' : '–'} {Math.abs(a.pageSerpAvg).toFixed(1)}</span></div>}
-                {a.mapsCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>Maps{a.measured ? '' : '*'} </span><span style={{ color: posColor(a.mapsAvg) }}>{a.mapsAvg > 0 ? '▲' : a.mapsAvg < 0 ? '▼' : '–'} {Math.abs(a.mapsAvg).toFixed(1)}</span></div>}
-                {!a.measured && <div style={{ fontSize: 10, color: '#f59e0b' }}>site-wide only</div>}
+                {a.siteSerpCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>SERP{a.measured ? '*' : '*'} </span><span style={{ color: posColor(a.siteSerpAvg) }}>{a.siteSerpAvg > 0 ? '▲' : a.siteSerpAvg < 0 ? '▼' : '–'} {Math.abs(a.siteSerpAvg).toFixed(1)}</span></div>}
+                {a.mapsCount > 0 && <div style={{ fontSize: 11, fontWeight: 600 }}><span style={{ color: 'var(--text3)' }}>Maps* </span><span style={{ color: posColor(a.mapsAvg) }}>{a.mapsAvg > 0 ? '▲' : a.mapsAvg < 0 ? '▼' : '–'} {Math.abs(a.mapsAvg).toFixed(1)}</span></div>}
+                {!a.pageSerpCount && !a.siteSerpCount && !a.mapsCount && <div style={{ fontSize: 10, color: 'var(--text3)' }}>no rank data</div>}
+                {!a.measured && <div style={{ fontSize: 10, color: '#f59e0b' }}>* site-wide context</div>}
               </div>
             </div>
           </div>
           {open[a.type] && (
             <div style={{ padding: '4px 16px 16px 38px', background: 'rgba(255,255,255,0.02)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', margin: '4px 0 6px' }}><span>Per-project results</span><span style={{ display: 'flex', gap: 18 }}><span style={{ width: 64, textAlign: 'right' }}>Page rank</span><span style={{ width: 56, textAlign: 'right' }}>Maps</span></span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', margin: '4px 0 6px' }}><span>Per-project results</span><span style={{ display: 'flex', gap: 14 }}><span style={{ width: 64, textAlign: 'right' }}>Page rank</span><span style={{ width: 52, textAlign: 'right' }}>SERP*</span><span style={{ width: 52, textAlign: 'right' }}>Maps*</span></span></div>
               {(a.details || []).map(d => {
                 const cell = (v) => v == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <span style={{ color: posColor(v), fontWeight: 600 }}>{v > 0 ? '▲' : v < 0 ? '▼' : '–'} {Math.abs(v).toFixed(1)}</span>;
                 return (
                   <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                     <span style={{ flex: 1 }}>{d.name} <span style={{ color: 'var(--text3)' }}>· done {d.times}×{d.pageCount ? '' : ' · no tracked page'}</span></span>
-                    <span style={{ display: 'flex', gap: 18 }}><span style={{ width: 64, textAlign: 'right' }}>{cell(d.pageSerpAvg)}</span><span style={{ width: 56, textAlign: 'right' }}>{cell(d.mapsAvg)}</span></span>
+                    <span style={{ display: 'flex', gap: 14 }}><span style={{ width: 64, textAlign: 'right' }}>{cell(d.pageSerpAvg)}</span><span style={{ width: 52, textAlign: 'right' }}>{cell(d.siteSerpAvg)}</span><span style={{ width: 52, textAlign: 'right' }}>{cell(d.mapsAvg)}</span></span>
                   </div>
                 );
               })}
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>Page rank = the exact page this fix touched, organic position before vs after (the trustworthy number). Maps = the whole business profile's position — shared by every local action that month, so it's context, not proof.</div>
+              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}><b>Page rank</b> = the exact page this fix touched, organic position before vs after — the trustworthy number. <b>SERP*</b> and <b>Maps*</b> = the whole site's organic / map-pack position, shared by every action that month — context, not proof.</div>
               <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)', lineHeight: 1.5 }}><i className="fas fa-arrow-right" style={{ color: '#8b5cf6', marginRight: 6 }} /><b>Next action:</b> {a.nextAction}</div>
             </div>
           )}
