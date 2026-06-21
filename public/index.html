@@ -20600,8 +20600,9 @@
         return () => { live = false; };
       }, [tab, project && project.id]);
       const acts = (data && data.actions) || [];
-      const worked = acts.filter(a => a.value > 0);
-      const didnt = acts.filter(a => a.value <= 0);
+      const worked = acts.filter(a => a.verdict === 'Working' || a.verdict === 'Promising');
+      const didnt = acts.filter(a => a.verdict === 'Little effect' || a.verdict === 'Not helping');
+      const verdictColor = { 'Working': '#22c55e', 'Promising': '#3b82f6', 'Little effect': '#f59e0b', 'Not helping': '#ef4444' };
       const card = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' };
       const tabBtn = (k, label) => (
         <button onClick={() => setTab(k)} style={{ background: tab === k ? '#8b5cf6' : 'transparent', color: tab === k ? '#fff' : 'var(--text2)', border: '1px solid ' + (tab === k ? '#8b5cf6' : 'var(--border)'), borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{label}</button>

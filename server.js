@@ -43988,15 +43988,29 @@ async function computeLearnings(onlyProjectId) {
     const key = t + '|' + a.project_id;
     if (!seenProjType.has(key)) { seenProjType.add(key); byType[t].outcomes.push(outcomes[a.project_id].score); }
   }
-  const learnings = Object.values(byType).map(b => {
-    const n = b.outcomes.length || 1;
-    const avg = b.outcomes.reduce((a, c) => a + c, 0) / n;
-    const positive = b.outcomes.filter(o => o > 0).length;
-    const consistency = positive / n; // 0..1
-    const freqWeight = Math.log2(b.projects.size + 1); // more projects = more evidence
-    const value = parseFloat((avg * consistency * freqWeight).toFixed(2));
-    return { type: b.type, timesDone: b.timesDone, projects: b.projects.size, avgOutcome: parseFloat(avg.toFixed(2)), consistency: Math.round(consistency * 100), value };
-  }).sort((a, b) => b.value - a.value);
+  // Drop generic pillar buckets — they're not real, actionable tactics.
+  const GENERIC = new Set(['serp', 'website', 'gbp', 'gbp_external', 'gsc', 'gsc_agent', 'technical', 'links', 'maps', 'other']);
+  const learnings = Object.values(byType)
+    .filter(b => !GENERIC.has((b.type || '').toLowerCase()))
+    .map(b => {
+      const n = b.outcomes.length || 1;          // # of sites where this was done (with a result)
+      const positive = b.outcomes.filter(o => o > 0).length;
+      const avg = b.outcomes.reduce((a, c) => a + c, 0) / n;
+      const consistency = Math.round((positive / n) * 100);
+      const value = parseFloat((avg * (positive / n) * Math.log2(b.projects.size + 1)).toFixed(2));
+      let verdict, recommendation;
+      if (avg <= 0 || consistency < 25) { verdict = 'Not helping'; recommendation = "No clear ranking benefit so far — deprioritise this, or change how it's done."; }
+      else if (consistency >= 60 && b.projects.size >= 2) { verdict = 'Working'; recommendation = `Rankings improved on ${positive} of ${n} sites where you did this — keep it up and roll it out to the rest.`; }
+      else if (consistency >= 40) { verdict = 'Promising'; recommendation = `Helped on ${positive} of ${n} sites — looks promising; do it on more sites to confirm.`; }
+      else { verdict = 'Little effect'; recommendation = `Only helped on ${positive} of ${n} sites — minor or inconsistent impact.`; }
+      return {
+        type: b.type, timesDone: b.timesDone, projects: b.projects.size,
+        sitesPositive: positive, sitesTotal: n, consistency, avgOutcome: parseFloat(avg.toFixed(2)),
+        value, verdict, recommendation,
+        evidence: `Done ${b.timesDone}× across ${b.projects.size} project${b.projects.size !== 1 ? 's' : ''} · rankings up on ${positive}/${n}`,
+      };
+    })
+    .sort((a, b) => b.value - a.value);
   return { actions: learnings, projectsAnalysed: ids.length };
 }
 app.get('/api/learnings', async (req, res) => {
