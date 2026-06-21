@@ -7450,7 +7450,7 @@
               { label: 'Robots.txt', ok: summary.hasRobotsTxt, icon: 'fa-robot', key: 'robots' },
               { label: 'Sitemap', ok: summary.hasSitemap, icon: 'fa-sitemap', key: 'sitemap' },
               { label: 'Schema', ok: summary.schemaTypes?.length > 0 && !findings.some(f => f.category === 'Schema & Data' && f.status !== 'fixed' && f.status !== 'rejected'), icon: 'fa-code', key: 'schema' },
-              { label: 'Mobile', ok: summary.mobileReady === summary.successful, icon: 'fa-mobile-alt', key: 'mobile' },
+              { label: 'Mobile', ok: !((summary.nonMobileList || []).length), icon: 'fa-mobile-alt', key: 'mobile' },
             ].map((h, i) => (
               <div key={i} onClick={() => toggleTile(h.key)} title="Click for details & fix"
                 style={{ background: tileDetail === h.key ? 'var(--bg)' : 'var(--card)', border: `1px solid ${h.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
