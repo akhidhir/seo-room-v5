@@ -39014,7 +39014,7 @@
       }
 
       // Show loading during project switch (project briefly set to null) — except standalone pages
-      if (!project && activeTab !== 'nw-migration' && activeTab !== 'kw-research' && activeTab !== 'learnings') {
+      if (!project && activeTab !== 'nw-migration' && activeTab !== 'kw-research' && activeTab !== 'learnings' && activeTab !== 'template-discovery' && activeTab !== 'template-tester' && activeTab !== 'asset-intake') {
         return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span><span style={{ marginLeft: 12, color: 'var(--text-secondary)' }}>Loading project...</span></div>;
       }
 
@@ -39189,11 +39189,6 @@ case 'action-plan':
           ] },
           { id: 'security-audit', label: 'Security Audit', icon: 'fas fa-shield-halved' },
         ]},
-        { section: 'TEMPLATES', items: [
-          { id: 'template-discovery', label: 'Template Discovery', icon: 'fas fa-magnifying-glass-chart' },
-          { id: 'template-tester', label: 'Template Tester', icon: 'fas fa-vial' },
-          { id: 'asset-intake', label: 'Asset Intake', icon: 'fas fa-box-open' },
-        ]},
         { section: 'BACKLINKS', items: [
           { id: 'backlinks', label: 'Backlinks', icon: 'fas fa-external-link-alt' },
         ]},
@@ -39268,6 +39263,15 @@ case 'action-plan':
               </button>
               <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('learnings'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'learnings' ? '1px solid #8b5cf6' : '1px dashed var(--border)', background: activeTab === 'learnings' ? 'rgba(139,92,246,0.1)' : 'transparent', color: '#8b5cf6', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                 <i className="fas fa-brain" style={{ fontSize: 13 }}></i> Learnings
+              </button>
+              <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('template-discovery'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'template-discovery' ? '1px solid #14b8a6' : '1px dashed var(--border)', background: activeTab === 'template-discovery' ? 'rgba(20,184,166,0.1)' : 'transparent', color: '#14b8a6', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                <i className="fas fa-magnifying-glass-chart" style={{ fontSize: 13 }}></i> Template Discovery
+              </button>
+              <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('template-tester'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'template-tester' ? '1px solid #14b8a6' : '1px dashed var(--border)', background: activeTab === 'template-tester' ? 'rgba(20,184,166,0.1)' : 'transparent', color: '#14b8a6', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                <i className="fas fa-vial" style={{ fontSize: 13 }}></i> Template Tester
+              </button>
+              <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('asset-intake'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'asset-intake' ? '1px solid #14b8a6' : '1px dashed var(--border)', background: activeTab === 'asset-intake' ? 'rgba(20,184,166,0.1)' : 'transparent', color: '#14b8a6', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                <i className="fas fa-box-open" style={{ fontSize: 13 }}></i> Asset Intake
               </button>
               {/* Project selector / back button */}
               {buildMode ? (
