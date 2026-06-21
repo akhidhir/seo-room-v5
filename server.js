@@ -43928,6 +43928,84 @@ async function maybeGenerateBaseline(projectId, userId) {
 
 // ==================== 12. MONTHLY REPORTS ====================
 
+// ===== LEARNINGS ENGINE =====
+// Correlates completed actions (by normalized type) with each project's ranking outcome, then
+// weights each learning by EVIDENCE: frequency × consistency × effect. Global + per-project.
+function normActionType(item) {
+  const t = ((item.title || '') + ' ' + (item.type || '') + ' ' + (item.category || '')).toLowerCase();
+  if (/duplicate title/.test(t)) return 'Fix duplicate titles';
+  if (/thin content|expand|word count|content quality|copywrit/.test(t)) return 'Expand thin / improve content';
+  if (/\bh1\b|keyword.*h1/.test(t)) return 'Add focus keyword to H1';
+  if (/meta title|title tag/.test(t)) return 'Optimise meta titles';
+  if (/meta desc/.test(t)) return 'Optimise meta descriptions';
+  if (/inbound|orphan/.test(t)) return 'Add inbound links (fix orphans)';
+  if (/internal link/.test(t)) return 'Add internal links';
+  if (/schema/.test(t)) return 'Add schema markup';
+  if (/\balt\b|alt text/.test(t)) return 'Fix image alt text';
+  if (/canonical/.test(t)) return 'Fix canonicals';
+  if (/noindex|indexing|index/.test(t)) return 'Fix indexing';
+  if (/citation|director/.test(t)) return 'Build citations';
+  if (/review|reputation/.test(t)) return 'Reviews (get / respond)';
+  if (/gbp|profile|categor|hours|photo|business description/.test(t)) return 'Improve GBP profile';
+  if (/backlink/.test(t)) return 'Build backlinks';
+  if (/speed|cwv|core web|pagespeed/.test(t)) return 'Improve page speed';
+  if (/suburb|landing page|new page|service area/.test(t)) return 'Create suburb / landing pages';
+  if (/ctr|click.?through/.test(t)) return 'Improve CTR';
+  return (item.pillar || 'other').toString();
+}
+async function computeLearnings(onlyProjectId) {
+  // 1) Each project's outcome = its latest report's SERP/Maps change (positive = improved).
+  const projRows = (await pool.query(
+    onlyProjectId ? 'SELECT id, name, business_name FROM projects WHERE id=$1' : 'SELECT id, name, business_name FROM projects'
+    , onlyProjectId ? [onlyProjectId] : [])).rows;
+  const outcomes = {}; // projectId -> { name, serp, maps, score }
+  for (const p of projRows) {
+    const rr = (await pool.query('SELECT report_data FROM monthly_reports WHERE project_id=$1 ORDER BY month DESC LIMIT 1', [p.id])).rows[0];
+    if (!rr) continue;
+    const d = typeof rr.report_data === 'string' ? JSON.parse(rr.report_data) : rr.report_data;
+    const serp = d?.mapsRankings?.serpChange; const maps = d?.mapsRankings?.mapsChange;
+    if (serp == null && maps == null) continue;
+    // Composite, clamped so one skewed average doesn't dominate.
+    const clamp = (x) => x == null ? null : Math.max(-10, Math.min(10, x));
+    const parts = [clamp(serp), clamp(maps)].filter(x => x != null);
+    outcomes[p.id] = { name: p.business_name || p.name, serp, maps, score: parts.reduce((a, b) => a + b, 0) / parts.length };
+  }
+  // 2) Completed actions per project, grouped by normalized type.
+  const ids = Object.keys(outcomes).map(Number);
+  if (!ids.length) return { actions: [], projectsAnalysed: 0 };
+  const acts = (await pool.query(
+    `SELECT project_id, pillar, type, title FROM action_items
+     WHERE project_id = ANY($1::int[]) AND (status IN ('done','fixed','applied','executed','completed') OR executed_at IS NOT NULL)`,
+    [ids])).rows;
+  // type -> { byProject: { pid: count }, outcomes: [score...] }
+  const byType = {};
+  const seenProjType = new Set();
+  for (const a of acts) {
+    const t = normActionType(a);
+    if (!byType[t]) byType[t] = { type: t, projects: new Set(), timesDone: 0, outcomes: [] };
+    byType[t].timesDone++;
+    byType[t].projects.add(a.project_id);
+    const key = t + '|' + a.project_id;
+    if (!seenProjType.has(key)) { seenProjType.add(key); byType[t].outcomes.push(outcomes[a.project_id].score); }
+  }
+  const learnings = Object.values(byType).map(b => {
+    const n = b.outcomes.length || 1;
+    const avg = b.outcomes.reduce((a, c) => a + c, 0) / n;
+    const positive = b.outcomes.filter(o => o > 0).length;
+    const consistency = positive / n; // 0..1
+    const freqWeight = Math.log2(b.projects.size + 1); // more projects = more evidence
+    const value = parseFloat((avg * consistency * freqWeight).toFixed(2));
+    return { type: b.type, timesDone: b.timesDone, projects: b.projects.size, avgOutcome: parseFloat(avg.toFixed(2)), consistency: Math.round(consistency * 100), value };
+  }).sort((a, b) => b.value - a.value);
+  return { actions: learnings, projectsAnalysed: ids.length };
+}
+app.get('/api/learnings', async (req, res) => {
+  try { res.json(await computeLearnings(null)); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/projects/:projectId/learnings', async (req, res) => {
+  try { res.json(await computeLearnings(parseInt(req.params.projectId))); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // List reports for a project
 app.get('/api/projects/:projectId/reports', async (req, res) => {
   try {

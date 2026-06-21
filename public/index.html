@@ -20575,6 +20575,60 @@
     }
 
     // ============ SEO MIGRATION WIZARD ============
+    function LearningsPage({ project, allProjects }) {
+      const [tab, setTab] = useState('global');
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(false);
+      useEffect(() => {
+        let live = true; setLoading(true);
+        const url = tab === 'global' ? '/learnings' : (project ? ('/projects/' + project.id + '/learnings') : null);
+        if (!url) { setData({ actions: [], projectsAnalysed: 0 }); setLoading(false); return; }
+        api(url).then(d => { if (live) { setData(d); setLoading(false); } }).catch(() => { if (live) { setData(null); setLoading(false); } });
+        return () => { live = false; };
+      }, [tab, project && project.id]);
+      const acts = (data && data.actions) || [];
+      const worked = acts.filter(a => a.value > 0);
+      const didnt = acts.filter(a => a.value <= 0);
+      const card = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' };
+      const tabBtn = (k, label) => (
+        <button onClick={() => setTab(k)} style={{ background: tab === k ? '#8b5cf6' : 'transparent', color: tab === k ? '#fff' : 'var(--text2)', border: '1px solid ' + (tab === k ? '#8b5cf6' : 'var(--border)'), borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
+      );
+      const row = (a) => (
+        <div key={a.type} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{a.type}</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>Done <b>{a.timesDone}×</b> across <b>{a.projects}</b> project{a.projects !== 1 ? 's' : ''} · {a.consistency}% positive · avg result {a.avgOutcome > 0 ? '+' : ''}{a.avgOutcome}</div>
+          </div>
+          <div style={{ width: 90, height: 7, background: 'var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: Math.min(100, Math.abs(a.value) * 12) + '%', background: a.value > 0 ? '#22c55e' : '#ef4444' }} />
+          </div>
+          <div style={{ textAlign: 'right', minWidth: 56 }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: a.value > 0 ? '#22c55e' : '#ef4444' }}>{a.value > 0 ? '+' : ''}{a.value}</div>
+            <div style={{ fontSize: 9, color: 'var(--text3)', textTransform: 'uppercase' }}>value</div>
+          </div>
+        </div>
+      );
+      return (
+        <div>
+          <div className="page-title"><i className="fas fa-brain" style={{ marginRight: 10, color: '#8b5cf6' }} />Learnings</div>
+          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>What's working across your projects, <b>weighted by evidence</b> — the more an action is done and consistently moves rankings, the higher its <b>value</b>. Wins on one site become rules for the rest. {data ? '(Analysed ' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + '.)' : ''}</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>{tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}</div>
+          {loading ? <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner-large" style={{ margin: '0 auto 12px' }} />Crunching results…</div>
+            : acts.length === 0 ? <div style={{ ...card, padding: 24, fontSize: 14, color: 'var(--text3)' }}>No learnings yet. Generate monthly reports (so rankings results exist) and complete some actions — then the engine can correlate what worked.</div>
+            : (<>
+              <div style={card}>
+                <div style={{ padding: '12px 16px', fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,0.06)' }}><i className="fas fa-check-circle" style={{ marginRight: 8 }} />What worked — highest value first</div>
+                {worked.length ? worked.map(row) : <div style={{ padding: 16, color: 'var(--text3)', fontSize: 13 }}>Nothing clearly positive yet.</div>}
+              </div>
+              {didnt.length > 0 && <div style={{ ...card, marginTop: 16 }}>
+                <div style={{ padding: '12px 16px', fontWeight: 700, color: '#ef4444', background: 'rgba(239,68,68,0.06)' }}><i className="fas fa-triangle-exclamation" style={{ marginRight: 8 }} />Didn't move the needle</div>
+                {didnt.map(row)}
+              </div>}
+            </>)}
+        </div>
+      );
+    }
+
     function PageBuilderPage({ project, allProjects }) {
       const card = { background: 'var(--card, #161922)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
       const projects = (allProjects && allProjects.length) ? allProjects : [project];
@@ -38839,7 +38893,7 @@
       }
 
       // Show loading during project switch (project briefly set to null) — except standalone pages
-      if (!project && activeTab !== 'nw-migration' && activeTab !== 'kw-research') {
+      if (!project && activeTab !== 'nw-migration' && activeTab !== 'kw-research' && activeTab !== 'learnings') {
         return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg)' }}><span className="spinner" style={{ width: 32, height: 32 }}></span><span style={{ marginLeft: 12, color: 'var(--text-secondary)' }}>Loading project...</span></div>;
       }
 
@@ -38918,6 +38972,8 @@ case 'action-plan':
             return <SEOMigrationPage />;
           case 'page-builder':
             return <PageBuilderPage project={project} allProjects={allProjects} />;
+          case 'learnings':
+            return <LearningsPage project={project} allProjects={allProjects} />;
           case 'template-discovery':
             return <TemplateDiscoveryPage project={project} setActiveTab={setActiveTab} />;
           case 'template-tester':
@@ -39088,6 +39144,9 @@ case 'action-plan':
               </button>
               <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('kw-research'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'kw-research' ? '1px solid #06b6d4' : '1px dashed var(--border)', background: activeTab === 'kw-research' ? 'rgba(6,182,212,0.1)' : 'transparent', color: '#06b6d4', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                 <i className="fas fa-search" style={{ fontSize: 13 }}></i> Keyword Research
+              </button>
+              <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('learnings'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'learnings' ? '1px solid #8b5cf6' : '1px dashed var(--border)', background: activeTab === 'learnings' ? 'rgba(139,92,246,0.1)' : 'transparent', color: '#8b5cf6', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                <i className="fas fa-brain" style={{ fontSize: 13 }}></i> Learnings
               </button>
               {/* Project selector / back button */}
               {buildMode ? (
