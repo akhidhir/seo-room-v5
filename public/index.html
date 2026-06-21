@@ -20588,14 +20588,14 @@
         try {
           const r = await api('/reports/generate-all', { method: 'POST' });
           setRunMsg('Done — ' + (r.generated || 0) + '/' + (r.total || 0) + ' reports' + (r.errors && r.errors.length ? (' · ' + r.errors.length + ' failed') : ''));
-          const url = tab === 'global' ? '/learnings' : (project ? ('/projects/' + project.id + '/learnings') : null);
+          const url = tab === 'project' ? (project ? ('/projects/' + project.id + '/learnings') : null) : '/learnings';
           if (url) { const d = await api(url); setData(d); }
         } catch (e) { setRunMsg('Error: ' + e.message); }
         setRunning(false);
       };
       useEffect(() => {
         let live = true; setLoading(true);
-        const url = tab === 'global' ? '/learnings' : (project ? ('/projects/' + project.id + '/learnings') : null);
+        const url = tab === 'project' ? (project ? ('/projects/' + project.id + '/learnings') : null) : '/learnings';
         if (!url) { setData({ actions: [], projectsAnalysed: 0 }); setLoading(false); return; }
         api(url).then(d => { if (live) { setData(d); setLoading(false); } }).catch(() => { if (live) { setData(null); setLoading(false); } });
         return () => { live = false; };
@@ -20661,12 +20661,65 @@
           )}
         </div>
       );
+      // Pivot global data into one row-set per project (tactic → what happened)
+      const byProject = {};
+      (acts || []).forEach(a => (a.details || []).forEach(d => {
+        (byProject[d.name] || (byProject[d.name] = [])).push({ type: a.type, times: d.times, page: d.pageSerpAvg, serp: d.siteSerpAvg, maps: d.mapsAvg, verdict: a.verdict, success: a.successRate });
+      }));
+      const exportCsv = () => {
+        const rows = [['Project', 'Tactic', 'Times done', 'Page rank change', 'SERP (site) change', 'Maps change', 'Verdict', 'Success %', 'Snapshot date']];
+        const today = new Date().toISOString().slice(0, 10);
+        Object.keys(byProject).sort().forEach(name => byProject[name].forEach(r => {
+          rows.push([name, r.type, r.times, r.page == null ? '' : r.page, r.serp == null ? '' : r.serp, r.maps == null ? '' : r.maps, r.verdict, r.success == null ? '' : r.success, today]);
+        }));
+        const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' }); const u = URL.createObjectURL(blob);
+        const link = document.createElement('a'); link.href = u; link.download = 'learnings-' + today + '.csv'; link.click(); URL.revokeObjectURL(u);
+      };
+      const dlt = (v) => v == null ? <span style={{ color: 'var(--text3)' }}>—</span> : <span style={{ color: posColor(v), fontWeight: 600 }}>{v > 0 ? '▲' : v < 0 ? '▼' : '–'} {Math.abs(v).toFixed(1)}</span>;
+      const th = { textAlign: 'left', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text3)', padding: '8px 10px', fontWeight: 700 };
+      const td = { fontSize: 12, padding: '7px 10px', borderTop: '1px solid rgba(255,255,255,0.05)' };
+      const projectTables = (
+        <div>
+          {Object.keys(byProject).sort().map(name => (
+            <div key={name} style={{ ...card, marginBottom: 16 }}>
+              <div style={{ padding: '11px 14px', fontWeight: 700, fontSize: 14, background: 'rgba(139,92,246,0.07)', color: '#a78bfa' }}>{name}</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>
+                    <th style={th}>Tactic (what we did)</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Done</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Page rank</th>
+                    <th style={{ ...th, textAlign: 'right' }}>SERP*</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Maps*</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Result</th>
+                  </tr></thead>
+                  <tbody>
+                    {byProject[name].slice().sort((x, y) => (y.page == null ? -99 : y.page) - (x.page == null ? -99 : x.page)).map((r, i) => (
+                      <tr key={i}>
+                        <td style={td}>{r.type}</td>
+                        <td style={{ ...td, textAlign: 'center', color: 'var(--text3)' }}>{r.times}×</td>
+                        <td style={{ ...td, textAlign: 'right' }}>{dlt(r.page)}</td>
+                        <td style={{ ...td, textAlign: 'right' }}>{dlt(r.serp)}</td>
+                        <td style={{ ...td, textAlign: 'right' }}>{dlt(r.maps)}</td>
+                        <td style={{ ...td, textAlign: 'center' }}><span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: (verdictColor[r.verdict] || '#64748b') + '22', color: verdictColor[r.verdict] || '#94a3b8' }}>{r.verdict}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, lineHeight: 1.6 }}><b>Page rank</b> = the exact page a fix touched (real, isolated). <b>SERP*</b> / <b>Maps*</b> = whole-site organic / map-pack position that month (context — many changes at once). Numbers = average positions gained (▲) / lost (▼). Export CSV each month, then diff snapshots to see trends.</div>
+        </div>
+      );
       return (
         <div>
           <div className="page-title"><i className="fas fa-brain" style={{ marginRight: 10, color: '#8b5cf6' }} />Learnings</div>
           <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>Two tiers, kept honest: <b style={{ color: '#22c55e' }}>Measured</b> = the fix was tied to a specific tracked page and that page's rank moved before vs after (real proof). <b style={{ color: '#f59e0b' }}>Site-wide correlation</b> = we couldn't tie it to a page, so it only reflects overall movement while many changes ran at once (a hint, not proof). {data ? '(' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + (data.measuredTactics != null ? ' · only ' + data.measuredTactics + '/' + data.totalTactics + ' tactics truly measured' : '') + '.)' : ''}</div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-            {tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}
+            {tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}{tabBtn('tables', 'By project (table)')}
+            {tab === 'tables' && acts.length > 0 && <button onClick={exportCsv} style={{ background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-download" style={{ marginRight: 6 }} />Export CSV</button>}
             <button onClick={runAllReports} disabled={running} style={{ marginLeft: 'auto', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: running ? 'wait' : 'pointer' }}>
               {running ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Running…</> : <><i className="fas fa-rotate" style={{ marginRight: 6 }} />Run monthly report (all projects)</>}
             </button>
@@ -20674,6 +20727,7 @@
           </div>
           {loading ? <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner-large" style={{ margin: '0 auto 12px' }} />Crunching results…</div>
             : acts.length === 0 ? <div style={{ ...card, padding: 24, fontSize: 14, color: 'var(--text3)' }}>No learnings yet. Generate monthly reports (so rankings results exist) and complete some actions — then the engine can correlate what worked.</div>
+            : tab === 'tables' ? projectTables
             : (<>
               <div style={card}>
                 <div style={{ padding: '12px 16px', fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,0.06)' }}><i className="fas fa-check-circle" style={{ marginRight: 8 }} />What worked — highest value first</div>
