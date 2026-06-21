@@ -6694,8 +6694,9 @@
       const isOpenFinding = (f) => !['fixed', 'dismissed', 'rejected', 'ignored', 'excluded', 'done'].includes(String(f.status || '').toLowerCase());
       const thinFindingCount = findings.filter(f => isOpenFinding(f) && /thin content/i.test(f.title || '')).length;
       const dupFindingCount = findings.filter(f => isOpenFinding(f) && /duplicate title/i.test(f.title || '')).length;
-      const thinCount = thinFindingCount || (summary ? (summary.thinPages || 0) : 0);
-      const dupCount = dupFindingCount || (summary ? ((summary.dupTitlesList && summary.dupTitlesList.length) || summary.dupTitles || 0) : 0);
+      // Count only what's actionable: real open findings, or a stored page list. No bare scalar fallback (it goes stale and has nothing to click).
+      const thinCount = thinFindingCount || (summary && summary.thinPagesList ? summary.thinPagesList.length : 0);
+      const dupCount = dupFindingCount || (summary && summary.dupTitlesList ? summary.dupTitlesList.length : 0);
 
       const toggleTile = (k) => {
         const willOpen = tileDetail !== k;
