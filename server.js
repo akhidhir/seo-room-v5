@@ -37155,7 +37155,11 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
     }
 
-    // 10. Try to purge cache
+    // 10. Purge BOTH the WP/BerqWP origin cache (so the static HTML regenerates) AND the Cloudflare edge cache.
+    //     Origin first — otherwise the re-verify crawl reads stale BerqWP HTML and reports "still missing".
+    try {
+      if (wpUrl && wpPageId) await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/clear-cache/${wpPageId}`, { method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000) });
+    } catch {}
     try { await purgeCloudflareCache(project, [pageUrl]); } catch {}
 
     const anyWritten = mediaFixed > 0 || contentFixed > 0;
