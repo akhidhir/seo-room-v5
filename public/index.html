@@ -7108,7 +7108,13 @@
       };
 
       const sevOrder = { Critical: 0, critical: 0, High: 1, high: 1, Medium: 2, medium: 2, Low: 3, low: 3 };
-      const categories = useMemo(() => [...new Set(findings.map(f => f.category))].sort(), [findings]);
+      // Fixed canonical tab set — every project shows the SAME category tabs (empty ones included), so the bar is identical everywhere.
+      const WS_CANONICAL_CATS = ['Site Health', 'Content Quality', 'Alt Text', 'Core Web Vitals', 'Schema & Data'];
+      const categories = useMemo(() => {
+        const present = new Set(findings.map(f => f.category));
+        const extras = [...present].filter(c => c && !WS_CANONICAL_CATS.includes(c)).sort();
+        return [...WS_CANONICAL_CATS, ...extras];
+      }, [findings]);
 
       const sorted = useMemo(() => {
         let list = [...findings];
