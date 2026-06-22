@@ -16941,15 +16941,15 @@ Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics
     let savedCount = 0;
     for (const f of findings) {
       await pool.query(
-        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, status, current_value, target_value)
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, status, current_value, recommended_value)
          VALUES ($1, $2, 'clarity', $3, $4, $5, $6, $7, 'approved', $8, $9)`,
         [projectId, auditId, f.category || 'User Behaviour', f.title, f.description, f.recommendation, f.severity || 'medium', f.page_url || '', 'Improve conversion']
       );
 
       // Auto-create action item
       await pool.query(
-        `INSERT INTO action_items (project_id, title, description, type, priority, status, category, pages_affected)
-         VALUES ($1, $2, $3, 'manual', $4, 'todo', $5, $6)`,
+        `INSERT INTO action_items (project_id, title, description, type, severity, status, category, pages_affected)
+         VALUES ($1, $2, $3, 'manual', $4, 'pending', $5, $6)`,
         [projectId, f.title, f.recommendation, f.severity === 'critical' ? 'high' : f.severity === 'high' ? 'high' : 'medium', f.category || 'User Behaviour', f.page_url || '']
       );
       savedCount++;
