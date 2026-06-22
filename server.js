@@ -20297,7 +20297,13 @@ async function fetchAllWpItems(wpBase, headers, type, extraQuery = '') {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=50&page=${pageNum}&status=publish${extraQuery}`, {
-          ...(headers ? { headers } : {}),
+          headers: {
+            // A real browser UA + JSON Accept gets past Cloudflare bot-challenges and security plugins
+            // (Wordfence etc.) that serve an HTML block page to UA-less requests — which then fails JSON parsing.
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+            'Accept': 'application/json',
+            ...(headers || {}),
+          },
           signal: AbortSignal.timeout(attempt === 0 ? 30000 : 60000)
         });
         if (resp.ok || resp.status === 400) break; // 400 = requested past the last page
@@ -20312,7 +20318,13 @@ async function fetchAllWpItems(wpBase, headers, type, extraQuery = '') {
       if (tp) totalPages = tp;
     }
     let batch;
-    try { batch = await resp.json(); } catch (e) { throw new Error(`WordPress returned invalid JSON for ${type} page ${pageNum}`); }
+    const raw = await resp.text();
+    try { batch = JSON.parse(raw); } catch (e) {
+      const looksHtml = /^\s*<(?:!doctype|html|head|body|\?xml)/i.test(raw.trim());
+      throw new Error(looksHtml
+        ? `${type} crawl blocked: the site returned an HTML page instead of JSON (likely Cloudflare bot-protection or a security plugin like Wordfence blocking the REST API). Allowlist the dashboard, or use the SEO Room connector plugin.`
+        : `WordPress returned invalid JSON for ${type} page ${pageNum}`);
+    }
     if (!Array.isArray(batch) || batch.length === 0) break;
     items.push(...batch);
     if (batch.length < 50) break;
