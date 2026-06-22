@@ -6616,7 +6616,7 @@
                 {sorted.length === 0 && <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No findings yet. Click Run Audit to start.</td></tr>}
                 {(() => { let lastCat = ''; let num = 0;
                   return sorted.map(f => {
-                    const showHeader = f.category !== lastCat && filterCat === 'all';
+                    const showHeader = f.category !== lastCat; // always group by category — consistent on every tab + project
                     lastCat = f.category; num++;
                     const cc = catColors[f.category] || '#6366f1';
                     return React.createElement(React.Fragment, { key: f.id },
@@ -7694,7 +7694,7 @@
                 {sorted.length === 0 && <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No findings yet. Click Run Audit to start.</td></tr>}
                 {(() => { let lastCat = ''; let num = 0;
                   return sorted.map(f => {
-                    const showHeader = f.category !== lastCat && filterCat === 'all';
+                    const showHeader = f.category !== lastCat; // always group by category — consistent on every tab + project
                     lastCat = f.category; num++;
                     const cc = catColors[f.category] || '#6366f1';
                     return React.createElement(React.Fragment, { key: f.id },
