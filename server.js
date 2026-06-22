@@ -37003,9 +37003,36 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
     let contentFixed = 0;
     const changes = [];
 
+    // 6a. PREFERRED: the seoroom plugin runs INSIDE WordPress, so it can set the attachment's
+    // _wp_attachment_image_alt (what Elementor renders) + patch Elementor data on template/suburb
+    // pages the REST API can't reach. If it's installed and sets anything, skip the REST fallback below.
+    let pluginAltOk = false;
+    try {
+      const items = altsToApply.filter(g => g.src && g.alt).map(g => ({ src: g.src, alt: g.alt }));
+      if (wpUrl && authHeaders && items.length) {
+        const pr = await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/fix-alt`, {
+          method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ page_id: wpPageId || 0, items }), signal: AbortSignal.timeout(25000)
+        });
+        if (pr.ok) {
+          const pj = await pr.json().catch(() => null);
+          if (pj && pj.ok && ((pj.media_set || 0) > 0 || pj.elementor_changed)) {
+            pluginAltOk = true;
+            mediaFixed += pj.media_set || 0;
+            if (pj.elementor_changed) contentFixed += 1;
+            // Record one history row per attachment touched (for rollback).
+            for (const r of (pj.results || [])) {
+              if (r.attachment_id) changes.push({ project_id: parseInt(projectId), page_id: r.attachment_id, page_url: r.src, page_title: (r.src || '').split('/').pop(), change_type: 'alt_text_fix', field_name: 'alt_text', original_value: '', new_value: (items.find(i => i.src === r.src) || {}).alt || '' });
+            }
+            console.log(`[alt-text-fix] plugin set ${pj.media_set} attachment alts, elementor_changed=${pj.elementor_changed}`);
+          }
+        }
+      }
+    } catch (e) { console.log('[alt-text-fix] plugin fix-alt unavailable, using REST fallback:', e.message); }
+
     // WP serves resized variants (image-768x504.jpg) while the media library holds the original (image.jpg) — match on the base name
     const stripSizeSuffix = f => f.replace(/-\d+x\d+(\.[a-z0-9]+)$/i, '$1');
-    for (const gen of altsToApply) {
+    for (const gen of (pluginAltOk ? [] : altsToApply)) {
       if (!gen.alt || !gen.src) continue;
       const filename = gen.src.split('/').pop().split('?')[0].replace(/\.[^.]+$/, '').replace(/-\d+x\d+$/, '');
 
@@ -37044,8 +37071,8 @@ app.post('/api/projects/:projectId/alt-text-fix', async (req, res) => {
       }
     }
 
-    // 7. Update post content to add alt attributes inline
-    if (wpPageId) {
+    // 7. Update post content to add alt attributes inline (REST fallback only — plugin already handled it)
+    if (wpPageId && !pluginAltOk) {
       try {
         const pageResp = await fetch(`${wpUrl}/wp-json/wp/v2/${wpPageType}/${wpPageId}?context=edit`, {
           headers: authHeaders, signal: AbortSignal.timeout(10000)
