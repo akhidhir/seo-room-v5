@@ -6702,8 +6702,10 @@
       // Count only what's actionable: real open findings, or a stored page list. No bare scalar fallback (it goes stale and has nothing to click).
       const thinCount = thinFindingCount || (summary && summary.thinPagesList ? summary.thinPagesList.length : 0);
       const dupCount = dupFindingCount || (summary && summary.dupTitlesList ? summary.dupTitlesList.length : 0);
-      const altOpenCount = findings.filter(f => isOpenFinding(f) && (/alt text/i.test(f.category || '') || /missing alt/i.test(f.title || ''))).length;
-      const altCount = altOpenCount || (summary ? (summary.totalMissingAlt || 0) : 0);
+      const altFindings = findings.filter(f => /alt text/i.test(f.category || '') || /missing alt/i.test(f.title || ''));
+      const altOpenCount = altFindings.filter(isOpenFinding).length;
+      // If alt findings exist, trust them (0 open = resolved → green). Only fall back to the crawl summary when there are NO alt findings at all.
+      const altCount = altFindings.length ? altOpenCount : (summary ? (summary.totalMissingAlt || 0) : 0);
 
       const toggleTile = (k) => {
         const willOpen = tileDetail !== k;
