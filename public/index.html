@@ -1336,7 +1336,10 @@
         }
 
         const contentType = res.headers.get('content-type') || '';
-        const isProxyError = !contentType.includes('application/json') || res.status === 502 || res.status === 503;
+        // Railway's proxy/restart errors return an HTML page; genuine app errors return JSON (even with a
+        // 5xx status, e.g. a 502 "WordPress crawl failed"). Only treat NON-JSON as a restart so real error
+        // messages aren't masked by the generic "server is restarting" banner.
+        const isProxyError = !contentType.includes('application/json');
         if (isProxyError) {
           if (attempt < MAX_TRIES) {
             console.warn(`[api] Server restarting? Non-JSON/${res.status} on ${path} (attempt ${attempt}/${MAX_TRIES}) — retrying in ${attempt * 5}s...`);
