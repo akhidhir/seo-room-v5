@@ -7699,7 +7699,16 @@
                 <th style={{ padding: '14px 10px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)' }}>Action</th>
               </tr></thead>
               <tbody>
-                {sorted.length === 0 && <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No findings yet. Click Run Audit to start.</td></tr>}
+                {sorted.length === 0 && (() => {
+                  const ran = findings.length > 0;
+                  const clear = ran && filterCat !== 'all' && !searchQ && filterSev === 'all';
+                  const msg = !ran ? 'No findings yet. Click Run Audit to start.'
+                    : searchQ ? 'No findings match your search.'
+                    : filterCat === 'Alt Text' ? 'No alt-text issues — every image already has alt text.'
+                    : filterCat !== 'all' ? ('No ' + WS_CAT_LABEL(filterCat) + ' issues — all clear here.')
+                    : 'No open findings — all clear.';
+                  return <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: clear ? '#22c55e' : 'var(--text3)' }}>{clear && <i className="fas fa-check-circle" style={{ marginRight: 8 }} />}{msg}</td></tr>;
+                })()}
                 {(() => { let lastCat = ''; let num = 0;
                   return sorted.map(f => {
                     const showHeader = f.category !== lastCat; // always group by category — consistent on every tab + project
