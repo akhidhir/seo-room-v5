@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.33
+ * Version: 8.9.34
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.33');
+define('SEOROOM_VERSION', '8.9.34');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 define('SEOROOM_UPDATE_BASE', 'https://seo-room-v5-production.up.railway.app/plugin/seoroom');
@@ -1587,11 +1587,12 @@ function sropt_elementor_preview_intercept() {
             $script .= '<script id="seo-section-data" type="application/json">' . wp_json_encode($sections) . '</script>';
         }
 
-        // Load section-preview.js from the DASHBOARD (always the latest — JS changes go live on deploy,
-        // no plugin update needed). The preview URL passes the dashboard origin via ?dash=. Cache-busted per load.
-        $dash = isset($_GET['dash']) ? esc_url_raw($_GET['dash']) : '';
-        if ($dash && strpos($dash, 'http') === 0) {
-            $dash = rtrim($dash, '/');
+        // Load section-preview.js from the DASHBOARD (always the latest — JS changes go live on deploy).
+        // SECURITY: the origin comes ONLY from the dashboard URL saved in plugin settings — never from a
+        // user-supplied ?dash= value. Honouring an attacker-controlled ?dash= would be reflected XSS:
+        // any external domain's JavaScript could be injected into the front-end via a crafted preview URL.
+        $dash = rtrim((sropt_get_options())['dashboard_url'] ?? '', '/');
+        if ($dash && strpos($dash, 'https://') === 0) {
             $script .= '<script src="' . esc_url($dash . '/section-preview.js?v=' . time()) . '"></script>';
             $script .= '<script>console.log("[SEO Room Preview] Injected ' . count($sections) . ' sections, script: dashboard (live)");</script>';
         } else {
