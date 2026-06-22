@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.31
+ * Version: 8.9.33
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,9 +12,68 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.31');
+define('SEOROOM_VERSION', '8.9.33');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
+define('SEOROOM_UPDATE_BASE', 'https://seo-room-v5-production.up.railway.app/plugin/seoroom');
+
+// ============ AUTO-UPDATE FROM THE SEO ROOM DASHBOARD ============
+// Change the plugin once on the dashboard → every client site sees the update (and auto-updates if enabled).
+// No per-site reinstall. Pulls version info + zip from the dashboard.
+add_filter('pre_set_site_transient_update_plugins', 'seoroom_check_for_update');
+function seoroom_check_for_update($transient) {
+    if (empty($transient) || empty($transient->checked)) return $transient;
+    $info = seoroom_fetch_update_info();
+    if (!$info || empty($info->version)) return $transient;
+    $plugin_file = plugin_basename(__FILE__); // seoroom/seoroom.php
+    if (version_compare($info->version, SEOROOM_VERSION, '>')) {
+        $transient->response[$plugin_file] = (object) array(
+            'slug'        => 'seoroom',
+            'plugin'      => $plugin_file,
+            'new_version' => $info->version,
+            'url'         => isset($info->homepage) ? $info->homepage : 'https://theseoroom.com.au',
+            'package'     => $info->download_url,
+            'tested'      => isset($info->tested) ? $info->tested : '',
+        );
+    } else {
+        // Ensure WP knows it's current (prevents stale "update available" flicker).
+        unset($transient->response[$plugin_file]);
+        $transient->no_update[$plugin_file] = (object) array(
+            'slug' => 'seoroom', 'plugin' => $plugin_file, 'new_version' => SEOROOM_VERSION,
+            'url' => 'https://theseoroom.com.au', 'package' => '',
+        );
+    }
+    return $transient;
+}
+add_filter('plugins_api', 'seoroom_plugin_info', 20, 3);
+function seoroom_plugin_info($result, $action, $args) {
+    if ($action !== 'plugin_information') return $result;
+    if (empty($args->slug) || $args->slug !== 'seoroom') return $result;
+    $info = seoroom_fetch_update_info();
+    if (!$info) return $result;
+    return (object) array(
+        'name'          => 'SEO Room',
+        'slug'          => 'seoroom',
+        'version'       => $info->version,
+        'author'        => 'The SEO Room',
+        'homepage'      => isset($info->homepage) ? $info->homepage : 'https://theseoroom.com.au',
+        'download_link' => $info->download_url,
+        'sections'      => array('changelog' => isset($info->changelog) ? $info->changelog : 'Latest SEO Room dashboard sync.'),
+    );
+}
+function seoroom_fetch_update_info() {
+    $cached = get_transient('seoroom_update_info');
+    if ($cached !== false) return $cached;
+    $resp = wp_remote_get(SEOROOM_UPDATE_BASE . '/info', array('timeout' => 10, 'headers' => array('Accept' => 'application/json')));
+    if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) !== 200) { set_transient('seoroom_update_info', null, 6 * HOUR_IN_SECONDS); return null; }
+    $body = json_decode(wp_remote_retrieve_body($resp));
+    set_transient('seoroom_update_info', $body ?: null, 6 * HOUR_IN_SECONDS);
+    return $body ?: null;
+}
+// After updating, clear the cached info + WP update cache so the new version registers immediately.
+add_action('upgrader_process_complete', function($upgrader, $hook_extra) {
+    if (isset($hook_extra['type']) && $hook_extra['type'] === 'plugin') { delete_transient('seoroom_update_info'); }
+}, 10, 2);
 
 // ============ SECURITY HEADERS ============
 // Output security response headers based on saved options (set from the dashboard Security Audit).
@@ -1292,6 +1351,11 @@ add_action('rest_api_init', function() {
         'callback' => 'sropt_clear_cache_route',
         'permission_callback' => function() { return current_user_can('edit_posts'); },
     ]);
+    register_rest_route('seoroom-opt/v1', '/fix-alt', [
+        'methods' => 'POST',
+        'callback' => 'sropt_fix_alt_route',
+        'permission_callback' => function() { return current_user_can('edit_posts'); },
+    ]);
 });
 function sropt_clear_cache_route($request) {
     $page_id = intval($request->get_param('page_id'));
@@ -1312,6 +1376,113 @@ function sropt_clear_cache_route($request) {
         try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {}
     }
     return rest_ensure_response(['ok' => true, 'cleared' => true, 'page_id' => $page_id]);
+}
+
+// Set alt text reliably from INSIDE WordPress. The attachment's _wp_attachment_image_alt is what
+// Elementor image widgets render, so this works on template/suburb pages the REST API can't reach.
+// Safe + idempotent: only sets alt + clears cache. Body: { page_id, items: [{src, alt}] }.
+function sropt_fix_alt_route($request) {
+    $p = $request->get_json_params();
+    $page_id = intval(isset($p['page_id']) ? $p['page_id'] : 0);
+    $items = (isset($p['items']) && is_array($p['items'])) ? $p['items'] : array();
+    // Filename stem: strip query, size suffix (-1024x683) and extension → matches any rendered variant.
+    $stem = function($u) {
+        $f = strtok(basename((string)$u), '?');
+        return preg_replace('/(-\d+x\d+)?\.[A-Za-z0-9]+$/', '', $f);
+    };
+    $results = array();
+    $media_set = 0;
+
+    // 1) Attachment alt meta — what Elementor outputs by default.
+    global $wpdb;
+    foreach ($items as $it) {
+        $src = isset($it['src']) ? $it['src'] : '';
+        $alt = isset($it['alt']) ? wp_strip_all_tags($it['alt']) : '';
+        if (!$src || !$alt) continue;
+        $aid = attachment_url_to_postid($src);
+        if (!$aid) {
+            $like = '%' . $wpdb->esc_like($stem($src)) . '%';
+            $aid = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key='_wp_attached_file' AND meta_value LIKE %s LIMIT 1", $like
+            ));
+        }
+        if ($aid) {
+            update_post_meta($aid, '_wp_attachment_image_alt', $alt);
+            $media_set++;
+            $results[] = array('src' => $src, 'attachment_id' => $aid, 'where' => 'attachment_meta');
+        } else {
+            $results[] = array('src' => $src, 'attachment_id' => 0, 'where' => 'not_in_media_library');
+        }
+    }
+
+    // 2) Elementor data on the page — set alt on image / background_image widgets by stem match.
+    $el_changed = false;
+    if ($page_id) {
+        $raw = get_post_meta($page_id, '_elementor_data', true);
+        if (!empty($raw)) {
+            $data = json_decode($raw, true);
+            if (is_array($data)) {
+                $walk = function(&$els) use (&$walk, $items, $stem) {
+                    foreach ($els as &$el) {
+                        if (isset($el['settings']) && is_array($el['settings'])) {
+                            foreach (array('image', 'background_image') as $key) {
+                                if (isset($el['settings'][$key]['url'])) {
+                                    $u = $el['settings'][$key]['url'];
+                                    foreach ($items as $it) {
+                                        if (!empty($it['src']) && $stem($u) !== '' && $stem($u) === $stem($it['src'])) {
+                                            $el['settings'][$key]['alt'] = wp_strip_all_tags($it['alt']);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (!empty($el['elements'])) $walk($el['elements']);
+                    }
+                };
+                $walk($data);
+                $new = wp_json_encode($data);
+                if ($new && $new !== $raw) {
+                    update_post_meta($page_id, '_elementor_data', wp_slash($new));
+                    $el_changed = true;
+                }
+            }
+        }
+
+        // 3) Classic/Gutenberg post content <img> tags (stem match → any size variant).
+        $post = get_post($page_id);
+        if ($post && !empty($post->post_content) && strpos($post->post_content, '<img') !== false) {
+            $content = $post->post_content; $orig = $content;
+            foreach ($items as $it) {
+                if (empty($it['src']) || empty($it['alt'])) continue;
+                $needle = preg_quote($stem($it['src']), '/');
+                if ($needle === '') continue;
+                $safe = esc_attr(wp_strip_all_tags($it['alt']));
+                $content = preg_replace_callback('/<img\b[^>]*' . $needle . '[^>]*>/i', function($m) use ($safe) {
+                    $tag = $m[0];
+                    if (preg_match('/\salt\s*=\s*("|\').*?\1/i', $tag)) {
+                        return preg_replace('/\salt\s*=\s*("|\').*?\1/i', ' alt="' . $safe . '"', $tag, 1);
+                    }
+                    return preg_replace('/<img\b/i', '<img alt="' . $safe . '"', $tag, 1);
+                }, $content);
+            }
+            if ($content !== $orig) {
+                wp_update_post(array('ID' => $page_id, 'post_content' => wp_slash($content)));
+            }
+        }
+
+        // 4) Clear caches so the live page regenerates.
+        delete_post_meta($page_id, '_elementor_css');
+        clean_post_cache($page_id);
+        do_action('berqwp_clear_url', get_permalink($page_id));
+    }
+    do_action('berqwp_clear_all_cache');
+    do_action('berqwp_clear_cache');
+    do_action('litespeed_purge_all');
+    do_action('rocket_clean_domain');
+    if (function_exists('wp_cache_flush')) wp_cache_flush();
+    if (class_exists('\\Elementor\\Plugin')) { try { \Elementor\Plugin::$instance->files_manager->clear_cache(); } catch (\Throwable $e) {} }
+
+    return rest_ensure_response(array('ok' => true, 'media_set' => $media_set, 'elementor_changed' => $el_changed, 'results' => $results));
 }
 
 // Style published FAQ <details> accordions to match the site — STATIC CSS in <head> (survives cache/JS optimizers),

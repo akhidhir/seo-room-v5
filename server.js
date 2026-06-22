@@ -47252,6 +47252,41 @@ app.delete('/api/projects/:id/local-intel/services/:name', async (req, res) => {
 });
 
 
+// ==================== PLUGIN AUTO-UPDATE (serve version + zip to client WordPress sites) ====================
+// The seoroom plugin checks /plugin/seoroom/info; if our version is newer, WordPress pulls the zip from
+// /plugin/seoroom/download and updates in place — no per-site reinstall.
+const SEOROOM_PLUGIN_DIR = path.join(__dirname, 'wordpress-plugins', 'seoroom');
+function readSeoroomPluginVersion() {
+  try {
+    const php = fs.readFileSync(path.join(SEOROOM_PLUGIN_DIR, 'seoroom.php'), 'utf8');
+    const m = php.match(/^\s*\*\s*Version:\s*([0-9][0-9.]*)/im);
+    return m ? m[1].trim() : '0';
+  } catch (e) { return '0'; }
+}
+app.get('/plugin/seoroom/info', (req, res) => {
+  const version = readSeoroomPluginVersion();
+  const base = `${req.protocol}://${req.get('host')}`;
+  res.json({
+    name: 'SEO Room', slug: 'seoroom', version,
+    download_url: `${base}/plugin/seoroom/download?v=${version}`,
+    homepage: 'https://theseoroom.com.au', tested: '6.7',
+    changelog: 'Auto-synced from the SEO Room dashboard.',
+  });
+});
+app.get('/plugin/seoroom/download', (req, res) => {
+  try {
+    const archiver = require('archiver');
+    const version = readSeoroomPluginVersion();
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="seoroom-${version}.zip"`);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => { console.error('[plugin-zip]', err.message); try { res.status(500).end(); } catch (e) {} });
+    archive.pipe(res);
+    archive.directory(SEOROOM_PLUGIN_DIR, 'seoroom'); // folder name must be 'seoroom' so WP updates in place
+    archive.finalize();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Static files
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: false }));
 
