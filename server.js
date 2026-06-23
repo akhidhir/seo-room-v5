@@ -20320,10 +20320,19 @@ async function fetchAllWpItems(wpBase, headers, type, extraQuery = '') {
     let batch;
     const raw = await resp.text();
     try { batch = JSON.parse(raw); } catch (e) {
-      const looksHtml = /^\s*<(?:!doctype|html|head|body|\?xml)/i.test(raw.trim());
-      throw new Error(looksHtml
-        ? `${type} crawl blocked: the site returned an HTML page instead of JSON (likely Cloudflare bot-protection or a security plugin like Wordfence blocking the REST API). Allowlist the dashboard, or use the SEO Room connector plugin.`
-        : `WordPress returned invalid JSON for ${type} page ${pageNum}`);
+      const t = raw.trim();
+      const snippet = t.slice(0, 220).replace(/\s+/g, ' ');
+      const looksMarkup = /<(?:!doctype|html|head|body|br|b>|div|p>|script|title)/i.test(t.slice(0, 400));
+      // Some servers leak a PHP notice/warning before the JSON — strip leading markup and retry once.
+      const firstBracket = t.search(/[\[{]/);
+      if (firstBracket > 0) {
+        try { batch = JSON.parse(t.slice(firstBracket)); } catch (e2) {}
+      }
+      if (!batch) {
+        throw new Error(looksMarkup
+          ? `${type} crawl blocked: the site returned HTML/markup instead of JSON (Cloudflare bot-protection, a security plugin like Wordfence, or a PHP warning leaking into the REST output). First bytes: "${snippet}"`
+          : `WordPress returned invalid JSON for ${type} page ${pageNum}. First bytes: "${snippet}"`);
+      }
     }
     if (!Array.isArray(batch) || batch.length === 0) break;
     items.push(...batch);
