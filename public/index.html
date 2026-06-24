@@ -9718,6 +9718,19 @@
       const [shortlist, setShortlist] = React.useState([]);
       const [saved, setSaved] = React.useState([]);
       const [source, setSource] = React.useState('');
+      const [categories, setCategories] = React.useState([]);
+      const [activeCat, setActiveCat] = React.useState(null); // null = All / uncategorised target
+      const [newCat, setNewCat] = React.useState('');
+      const loadCategories = async () => { try { const d = await api('/template-categories'); if (d && d.categories) setCategories(d.categories); } catch (e) {} };
+      const createCategory = async () => {
+        const name = newCat.trim(); if (!name) return;
+        try { const r = await api('/template-categories', { method: 'POST', body: { name } }); if (r && r.category) { setCategories(prev => prev.concat(r.category)); setActiveCat(r.category.id); setNewCat(''); } else if (r && r.error) alert(r.error); } catch (e) { alert('Create failed: ' + e.message); }
+      };
+      const deleteCategory = async (id) => {
+        if (!window.confirm('Delete this category? Shortlisted items stay but become uncategorised.')) return;
+        try { await api('/template-categories/' + id, { method: 'DELETE' }); setCategories(prev => prev.filter(c => c.id !== id)); if (activeCat === id) setActiveCat(null); loadShortlist(); } catch (e) {}
+      };
+      const activeCatName = (categories.find(c => c.id === activeCat) || {}).name;
       const [excluded, setExcluded] = React.useState(() => { try { return JSON.parse(localStorage.getItem('tplDiscExcluded') || '[]'); } catch (e) { return []; } });
       const exclude = (it) => {
         const next = excluded.includes(it.id) ? excluded : excluded.concat(it.id);
@@ -9745,7 +9758,7 @@
           }
         } catch (e) {}
       };
-      React.useEffect(() => { loadShortlist(); restoreLastSearch(); }, []);
+      React.useEffect(() => { loadShortlist(); restoreLastSearch(); loadCategories(); }, []);
 
       const runTest = async (it) => {
         const testUrl = it.demo_url || it.preview_url;
@@ -9785,10 +9798,12 @@
           setShortlist(prev => prev.filter(i => i !== id));
           setSaved(prev => prev.filter(x => x.id !== id));
           try { await api('/template-shortlist/' + id, { method: 'DELETE' }); } catch (e) {}
+          loadCategories();
         } else {
           setShortlist(prev => prev.concat(id));
-          setSaved(prev => prev.find(x => x.id === id) ? prev : prev.concat({ ...it, niche: niche.trim() }));
-          try { const r = await api('/template-shortlist', { method: 'POST', body: { item: it, niche: niche.trim() } }); if (r && r.error) alert('Save failed: ' + r.error); } catch (e) { alert('Save failed: ' + e.message); }
+          setSaved(prev => prev.find(x => x.id === id) ? prev : prev.concat({ ...it, niche: niche.trim(), category_id: activeCat }));
+          try { const r = await api('/template-shortlist', { method: 'POST', body: { item: it, niche: niche.trim(), category_id: activeCat } }); if (r && r.error) alert('Save failed: ' + r.error); } catch (e) { alert('Save failed: ' + e.message); }
+          loadCategories();
         }
       };
       const vColor = { pass: '#22c55e', warn: '#f59e0b', reject: '#ef4444' };
@@ -9812,10 +9827,30 @@
             {excluded.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>{excluded.length} hidden · <a onClick={() => { setExcluded([]); try { localStorage.removeItem('tplDiscExcluded'); } catch (e) {} }} style={{ color: '#8b5cf6', cursor: 'pointer' }}>reset</a></div>}
           </div>
 
-          {saved.length > 0 && (
+          {/* Categories — create one, then search and shortlist into it */}
+          <div style={{ ...card, marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Categories</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              {(() => { const cs = (a) => ({ padding: '7px 13px', borderRadius: 20, border: '1px solid ' + (a ? '#8b5cf6' : 'var(--border)'), background: a ? '#8b5cf6' : 'transparent', color: a ? '#fff' : 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' });
+                return <React.Fragment>
+                  <button onClick={() => setActiveCat(null)} style={cs(activeCat === null)}>All ({saved.length})</button>
+                  {categories.map(c => (
+                    <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                      <button onClick={() => setActiveCat(c.id)} style={cs(activeCat === c.id)}>{c.name} ({c.count})</button>
+                      <button onClick={() => deleteCategory(c.id)} title="Delete category" style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 12 }}><i className="fas fa-times"></i></button>
+                    </span>
+                  ))}
+                </React.Fragment>; })()}
+              <input value={newCat} onChange={e => setNewCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') createCategory(); }} placeholder="New category…" style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, width: 160 }} />
+              <button onClick={createCategory} style={{ padding: '7px 13px', border: 'none', borderRadius: 8, background: '#8b5cf6', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>+ Add</button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>{activeCat ? <React.Fragment>Templates you shortlist will be saved into <b style={{ color: '#8b5cf6' }}>{activeCatName}</b>.</React.Fragment> : 'Select or create a category, then shortlist templates into it. (“All” saves them uncategorised.)'}</div>
+          </div>
+
+          {(() => { const shownSaved = activeCat ? saved.filter(s => s.category_id === activeCat) : saved; return shownSaved.length > 0 && (
             <div style={{ ...card, marginBottom: 18, borderColor: '#22c55e' }}>
-              <div style={{ fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Shortlisted ({saved.length})</div>
-              {saved.map(s => (
+              <div style={{ fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', fontSize: 13, color: 'var(--text2)' }}>Shortlisted{activeCat ? ' — ' + activeCatName : ''} ({shownSaved.length})</div>
+              {shownSaved.map(s => (
                 <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
                   <i className="fas fa-bookmark" style={{ color: '#22c55e' }}></i>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -9828,7 +9863,7 @@
                 </div>
               ))}
             </div>
-          )}
+          ); })()}
 
           {items.length > 0 && source && (
             <div style={{ fontSize: 13, marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: source === 'template-kits' ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)', color: source === 'template-kits' ? '#22c55e' : '#f59e0b', border: '1px solid ' + (source === 'template-kits' ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)') }}>

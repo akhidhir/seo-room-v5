@@ -498,6 +498,15 @@ async function initDb() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    // Template Discovery categories — create a category, then search + shortlist into it
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS template_categories (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`ALTER TABLE template_shortlist ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES template_categories(id) ON DELETE SET NULL`).catch(() => {});
 
     // Last Template Discovery search batch (single global row) — so results survive reload/navigation
     await client.query(`
@@ -12918,20 +12927,50 @@ app.post('/api/projects/:projectId/template-to-copywriter', async (req, res) => 
 });
 
 // Template Discovery shortlist — list / add / remove
+// ── Template Discovery categories ──
+app.get('/api/template-categories', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT c.id, c.name, c.created_at, COUNT(s.item_id)::int AS count
+         FROM template_categories c
+         LEFT JOIN template_shortlist s ON s.category_id = c.id
+        GROUP BY c.id ORDER BY c.created_at ASC`);
+    res.json({ categories: r.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/template-categories', async (req, res) => {
+  try {
+    const name = (req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Category name required' });
+    const r = await pool.query('INSERT INTO template_categories (name) VALUES ($1) RETURNING id, name, created_at', [name]);
+    res.json({ category: { ...r.rows[0], count: 0 } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/template-categories/:id', async (req, res) => {
+  try {
+    // Items in this category keep their shortlist row but become uncategorised (ON DELETE SET NULL).
+    await pool.query('DELETE FROM template_categories WHERE id = $1', [parseInt(req.params.id, 10)]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/template-shortlist', async (req, res) => {
   try {
-    const r = await pool.query('SELECT item_id, niche, data, created_at FROM template_shortlist ORDER BY created_at DESC LIMIT 200');
-    res.json({ items: r.rows.map(x => ({ ...x.data, id: Number(x.item_id), niche: x.niche, created_at: x.created_at })) });
+    const catFilter = req.query.category_id ? ' WHERE category_id = $1' : '';
+    const params = req.query.category_id ? [parseInt(req.query.category_id, 10)] : [];
+    const r = await pool.query(`SELECT item_id, niche, data, category_id, created_at FROM template_shortlist${catFilter} ORDER BY created_at DESC LIMIT 500`, params);
+    res.json({ items: r.rows.map(x => ({ ...x.data, id: Number(x.item_id), niche: x.niche, category_id: x.category_id, created_at: x.created_at })) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/template-shortlist', async (req, res) => {
   try {
-    const { item, niche } = req.body || {};
+    const { item, niche, category_id } = req.body || {};
     if (!item || !item.id) return res.status(400).json({ error: 'item with id required' });
+    const cat = category_id ? parseInt(category_id, 10) : null;
     await pool.query(
-      `INSERT INTO template_shortlist (item_id, niche, data) VALUES ($1,$2,$3)
-       ON CONFLICT (item_id) DO UPDATE SET niche = EXCLUDED.niche, data = EXCLUDED.data`,
-      [item.id, niche || '', JSON.stringify(item)]
+      `INSERT INTO template_shortlist (item_id, niche, data, category_id) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (item_id) DO UPDATE SET niche = EXCLUDED.niche, data = EXCLUDED.data, category_id = EXCLUDED.category_id`,
+      [item.id, niche || '', JSON.stringify(item), cat]
     );
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
