@@ -15194,6 +15194,60 @@ app.get('/api/rc/locations', async (req, res) => {
 
 // ==================== GBP OPTIMISE — read-only audit (scores the profile vs local ranking factors) ====================
 // Reads the stored GBP profile (+ posts/reviews caches) and grades it. No writes — diagnosis only.
+// Fetch a project's GBP profile LIVE from RatingCaptain (server-side, dashboard-triggered — no MCP needed)
+// and store it as rc_profile + rc_sync + gbp_profile so the read-only GBP Optimise audit can grade it.
+async function syncRcProfileFromApi(projectId) {
+  const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+  if (!project) return { ok: false, error: 'Project not found' };
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return { ok: false, error: 'RatingCaptain is not configured (RC_API_TOKEN missing). Add it in Railway environment variables.' };
+  const gbpLocationId = project.gbp_location_id;
+  if (!gbpLocationId) return { ok: false, error: 'No GBP Location ID set. Open Project Settings → GBP and select the RatingCaptain location, then sync.' };
+  const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json' };
+  const RC_BASE = 'https://local.ratingcaptain.com/api';
+  const numericId = String(gbpLocationId).replace(/^locations\//, '');
+  let profile = null, reviews_stats = null, posts = null;
+  const [pr, ex] = await Promise.allSettled([
+    fetch(`${RC_BASE}/locations/${numericId}`, { headers: rcHeaders, signal: AbortSignal.timeout(20000) }),
+    fetch(`${RC_BASE}/locations/extended?current_page=1&type=active_profiles`, { headers: rcHeaders, signal: AbortSignal.timeout(20000) }),
+  ]);
+  if (pr.status === 'fulfilled' && pr.value.ok) { try { profile = await pr.value.json(); } catch {} }
+  if (ex.status === 'fulfilled' && ex.value.ok) {
+    try {
+      const ed = await ex.value.json();
+      const loc = (ed.data || []).find(l => l.location_id === gbpLocationId || String(l.id) === numericId || l.location_id === numericId);
+      if (loc) reviews_stats = { total_reviews: loc.reviews_amount || 0, average_rating: loc.rating || 0, reply_rate: 0, replied_count: 0, unreplied_count: 0 };
+    } catch {}
+  }
+  if (!profile || !profile.title) return { ok: false, error: 'RatingCaptain returned no profile for this location. Confirm the GBP Location ID matches an active RC profile.' };
+  try {
+    const pp = await fetch(`${RC_BASE}/posts?location_id=${encodeURIComponent(gbpLocationId)}&status=published&page=1&per_page=50`, { headers: rcHeaders, signal: AbortSignal.timeout(20000) });
+    if (pp.ok) { const pd = await pp.json(); const arr = pd.data || pd.posts || []; posts = { count: arr.length, published_posts: arr }; }
+  } catch {}
+  const rcData = { location_id: gbpLocationId, profile, reviews_stats, posts, synced_at: new Date().toISOString() };
+  const upsert = (kind, cfg) => pool.query(
+    `INSERT INTO project_integrations (project_id, kind, config, status, updated_at) VALUES ($1,$2,$3,'connected',NOW())
+     ON CONFLICT (project_id, kind) DO UPDATE SET config=$3, status='connected', updated_at=NOW()`, [projectId, kind, JSON.stringify(cfg)]);
+  await upsert('rc_profile', rcData);
+  await upsert('rc_sync', { reviews_stats, posts, synced_at: new Date().toISOString() });
+  const hoursA = (profile.regularHours?.periods || []); const serviceItems = (profile.serviceItems || []); const serviceAreas = (profile.serviceArea?.places?.placeInfos || []);
+  await upsert('gbp_profile', {
+    business: { name: profile.title || project.business_name || '' }, source: 'rating_captain',
+    address: [...(profile.storefrontAddress?.addressLines || []), profile.storefrontAddress?.locality, profile.storefrontAddress?.administrativeArea, profile.storefrontAddress?.postalCode].filter(Boolean).join(', '),
+    phone: profile.phoneNumbers?.primaryPhone || null, website: profile.websiteUri || null, description: profile.profile?.description || null,
+    categories: [profile.categories?.primaryCategory?.displayName, ...(profile.categories?.additionalCategories || []).map(c => c.displayName)].filter(Boolean),
+    hours: hoursA.map(h => ({ day: h.openDay, hours: `${h.openTime?.hours || 0}:${String(h.openTime?.minutes || 0).padStart(2, '0')}-${h.closeTime?.hours || 0}:${String(h.closeTime?.minutes || 0).padStart(2, '0')}` })),
+    services: serviceItems.map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean),
+    service_areas: serviceAreas.map(s => s.placeName), place_id: profile.metadata?.placeId || null, reviews: reviews_stats || {}, posts_count: posts?.count || 0,
+  });
+  return { ok: true, business: profile.title };
+}
+// Explicit "Sync from RatingCaptain" button on the GBP Optimise page
+app.post('/api/projects/:projectId/gbp-optimise/sync', async (req, res) => {
+  try { const r = await syncRcProfileFromApi(parseInt(req.params.projectId)); if (!r.ok) return res.status(400).json(r); res.json(r); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/projects/:projectId/gbp-optimise/audit', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   try {
@@ -15203,10 +15257,17 @@ app.get('/api/projects/:projectId/gbp-optimise/audit', async (req, res) => {
     // Source 1: full Google-shape profile (kind='rc_profile' → config.profile), Source 2: clean gbp_profile
     const intg = await pool.query(`SELECT kind, config FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_profile','gbp_profile')`, [projectId]);
     const byKind = {}; for (const r of intg.rows) byKind[r.kind] = (typeof r.config === 'string' ? JSON.parse(r.config) : r.config);
-    const rcProfile = byKind.rc_profile?.profile || null;          // full GBP API shape
-    const gbp = byKind.gbp_profile || null;                         // flattened convenience shape
+    let rcProfile = byKind.rc_profile?.profile || null;          // full GBP API shape
+    let gbp = byKind.gbp_profile || null;                         // flattened convenience shape
     if (!rcProfile && !gbp) {
-      return res.json({ connected: false, error: 'No GBP profile synced for this project yet. Sync RatingCaptain / set the GBP Location ID in Project Settings.' });
+      // Nothing stored — try syncing live from RatingCaptain right here (dashboard-driven, no MCP).
+      const synced = await syncRcProfileFromApi(projectId);
+      if (!synced.ok) return res.json({ connected: false, error: synced.error });
+      const intg2 = await pool.query(`SELECT kind, config FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_profile','gbp_profile')`, [projectId]);
+      for (const r of intg2.rows) byKind[r.kind] = (typeof r.config === 'string' ? JSON.parse(r.config) : r.config);
+      rcProfile = byKind.rc_profile?.profile || null;
+      gbp = byKind.gbp_profile || null;
+      if (!rcProfile && !gbp) return res.json({ connected: false, error: 'Synced from RatingCaptain but no profile data was returned.' });
     }
 
     // Normalise the fields we grade from whichever source we have

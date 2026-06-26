@@ -10976,10 +10976,19 @@
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [err, setErr] = useState('');
+      const [syncing, setSyncing] = useState(false);
       const load = () => {
         if (!project?.id) return;
         setLoading(true); setErr('');
         api(`/projects/${project.id}/gbp-optimise/audit`).then(d => { if (d.error && !d.connected) setErr(d.error); setData(d); }).catch(e => setErr(e.message)).finally(() => setLoading(false));
+      };
+      const syncRc = async () => {
+        if (!project?.id) return;
+        setSyncing(true); setErr('');
+        try { const r = await api(`/projects/${project.id}/gbp-optimise/sync`, { method: 'POST' }); if (r && r.error) setErr(r.error); }
+        catch (e) { setErr(e.message); }
+        setSyncing(false);
+        load();
       };
       useEffect(() => { load(); }, [project?.id]);
 
@@ -10991,7 +11000,10 @@
         <div style={{ padding: '24px 32px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-map-marker-alt" style={{ marginRight: 10, color: '#14b8a6' }} />GBP Optimise</h2>
-            <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Re-audit</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn" onClick={syncRc} disabled={syncing || loading} style={{ fontSize: 13, background: '#14b8a6', color: '#fff', border: 'none' }}><i className={syncing ? 'fas fa-spinner fa-spin' : 'fas fa-download'} style={{ marginRight: 6 }} />{syncing ? 'Syncing…' : 'Sync from RatingCaptain'}</button>
+              <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Re-audit</button>
+            </div>
           </div>
           <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors. Read-only — applying fixes comes next.</p>
 
