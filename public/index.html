@@ -7113,12 +7113,13 @@
       };
 
       const sevOrder = { Critical: 0, critical: 0, High: 1, high: 1, Medium: 2, medium: 2, Low: 3, low: 3 };
-      // Fixed canonical tab set — every project shows the SAME category tabs (empty ones included), so the bar is identical everywhere.
-      const WS_CANONICAL_CATS = ['Site Health', 'Content Quality', 'Alt Text', 'Core Web Vitals', 'Schema & Data'];
+      // Specific categories in a sensible order (only those present) so each issue type is clear, not a generic bucket.
+      const WS_CAT_ORDER = ['Site Health', 'Indexing & Crawl', 'Internal Linking', 'Broken Links', 'Redirects', 'Canonicals', 'On-Page Tags', 'Content Quality', 'Alt Text', 'Schema & Data', 'Core Web Vitals', 'HTTPS & Security', 'Mobile'];
       const categories = useMemo(() => {
-        const present = new Set(findings.map(f => f.category));
-        const extras = [...present].filter(c => c && !WS_CANONICAL_CATS.includes(c)).sort();
-        return [...WS_CANONICAL_CATS, ...extras];
+        const present = [...new Set(findings.map(f => f.category))].filter(Boolean);
+        const ordered = WS_CAT_ORDER.filter(c => present.includes(c));
+        const extras = present.filter(c => !WS_CAT_ORDER.includes(c)).sort();
+        return [...ordered, ...extras];
       }, [findings]);
 
       const sorted = useMemo(() => {
@@ -7144,7 +7145,7 @@
         return list;
       }, [findings, filterSev, filterCat, filterStatus, searchQ, sortCol, sortDir]);
 
-      const catColors = { 'Site Health': '#ef4444', 'Alt Text': '#f97316', 'Content Quality': '#8b5cf6', 'Schema & Data': '#06b6d4', 'Internal Links': '#14b8a6' };
+      const catColors = { 'Site Health': '#ef4444', 'Alt Text': '#f97316', 'Content Quality': '#8b5cf6', 'Schema & Data': '#06b6d4', 'Internal Linking': '#14b8a6', 'Indexing & Crawl': '#eab308', 'Broken Links': '#ef4444', 'Redirects': '#f59e0b', 'Canonicals': '#a855f7', 'On-Page Tags': '#3b82f6', 'Core Web Vitals': '#10b981', 'HTTPS & Security': '#22c55e', 'Mobile': '#ec4899' };
 
       // Link audit categories to their fix sub-pages (PDCA: audit detects → fix page resolves → re-audit verifies)
       const catFixPages = {
@@ -7855,14 +7856,9 @@
                               style={{ fontSize: 13, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)', whiteSpace: 'nowrap' }}>
                               <i className="fas fa-tachometer-alt" style={{ marginRight: 4 }} />Fix Speed
                             </button>
-                          ) : f.category === 'Site Health' ? (
+                          ) : ['Site Health', 'Indexing & Crawl', 'Internal Linking', 'Broken Links', 'Redirects', 'Canonicals', 'HTTPS & Security', 'Mobile', 'On-Page Tags'].includes(f.category) ? (
                             <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }}
                               style={{ fontSize: 13, background: 'rgba(99,102,241,0.1)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.3)', whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-list-ol" style={{ marginRight: 4 }} />View Steps
-                            </button>
-                          ) : f.category === 'Crawlability' ? (
-                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); setReviewFinding(f); }}
-                              style={{ fontSize: 13, background: 'rgba(249,115,22,0.1)', color: '#f97316', border: '1px solid rgba(249,115,22,0.3)', whiteSpace: 'nowrap' }}>
                               <i className="fas fa-list-ol" style={{ marginRight: 4 }} />View Steps
                             </button>
                           ) : (

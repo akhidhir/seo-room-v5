@@ -9135,10 +9135,28 @@ app.get('/api/projects/:id/audit-findings', async (req, res) => {
       return validCats[0] || rawCat || 'General';
     }
 
+    // Website findings: derive a SPECIFIC category from the finding itself (title/desc/type) so the user
+    // sees exactly what each issue is — not everything flattened into the generic "Technical SEO" bucket.
+    function websiteSubCategory(f) {
+      const t = `${f.title || ''} ${f.description || ''} ${f.category || ''} ${f.fix_type || ''}`.toLowerCase();
+      if (/missing alt|alt text/.test(t)) return 'Alt Text';
+      if (/schema|structured data|json-?ld/.test(t)) return 'Schema & Data';
+      if (/lcp|cls|\btbt\b|core web|pagespeed|render-?block|page speed/.test(t)) return 'Core Web Vitals';
+      if (/internal link|orphan|outbound link|no\s+links/.test(t)) return 'Internal Linking';
+      if (/broken link|dead link|\b404\b/.test(t)) return 'Broken Links';
+      if (/redirect|\b301\b|\b302\b|redirect chain/.test(t)) return 'Redirects';
+      if (/canonical/.test(t)) return 'Canonicals';
+      if (/noindex|not indexed|indexing|crawl|sitemap|robots/.test(t)) return 'Indexing & Crawl';
+      if (/thin content|word count|content quality|expand|duplicate title/.test(t)) return 'Content Quality';
+      if (/meta title|title tag|meta desc|missing h1|\bh1\b|focus keyword|too long|too short/.test(t)) return 'On-Page Tags';
+      if (/https|ssl|mixed content|insecure/.test(t)) return 'HTTPS & Security';
+      if (/mobile|viewport|responsive/.test(t)) return 'Mobile';
+      return 'Site Health';
+    }
     const findings = result.rows.map(f => {
       const normPillar = PILLAR_MAP[(f.pillar || '').toLowerCase()] || f.pillar;
       const display = PILLAR_DISPLAY[normPillar] || 'Website';
-      const normCategory = normCat(f.category, display);
+      const normCategory = display === 'Website' ? websiteSubCategory(f) : normCat(f.category, display);
       if (normCategory === null) return null; // drop junk
       return { ...f, pillar: normPillar, category: normCategory };
     }).filter(Boolean);
