@@ -6927,7 +6927,7 @@
       // Fix Internal Links: background job (AI picks source pages, adds inbound links, marks findings fixed)
       const [linkJobProgress, setLinkJobProgress] = useState(null);
       const linkJobPollRef = React.useRef(false);
-      const isInternalLinkFinding = f => (f.category || '') === 'Site Health' && /[—–-]\s*(no internal links|only \d+ internal link)/i.test(f.title || '');
+      const isInternalLinkFinding = f => (f.category || '') === 'Internal Linking' || /[—–-]\s*(no internal links|only \d+ internal link)/i.test(f.title || '');
       const pollLinkJob = async () => {
         if (linkJobPollRef.current) return;
         linkJobPollRef.current = true;
@@ -7723,6 +7723,14 @@
                         <td colSpan={7} style={{ padding: '12px 14px', fontWeight: 700, fontSize: 16, color: cc, borderBottom: `2px solid ${cc}30` }}>
                           {WS_CAT_LABEL(f.category)} <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)', marginLeft: 10 }}>({sorted.filter(s => s.category === f.category).length} issues)</span>
                           {typeof catFixPages !== 'undefined' && catFixPages[f.category] && setActiveTab && <button onClick={(e) => { e.stopPropagation(); setActiveTab(catFixPages[f.category].page); }} style={{ marginLeft: 12, background: 'none', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 5, padding: '3px 10px', fontSize: 11, color: '#6366f1', cursor: 'pointer', verticalAlign: 'middle' }}><i className={`fas ${catFixPages[f.category].icon}`} style={{ marginRight: 4, fontSize: 10 }} />{catFixPages[f.category].label} <i className="fas fa-arrow-right" style={{ fontSize: 8, marginLeft: 2 }} /></button>}
+                          {(() => {
+                            const fixBtn = (color, icon, label, onClick) => <button onClick={(e) => { e.stopPropagation(); onClick(); }} style={{ marginLeft: 12, background: color + '20', border: '1px solid ' + color + '55', borderRadius: 5, padding: '4px 12px', fontSize: 12, fontWeight: 700, color, cursor: 'pointer', verticalAlign: 'middle' }}><i className={'fas ' + icon} style={{ marginRight: 5 }} />{label}</button>;
+                            const openF = sorted.filter(s => s.category === f.category && s.status !== 'fixed' && s.status !== 'rejected');
+                            if (f.category === 'Internal Linking') { const n = openF.filter(isInternalLinkFinding).length; if (n) return fixBtn('#22c55e', 'fa-link', `Fix all internal links (${n})`, fixInternalLinks); }
+                            if (f.category === 'Schema & Data') { const n = openF.filter(isAutoFixable).length; if (n) return fixBtn('#06b6d4', 'fa-wand-magic-sparkles', `Fix all schema (${n})`, fixAllSchema); }
+                            if (f.category === 'Alt Text') { const n = openF.filter(isAltTextFixable).length; if (n) return fixBtn('#f97316', 'fa-image', `Fix all alt text (${n})`, fixAllAltText); }
+                            return null;
+                          })()}
                         </td></tr>),
                       <tr style={{ borderBottom: '1px solid var(--border)', background: selected.has(f.id) ? 'rgba(99,102,241,0.08)' : 'transparent', cursor: 'pointer' }}
                         onClick={(e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setReviewFinding(f); }}>
