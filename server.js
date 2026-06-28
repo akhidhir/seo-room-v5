@@ -34447,8 +34447,9 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
           const textContent = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           const wordCount = textContent.split(/\s+/).length;
 
-          // HTTPS check
-          const isHttps = page.url.startsWith('https://');
+          // HTTPS check — base it on the site's protocol (baseUrl) so a malformed/relative page URL can't
+          // produce a false "not on HTTPS" flag. If the site is served over https, its pages are https.
+          const isHttps = /^https:/i.test(baseUrl) || /^https:/i.test(String(page.url || ''));
 
           // Redirect check
           const wasRedirected = finalUrl !== page.url;
@@ -34465,8 +34466,15 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
           const hasFAQSection = /<h[1-4][^>]*>[^<]*(faq|frequently asked|common questions)[^<]*<\/h[1-4]>/i.test(html)
             || /<(section|div)[^>]*(id|class)="[^"]*faq[^"]*"[^>]*>/i.test(html);
 
+          // Normalise path to a real pathname even if slug/url arrived as a full URL (prevents doubled
+          // "https://site/https://site/..." display in the findings list).
+          const cleanPath = (() => {
+            const raw = String(page.slug || page.url || '');
+            const m = raw.match(/^https?:\/\/[^/]+(\/.*)?$/i);
+            return m ? (m[1] || '/') : ('/' + raw.replace(/^\/+/, ''));
+          })();
           return {
-            url: page.url, path: page.slug || page.url.replace(baseUrl, '') || '/', title: page.title,
+            url: page.url, path: cleanPath, title: page.title,
             statusCode, elapsed, finalUrl, wasRedirected,
             metaTitle, metaTitleLength: metaTitle.length,
             metaDesc, metaDescLength: metaDesc.length,
