@@ -10975,12 +10975,48 @@
       );
     }
 
-    // ============ GBP OPTIMISE (read-only audit) ============
+    // ============ GBP OPTIMISE (audit + AI auto-optimise via RatingCaptain) ============
     function GBPOptimisePage({ project }) {
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [err, setErr] = useState('');
       const [syncing, setSyncing] = useState(false);
+      // Auto-optimise modal: draft → review → publish
+      const [opt, setOpt] = useState(null); // { type, label } when open
+      const [drafting, setDrafting] = useState(false);
+      const [draft, setDraft] = useState(null); // { current, proposed }
+      const [editVal, setEditVal] = useState('');
+      const [publishing, setPublishing] = useState(false);
+      const [optResult, setOptResult] = useState(null);
+      // Map a finding to an optimisation type the backend understands (null = not auto-fixable here)
+      const optType = (f) => {
+        const t = ((f.label || '') + ' ' + (f.detail || '')).toLowerCase();
+        if (/description/.test(t)) return 'description';
+        if (/google post|no post|posting/.test(t)) return 'post';
+        if (/secondary categor|categor/.test(t)) return 'categories';
+        if (/service/.test(t)) return 'services';
+        return null;
+      };
+      const optTitle = { description: 'Optimise description', post: 'Create Google Post', categories: 'Add categories', services: 'Add services' };
+      const startOptimise = async (type, label) => {
+        setOpt({ type, label }); setDraft(null); setEditVal(''); setOptResult(null); setDrafting(true);
+        try {
+          const r = await api(`/projects/${project.id}/gbp-optimise/draft`, { method: 'POST', body: { type } });
+          if (r && r.error) { setOptResult({ ok: false, msg: r.error }); }
+          else { setDraft(r); setEditVal(r.proposed || ''); }
+        } catch (e) { setOptResult({ ok: false, msg: e.message }); }
+        setDrafting(false);
+      };
+      const publishOptimise = async () => {
+        if (!opt || !editVal.trim()) return;
+        setPublishing(true); setOptResult(null);
+        try {
+          const r = await api(`/projects/${project.id}/gbp-optimise/publish`, { method: 'POST', body: { type: opt.type, value: editVal } });
+          if (r && r.ok) { setOptResult({ ok: true, msg: 'Published to your Google Business Profile via RatingCaptain.' }); setTimeout(() => { setOpt(null); load(); }, 1400); }
+          else { setOptResult({ ok: false, msg: (r && r.error) || 'Publish failed', detail: r && r.detail }); }
+        } catch (e) { setOptResult({ ok: false, msg: e.message }); }
+        setPublishing(false);
+      };
       const load = () => {
         if (!project?.id) return;
         setLoading(true); setErr('');
@@ -11009,7 +11045,7 @@
               <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Re-audit</button>
             </div>
           </div>
-          <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors. Read-only — applying fixes comes next.</p>
+          <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors, then auto-optimises each gap via RatingCaptain — you review and edit every change before it publishes.</p>
 
           {loading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }} />Auditing profile…</div>}
           {!loading && err && <div style={{ padding: 16, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, color: '#f59e0b', fontSize: 14 }}><i className="fas fa-circle-info" style={{ marginRight: 8 }} />{err}</div>}
@@ -11061,20 +11097,67 @@
                     <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: factorColor[factor] || 'var(--text2)', marginBottom: 8 }}>
                       <i className="fas fa-location-crosshairs" style={{ marginRight: 6 }} />{factor} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({items.length})</span>
                     </div>
-                    {items.map((f, i) => (
+                    {items.map((f, i) => { const ot = optType(f); return (
                       <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', background: 'var(--card)', border: '1px solid var(--border)', borderLeft: `3px solid ${sevColor[f.severity]}`, borderRadius: 8, padding: '12px 16px', marginBottom: 8 }}>
                         <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: sevColor[f.severity], background: sevColor[f.severity] + '22', padding: '3px 8px', borderRadius: 4, marginTop: 2, whiteSpace: 'nowrap' }}>{f.severity}</span>
-                        <div>
+                        <div style={{ flex: 1 }}>
                           <div style={{ fontSize: 14, fontWeight: 600 }}>{f.label}</div>
                           <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{f.detail}</div>
                           <div style={{ fontSize: 13, color: '#22c55e', marginTop: 4 }}><i className="fas fa-lightbulb" style={{ marginRight: 6 }} />{f.recommendation}</div>
                         </div>
+                        {ot && <button onClick={() => startOptimise(ot, f.label)} style={{ alignSelf: 'center', background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 7, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }} />Auto-optimise</button>}
                       </div>
-                    ))}
+                    ); })}
                   </div>
                 ))}
             </>;
           })()}
+
+          {/* Auto-optimise: review-before-publish modal */}
+          {opt && (
+            <div onClick={() => !publishing && setOpt(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+              <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, width: '100%', maxWidth: 720, maxHeight: '88vh', overflow: 'auto', padding: 22 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <h3 style={{ margin: 0, fontSize: 18 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 8, color: '#14b8a6' }} />{optTitle[opt.type] || 'Optimise'}</h3>
+                  <button onClick={() => !publishing && setOpt(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', fontSize: 18, cursor: 'pointer' }}>✕</button>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 14 }}>Review and edit before it publishes to your Google Business Profile. Nothing is sent until you click Publish.</div>
+
+                {drafting && <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }} />Drafting with AI…</div>}
+
+                {!drafting && draft && (
+                  <React.Fragment>
+                    {draft.current ? (
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: '#ef4444', marginBottom: 4 }}>Current</div>
+                        <div style={{ fontSize: 13, color: 'var(--text2)', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 8, padding: '10px 12px', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{draft.current}</div>
+                      </div>
+                    ) : null}
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: '#22c55e', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}><span>Proposed (editable)</span><span style={{ color: 'var(--text3)' }}>{editVal.length} chars</span></div>
+                      <textarea value={editVal} onChange={e => setEditVal(e.target.value)} rows={opt.type === 'post' || opt.type === 'description' ? 9 : 4}
+                        style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg)', border: '1px solid rgba(34,197,94,0.4)', borderRadius: 8, color: 'var(--text)', fontSize: 14, padding: '10px 12px', lineHeight: 1.5, resize: 'vertical' }} />
+                    </div>
+                  </React.Fragment>
+                )}
+
+                {optResult && (
+                  <div style={{ marginTop: 10, fontSize: 13, padding: '10px 12px', borderRadius: 8, background: optResult.ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)', color: optResult.ok ? '#22c55e' : '#ef4444', border: '1px solid ' + (optResult.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)') }}>
+                    <i className={'fas ' + (optResult.ok ? 'fa-circle-check' : 'fa-circle-exclamation')} style={{ marginRight: 6 }} />{optResult.msg}
+                    {optResult.detail && <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text3)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{typeof optResult.detail === 'string' ? optResult.detail : JSON.stringify(optResult.detail)}</div>}
+                  </div>
+                )}
+
+                {!drafting && draft && (
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+                    <button onClick={() => !publishing && setOpt(null)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+                    <button onClick={() => startOptimise(opt.type, opt.label)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 6 }} />Regenerate</button>
+                    <button onClick={publishOptimise} disabled={publishing || !editVal.trim()} style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: publishing ? 'wait' : 'pointer' }}>{publishing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Publishing…</> : <><i className="fas fa-cloud-arrow-up" style={{ marginRight: 6 }} />Publish to GBP</>}</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       );
     }

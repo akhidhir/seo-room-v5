@@ -15282,6 +15282,85 @@ app.post('/api/projects/:projectId/gbp-optimise/sync', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── GBP Auto-Optimise: AI-draft a fix → review in the UI → publish to GBP via RatingCaptain ──
+// Draft only — NO writes. Generates a proposed optimisation for one field from the synced profile.
+app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const type = (req.body?.type || '').toLowerCase();
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const intg = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId])).rows[0];
+    const rc = intg ? (typeof intg.config === 'string' ? JSON.parse(intg.config) : intg.config) : null;
+    const profile = rc?.profile || {};
+    const bizName = profile.title || project.business_name || project.name || '';
+    const industry = project.industry || profile.categories?.primaryCategory?.displayName || '';
+    const serviceAreas = (profile.serviceArea?.places?.placeInfos || []).map(p => p.placeName);
+    const services = (profile.serviceItems || []).map(s => s.freeFormServiceItem?.label?.displayName || s.structuredServiceItem?.serviceTypeId || '').filter(Boolean);
+    const curDesc = profile.profile?.description || '';
+    const curCats = [profile.categories?.primaryCategory?.displayName, ...(profile.categories?.additionalCategories || []).map(c => c.displayName)].filter(Boolean);
+
+    const system = 'You write Google Business Profile content that follows Google guidelines strictly: no promotional language, no prices, no phone numbers, no URLs, no emojis. Australian English. Return only the requested content, nothing else.';
+    let current = '', prompt = '';
+    if (type === 'description') {
+      current = curDesc;
+      prompt = `Write a Google Business Profile description for "${bizName}" (${industry}). 600-750 characters. Naturally include the main services (${services.slice(0, 12).join(', ') || industry}) and the areas served (${serviceAreas.slice(0, 10).join(', ')}). Describe what the business does and who it helps. Return ONLY the description text.`;
+    } else if (type === 'post') {
+      prompt = `Write a Google Business Profile post (~1200-1500 characters) for "${bizName}" (${industry}) serving ${serviceAreas.slice(0, 6).join(', ')}. Helpful, locally relevant, one clear topic. Return ONLY the post text.`;
+    } else if (type === 'categories') {
+      current = curCats.join(', ');
+      prompt = `The GBP for "${bizName}" (${industry}) has these categories: ${curCats.join(', ') || 'none'}. Suggest 3-6 additional, highly relevant REAL Google Business Profile secondary categories that fit this business. Return ONLY a comma-separated list of category names.`;
+    } else if (type === 'services') {
+      current = services.join(', ');
+      prompt = `The GBP for "${bizName}" (${industry}) lists these services: ${services.join(', ') || 'none'}. Suggest 6-12 additional relevant services this business likely offers (short names). Return ONLY a comma-separated list.`;
+    } else {
+      return res.status(400).json({ error: 'Unknown optimisation type' });
+    }
+    const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system, messages: [{ role: 'user', content: prompt }] });
+    const proposed = (resp.content?.[0]?.text || '').trim();
+    res.json({ type, current, proposed });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Publish an APPROVED optimisation to GBP via RatingCaptain.
+app.post('/api/projects/:projectId/gbp-optimise/publish', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const type = (req.body?.type || '').toLowerCase();
+  const value = req.body?.value;
+  const RC_TOKEN = process.env.RC_API_TOKEN;
+  if (!RC_TOKEN) return res.status(400).json({ error: 'RatingCaptain not configured (RC_API_TOKEN missing).' });
+  if (!value || !String(value).trim()) return res.status(400).json({ error: 'Nothing to publish.' });
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const gbpLocationId = project.gbp_location_id;
+    if (!gbpLocationId) return res.status(400).json({ error: 'No GBP Location ID set in Project Settings.' });
+    const numericId = String(gbpLocationId).replace(/^locations\//, '');
+    const RC_BASE = 'https://local.ratingcaptain.com/api';
+    const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
+
+    if (type === 'post') {
+      const resp = await fetch(`${RC_BASE}/posts`, { method: 'POST', headers: rcHeaders, body: JSON.stringify({ location_id: gbpLocationId, summary: String(value) }) });
+      const body = await resp.text();
+      if (!resp.ok) return res.status(502).json({ error: `RatingCaptain rejected the post (${resp.status})`, detail: body.slice(0, 400) });
+      return res.json({ ok: true, published: 'post' });
+    }
+
+    // Profile field updates — RC location update. Surface RC's exact response so the endpoint/shape can be verified.
+    let updateBody;
+    if (type === 'description') updateBody = { description: String(value) };
+    else if (type === 'categories') updateBody = { additional_categories: String(value).split(',').map(s => s.trim()).filter(Boolean) };
+    else if (type === 'services') updateBody = { services: String(value).split(',').map(s => s.trim()).filter(Boolean) };
+    else return res.status(400).json({ error: 'Unknown optimisation type' });
+
+    const resp = await fetch(`${RC_BASE}/locations/${numericId}`, { method: 'PUT', headers: rcHeaders, body: JSON.stringify(updateBody) });
+    const body = await resp.text();
+    if (!resp.ok) return res.status(502).json({ error: `RatingCaptain rejected the update (HTTP ${resp.status}) — the update endpoint or field name may differ. Send me this and I'll adjust.`, detail: body.slice(0, 500), endpoint: `PUT /locations/${numericId}`, sent: updateBody });
+    try { await syncRcProfileFromApi(projectId); } catch {}
+    res.json({ ok: true, published: type });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/projects/:projectId/gbp-optimise/audit', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   try {
