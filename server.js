@@ -34620,8 +34620,10 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       });
     }
 
-    // HTTPS check
-    const nonHttps = successPages.filter(p => !p.isHttps);
+    // HTTPS check — if the site itself is served over https (baseUrl is always https://), then no page is
+    // "not on HTTPS". Only flag when the SITE genuinely isn't https. Guards against stale/cached isHttps flags.
+    const siteIsHttps = /^https:/i.test(baseUrl);
+    const nonHttps = siteIsHttps ? [] : successPages.filter(p => !p.isHttps);
     if (nonHttps.length > 0) {
       findings.push({
         pillar: 'website', category: 'Site Health',
@@ -35071,14 +35073,14 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
       avgWordCount, avgResponseTime, totalImages,
       totalMissingAlt, totalFindings: findings.length,
       hasRobotsTxt: !!robotsTxt, hasSitemap: sitemapOk, sitemapUrls,
-      httpsPages: successPages.filter(p => p.isHttps).length,
+      httpsPages: siteIsHttps ? successPages.length : successPages.filter(p => p.isHttps).length,
       noindexPages: noindexPages.length,
       schemaTypes, dupTitles: dupTitles.length,
       thinPages: thinPages.length,
       mobileReady, redirectCount,
       thinPagesList: thinPages.slice(0, 50).map(p => ({ path: p.path, words: p.wordCount })),
       dupTitlesList: dupTitles.slice(0, 50).map(([title, paths]) => ({ title, pages: paths })),
-      nonHttpsList: successPages.filter(p => !p.isHttps).slice(0, 50).map(p => p.path),
+      nonHttpsList: siteIsHttps ? [] : successPages.filter(p => !p.isHttps).slice(0, 50).map(p => p.path),
       nonMobileList: successPages.filter(p => !p.hasViewport).slice(0, 50).map(p => p.path),
     };
 
