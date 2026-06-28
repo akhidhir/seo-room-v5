@@ -999,6 +999,23 @@ async function initDb() {
       )
     `).catch(() => {});
 
+    // GBP profile-field writes queue — RC profile writes only work through the RatingCaptain MCP
+    // (Google OAuth lives there), which the server can't reach. The dashboard queues approved field
+    // changes here; a Claude/Cowork flush pushes them via locations-update-tool and marks them done.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS gbp_pending_writes (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL,
+        location_id TEXT NOT NULL,
+        field TEXT NOT NULL,
+        value TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        error TEXT,
+        queued_at TIMESTAMPTZ DEFAULT NOW(),
+        published_at TIMESTAMPTZ
+      )
+    `).catch(() => {});
+
     // System health monitor — every captured issue across the whole system
     await client.query(`
       CREATE TABLE IF NOT EXISTS system_issues (
@@ -15355,34 +15372,78 @@ app.post('/api/projects/:projectId/gbp-optimise/publish', async (req, res) => {
       return res.json({ ok: true, published: 'post' });
     }
 
-    // Profile field updates — RC location update. Surface RC's exact response so the endpoint/shape can be verified.
-    let updateBody;
-    if (type === 'description') updateBody = { description: String(value) };
-    else if (type === 'categories') updateBody = { additional_categories: String(value).split(',').map(s => s.trim()).filter(Boolean) };
-    else if (type === 'services') updateBody = { services: String(value).split(',').map(s => s.trim()).filter(Boolean) };
-    else return res.status(400).json({ error: 'Unknown optimisation type' });
-
-    // RC's update method/path isn't documented — try the common REST shapes. Stop on the first success,
-    // or on the first NON-method error (e.g. 422) so a wrong field name surfaces instead of being hidden.
-    const tryReqs = [
-      ['PATCH', `/locations/${numericId}`],
-      ['POST', `/locations/${numericId}`],
-      ['PUT', `/locations/${numericId}`],
-      ['POST', `/locations/${numericId}/update`],
-      ['PATCH', `/locations/${numericId}/profile`],
-    ];
-    let ok = false, lastStatus = 0, lastBody = '', usedReq = '';
-    for (const [method, path] of tryReqs) {
-      try {
-        const r = await fetch(`${RC_BASE}${path}`, { method, headers: rcHeaders, body: JSON.stringify(updateBody) });
-        lastStatus = r.status; lastBody = await r.text(); usedReq = `${method} ${path}`;
-        if (r.ok) { ok = true; break; }
-        if (![404, 405, 501].includes(r.status)) break; // right endpoint, different problem (body/field) — report it
-      } catch (e) { lastBody = e.message; usedReq = `${method} ${path}`; }
+    // Profile field updates (description / categories / services) can ONLY be written through the
+    // RatingCaptain MCP (locations-update-tool) — its Google OAuth isn't reachable from this server,
+    // and RC's REST surface (local.ratingcaptain.com/api) has no profile-write endpoint. So queue the
+    // approved value; a Claude/Cowork flush pushes it via the MCP and marks the row published/failed.
+    if (!['description', 'categories', 'services'].includes(type)) {
+      return res.status(400).json({ error: 'Unknown optimisation type' });
     }
-    if (!ok) return res.status(502).json({ error: `RatingCaptain rejected the update (last tried ${usedReq} → HTTP ${lastStatus}). Send me this and I'll fix the exact call.`, detail: lastBody.slice(0, 500), sent: updateBody });
-    try { await syncRcProfileFromApi(projectId); } catch {}
-    res.json({ ok: true, published: type });
+    const locForQueue = `locations/${numericId}`;
+    // Supersede any earlier still-queued write for the same field so the queue holds one row per field.
+    await pool.query(
+      `UPDATE gbp_pending_writes SET status='superseded' WHERE project_id=$1 AND field=$2 AND status='queued'`,
+      [projectId, type]
+    ).catch(() => {});
+    const ins = await pool.query(
+      `INSERT INTO gbp_pending_writes (project_id, location_id, field, value, status)
+       VALUES ($1, $2, $3, $4, 'queued') RETURNING id`,
+      [projectId, locForQueue, type, String(value)]
+    );
+    res.json({ ok: true, queued: true, id: ins.rows[0].id, field: type,
+      message: `${type} queued for publish to Google via RatingCaptain. It will go live on the next flush.` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Queue status for the GBP Optimise modal — recent profile-field writes and their state.
+app.get('/api/projects/:projectId/gbp-optimise/queue', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const rows = (await pool.query(
+      `SELECT id, field, status, error, queued_at, published_at,
+              LEFT(value, 120) AS preview
+       FROM gbp_pending_writes
+       WHERE project_id=$1 AND status <> 'superseded'
+       ORDER BY id DESC LIMIT 20`, [projectId])).rows;
+    res.json({ queue: rows, pending: rows.filter(r => r.status === 'queued').length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GBP queue flush support (used by a Claude/Cowork session or scheduled task) ──
+// The flusher reads pending writes over HTTP, pushes each via the RatingCaptain MCP
+// (locations-update-tool), then reports the result back. Guarded by GBP_FLUSH_KEY so it
+// doesn't need the dashboard login/JWT. No direct DB access required on the flusher side.
+function gbpFlushKeyOk(req) {
+  const key = process.env.GBP_FLUSH_KEY;
+  if (!key) return false; // disabled until configured
+  const given = req.query.key || req.get('x-flush-key');
+  return given && given === key;
+}
+
+// List all queued profile-field writes across projects (for the flusher to act on).
+app.get('/api/gbp-queue/pending', async (req, res) => {
+  if (!gbpFlushKeyOk(req)) return res.status(403).json({ error: 'Invalid or missing flush key' });
+  try {
+    const rows = (await pool.query(
+      `SELECT id, project_id, location_id, field, value, queued_at
+       FROM gbp_pending_writes WHERE status='queued' ORDER BY id ASC LIMIT 50`)).rows;
+    res.json({ pending: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Report the outcome of a flush for one queued row.
+app.post('/api/gbp-queue/:id/result', async (req, res) => {
+  if (!gbpFlushKeyOk(req)) return res.status(403).json({ error: 'Invalid or missing flush key' });
+  const id = parseInt(req.params.id);
+  const status = (req.body?.status || '').toLowerCase();
+  const error = req.body?.error ? String(req.body.error).slice(0, 500) : null;
+  if (!['published', 'failed'].includes(status)) return res.status(400).json({ error: 'status must be published or failed' });
+  try {
+    await pool.query(
+      `UPDATE gbp_pending_writes
+       SET status=$1, error=$2, published_at = CASE WHEN $1='published' THEN NOW() ELSE published_at END
+       WHERE id=$3`, [status, error, id]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

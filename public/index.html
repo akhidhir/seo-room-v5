@@ -10992,6 +10992,11 @@
       const appendItem = () => { const v = addItem.trim(); if (!v) return; setEditVal(prev => (prev.trim() ? prev.replace(/[,\s]+$/, '') + ', ' : '') + v); setAddItem(''); };
       const [refineInstr, setRefineInstr] = useState('');
       const [refining, setRefining] = useState(false);
+      const [queue, setQueue] = useState([]);
+      const loadQueue = () => {
+        if (!project?.id) return;
+        api(`/projects/${project.id}/gbp-optimise/queue`).then(d => setQueue((d && d.queue) || [])).catch(() => {});
+      };
       const refineDraft = async () => {
         if (!opt || !refineInstr.trim()) return;
         setRefining(true); setOptResult(null);
@@ -11026,7 +11031,8 @@
         setPublishing(true); setOptResult(null);
         try {
           const r = await api(`/projects/${project.id}/gbp-optimise/publish`, { method: 'POST', body: { type: opt.type, value: editVal } });
-          if (r && r.ok) { setOptResult({ ok: true, msg: 'Published to your Google Business Profile via RatingCaptain.' }); setTimeout(() => { setOpt(null); load(); }, 1400); }
+          if (r && r.queued) { setOptResult({ ok: true, msg: r.message || `${opt.type} queued for publish to Google via RatingCaptain.` }); loadQueue(); setTimeout(() => { setOpt(null); load(); }, 1800); }
+          else if (r && r.ok) { setOptResult({ ok: true, msg: 'Published to your Google Business Profile via RatingCaptain.' }); setTimeout(() => { setOpt(null); load(); }, 1400); }
           else { setOptResult({ ok: false, msg: (r && r.error) || 'Publish failed', detail: r && r.detail }); }
         } catch (e) { setOptResult({ ok: false, msg: e.message }); }
         setPublishing(false);
@@ -11044,7 +11050,7 @@
         setSyncing(false);
         load();
       };
-      useEffect(() => { load(); }, [project?.id]);
+      useEffect(() => { load(); loadQueue(); }, [project?.id]);
 
       const factorColor = { Relevance: '#6366f1', Prominence: '#14b8a6', Consistency: '#f59e0b', Completeness: '#ef4444', Distance: '#8b5cf6' };
       const sevColor = { critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#9ca3af' };
@@ -11060,6 +11066,33 @@
             </div>
           </div>
           <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors, then auto-optimises each gap via RatingCaptain — you review and edit every change before it publishes.</p>
+
+          {queue.length > 0 && (
+            <div style={{ marginBottom: 20, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(20,184,166,0.08)', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#14b8a6' }}><i className="fas fa-cloud-arrow-up" style={{ marginRight: 7 }} />Publish queue</span>
+                <button className="btn" onClick={loadQueue} style={{ fontSize: 11, padding: '3px 9px' }}><i className="fas fa-rotate" style={{ marginRight: 5 }} />Refresh</button>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <tbody>
+                  {queue.map(q => {
+                    const st = { queued: { c: '#f59e0b', t: 'Queued — awaiting flush' }, published: { c: '#22c55e', t: 'Published to Google' }, failed: { c: '#ef4444', t: 'Failed' } }[q.status] || { c: '#9ca3af', t: q.status };
+                    return (
+                      <tr key={q.id} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '8px 14px', textTransform: 'capitalize', fontWeight: 600, width: 110 }}>{q.field}</td>
+                        <td style={{ padding: '8px 14px', color: 'var(--text3)' }}>{q.preview}{(q.preview || '').length >= 120 ? '…' : ''}</td>
+                        <td style={{ padding: '8px 14px', whiteSpace: 'nowrap', color: st.c, fontWeight: 600 }}>
+                          <i className={'fas ' + (q.status === 'published' ? 'fa-circle-check' : q.status === 'failed' ? 'fa-circle-xmark' : 'fa-clock')} style={{ marginRight: 6 }} />{st.t}
+                          {q.status === 'failed' && q.error ? <div style={{ fontSize: 11, fontWeight: 400, color: '#ef4444', marginTop: 2 }}>{q.error}</div> : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{ padding: '7px 14px', fontSize: 11, color: 'var(--text3)', background: 'var(--bg2)' }}>Profile-field changes publish to Google through the RatingCaptain MCP. Queued items go live on the next flush (auto-runs, or ask Claude to flush now).</div>
+            </div>
+          )}
 
           {loading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }} />Auditing profile…</div>}
           {!loading && err && <div style={{ padding: 16, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, color: '#f59e0b', fontSize: 14 }}><i className="fas fa-circle-info" style={{ marginRight: 8 }} />{err}</div>}
@@ -11197,7 +11230,9 @@
                   <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
                     <button onClick={() => !publishing && setOpt(null)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
                     <button onClick={() => startOptimise(opt.type, opt.label)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 6 }} />Regenerate</button>
-                    <button onClick={publishOptimise} disabled={publishing || !editVal.trim()} style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: publishing ? 'wait' : 'pointer' }}>{publishing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Publishing…</> : <><i className="fas fa-cloud-arrow-up" style={{ marginRight: 6 }} />Publish to GBP</>}</button>
+                    {(() => { const isPost = opt && opt.type === 'post'; const busyTxt = isPost ? 'Publishing…' : 'Queuing…'; const idleTxt = isPost ? 'Publish to GBP' : 'Queue for publish'; return (
+                    <button onClick={publishOptimise} disabled={publishing || !editVal.trim()} title={isPost ? 'Publishes the post to Google now' : 'Queues this change; it publishes to Google via RatingCaptain on the next flush'} style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: publishing ? 'wait' : 'pointer' }}>{publishing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />{busyTxt}</> : <><i className="fas fa-cloud-arrow-up" style={{ marginRight: 6 }} />{idleTxt}</>}</button>
+                    ); })()}
                   </div>
                 )}
               </div>
