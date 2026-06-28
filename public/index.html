@@ -11091,6 +11091,22 @@
                 ))}
               </div>
 
+              {/* Optimise your profile — always available, not just when a gap is flagged */}
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: '#14b8a6', marginBottom: 4 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }} />Optimise your profile</div>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>AI-draft each profile field, review/edit, then publish to GBP via RatingCaptain. Use these any time to improve the listing.</div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {[
+                    { type: 'description', label: 'Improve description', icon: 'fa-align-left' },
+                    { type: 'services', label: 'Add services', icon: 'fa-screwdriver-wrench' },
+                    { type: 'categories', label: 'Add categories', icon: 'fa-tags' },
+                    { type: 'post', label: 'Create Google Post', icon: 'fa-bullhorn' },
+                  ].map(b => (
+                    <button key={b.type} onClick={() => startOptimise(b.type, b.label)} style={{ background: 'rgba(20,184,166,0.12)', color: '#14b8a6', border: '1px solid rgba(20,184,166,0.4)', borderRadius: 8, padding: '10px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}><i className={'fas ' + b.icon} style={{ marginRight: 7 }} />{b.label}</button>
+                  ))}
+                </div>
+              </div>
+
               {/* Findings grouped by ranking factor */}
               {(data.findings || []).length === 0
                 ? <div style={{ padding: 24, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10, color: '#22c55e', fontSize: 14 }}><i className="fas fa-circle-check" style={{ marginRight: 8 }} />No gaps found — this profile is well optimised.</div>

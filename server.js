@@ -15396,7 +15396,11 @@ app.get('/api/projects/:projectId/gbp-optimise/audit', async (req, res) => {
     const serviceAreas = rcProfile?.serviceArea?.places?.placeInfos?.map(p => p.placeName) || gbp?.service_areas || [];
     const website = rcProfile?.websiteUri || gbp?.website || '';
     const phone = rcProfile?.phoneNumbers?.primaryPhone || gbp?.phone || '';
-    const hasEmergencyService = serviceItems.some(s => /emergency|24|callout/i.test(s.freeFormServiceItem?.label?.displayName || ''));
+    // Only treat as a genuine emergency business if the PRIMARY CATEGORY is an emergency trade AND it
+    // advertises real emergency/24-7 service — so a computer shop listing "24 Hrs Services" isn't flagged.
+    const emergencyCats = /locksmith|plumber|electrician|\btow|towing|restoration|garage door|hvac|air condition|glazier|pest control|water damage|roadside|emergency/i;
+    const hasEmergencyService = emergencyCats.test(primaryCategory || '')
+      && serviceItems.some(s => /emergency|24\/7|24[\s-]?hour|24[\s-]?hr|callout|after[\s-]?hours/i.test(s.freeFormServiceItem?.label?.displayName || ''));
 
     // Reviews + posts: PREFER the authoritative synced RC data (reviews-stats API matches the RC app and
     // excludes deleted/duplicate reviews). The Local-Intel reviews_cache/posts_cache are only a fallback —
