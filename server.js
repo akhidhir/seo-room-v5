@@ -18,7 +18,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Core env vars
-const JWT_SECRET = process.env.JWT_SECRET || 'seo-room-v5-secret-change-in-production';
+// JWT_SECRET comes ONLY from the environment — no hardcoded fallback. A known/weak secret would let
+// anyone forge valid auth tokens, so if it is missing the server refuses to start (fail closed).
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set. Refusing to start with a forgeable token secret. Set JWT_SECRET (a long random string) and restart.');
+  process.exit(1);
+}
 const DATABASE_URL = process.env.DATABASE_URL;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
@@ -1662,8 +1668,14 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 // Reset password (no auth required - uses email verification)
 app.post('/api/auth/reset-password', async (req, res) => {
   const { email, newPassword, resetSecret } = req.body;
-  // Simple secret-based reset for now (agency use only)
-  if (resetSecret !== process.env.RESET_SECRET && resetSecret !== 'seoroom2024reset') {
+  // Secret-based reset (agency use only). The secret comes ONLY from the RESET_SECRET env var —
+  // there is no hardcoded fallback. If RESET_SECRET is not configured, the reset path is disabled
+  // (fail closed) rather than accepting any request.
+  const expectedResetSecret = process.env.RESET_SECRET;
+  if (!expectedResetSecret) {
+    return res.status(503).json({ error: 'Password reset is not configured' });
+  }
+  if (resetSecret !== expectedResetSecret) {
     return res.status(403).json({ error: 'Invalid reset secret' });
   }
   if (!email || !newPassword) return res.status(400).json({ error: 'Email and new password required' });
@@ -20408,18 +20420,22 @@ async function warmCache(urls, job, label) {
 // (partial crawls made audit counts swing between runs: 284 → 150 → 188 → 100 pages).
 async function fetchAllWpItems(wpBase, headers, type, extraQuery = '') {
   const items = [];
-  let pageNum = 1;
-  let totalPages = null;
-  while (true) {
+  let offset = 0;
+  let perPage = 20;     // full page objects are large; start small and shrink further if the host returns empty
+  let total = null;
+  let guard = 0;
+  while (guard++ < 1000) {
     let resp = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=50&page=${pageNum}&status=publish${extraQuery}`, {
+        // _cb cache-buster makes every request a unique URL so Cloudflare/BerqWP can't serve a stale cached copy.
+        resp = await fetch(`${wpBase}/wp-json/wp/v2/${type}?per_page=${perPage}&offset=${offset}&status=publish&_cb=${Date.now()}${extraQuery}`, {
           headers: {
-            // A real browser UA + JSON Accept gets past Cloudflare bot-challenges and security plugins
-            // (Wordfence etc.) that serve an HTML block page to UA-less requests — which then fails JSON parsing.
+            // A real browser UA + JSON Accept gets past Cloudflare bot-challenges / security plugins that
+            // serve an HTML block page to UA-less requests.
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
             'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
             ...(headers || {}),
           },
           signal: AbortSignal.timeout(attempt === 0 ? 30000 : 60000)
@@ -20429,37 +20445,36 @@ async function fetchAllWpItems(wpBase, headers, type, extraQuery = '') {
       } catch (e) { resp = null; }
       if (attempt < 2) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
     }
-    if (!resp) throw new Error(`WordPress crawl failed on ${type} page ${pageNum} after 3 attempts`);
+    if (!resp) throw new Error(`WordPress crawl failed on ${type} at offset ${offset} after 3 attempts`);
     if (resp.status === 400) break;
-    if (totalPages === null) {
-      const tp = parseInt(resp.headers.get('x-wp-totalpages') || '0', 10);
-      if (tp) totalPages = tp;
-    }
-    let batch;
+    if (total === null) { const tt = parseInt(resp.headers.get('x-wp-total') || '0', 10); if (tt) total = tt; }
+
     const raw = await resp.text();
-    try { batch = JSON.parse(raw); } catch (e) {
-      const t = raw.trim();
-      const snippet = t.slice(0, 220).replace(/\s+/g, ' ');
-      const looksMarkup = /<(?:!doctype|html|head|body|br|b>|div|p>|script|title)/i.test(t.slice(0, 400));
-      // Some servers leak a PHP notice/warning before the JSON — strip leading markup and retry once.
-      const firstBracket = t.search(/[\[{]/);
-      if (firstBracket > 0) {
-        try { batch = JSON.parse(t.slice(firstBracket)); } catch (e2) {}
-      }
-      if (!batch) {
-        throw new Error(looksMarkup
-          ? `${type} crawl blocked: the site returned HTML/markup instead of JSON (Cloudflare bot-protection, a security plugin like Wordfence, or a PHP warning leaking into the REST output). First bytes: "${snippet}"`
-          : `WordPress returned invalid JSON for ${type} page ${pageNum}. First bytes: "${snippet}"`);
+    let batch = null;
+    if (raw && raw.trim()) {
+      try { batch = JSON.parse(raw); }
+      catch (e) {
+        // Tolerate a leading PHP notice before the JSON.
+        const t = raw.trim(); const fb = t.search(/[\[{]/);
+        if (fb > 0) { try { batch = JSON.parse(t.slice(fb)); } catch (e2) {} }
       }
     }
+
+    if (batch === null) {
+      // Empty/garbage response. Usually the batch is too big for the host to return — shrink and retry SAME offset.
+      if (perPage > 2) { perPage = Math.max(2, Math.floor(perPage / 2)); continue; }
+      const snippet = (raw || '').trim().slice(0, 220).replace(/\s+/g, ' ');
+      const looksMarkup = /<(?:!doctype|html|head|body|br|b>|div|p>|script|title)/i.test((raw || '').slice(0, 400));
+      throw new Error(looksMarkup
+        ? `${type} crawl blocked: the site returned HTML/markup instead of JSON (Cloudflare bot-protection or a security plugin). First bytes: "${snippet}"`
+        : `${type} crawl: the site returned an empty response even at the smallest batch size — the host appears to be limiting REST API response size. First bytes: "${snippet}"`);
+    }
+
     if (!Array.isArray(batch) || batch.length === 0) break;
     items.push(...batch);
-    if (batch.length < 50) break;
-    pageNum++;
-    if (totalPages && pageNum > totalPages) break;
-  }
-  if (totalPages && items.length < (totalPages - 1) * 50) {
-    throw new Error(`WordPress crawl incomplete for ${type}: got ${items.length} items but server reports ${totalPages} pages`);
+    offset += batch.length;
+    if (batch.length < perPage) break;        // last (partial) page
+    if (total && offset >= total) break;
   }
   return items;
 }
