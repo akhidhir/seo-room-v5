@@ -1180,6 +1180,10 @@ async function initDb() {
     // Clean up stale "running" audits from previous server instance
     await client.query(`UPDATE audits SET status='failed', completed_at=NOW(), audit_data='{"error":"Server restarted during audit"}'::jsonb WHERE status='running'`).catch(() => {});
 
+    // Clean up orphaned "running" background jobs (e.g. Fix Internal Links) killed mid-run by a deploy/restart.
+    // A live job heartbeats every ~5s, so a stale heartbeat means the job's server instance is gone.
+    await client.query(`UPDATE background_jobs SET status='failed', error='Server restarted during job', finished_at=NOW() WHERE status='running' AND heartbeat_at < NOW() - INTERVAL '2 minutes'`).catch(() => {});
+
     // Clean up broken SERP analyses (where JSON parsing failed — score=0 and verdict contains raw JSON)
     await client.query(`DELETE FROM serp_analysis WHERE (analysis->>'score')::int = 0 AND length(analysis->>'verdict') > 200`).catch(() => {});
 
