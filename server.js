@@ -15316,6 +15316,13 @@ app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
     } else {
       return res.status(400).json({ error: 'Unknown optimisation type' });
     }
+    // Refine mode: revise the existing draft per a user instruction instead of generating fresh.
+    const instruction = (req.body?.instruction || '').trim();
+    const base = req.body?.base;
+    if (instruction && base) {
+      const fmt = (type === 'categories' || type === 'services') ? 'comma-separated list' : 'text';
+      prompt = `Here is the current draft ${type} for "${bizName}":\n\n"""${base}"""\n\nRevise it according to this instruction: "${instruction}". Keep it valid for a Google Business Profile (no prices, phone numbers, URLs, or emojis; Australian English${type === 'post' ? '; stay under 1500 characters' : type === 'description' ? '; 600-750 characters' : ''}). Return ONLY the revised ${fmt}, nothing else.`;
+    }
     const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system, messages: [{ role: 'user', content: prompt }] });
     const proposed = (resp.content?.[0]?.text || '').trim();
     res.json({ type, current, proposed });
@@ -15355,9 +15362,25 @@ app.post('/api/projects/:projectId/gbp-optimise/publish', async (req, res) => {
     else if (type === 'services') updateBody = { services: String(value).split(',').map(s => s.trim()).filter(Boolean) };
     else return res.status(400).json({ error: 'Unknown optimisation type' });
 
-    const resp = await fetch(`${RC_BASE}/locations/${numericId}`, { method: 'PUT', headers: rcHeaders, body: JSON.stringify(updateBody) });
-    const body = await resp.text();
-    if (!resp.ok) return res.status(502).json({ error: `RatingCaptain rejected the update (HTTP ${resp.status}) — the update endpoint or field name may differ. Send me this and I'll adjust.`, detail: body.slice(0, 500), endpoint: `PUT /locations/${numericId}`, sent: updateBody });
+    // RC's update method/path isn't documented — try the common REST shapes. Stop on the first success,
+    // or on the first NON-method error (e.g. 422) so a wrong field name surfaces instead of being hidden.
+    const tryReqs = [
+      ['PATCH', `/locations/${numericId}`],
+      ['POST', `/locations/${numericId}`],
+      ['PUT', `/locations/${numericId}`],
+      ['POST', `/locations/${numericId}/update`],
+      ['PATCH', `/locations/${numericId}/profile`],
+    ];
+    let ok = false, lastStatus = 0, lastBody = '', usedReq = '';
+    for (const [method, path] of tryReqs) {
+      try {
+        const r = await fetch(`${RC_BASE}${path}`, { method, headers: rcHeaders, body: JSON.stringify(updateBody) });
+        lastStatus = r.status; lastBody = await r.text(); usedReq = `${method} ${path}`;
+        if (r.ok) { ok = true; break; }
+        if (![404, 405, 501].includes(r.status)) break; // right endpoint, different problem (body/field) — report it
+      } catch (e) { lastBody = e.message; usedReq = `${method} ${path}`; }
+    }
+    if (!ok) return res.status(502).json({ error: `RatingCaptain rejected the update (last tried ${usedReq} → HTTP ${lastStatus}). Send me this and I'll fix the exact call.`, detail: lastBody.slice(0, 500), sent: updateBody });
     try { await syncRcProfileFromApi(projectId); } catch {}
     res.json({ ok: true, published: type });
   } catch (e) { res.status(500).json({ error: e.message }); }

@@ -10990,6 +10990,18 @@
       const [optResult, setOptResult] = useState(null);
       const [addItem, setAddItem] = useState('');
       const appendItem = () => { const v = addItem.trim(); if (!v) return; setEditVal(prev => (prev.trim() ? prev.replace(/[,\s]+$/, '') + ', ' : '') + v); setAddItem(''); };
+      const [refineInstr, setRefineInstr] = useState('');
+      const [refining, setRefining] = useState(false);
+      const refineDraft = async () => {
+        if (!opt || !refineInstr.trim()) return;
+        setRefining(true); setOptResult(null);
+        try {
+          const r = await api(`/projects/${project.id}/gbp-optimise/draft`, { method: 'POST', body: { type: opt.type, instruction: refineInstr, base: editVal } });
+          if (r && r.proposed) { setEditVal(r.proposed); setRefineInstr(''); }
+          else if (r && r.error) setOptResult({ ok: false, msg: r.error });
+        } catch (e) { setOptResult({ ok: false, msg: e.message }); }
+        setRefining(false);
+      };
       // Map a finding to an optimisation type the backend understands (null = not auto-fixable here)
       const optType = (f) => {
         const t = ((f.label || '') + ' ' + (f.detail || '')).toLowerCase();
@@ -11001,7 +11013,7 @@
       };
       const optTitle = { description: 'Optimise description', post: 'Create Google Post', categories: 'Add categories', services: 'Add services' };
       const startOptimise = async (type, label) => {
-        setOpt({ type, label }); setDraft(null); setEditVal(''); setOptResult(null); setAddItem(''); setDrafting(true);
+        setOpt({ type, label }); setDraft(null); setEditVal(''); setOptResult(null); setAddItem(''); setRefineInstr(''); setDrafting(true);
         try {
           const r = await api(`/projects/${project.id}/gbp-optimise/draft`, { method: 'POST', body: { type } });
           if (r && r.error) { setOptResult({ ok: false, msg: r.error }); }
@@ -11164,6 +11176,13 @@
                         <button onClick={appendItem} style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}><i className="fas fa-plus" style={{ marginRight: 6 }} />Add</button>
                       </div>
                     )}
+                    {/* Modify with AI — tell it how to change the draft */}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <input value={refineInstr} onChange={e => setRefineInstr(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); refineDraft(); } }}
+                        placeholder="Tell AI how to modify it, e.g. make it shorter / mention 25 years / focus on Mac repairs"
+                        style={{ flex: 1, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 13, padding: '9px 12px' }} />
+                      <button onClick={refineDraft} disabled={refining || !refineInstr.trim()} style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700, cursor: refining ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{refining ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Modifying…</> : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }} />Modify</>}</button>
+                    </div>
                   </React.Fragment>
                 )}
 
