@@ -10988,6 +10988,8 @@
       const [editVal, setEditVal] = useState('');
       const [publishing, setPublishing] = useState(false);
       const [optResult, setOptResult] = useState(null);
+      const [addItem, setAddItem] = useState('');
+      const appendItem = () => { const v = addItem.trim(); if (!v) return; setEditVal(prev => (prev.trim() ? prev.replace(/[,\s]+$/, '') + ', ' : '') + v); setAddItem(''); };
       // Map a finding to an optimisation type the backend understands (null = not auto-fixable here)
       const optType = (f) => {
         const t = ((f.label || '') + ' ' + (f.detail || '')).toLowerCase();
@@ -10999,7 +11001,7 @@
       };
       const optTitle = { description: 'Optimise description', post: 'Create Google Post', categories: 'Add categories', services: 'Add services' };
       const startOptimise = async (type, label) => {
-        setOpt({ type, label }); setDraft(null); setEditVal(''); setOptResult(null); setDrafting(true);
+        setOpt({ type, label }); setDraft(null); setEditVal(''); setOptResult(null); setAddItem(''); setDrafting(true);
         try {
           const r = await api(`/projects/${project.id}/gbp-optimise/draft`, { method: 'POST', body: { type } });
           if (r && r.error) { setOptResult({ ok: false, msg: r.error }); }
@@ -11138,6 +11140,14 @@
                       <textarea value={editVal} onChange={e => setEditVal(e.target.value)} rows={opt.type === 'post' || opt.type === 'description' ? 9 : 4}
                         style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg)', border: '1px solid rgba(34,197,94,0.4)', borderRadius: 8, color: 'var(--text)', fontSize: 14, padding: '10px 12px', lineHeight: 1.5, resize: 'vertical' }} />
                     </div>
+                    {(opt.type === 'services' || opt.type === 'categories') && (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                        <input value={addItem} onChange={e => setAddItem(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); appendItem(); } }}
+                          placeholder={opt.type === 'services' ? 'Add your own, e.g. Mac Repair' : 'Add a category…'}
+                          style={{ flex: 1, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 13, padding: '9px 12px' }} />
+                        <button onClick={appendItem} style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}><i className="fas fa-plus" style={{ marginRight: 6 }} />Add</button>
+                      </div>
+                    )}
                   </React.Fragment>
                 )}
 
