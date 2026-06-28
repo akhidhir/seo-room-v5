@@ -11134,7 +11134,7 @@
                       </div>
                     ) : null}
                     <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: '#22c55e', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}><span>Proposed (editable)</span><span style={{ color: 'var(--text3)' }}>{editVal.length} chars</span></div>
+                      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: '#22c55e', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}><span>Proposed (editable)</span><span style={{ color: (opt.type === 'post' && editVal.length > 1500) ? '#ef4444' : 'var(--text3)' }}>{editVal.length} chars{opt.type === 'post' && editVal.length > 1500 ? ' — over Google\'s 1500 limit, trim it' : ''}</span></div>
                       <textarea value={editVal} onChange={e => setEditVal(e.target.value)} rows={opt.type === 'post' || opt.type === 'description' ? 9 : 4}
                         style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg)', border: '1px solid rgba(34,197,94,0.4)', borderRadius: 8, color: 'var(--text)', fontSize: 14, padding: '10px 12px', lineHeight: 1.5, resize: 'vertical' }} />
                     </div>

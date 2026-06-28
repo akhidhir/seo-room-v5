@@ -15306,7 +15306,7 @@ app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
       current = curDesc;
       prompt = `Write a Google Business Profile description for "${bizName}" (${industry}). 600-750 characters. Naturally include the main services (${services.slice(0, 12).join(', ') || industry}) and the areas served (${serviceAreas.slice(0, 10).join(', ')}). Describe what the business does and who it helps. Return ONLY the description text.`;
     } else if (type === 'post') {
-      prompt = `Write a Google Business Profile post (~1200-1500 characters) for "${bizName}" (${industry}) serving ${serviceAreas.slice(0, 6).join(', ')}. Helpful, locally relevant, one clear topic. Return ONLY the post text.`;
+      prompt = `Write a Google Business Profile post for "${bizName}" (${industry}) serving ${serviceAreas.slice(0, 6).join(', ')}. STRICT: 900-1400 characters total (Google's hard limit is 1500). Helpful, locally relevant, one clear topic. Return ONLY the post text.`;
     } else if (type === 'categories') {
       current = curCats.join(', ');
       prompt = `The GBP for "${bizName}" (${industry}) has these categories: ${curCats.join(', ') || 'none'}. Suggest 3-6 additional, highly relevant REAL Google Business Profile secondary categories that fit this business. Return ONLY a comma-separated list of category names.`;
@@ -15340,9 +15340,11 @@ app.post('/api/projects/:projectId/gbp-optimise/publish', async (req, res) => {
     const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
 
     if (type === 'post') {
-      const resp = await fetch(`${RC_BASE}/posts`, { method: 'POST', headers: rcHeaders, body: JSON.stringify({ location_id: gbpLocationId, summary: String(value) }) });
+      let loc; try { loc = await getRcLocationDetails(projectId); } catch (e) { return res.status(400).json({ error: 'Could not resolve RatingCaptain location: ' + e.message }); }
+      const summary = String(value).trim().slice(0, 1500); // Google Business Post hard limit
+      const resp = await fetch(`${RC_BASE}/posts`, { method: 'POST', headers: rcHeaders, body: JSON.stringify({ account_id: loc.account_id, location_id: loc.location_id, summary }) });
       const body = await resp.text();
-      if (!resp.ok) return res.status(502).json({ error: `RatingCaptain rejected the post (${resp.status})`, detail: body.slice(0, 400) });
+      if (!resp.ok) return res.status(502).json({ error: `RatingCaptain rejected the post (HTTP ${resp.status}).`, detail: body.slice(0, 400) });
       return res.json({ ok: true, published: 'post' });
     }
 
