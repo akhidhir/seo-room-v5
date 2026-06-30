@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.34
+ * Version: 8.9.35
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -3959,11 +3959,15 @@ add_action('rest_api_init', function() {
             if (!$row404) return new WP_REST_Response(array('error' => '404 not found'), 404);
             $type = intval($request->get_param('redirect_type') ?: 301);
             $target = $type === 410 ? '' : trim($request->get_param('target_url') ?: '/');
-            $hash = md5($row404->url);
+            // Normalize source to PATH only — the serving side (sropt_check_redirects) matches on
+            // md5(parse_url(REQUEST_URI, PATH)). Hashing the full URL here meant redirects never matched.
+            $source_path = parse_url($row404->url, PHP_URL_PATH);
+            if (empty($source_path)) $source_path = $row404->url;
+            $hash = md5($source_path);
             $wpdb->query($wpdb->prepare(
                 "INSERT INTO $tred (source_url, source_hash, target_url, redirect_type) VALUES (%s, %s, %s, %d)
                  ON DUPLICATE KEY UPDATE target_url=%s, redirect_type=%d, updated_at=NOW()",
-                $row404->url, $hash, $target, $type, $target, $type
+                $source_path, $hash, $target, $type, $target, $type
             ));
             // Remove from 404 log
             $wpdb->delete($t404, array('id' => $request['id']));
@@ -4401,6 +4405,28 @@ function sropt_check_redirects() {
         wp_redirect($redirect->target_url, $rtype);
         exit;
     }
+}
+
+// One-time repair: redirects created from 404s in older versions stored source_hash = md5(full URL),
+// but serving matches md5(path) — so they never fired. Recompute hash from the path for those rows.
+add_action('admin_init', 'sropt_fix_redirect_hashes_once');
+function sropt_fix_redirect_hashes_once() {
+    if (get_option('sropt_redirect_hash_fixed_v2')) return;
+    global $wpdb;
+    $table = $wpdb->prefix . 'seoroom_redirects';
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) { return; }
+    $rows = $wpdb->get_results("SELECT id, source_url FROM $table WHERE source_url LIKE 'http%'");
+    if ($rows) {
+        foreach ($rows as $r) {
+            $p = parse_url($r->source_url, PHP_URL_PATH);
+            if (!empty($p)) {
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table SET source_url=%s, source_hash=%s WHERE id=%d", $p, md5($p), $r->id
+                ));
+            }
+        }
+    }
+    update_option('sropt_redirect_hash_fixed_v2', 1);
 }
 
 
