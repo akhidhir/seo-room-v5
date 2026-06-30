@@ -15423,33 +15423,35 @@ function gbpFlushKeyOk(req) {
 }
 
 // List all queued profile-field writes across projects (for the flusher to act on).
-// Returns text/plain JSON so simple fetchers (web_fetch / scheduled tasks) can read the body —
-// application/json often comes back blank through readable-text extractors.
+// Returns the JSON wrapped in an HTML <pre> block. Readable-text extractors (web_fetch, scheduled
+// tasks) return BLANK for raw JSON or text/plain — they need an HTML document to extract from.
+const htmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const flushHtml = (text) => `<!doctype html><html><body><pre>${htmlEscape(text)}</pre></body></html>`;
 app.get('/api/gbp-queue/pending', async (req, res) => {
-  if (!gbpFlushKeyOk(req)) return res.type('text/plain').status(403).send('ERROR: Invalid or missing flush key');
+  if (!gbpFlushKeyOk(req)) return res.type('html').status(403).send(flushHtml('ERROR: Invalid or missing flush key'));
   try {
     const rows = (await pool.query(
       `SELECT id, project_id, location_id, field, value, queued_at
        FROM gbp_pending_writes WHERE status='queued' ORDER BY id ASC LIMIT 50`)).rows;
-    res.type('text/plain').send(JSON.stringify({ pending: rows }));
-  } catch (e) { res.type('text/plain').status(500).send('ERROR: ' + e.message); }
+    res.type('html').send(flushHtml(JSON.stringify({ pending: rows })));
+  } catch (e) { res.type('html').status(500).send(flushHtml('ERROR: ' + e.message)); }
 });
 
 // Report the outcome of a flush for one queued row. Accepts GET (so a plain fetcher can mark it via
 // query params) or POST. status=published|failed, optional error=...
 app.get('/api/gbp-queue/:id/result', async (req, res) => {
-  if (!gbpFlushKeyOk(req)) return res.type('text/plain').status(403).send('ERROR: Invalid or missing flush key');
+  if (!gbpFlushKeyOk(req)) return res.type('html').status(403).send(flushHtml('ERROR: Invalid or missing flush key'));
   const id = parseInt(req.params.id);
   const status = (req.query.status || '').toLowerCase();
   const error = req.query.error ? String(req.query.error).slice(0, 500) : null;
-  if (!['published', 'failed'].includes(status)) return res.type('text/plain').status(400).send('ERROR: status must be published or failed');
+  if (!['published', 'failed'].includes(status)) return res.type('html').status(400).send(flushHtml('ERROR: status must be published or failed'));
   try {
     await pool.query(
       `UPDATE gbp_pending_writes
        SET status=$1, error=$2, published_at = CASE WHEN $1='published' THEN NOW() ELSE published_at END
        WHERE id=$3`, [status, error, id]);
-    res.type('text/plain').send('OK ' + status + ' #' + id);
-  } catch (e) { res.type('text/plain').status(500).send('ERROR: ' + e.message); }
+    res.type('html').send(flushHtml('OK ' + status + ' #' + id));
+  } catch (e) { res.type('html').status(500).send(flushHtml('ERROR: ' + e.message)); }
 });
 
 // Report the outcome of a flush for one queued row.
