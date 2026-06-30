@@ -1619,6 +1619,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/rc-sync$/)) return next();
   // Allow GBP sync targets list (read-only: project id/name/location id — called by scheduled automation)
   if (req.path === '/api/gbp-sync/targets') return next();
+  // Allow GBP queue flush routes (own GBP_FLUSH_KEY auth via ?key= — called by Claude/scheduled flusher)
+  if (req.path.match(/^\/api\/gbp-queue\//)) return next();
   // Allow plugin-verify (WP plugin uses connection code, not JWT)
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
