@@ -15394,35 +15394,30 @@ app.post('/api/projects/:projectId/gbp-optimise/publish', async (req, res) => {
     const RC_BASE = 'https://local.ratingcaptain.com/api';
     const rcHeaders = { 'Authorization': `Bearer ${RC_TOKEN}`, 'Accept': 'application/json', 'Content-Type': 'application/json' };
 
-    if (type === 'post') {
-      let loc; try { loc = await getRcLocationDetails(projectId); } catch (e) { return res.status(400).json({ error: 'Could not resolve RatingCaptain location: ' + e.message }); }
-      const summary = String(value).trim().slice(0, 1500); // Google Business Post hard limit
-      const resp = await fetch(`${RC_BASE}/posts`, { method: 'POST', headers: rcHeaders, body: JSON.stringify({ account_id: loc.account_id, location_id: loc.location_id, summary }) });
-      const body = await resp.text();
-      if (!resp.ok) return res.status(502).json({ error: `RatingCaptain rejected the post (HTTP ${resp.status}).`, detail: body.slice(0, 400) });
-      return res.json({ ok: true, published: 'post' });
-    }
-
-    // Profile field updates (description / categories / services) can ONLY be written through the
-    // RatingCaptain MCP (locations-update-tool) — its Google OAuth isn't reachable from this server,
-    // and RC's REST surface (local.ratingcaptain.com/api) has no profile-write endpoint. So queue the
-    // approved value; a Claude/Cowork flush pushes it via the MCP and marks the row published/failed.
-    if (!['description', 'categories', 'services'].includes(type)) {
+    // Everything (description / categories / services / post) can ONLY be written through the
+    // RatingCaptain MCP — its Google OAuth isn't reachable from this server, and RC's REST surface
+    // (local.ratingcaptain.com/api) returns 404 for profile writes AND post creation from here. So queue
+    // the approved value; a Claude/Cowork flush pushes it via the MCP and marks the row published/failed.
+    if (!['description', 'categories', 'services', 'post'].includes(type)) {
       return res.status(400).json({ error: 'Unknown optimisation type' });
     }
     const locForQueue = `locations/${numericId}`;
-    // Supersede any earlier still-queued write for the same field so the queue holds one row per field.
-    await pool.query(
-      `UPDATE gbp_pending_writes SET status='superseded' WHERE project_id=$1 AND field=$2 AND status='queued'`,
-      [projectId, type]
-    ).catch(() => {});
+    // For single-value profile fields, supersede any earlier still-queued write (one row per field).
+    // Posts are independent (you can queue many), so they are NOT superseded.
+    if (type !== 'post') {
+      await pool.query(
+        `UPDATE gbp_pending_writes SET status='superseded' WHERE project_id=$1 AND field=$2 AND status='queued'`,
+        [projectId, type]
+      ).catch(() => {});
+    }
     const ins = await pool.query(
       `INSERT INTO gbp_pending_writes (project_id, location_id, field, value, status)
        VALUES ($1, $2, $3, $4, 'queued') RETURNING id`,
-      [projectId, locForQueue, type, String(value)]
+      [projectId, locForQueue, type, String(value).slice(0, type === 'post' ? 1500 : 5000)]
     );
+    const label = type === 'post' ? 'Google Post' : type;
     res.json({ ok: true, queued: true, id: ins.rows[0].id, field: type,
-      message: `${type} queued for publish to Google via RatingCaptain. It will go live on the next flush.` });
+      message: `${label} queued for publish to Google via RatingCaptain. It will go live on the next flush.` });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
