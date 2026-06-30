@@ -16644,6 +16644,99 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
   }
 });
 
+// ── NAP Consistency Check ──────────────────────────────────────────
+// Source of truth = GBP (RatingCaptain). Compares the website + every directory listing URL we have
+// against the GBP Name/Address/Phone and flags mismatches. Directories with no URL or that block
+// fetching are returned as "manual" to verify by hand.
+function napNormPhone(p) { let d = String(p || '').replace(/\D/g, ''); d = d.replace(/^61/, '').replace(/^0+/, ''); return d.slice(-9); }
+function napNormName(n) { return String(n || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim(); }
+function napNormAddr(a) { return String(a || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\b(street|st|road|rd|avenue|ave|place|pl|drive|dr|court|ct|unit|suite|ste|lane|ln|way|level|lvl|shop|australia|wa|western)\b/g, ' ').replace(/\s+/g, ' ').trim(); }
+function napExtract(html) {
+  let name = null, phone = null, address = null;
+  try {
+    const ld = [...String(html).matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)];
+    for (const m of ld) {
+      let data; try { data = JSON.parse(m[1].trim()); } catch { continue; }
+      const arr = Array.isArray(data) ? data : (data['@graph'] || [data]);
+      for (const o of arr) {
+        if (!o || typeof o !== 'object') continue;
+        const t = JSON.stringify(o['@type'] || '');
+        if (/LocalBusiness|Organization|Store|Plumber|Electrician|Locksmith|HomeAndConstruction|ProfessionalService|Corporation/i.test(t)) {
+          if (!name && o.name) name = String(o.name);
+          if (!phone && o.telephone) phone = String(o.telephone);
+          if (!address && o.address) { const a = o.address; address = typeof a === 'string' ? a : [a.streetAddress, a.addressLocality, a.addressRegion, a.postalCode].filter(Boolean).join(', '); }
+        }
+      }
+    }
+  } catch (e) {}
+  if (!phone) { const pm = String(html).match(/(\(0\d\)\s?\d{4}\s?\d{4}|\b0\d{1,2}[\s-]?\d{3,4}[\s-]?\d{3,4}\b|\+61\s?\d[\d\s-]{7,12})/); if (pm) phone = pm[1].trim(); }
+  return { name, phone, address };
+}
+async function napFetchHtml(url) {
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomNAP/1.0; +https://theseoroom.com.au)', 'Accept': 'text/html' }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return null;
+    return await r.text();
+  } catch (e) { return null; }
+}
+app.post('/api/projects/:projectId/nap-check', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    // Canonical NAP from GBP (RatingCaptain)
+    const intg = await pool.query(`SELECT kind, config FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_profile','gbp_profile')`, [projectId]);
+    const byKind = {}; for (const r of intg.rows) byKind[r.kind] = (typeof r.config === 'string' ? JSON.parse(r.config) : r.config);
+    const rc = byKind.rc_profile?.profile || null;
+    const gbp = byKind.gbp_profile || null;
+    const canonical = {
+      name: rc?.title || gbp?.business?.name || project.business_name || project.name || '',
+      address: rc ? [...(rc.storefrontAddress?.addressLines || []), rc.storefrontAddress?.locality, rc.storefrontAddress?.administrativeArea, rc.storefrontAddress?.postalCode].filter(Boolean).join(', ') : (gbp?.address || project.location || ''),
+      phone: rc?.phoneNumbers?.primaryPhone || gbp?.phone || project.phone || '',
+    };
+    if (!canonical.name && !canonical.phone) return res.json({ error: 'No GBP profile found for this project — connect/sync RatingCaptain first.' });
+
+    const cName = napNormName(canonical.name), cPhone = napNormPhone(canonical.phone), cAddr = napNormAddr(canonical.address);
+    const matchField = (found, kind) => {
+      if (!found) return 'not_found';
+      if (kind === 'phone') { return cPhone && napNormPhone(found) === cPhone ? 'aligned' : 'mismatch'; }
+      if (kind === 'name') { const f = napNormName(found); return (cName && (f === cName || f.includes(cName) || cName.includes(f))) ? 'aligned' : 'mismatch'; }
+      if (kind === 'address') { const f = napNormAddr(found); const ct = new Set(cAddr.split(' ').filter(w => w.length > 2)); const ft = f.split(' ').filter(w => w.length > 2); const overlap = ft.filter(w => ct.has(w)).length; return (ct.size && overlap >= Math.min(3, ct.size)) ? 'aligned' : 'mismatch'; }
+      return 'not_found';
+    };
+    const matchAll = (nap) => ({ name: matchField(nap.name, 'name'), phone: matchField(nap.phone, 'phone'), address: matchField(nap.address, 'address') });
+
+    // Website check
+    const dom = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const base = dom ? 'https://' + dom : null;
+    let websiteNAP = { name: null, phone: null, address: null }, websiteReachable = false;
+    if (base) {
+      for (const path of ['', '/contact', '/contact-us', '/contact-us/']) {
+        const html = await napFetchHtml(base + path);
+        if (html) { websiteReachable = true; const nap = napExtract(html); websiteNAP.name = websiteNAP.name || nap.name; websiteNAP.phone = websiteNAP.phone || nap.phone; websiteNAP.address = websiteNAP.address || nap.address; if (websiteNAP.name && websiteNAP.phone && websiteNAP.address) break; }
+      }
+    }
+    const website = { reachable: websiteReachable, found: websiteNAP, match: matchAll(websiteNAP) };
+
+    // Directory checks — only those with a saved listing URL
+    const cits = (await pool.query(`SELECT directory_name, listing_url FROM citations WHERE project_id=$1 AND listing_url IS NOT NULL AND listing_url <> ''`, [projectId])).rows;
+    const directories = [];
+    for (const c of cits.slice(0, 30)) {
+      const html = await napFetchHtml(c.listing_url);
+      if (!html) { directories.push({ name: c.directory_name, url: c.listing_url, reachable: false, found: {}, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+      const nap = napExtract(html);
+      const match = matchAll(nap);
+      directories.push({ name: c.directory_name, url: c.listing_url, reachable: true, found: nap, match });
+      await pool.query(`UPDATE citations SET found_name=$1, found_phone=$2, found_address=$3, nap_match=$4 WHERE project_id=$5 AND directory_name=$6`,
+        [nap.name || null, nap.phone || null, nap.address || null, JSON.stringify(match), projectId, c.directory_name]).catch(() => {});
+    }
+
+    const allChecks = [website, ...directories.filter(d => d.reachable)];
+    const mismatches = allChecks.filter(x => x.match.name === 'mismatch' || x.match.phone === 'mismatch' || x.match.address === 'mismatch').length;
+    res.json({ canonical, website, directories, summary: { sources_checked: allChecks.length, mismatches, manual: directories.filter(d => !d.reachable).length }, checked_at: new Date().toISOString() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Helper: fetch a URL with timeout, return {html, blocked} or null
 async function fetchPage(url, timeoutMs = 8000) {
   const controller = new AbortController();
