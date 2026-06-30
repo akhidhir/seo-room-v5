@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.35
+ * Version: 8.9.36
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -4383,10 +4383,14 @@ function sropt_check_redirects() {
     if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) return;
 
     $request_path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-    $hash = md5($request_path);
+    // Match regardless of trailing slash — a redirect may have been stored with or without it.
+    $alt_path = (substr($request_path, -1) === '/') ? rtrim($request_path, '/') : $request_path . '/';
+    $hashes = array(md5($request_path));
+    if ($alt_path !== '' && $alt_path !== $request_path) $hashes[] = md5($alt_path);
+    $placeholders = implode(',', array_fill(0, count($hashes), '%s'));
 
     $redirect = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM $table WHERE source_hash = %s LIMIT 1", $hash
+        "SELECT * FROM $table WHERE source_hash IN ($placeholders) LIMIT 1", $hashes
     ));
 
     if ($redirect) {
