@@ -11533,6 +11533,31 @@
                         </tbody>
                       </table>
                     </div>
+                    {/* Fix-on-website hint when the site doesn't match GBP */}
+                    {(() => {
+                      const wm = napReport.website?.match || {}; const wf = napReport.website?.found || {};
+                      const probs = [];
+                      if (wm.name === 'mismatch' || wm.name === 'not_found') probs.push(['Business name', c.name, wf.name]);
+                      if (wm.address === 'mismatch' || wm.address === 'not_found') probs.push(['Address', c.address, wf.address]);
+                      if (wm.phone === 'mismatch' || wm.phone === 'not_found') probs.push(['Phone', c.phone, wf.phone]);
+                      if (!probs.length) return null;
+                      return (
+                        <div style={{ marginTop: 14, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '12px 14px' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', marginBottom: 8 }}><i className="fas fa-screwdriver-wrench" style={{ marginRight: 6 }} />Fix on your website</div>
+                          <div style={{ display: 'grid', gap: 8 }}>
+                            {probs.map(([field, correct, current], i) => (
+                              <div key={i} style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                                <b>{field}:</b> set it to <span style={{ color: '#22c55e', fontWeight: 700 }}>{correct || '(set in GBP first)'}</span>
+                                {current ? <> — your site currently shows <span style={{ color: '#ef4444' }}>{current}</span></> : <> — <span style={{ color: 'var(--text3)' }}>not found on the site</span></>}
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.5 }}>
+                            Update these everywhere they appear so they match GBP <b>exactly</b> (character for character): the site <b>footer</b>, the <b>Contact</b> page, the <b>header</b>, and your <b>LocalBusiness schema</b>. Even small differences (e.g. "St" vs "Street", "(08)" vs "08") count as inconsistent to Google.
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>Directories with a saved listing URL are auto-checked; ones that block fetching show "Verify". Add listing URLs below to check more.</div>
                   </div>
                 );
