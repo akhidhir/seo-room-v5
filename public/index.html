@@ -11748,6 +11748,20 @@
       const [addTarget, setAddTarget] = useState('');
       const [addType, setAddType] = useState('301');
       const [addSaving, setAddSaving] = useState(false);
+      const [recoverTarget, setRecoverTarget] = useState('/');
+      const [recoverBusy, setRecoverBusy] = useState(false);
+      const [recoverMsg, setRecoverMsg] = useState('');
+      const recover410s = async (mode) => {
+        const verb = mode === 'delete' ? 'delete all 410 (Gone) rules' : `redirect all 410 (Gone) pages to "${recoverTarget.trim() || '/'}"`;
+        if (!confirm(`This will ${verb}. Continue?`)) return;
+        setRecoverBusy(true); setRecoverMsg('');
+        try {
+          const r = await api(`/projects/${project.id}/plugin/redirects/recover-410`, { method: 'POST', body: mode === 'delete' ? { mode: 'delete' } : { mode: 'redirect', target_url: recoverTarget.trim() || '/' } });
+          if (r && r.ok) { setRecoverMsg(`✓ ${mode === 'delete' ? 'Deleted' : 'Recovered'} ${r.affected || 0} 410 page${(r.affected || 0) === 1 ? '' : 's'}${mode === 'delete' ? '' : ' → ' + (r.target || recoverTarget)}.`); loadRedirects(); }
+          else setRecoverMsg('✗ ' + ((r && r.error) || 'Failed'));
+        } catch (e) { setRecoverMsg('✗ ' + e.message); }
+        setRecoverBusy(false);
+      };
       const [editingId, setEditingId] = useState(null);
       const [editSource, setEditSource] = useState('');
       const [editTarget, setEditTarget] = useState('');
@@ -12649,6 +12663,17 @@
           statCard(redTotal, 'Total Redirects', '#6366f1'),
           statCard(count301, '301 Permanent', '#22c55e'),
           statCard(count302, '302 Temporary', '#f59e0b')
+        ),
+        // Recover 410s — undo a bulk 410 by redirecting all "Gone" pages to a live page (or delete them)
+        e('div', { style: { ...cardStyle, marginBottom: 16, borderLeft: '3px solid #f59e0b' } },
+          e('div', { style: { fontSize: 13, fontWeight: 700, marginBottom: 6 } }, e('i', { className: 'fas fa-rotate-left', style: { marginRight: 6, color: '#f59e0b' } }), 'Recover 410 (Gone) pages'),
+          e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 10 } }, 'Undo a bulk 410: send every page currently marked "410 Gone" to a live page instead (e.g. the homepage), or delete those rules entirely.'),
+          e('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+            e('input', { style: { ...inputStyle, padding: '8px 12px', fontSize: 13, minWidth: 220 }, placeholder: '/ (homepage) or /target-page', value: recoverTarget, onChange: (ev) => setRecoverTarget(ev.target.value) }),
+            e('button', { style: { ...btnStyle('#22c55e'), padding: '8px 14px', fontSize: 13 }, onClick: () => recover410s('redirect'), disabled: recoverBusy }, recoverBusy ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-rotate-left' }), ' Recover all 410s'),
+            e('button', { style: { ...btnStyle('#ef4444'), padding: '8px 14px', fontSize: 13 }, onClick: () => recover410s('delete'), disabled: recoverBusy }, e('i', { className: 'fas fa-trash' }), ' Delete all 410s')
+          ),
+          recoverMsg && e('div', { style: { marginTop: 10, fontSize: 13, fontWeight: 600, color: recoverMsg.charAt(0) === '✓' ? '#22c55e' : '#ef4444' } }, recoverMsg)
         ),
         // Add redirect button + form
         e('div', { style: { marginBottom: 12 } },

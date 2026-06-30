@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.36
+ * Version: 8.9.38
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -3963,6 +3963,11 @@ add_action('rest_api_init', function() {
             // md5(parse_url(REQUEST_URI, PATH)). Hashing the full URL here meant redirects never matched.
             $source_path = parse_url($row404->url, PHP_URL_PATH);
             if (empty($source_path)) $source_path = $row404->url;
+            // NEVER create a redirect/410 for the homepage/root — just clear the log entry.
+            if ($source_path === '' || $source_path === '/') {
+                $wpdb->delete($t404, array('id' => $request['id']));
+                return new WP_REST_Response(array('ok' => true, 'skipped' => 'root'), 200);
+            }
             $hash = md5($source_path);
             $wpdb->query($wpdb->prepare(
                 "INSERT INTO $tred (source_url, source_hash, target_url, redirect_type) VALUES (%s, %s, %s, %d)
@@ -3972,6 +3977,30 @@ add_action('rest_api_init', function() {
             // Remove from 404 log
             $wpdb->delete($t404, array('id' => $request['id']));
             return new WP_REST_Response(array('ok' => true), 201);
+        },
+        'permission_callback' => function() { return current_user_can('manage_options'); },
+    ));
+
+    // ---- Recover all 410 ("Gone") rules — bulk-convert them to a 301 redirect to a chosen page,
+    // or delete them entirely. Lets you undo a bulk-410 in one click. ----
+    register_rest_route('seoroom-opt/v1', '/redirects/recover-410', array(
+        'methods'  => 'POST',
+        'callback' => function($request) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'seoroom_redirects';
+            $mode = $request->get_param('mode') ?: 'redirect';
+            $count = intval($wpdb->get_var("SELECT COUNT(*) FROM $table WHERE redirect_type = 410"));
+            if ($mode === 'delete') {
+                $wpdb->query("DELETE FROM $table WHERE redirect_type = 410");
+                return new WP_REST_Response(array('ok' => true, 'mode' => 'delete', 'affected' => $count), 200);
+            }
+            $target = trim($request->get_param('target_url') ?: home_url('/'));
+            if ($target === '') $target = home_url('/');
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table SET redirect_type = 301, target_url = %s, updated_at = NOW() WHERE redirect_type = 410",
+                $target
+            ));
+            return new WP_REST_Response(array('ok' => true, 'mode' => 'redirect', 'target' => $target, 'affected' => $count), 200);
         },
         'permission_callback' => function() { return current_user_can('manage_options'); },
     ));
@@ -4382,11 +4411,17 @@ function sropt_check_redirects() {
     // Check if table exists (avoid errors before activation)
     if ($wpdb->get_var("SHOW TABLES LIKE '$table'") !== $table) return;
 
+    // ONLY act on URLs WordPress itself can't serve (genuine 404s). This guarantees a redirect/410 rule
+    // can never hijack a real, live page — the homepage or any other — even if a bad rule exists.
+    if (!is_404()) return;
     $request_path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    // Belt-and-suspenders: never touch the homepage / root.
+    if ($request_path === '' || $request_path === '/' || $request_path === null) return;
     // Match regardless of trailing slash — a redirect may have been stored with or without it.
     $alt_path = (substr($request_path, -1) === '/') ? rtrim($request_path, '/') : $request_path . '/';
     $hashes = array(md5($request_path));
-    if ($alt_path !== '' && $alt_path !== $request_path) $hashes[] = md5($alt_path);
+    // Only add the alternate hash when it's a real, non-root path (empty/"/" must never match).
+    if ($alt_path !== '' && $alt_path !== '/' && $alt_path !== $request_path) $hashes[] = md5($alt_path);
     $placeholders = implode(',', array_fill(0, count($hashes), '%s'));
 
     $redirect = $wpdb->get_row($wpdb->prepare(

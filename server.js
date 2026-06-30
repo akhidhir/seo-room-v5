@@ -2976,6 +2976,9 @@ function isValid404Url(url) {
   if (/[?&](nocache|cache_?bust|_=\d{10,}|v=\d{13,}|t=\d{13,})/i.test(url)) return false;
   // Common bot-probing paths (not real pages)
   const path = url.replace(/^https?:\/\/[^/]+/, '').toLowerCase().replace(/\/$/, '');
+  // NEVER treat the homepage / root as an actionable 404 — a redirect/410 on "/" would take the site down.
+  const bareePath = path.split(/[?#]/)[0];
+  if (bareePath === '' || bareePath === '/') return false;
   const botPaths = [
     '/wp', '/wp-admin', '/wp-login', '/wp-login.php', '/wp-cron', '/wp-config', '/wp-includes',
     '/admin', '/administrator', '/login', '/signin', '/signup',
@@ -3679,6 +3682,17 @@ app.post('/api/projects/:id/plugin/404s/:fid/redirect', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// POST /api/projects/:id/plugin/redirects/recover-410 — bulk-convert all 410 rules to a 301 redirect
+// to a chosen page (or delete them). One-click undo of a bulk-410.
+app.post('/api/projects/:id/plugin/redirects/recover-410', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const data = await callPluginApi(project, '/redirects/recover-410', 'POST', req.body || {});
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // GET /api/projects/:id/plugin/redirects — list all redirects
