@@ -15325,7 +15325,8 @@ app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
       current = curDesc;
       prompt = `Write a Google Business Profile description for "${bizName}" (${industry}). 600-750 characters. Naturally include the main services (${services.slice(0, 12).join(', ') || industry}) and the areas served (${serviceAreas.slice(0, 10).join(', ')}). Describe what the business does and who it helps. Return ONLY the description text.`;
     } else if (type === 'post') {
-      prompt = `Write a Google Business Profile post for "${bizName}" (${industry}) serving ${serviceAreas.slice(0, 6).join(', ')}. STRICT: 900-1400 characters total (Google's hard limit is 1500). Helpful, locally relevant, one clear topic. Return ONLY the post text.`;
+      const subject = (req.body?.subject || '').trim();
+      prompt = `Write a Google Business Profile post for "${bizName}" (${industry}) serving ${serviceAreas.slice(0, 6).join(', ')}. ${subject ? `The post is specifically about this subject/topic: "${subject}". Write the whole post about that.` : 'Choose one clear, helpful, locally relevant topic.'} STRICT: 900-1400 characters total (Google's hard limit is 1500). Helpful, locally relevant, one clear topic. Return ONLY the post text.`;
     } else if (type === 'categories') {
       current = curCats.join(', ');
       prompt = `The GBP for "${bizName}" (${industry}) has these categories: ${curCats.join(', ') || 'none'}. Suggest 3-6 additional, highly relevant REAL Google Business Profile secondary categories that fit this business. Return ONLY a comma-separated list of category names.`;
@@ -15345,6 +15346,34 @@ app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
     const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system, messages: [{ role: 'user', content: prompt }] });
     const proposed = (resp.content?.[0]?.text || '').trim();
     res.json({ type, current, proposed });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// AI-suggested timely "hot" Google Post topics to choose from (used by the Create Google Post flow).
+// Optional body.theme steers the suggestions; otherwise they're based on the business + current date.
+app.post('/api/projects/:projectId/gbp-optimise/post-ideas', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const intg = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId])).rows[0];
+    const rc = intg ? (typeof intg.config === 'string' ? JSON.parse(intg.config) : intg.config) : null;
+    const profile = rc?.profile || {};
+    const bizName = profile.title || project.business_name || project.name || '';
+    const industry = project.industry || profile.categories?.primaryCategory?.displayName || '';
+    const serviceAreas = (profile.serviceArea?.places?.placeInfos || []).map(p => p.placeName);
+    const services = (profile.serviceItems || []).map(s => s.freeFormServiceItem?.label?.displayName || '').filter(Boolean);
+    const theme = (req.body?.theme || '').trim();
+    const today = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' });
+    const system = 'You are a local marketing strategist for Australian small businesses, suggesting timely Google Business Profile post topics. Return ONLY valid JSON — no commentary, no code fences.';
+    const prompt = `Today is ${today} (Australia). Suggest 6 timely, engaging Google Business Profile post topics for "${bizName}", a ${industry} serving ${serviceAreas.slice(0, 6).join(', ') || 'its local area'}. Services: ${services.slice(0, 12).join(', ') || industry}. ${theme ? `Focus on this theme: "${theme}". ` : ''}Make them genuinely "hot" and relevant RIGHT NOW — consider the current season, Australian events/holidays, end-of-financial-year, and common timely problems customers face this time of year. Each must be specific and ready to post about. Return ONLY a JSON array of 6 objects, each: {"title":"short topic (max 6 words)","angle":"one sentence on what the post would cover"}.`;
+    const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 900, system, messages: [{ role: 'user', content: prompt }] });
+    let text = (resp.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    let ideas = [];
+    try { ideas = JSON.parse(text); } catch { const m = text.match(/\[[\s\S]*\]/); if (m) { try { ideas = JSON.parse(m[0]); } catch {} } }
+    if (!Array.isArray(ideas)) ideas = [];
+    ideas = ideas.filter(i => i && i.title).map(i => ({ title: String(i.title).slice(0, 80), angle: String(i.angle || '').slice(0, 200) })).slice(0, 6);
+    res.json({ ideas });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

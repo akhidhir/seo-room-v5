@@ -10997,6 +10997,31 @@
         if (!project?.id) return;
         api(`/projects/${project.id}/gbp-optimise/queue`).then(d => setQueue((d && d.queue) || [])).catch(() => {});
       };
+      // Google Post subject-picker: AI suggests timely topics; user picks one or writes their own.
+      const [ideas, setIdeas] = useState([]);
+      const [loadingIdeas, setLoadingIdeas] = useState(false);
+      const [ideaTheme, setIdeaTheme] = useState('');
+      const [ownSubject, setOwnSubject] = useState('');
+      const [chosenSubject, setChosenSubject] = useState('');
+      const loadPostIdeas = async (theme) => {
+        setLoadingIdeas(true); setIdeas([]); setOptResult(null);
+        try {
+          const r = await api(`/projects/${project.id}/gbp-optimise/post-ideas`, { method: 'POST', body: { theme: theme || '' } });
+          if (r && r.ideas) setIdeas(r.ideas);
+          else if (r && r.error) setOptResult({ ok: false, msg: r.error });
+        } catch (e) { setOptResult({ ok: false, msg: e.message }); }
+        setLoadingIdeas(false);
+      };
+      const draftPostWithSubject = async (subject) => {
+        if (!subject || !subject.trim()) return;
+        setChosenSubject(subject); setDraft(null); setDrafting(true); setOptResult(null);
+        try {
+          const r = await api(`/projects/${project.id}/gbp-optimise/draft`, { method: 'POST', body: { type: 'post', subject } });
+          if (r && r.error) setOptResult({ ok: false, msg: r.error });
+          else { setDraft(r); setEditVal(r.proposed || ''); }
+        } catch (e) { setOptResult({ ok: false, msg: e.message }); }
+        setDrafting(false);
+      };
       const refineDraft = async () => {
         if (!opt || !refineInstr.trim()) return;
         setRefining(true); setOptResult(null);
@@ -11018,7 +11043,11 @@
       };
       const optTitle = { description: 'Optimise description', post: 'Create Google Post', categories: 'Add categories', services: 'Add services' };
       const startOptimise = async (type, label) => {
-        setOpt({ type, label }); setDraft(null); setEditVal(''); setOptResult(null); setAddItem(''); setRefineInstr(''); setDrafting(true);
+        setOpt({ type, label }); setDraft(null); setEditVal(''); setOptResult(null); setAddItem(''); setRefineInstr('');
+        setIdeas([]); setIdeaTheme(''); setOwnSubject(''); setChosenSubject('');
+        // Posts: pick a subject first (AI suggests timely topics), then draft the post on it.
+        if (type === 'post') { setDrafting(false); loadPostIdeas(''); return; }
+        setDrafting(true);
         try {
           const r = await api(`/projects/${project.id}/gbp-optimise/draft`, { method: 'POST', body: { type } });
           if (r && r.error) { setOptResult({ ok: false, msg: r.error }); }
@@ -11188,6 +11217,39 @@
 
                 {drafting && <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }} />Drafting with AI…</div>}
 
+                {/* Google Post: choose a subject first (AI suggests timely topics) */}
+                {opt.type === 'post' && !draft && !drafting && (
+                  <div style={{ marginBottom: 4 }}>
+                    <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: '#14b8a6', marginBottom: 8 }}>Choose a topic — AI suggests what's timely right now</div>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                      <input value={ideaTheme} onChange={e => setIdeaTheme(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); loadPostIdeas(ideaTheme); } }}
+                        placeholder="Optional theme to steer ideas, e.g. winter, EOFY, new service"
+                        style={{ flex: 1, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 13, padding: '9px 12px' }} />
+                      <button onClick={() => loadPostIdeas(ideaTheme)} disabled={loadingIdeas} style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700, cursor: loadingIdeas ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{loadingIdeas ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Researching…</> : <><i className="fas fa-lightbulb" style={{ marginRight: 6 }} />Suggest topics</>}</button>
+                    </div>
+                    {loadingIdeas && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}><span className="spinner" style={{ marginRight: 8 }} />Finding hot topics for right now…</div>}
+                    {!loadingIdeas && ideas.length > 0 && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                        {ideas.map((idea, i) => (
+                          <button key={i} onClick={() => draftPostWithSubject(idea.title + (idea.angle ? ' — ' + idea.angle : ''))}
+                            style={{ textAlign: 'left', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', cursor: 'pointer', transition: 'border-color .15s' }}
+                            onMouseEnter={e => e.currentTarget.style.borderColor = '#14b8a6'} onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 3 }}>{idea.title}</div>
+                            <div style={{ fontSize: 11.5, color: 'var(--text3)', lineHeight: 1.4 }}>{idea.angle}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', margin: '6px 0 6px' }}>Or write your own subject</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input value={ownSubject} onChange={e => setOwnSubject(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); draftPostWithSubject(ownSubject); } }}
+                        placeholder="e.g. Free data backup check this month"
+                        style={{ flex: 1, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 13, padding: '9px 12px' }} />
+                      <button onClick={() => draftPostWithSubject(ownSubject)} disabled={!ownSubject.trim()} style={{ background: ownSubject.trim() ? '#14b8a6' : 'var(--border)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700, cursor: ownSubject.trim() ? 'pointer' : 'default', whiteSpace: 'nowrap' }}><i className="fas fa-pen-nib" style={{ marginRight: 6 }} />Write post</button>
+                    </div>
+                  </div>
+                )}
+
                 {!drafting && draft && (
                   <React.Fragment>
                     {draft.current ? (
@@ -11229,7 +11291,10 @@
                 {!drafting && draft && (
                   <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
                     <button onClick={() => !publishing && setOpt(null)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-                    <button onClick={() => startOptimise(opt.type, opt.label)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 6 }} />Regenerate</button>
+                    {opt.type === 'post' && (
+                      <button onClick={() => { setDraft(null); setOptResult(null); }} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-arrow-left" style={{ marginRight: 6 }} />Change topic</button>
+                    )}
+                    <button onClick={() => opt.type === 'post' ? draftPostWithSubject(chosenSubject) : startOptimise(opt.type, opt.label)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 6 }} />Regenerate</button>
                     {(() => { const isPost = opt && opt.type === 'post'; const busyTxt = isPost ? 'Publishing…' : 'Queuing…'; const idleTxt = isPost ? 'Publish to GBP' : 'Queue for publish'; return (
                     <button onClick={publishOptimise} disabled={publishing || !editVal.trim()} title={isPost ? 'Publishes the post to Google now' : 'Queues this change; it publishes to Google via RatingCaptain on the next flush'} style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: publishing ? 'wait' : 'pointer' }}>{publishing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />{busyTxt}</> : <><i className="fas fa-cloud-arrow-up" style={{ marginRight: 6 }} />{idleTxt}</>}</button>
                     ); })()}
@@ -11593,6 +11658,16 @@
       const [suggestLoading, setSuggestLoading] = useState(false);
       const [autoRedirecting, setAutoRedirecting] = useState(false);
       const [autoProgress, setAutoProgress] = useState(null);
+      const [redirectedCount, setRedirectedCount] = useState(0);   // running total redirected & cleared this session
+      const [redirectResult, setRedirectResult] = useState('');     // green banner message after a redirect action
+      // After a redirect is created, delete the now-stale 404 log entry so it doesn't reappear, drop the
+      // row from the list, and bump the success counter. Used by single + bulk redirect actions.
+      const finishRedirect = async (fid) => {
+        try { await api(`/projects/${project.id}/plugin/404s/${fid}`, { method: 'DELETE' }); } catch (e) {}
+        setFourOhFours(prev => prev.filter(x => x.id !== fid));
+        setFourTotal(prev => Math.max(0, prev - 1));
+        setRedirectedCount(c => c + 1);
+      };
       // Diagnose state
       const [diagnoses, setDiagnoses] = useState({});
       const [diagnosing, setDiagnosing] = useState(false);
@@ -11744,8 +11819,9 @@
           });
           setRedirectingId(null);
           setRedirectTarget('');
-          load404s();
-        } catch (err) { console.error(err); }
+          await finishRedirect(fid);                 // remove the row + count it
+          setRedirectResult('✓ Redirect created and removed from the list.');
+        } catch (err) { console.error(err); setRedirectResult('✗ That redirect failed — left in the list. ' + (err.message || '')); }
       };
 
       const handleClearAll404s = async () => {
@@ -11784,15 +11860,20 @@
           setSuggestions(sug);
           const matched = fourOhFours.filter(f => { const k = f.url || f.url_path || ''; return sug[k] && sug[k].score >= 25; });
           setAutoProgress({ done: 0, total: matched.length });
-          let done = 0;
+          let done = 0, failed = 0;
           for (const item of matched) {
             const k = item.url || item.url_path || ''; const target = sug[k] && sug[k].url; if (!target) continue;
-            try { await api(`/projects/${project.id}/plugin/404s/${item.id}/redirect`, { method: 'POST', body: { target_url: target } }); done++; setAutoProgress({ done, total: matched.length }); } catch (e) {}
+            try {
+              await api(`/projects/${project.id}/plugin/404s/${item.id}/redirect`, { method: 'POST', body: { target_url: target } });
+              await finishRedirect(item.id);          // remove each redirected row + count it
+              done++; setAutoProgress({ done, total: matched.length });
+            } catch (e) { failed++; }
           }
           const unmatched = fourOhFours.length - matched.length;
-          alert(`Fixed ${done} of ${fourOhFours.length} 404s with 301 redirects to the best-matching page.` + (unmatched ? `\n\n${unmatched} had no confident match — left as-is (usually bot/junk URLs or pages that are genuinely gone).` : ''));
-          load404s();
-        } catch (e) { alert('Fix all error: ' + (e.message || e)); }
+          setRedirectResult(`✓ Redirected ${done} of ${matched.length} matched URLs and removed them from the list.`
+            + (failed ? ` ${failed} failed.` : '')
+            + (unmatched ? ` ${unmatched} had no confident match — left as-is (bot/junk or genuinely gone; 410 those).` : ''));
+        } catch (e) { setRedirectResult('✗ Fix all error: ' + (e.message || e)); }
         setAutoRedirecting(false); setAutoProgress(null);
       };
 
@@ -11804,7 +11885,7 @@
         if (!matchedItems.length) return;
         setAutoRedirecting(true);
         setAutoProgress({ done: 0, total: matchedItems.length });
-        let done = 0;
+        let done = 0, failed = 0;
         for (const item of matchedItems) {
           const key = item.url || item.url_path || '';
           const target = suggestions[key]?.url;
@@ -11813,15 +11894,14 @@
             await api(`/projects/${project.id}/plugin/404s/${item.id}/redirect`, {
               method: 'POST', body: { target_url: target }
             });
+            await finishRedirect(item.id);            // remove each redirected row + count it
             done++;
             setAutoProgress({ done, total: matchedItems.length });
-          } catch (err) { console.error('Auto-redirect error:', item.id, err); }
+          } catch (err) { failed++; console.error('Auto-redirect error:', item.id, err); }
         }
         setAutoRedirecting(false);
         setAutoProgress(null);
-        await load404s(); // Refresh list
-        // Re-suggest for remaining 404s
-        setTimeout(() => suggestRedirects(), 500);
+        setRedirectResult(`✓ Redirected ${done} of ${matchedItems.length} matched URLs and removed them from the list.` + (failed ? ` ${failed} failed.` : ''));
       };
 
       const diagnose404s = async () => {
@@ -12133,6 +12213,17 @@
             cat.label,
             catCounts[cat.id] > 0 && e('span', { style: { background: fourCategory === cat.id ? cat.color : 'var(--border)', color: fourCategory === cat.id ? '#fff' : 'var(--text3)', padding: '1px 6px', borderRadius: 10, fontSize: 10, marginLeft: 2 } }, catCounts[cat.id])
           ))
+        ),
+        // Result banner — how many got redirected & cleared
+        redirectResult && e('div', { style: { marginBottom: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, background: redirectResult.charAt(0) === '✓' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)', color: redirectResult.charAt(0) === '✓' ? '#22c55e' : '#ef4444', border: '1px solid ' + (redirectResult.charAt(0) === '✓' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)') } },
+          e('span', null, redirectResult),
+          e('button', { onClick: () => setRedirectResult(''), style: { background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 15 } }, '✕')
+        ),
+        // How it works
+        filtered404s.length > 0 && e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 8, lineHeight: 1.5 } },
+          e('i', { className: 'fas fa-circle-info', style: { marginRight: 6 } }),
+          'Click ', e('b', { style: { color: 'var(--text2)' } }, 'Fix All 404s (Auto)'), ' — it matches each dead URL to its best live page, creates the redirect, and removes it from this list. (Or ', e('b', { style: { color: 'var(--text2)' } }, 'Suggest Redirects'), ' to preview matches first, then ', e('b', { style: { color: 'var(--text2)' } }, 'Auto-Redirect'), '. Use ', e('b', { style: { color: 'var(--text2)' } }, '410'), ' for junk/gone URLs.)',
+          redirectedCount > 0 && e('span', { style: { marginLeft: 8, color: '#22c55e', fontWeight: 700 } }, `· ${redirectedCount} redirected & cleared`)
         ),
         // Action buttons
         filtered404s.length > 0 && e('div', { style: { marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
