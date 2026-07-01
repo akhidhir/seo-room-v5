@@ -11055,16 +11055,23 @@
         } catch (e) { setOptResult({ ok: false, msg: e.message }); }
         setDrafting(false);
       };
-      const publishOptimise = async () => {
-        if (!opt || !editVal.trim()) return;
-        setPublishing(true); setOptResult(null);
+      const [copied, setCopied] = useState(false);
+      // Copy-to-paste model: the AI writes it, you paste it into Google yourself. No publishing/flushing.
+      const pasteHints = {
+        description: 'Paste into Google Business Profile → Edit profile → "About" → Business description.',
+        post: 'Paste into Google Business Profile → Add update / Create post.',
+        services: 'Add each of these in Google Business Profile → Edit profile → Services.',
+        categories: 'Add these in Google Business Profile → Edit profile → Categories (pick the closest match Google offers).',
+      };
+      const copyDraft = async () => {
+        if (!editVal.trim()) return;
         try {
-          const r = await api(`/projects/${project.id}/gbp-optimise/publish`, { method: 'POST', body: { type: opt.type, value: editVal } });
-          if (r && r.queued) { setOptResult({ ok: true, msg: r.message || `${opt.type} queued for publish to Google via RatingCaptain.` }); loadQueue(); setTimeout(() => { setOpt(null); load(); }, 1800); }
-          else if (r && r.ok) { setOptResult({ ok: true, msg: 'Published to your Google Business Profile via RatingCaptain.' }); setTimeout(() => { setOpt(null); load(); }, 1400); }
-          else { setOptResult({ ok: false, msg: (r && r.error) || 'Publish failed', detail: r && r.detail }); }
-        } catch (e) { setOptResult({ ok: false, msg: e.message }); }
-        setPublishing(false);
+          await navigator.clipboard.writeText(editVal);
+          setCopied(true); setOptResult({ ok: true, msg: 'Copied to clipboard — now paste it into Google.' });
+          setTimeout(() => setCopied(false), 2500);
+        } catch (e) {
+          setOptResult({ ok: false, msg: 'Copy blocked — select the text in the box and copy it manually (Cmd/Ctrl+C).' });
+        }
       };
       const load = () => {
         if (!project?.id) return;
@@ -11094,9 +11101,9 @@
               <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Re-audit</button>
             </div>
           </div>
-          <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors, then auto-optimises each gap via RatingCaptain — you review and edit every change before it publishes.</p>
+          <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors and AI-drafts each fix — you copy it and paste it into Google yourself.</p>
 
-          {queue.length > 0 && (
+          {false && (
             <div style={{ marginBottom: 20, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(20,184,166,0.08)', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#14b8a6' }}><i className="fas fa-cloud-arrow-up" style={{ marginRight: 7 }} />Publish queue</span>
@@ -11168,7 +11175,7 @@
               {/* Optimise your profile — always available, not just when a gap is flagged */}
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 20 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: '#14b8a6', marginBottom: 4 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }} />Optimise your profile</div>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>AI-draft each profile field, review/edit, then publish to GBP via RatingCaptain. Use these any time to improve the listing.</div>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>AI-drafts each profile field for you — review, edit, then copy and paste it into Google Business Profile yourself.</div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {[
                     { type: 'description', label: 'Improve description', icon: 'fa-align-left' },
@@ -11213,7 +11220,7 @@
                   <h3 style={{ margin: 0, fontSize: 18 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 8, color: '#14b8a6' }} />{optTitle[opt.type] || 'Optimise'}</h3>
                   <button onClick={() => !publishing && setOpt(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', fontSize: 18, cursor: 'pointer' }}>✕</button>
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 14 }}>Review and edit before it publishes to your Google Business Profile. Nothing is sent until you click Publish.</div>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 14 }}>Review and edit the AI draft, then Copy it and paste it into Google yourself. Nothing is sent automatically.</div>
 
                 {drafting && <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }} />Drafting with AI…</div>}
 
@@ -11289,14 +11296,19 @@
                 )}
 
                 {!drafting && draft && (
-                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
-                    <button onClick={() => !publishing && setOpt(null)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-                    {opt.type === 'post' && (
-                      <button onClick={() => { setDraft(null); setOptResult(null); }} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-arrow-left" style={{ marginRight: 6 }} />Change topic</button>
-                    )}
-                    <button onClick={() => opt.type === 'post' ? draftPostWithSubject(chosenSubject) : startOptimise(opt.type, opt.label)} disabled={publishing} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 6 }} />Regenerate</button>
-                    <button onClick={publishOptimise} disabled={publishing || !editVal.trim()} title="Queues this change; it publishes to Google via RatingCaptain on the next flush" style={{ background: '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: publishing ? 'wait' : 'pointer' }}>{publishing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Queuing…</> : <><i className="fas fa-cloud-arrow-up" style={{ marginRight: 6 }} />Queue for publish</>}</button>
-                  </div>
+                  <React.Fragment>
+                    <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.3)', borderRadius: 8, fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>
+                      <i className="fas fa-circle-info" style={{ marginRight: 6, color: '#14b8a6' }} />{pasteHints[opt.type] || 'Copy this and paste it into your Google Business Profile.'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 14 }}>
+                      <button onClick={() => setOpt(null)} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Close</button>
+                      {opt.type === 'post' && (
+                        <button onClick={() => { setDraft(null); setOptResult(null); }} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-arrow-left" style={{ marginRight: 6 }} />Change topic</button>
+                      )}
+                      <button onClick={() => opt.type === 'post' ? draftPostWithSubject(chosenSubject) : startOptimise(opt.type, opt.label)} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 6 }} />Regenerate</button>
+                      <button onClick={copyDraft} disabled={!editVal.trim()} style={{ background: copied ? '#16a34a' : '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}><i className={'fas ' + (copied ? 'fa-check' : 'fa-copy')} style={{ marginRight: 6 }} />{copied ? 'Copied!' : 'Copy'}</button>
+                    </div>
+                  </React.Fragment>
                 )}
               </div>
             </div>
