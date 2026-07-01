@@ -15317,6 +15317,21 @@ app.post('/api/projects/:projectId/gbp-optimise/sync', async (req, res) => {
 
 // ── GBP Auto-Optimise: AI-draft a fix → review in the UI → publish to GBP via RatingCaptain ──
 // Draft only — NO writes. Generates a proposed optimisation for one field from the synced profile.
+// Retry wrapper for Anthropic — handles transient "Premature close" / network drops / overload (529/429/5xx).
+async function aiCreate(params, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try { return await anthropic.messages.create(params); }
+    catch (e) {
+      lastErr = e;
+      const msg = String((e && e.message) || e);
+      const retryable = /premature close|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed|network|overloaded|rate.?limit|\b(429|500|502|503|529)\b/i.test(msg);
+      if (!retryable || i === tries - 1) throw e;
+      await new Promise(r => setTimeout(r, 700 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
 app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const type = (req.body?.type || '').toLowerCase();
@@ -15357,7 +15372,7 @@ app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
       const fmt = (type === 'categories' || type === 'services') ? 'comma-separated list' : 'text';
       prompt = `Here is the current draft ${type} for "${bizName}":\n\n"""${base}"""\n\nRevise it according to this instruction: "${instruction}". Keep it valid for a Google Business Profile (no prices, phone numbers, URLs, or emojis; Australian English${type === 'post' ? '; stay under 1500 characters' : type === 'description' ? '; 600-750 characters' : ''}). Return ONLY the revised ${fmt}, nothing else.`;
     }
-    const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system, messages: [{ role: 'user', content: prompt }] });
+    const resp = await aiCreate({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system, messages: [{ role: 'user', content: prompt }] });
     const proposed = (resp.content?.[0]?.text || '').trim();
     res.json({ type, current, proposed });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -15381,7 +15396,7 @@ app.post('/api/projects/:projectId/gbp-optimise/post-ideas', async (req, res) =>
     const today = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' });
     const system = 'You are a local marketing strategist for Australian small businesses, suggesting timely Google Business Profile post topics. Return ONLY valid JSON — no commentary, no code fences.';
     const prompt = `Today is ${today} (Australia). Suggest 6 timely, engaging Google Business Profile post topics for "${bizName}", a ${industry} serving ${serviceAreas.slice(0, 6).join(', ') || 'its local area'}. Services: ${services.slice(0, 12).join(', ') || industry}. ${theme ? `Focus on this theme: "${theme}". ` : ''}Make them genuinely "hot" and relevant RIGHT NOW — consider the current season, Australian events/holidays, end-of-financial-year, and common timely problems customers face this time of year. Each must be specific and ready to post about. Return ONLY a JSON array of 6 objects, each: {"title":"short topic (max 6 words)","angle":"one sentence on what the post would cover"}.`;
-    const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 900, system, messages: [{ role: 'user', content: prompt }] });
+    const resp = await aiCreate({ model: 'claude-haiku-4-5-20251001', max_tokens: 900, system, messages: [{ role: 'user', content: prompt }] });
     let text = (resp.content?.[0]?.text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     let ideas = [];
     try { ideas = JSON.parse(text); } catch { const m = text.match(/\[[\s\S]*\]/); if (m) { try { ideas = JSON.parse(m[0]); } catch {} } }
