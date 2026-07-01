@@ -75,7 +75,9 @@ const pool = new Pool({
 });
 
 // Anthropic client
-const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
+// maxRetries: the SDK auto-retries connection drops ("Premature close"/ECONNRESET), 408/409/429/5xx
+// with exponential backoff. timeout gives slow responses room before the socket is cut.
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY, maxRetries: 5, timeout: 60000 }) : null;
 
 // Universal utility page slugs — pages that are NEVER service pages on any website
 const UTILITY_SLUGS = new Set([
