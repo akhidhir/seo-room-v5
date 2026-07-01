@@ -3,7 +3,7 @@
  * Plugin Name: SEO Room
  * Plugin URI: https://theseoroom.com.au
  * Description: SEO tools + complementary speed optimizations. Works alongside BerqWP/cloud cache. Features: JSON-LD schema, 404 monitor, redirects, broken link checker, CLS prevention (image dims), font-display swap, preconnect/prefetch, LCP preload, jQuery delay, unused CSS removal. Dashboard connector for SEO Room v5.
- * Version: 8.9.39
+ * Version: 8.9.40
  * Author: The SEO Room
  * Author URI: https://theseoroom.com.au
  * License: GPL v2 or later
@@ -12,7 +12,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('SEOROOM_VERSION', '8.9.39');
+define('SEOROOM_VERSION', '8.9.40');
 define('SEOROOM_PATH', plugin_dir_path(__FILE__));
 define('SEOROOM_URL', plugin_dir_url(__FILE__));
 define('SEOROOM_UPDATE_BASE', 'https://seo-room-v5-production.up.railway.app/plugin/seoroom');
@@ -3848,8 +3848,19 @@ add_action('rest_api_init', function() {
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT * FROM $table ORDER BY hit_count DESC, last_seen DESC LIMIT %d OFFSET %d", $limit, $offset
             ));
+            // AIRTIGHT GUARD: a logged 404 may since have become a real, live page. Never let a live
+            // page appear in the fix list — re-check each URL and drop any that now resolves to a
+            // published page (or is the homepage/root). This self-cleans stale entries.
+            $filtered = array();
+            foreach ($rows as $r) {
+                $path = strtok($r->url, '?');
+                if ($path === '' || $path === '/') { $wpdb->delete($table, array('id' => $r->id)); continue; }
+                $pid = url_to_postid(home_url($path));
+                if ($pid && get_post_status($pid) === 'publish') { $wpdb->delete($table, array('id' => $r->id)); continue; }
+                $filtered[] = $r;
+            }
             $total = $wpdb->get_var("SELECT COUNT(*) FROM $table");
-            return new WP_REST_Response(array('items' => $rows, 'total' => intval($total)), 200);
+            return new WP_REST_Response(array('items' => $filtered, 'total' => intval($total)), 200);
         },
         'permission_callback' => '__return_true',
     ));
