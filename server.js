@@ -15327,6 +15327,8 @@ async function aiCreate(params, tries = 3) {
     catch (e) {
       lastErr = e;
       const msg = String((e && e.message) || e);
+      const causeCode = e && e.cause && (e.cause.code || e.cause.message);
+      console.error(`[aiCreate] attempt ${i + 1}/${tries} failed — status:${e && e.status} cause:${causeCode} msg:${msg}`);
       const retryable = /premature close|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed|network|overloaded|rate.?limit|\b(429|500|502|503|529)\b/i.test(msg);
       if (!retryable || i === tries - 1) throw e;
       await new Promise(r => setTimeout(r, 700 * (i + 1)));
