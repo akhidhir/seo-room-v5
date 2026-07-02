@@ -14919,13 +14919,21 @@
         const BATCH = 5;
         const allSuggestions = [];
 
+        let lastErr = '';
         for (let i = 0; i < noKw.length; i += BATCH) {
           const batch = noKw.slice(i, i + BATCH);
           setFixAllState(prev => ({ ...prev, current: i + batch.length, currentTitle: batch[0].title }));
           try {
             const data = await api('/projects/' + project.id + '/onpage-audit/suggest', { method: 'POST', body: { pages: batch } });
             if (data.suggestions) allSuggestions.push(...data.suggestions);
-          } catch (e) { console.error('Suggest keywords batch error:', e); }
+            else if (data.error) lastErr = data.error;
+          } catch (e) { lastErr = (e && e.message) || 'request failed'; console.error('Suggest keywords batch error:', e); }
+        }
+
+        if (allSuggestions.length === 0) {
+          setFixAllState(null);
+          alert('Could not get keyword suggestions from the AI' + (lastErr ? ' (' + lastErr + ')' : '') + '. Please try again.');
+          return;
         }
 
         // Apply only the keywords (not title/desc)

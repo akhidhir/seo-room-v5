@@ -18314,7 +18314,8 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
     } catch (e) { console.log('[onpage-suggest] cannibalization map skipped:', e.message); }
     const reservedKeywords = Object.keys(ownedByOthers);
 
-    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+    // Use the shared resilient client (undici keep-alive fix + retries via aiCreate) — a raw new Anthropic()
+    // here was hitting "Premature close" and silently returning no suggestions.
     const tkw = target_keywords || {}; // { pageId: "pre-researched keyword" }
     const pagesData = pages.map(p => {
       const obj = {
@@ -18346,7 +18347,7 @@ app.post('/api/projects/:projectId/onpage-audit/suggest', async (req, res) => {
         ? `\n- KEYWORD CANNIBALIZATION — CRITICAL: These focus keywords are ALREADY owned by OTHER pages on this site. Do NOT assign any of them (or a near-duplicate) as the suggested_keyword for the pages below — each page must target a DISTINCT keyword so pages don't compete with each other in Google. Pick a more specific / differentiated variant instead. Already-taken keywords: ${reservedKeywords.slice(0, 60).map(k => '"' + k + '"').join(', ')}.\n- Also ensure no two pages in THIS batch share the same suggested_keyword.`
         : `\n- KEYWORD CANNIBALIZATION: Ensure no two pages in this batch share the same suggested_keyword — each page must target a DISTINCT keyword.`;
 
-      const resp = await anthropic.messages.create({
+      const resp = await aiCreate({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 2000,
         messages: [{
