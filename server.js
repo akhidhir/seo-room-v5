@@ -16853,7 +16853,9 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       else if (pr.name) match = { name: 'aligned', phone: pr.phone ? 'aligned' : 'manual', address: pr.address ? 'aligned' : 'manual' };
       else match = { name: 'manual', phone: 'manual', address: 'manual' };
       directories.push({ name: d.name, url, hasUrl: true, reachable: true, confirmed: !!pr.name, wrongUrl, match });
-      await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
+      // Self-heal: a URL proven to point at a different business is purged so it can't mislead again (any project).
+      if (wrongUrl) await pool.query(`UPDATE citations SET listing_url=NULL, nap_match=$1, notes='Saved link was a different business — cleared automatically' WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
+      else await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
     }
 
     const confirmed = directories.filter(d => d.confirmed);
@@ -17213,7 +17215,7 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         `INSERT INTO citations (project_id, directory_name, status, listing_url, notes, found_name, found_phone, found_address, nap_match, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
          ON CONFLICT (project_id, directory_name)
-         DO UPDATE SET status=$3, listing_url=COALESCE($4, citations.listing_url), notes=$5, found_name=$6, found_phone=$7, found_address=$8, nap_match=$9, updated_at=NOW()`,
+         DO UPDATE SET status=$3, listing_url=CASE WHEN $3='not_listed' THEN NULL ELSE COALESCE($4, citations.listing_url) END, notes=$5, found_name=$6, found_phone=$7, found_address=$8, nap_match=$9, updated_at=NOW()`,
         [projectId, r.name, r.status, r.listing_url, r.notes, r.found_name || null, r.found_phone || null, r.found_address || null, r.nap_match ? JSON.stringify(r.nap_match) : null]
       );
     }
