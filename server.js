@@ -609,6 +609,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_id TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS gbp_location_name TEXT`);
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS rc_location_id INTEGER`).catch(() => {});
+    await client.query(`ALTER TABLE rank_tracking ADD COLUMN IF NOT EXISTS serp_position_mobile INTEGER`).catch(() => {});
     // One-time bootstrap defaults ONLY — never overwrite a location the user has set in Project Settings.
     // (These previously ran unconditionally and clobbered gbp_location_id on every deploy, breaking the
     //  project→GBP mapping. Now they only fill blanks.)
@@ -11309,10 +11310,11 @@ function estimateFeatureCost(feature, params = {}) {
   switch (feature) {
     case 'serp_sync': {
       const kwCount = params.keywords || 0;
-      const provider = params.provider || 'serpapi';
+      const provider = params.provider || 'dataforseo';
       const rate = provider === 'serpapi' ? API_COST_RATES.serpapi.google : API_COST_RATES.dataforseo.serp;
       const volumeCost = API_COST_RATES.dataforseo.search_volume * Math.min(kwCount, 1); // 1 batch call
-      return { calls: kwCount, cost: +(kwCount * rate + volumeCost).toFixed(4), provider };
+      // ×2: every keyword is checked on desktop AND mobile
+      return { calls: kwCount * 2, cost: +(kwCount * 2 * rate + volumeCost).toFixed(4), provider };
     }
     case 'maps_sync': {
       const kwCount = params.keywords || 0;
@@ -11540,7 +11542,7 @@ async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
 
 // DataForSEO Organic SERP — replaces serpApiSearch({ engine: 'google', ... })
 // Returns normalized results matching the shape the dashboard expects
-async function dataForSeoSerp({ keyword, location, depth }) {
+async function dataForSeoSerp({ keyword, location, depth, device }) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.');
   // DataForSEO requires location_name without spaces after commas, e.g. "Perth,Western Australia,Australia"
   const normalizedLocation = (location || 'Perth,Western Australia,Australia').replace(/,\s+/g, ',');
@@ -11548,7 +11550,7 @@ async function dataForSeoSerp({ keyword, location, depth }) {
     keyword,
     language_code: 'en',
     depth: depth || 30,
-    device: 'desktop',
+    device: device === 'mobile' ? 'mobile' : 'desktop',
     se_domain: 'google.com.au',
     location_name: normalizedLocation,
   };
@@ -40799,7 +40801,8 @@ app.delete('/api/projects/:projectId/maps/clean', async (req, res) => {
 
 // SERPapi-powered Maps/Local Pack sync
 app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
-  const provider = (req.body?.provider || 'serpapi').toLowerCase();
+  // DataForSEO is the default — cheaper per query than SerpAPI. Falls back if not configured.
+  const provider = (req.body?.provider || (DATAFORSEO_AUTH ? 'dataforseo' : 'serpapi')).toLowerCase();
   const force = req.body?.force === true;
   if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
   if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured.' });
@@ -41808,7 +41811,8 @@ app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
 
 // Sync ranks — calls DataForSEO or SerpAPI for all tracked keywords
 app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
-  let provider = (req.body?.provider || 'serpapi').toLowerCase(); // 'seodity', 'serpapi' or 'dataforseo'
+  // DataForSEO is the default — cheaper per query than SerpAPI. Falls back if not configured.
+  let provider = (req.body?.provider || (DATAFORSEO_AUTH ? 'dataforseo' : 'serpapi')).toLowerCase(); // 'seodity', 'serpapi' or 'dataforseo'
   const force = req.body?.force === true;
   if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
   if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
@@ -41908,46 +41912,42 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
             }
           }
 
-          let data;
-          if (provider === 'serpapi' || provider === 'seodity') {
-            // Suburb-specific location text for better accuracy
-            // Format: "Warner, Queensland, Australia" or "Brisbane, Queensland, Australia"
-            let serpLocation = resolvedLoc.replace(/,/g, ', ');
-            // If we detected a suburb with GPS, use suburb name as the location for suburb-level targeting
-            if (detectedSuburb && SUBURB_GPS[detectedSuburb.toLowerCase()]) {
-              // Resolve suburb state from resolvedLoc (e.g. "Brisbane,Queensland,Australia" → "Queensland")
-              const locParts = resolvedLoc.split(',');
-              const state = locParts.length >= 2 ? locParts[1] : 'Queensland';
-              serpLocation = `${detectedSuburb.charAt(0).toUpperCase() + detectedSuburb.slice(1)}, ${state}, Australia`;
-            }
-            if (provider === 'seodity') {
-              if (idx < 3) console.log(`[rank-sync] "${query}" using Seodity location="${serpLocation}"`);
-              try {
-                data = await seoditySerpSearch({ query, location: serpLocation, device: 'desktop' });
-              } catch (se) {
-                // Per-keyword fallback so one Seodity hiccup never breaks a sync
-                if (!SERPAPI_KEY) throw se;
-                if (idx < 3) console.log(`[rank-sync] Seodity failed (${se.message.slice(0, 80)}) — SerpAPI fallback for "${query}"`);
-                data = await serpApiSearch({ engine: 'google', q: query, gl: 'au', google_domain: 'google.com.au', location: serpLocation, num: 30 });
+          // One search per device — desktop drives the full parse (organic + local pack +
+          // competitors); mobile adds the mobile organic position (most local searches are mobile).
+          const doSearch = async (device) => {
+            if (provider === 'serpapi' || provider === 'seodity') {
+              // Suburb-specific location text for better accuracy
+              // Format: "Warner, Queensland, Australia" or "Brisbane, Queensland, Australia"
+              let serpLocation = resolvedLoc.replace(/,/g, ', ');
+              // If we detected a suburb with GPS, use suburb name as the location for suburb-level targeting
+              if (detectedSuburb && SUBURB_GPS[detectedSuburb.toLowerCase()]) {
+                // Resolve suburb state from resolvedLoc (e.g. "Brisbane,Queensland,Australia" → "Queensland")
+                const locParts = resolvedLoc.split(',');
+                const state = locParts.length >= 2 ? locParts[1] : 'Queensland';
+                serpLocation = `${detectedSuburb.charAt(0).toUpperCase() + detectedSuburb.slice(1)}, ${state}, Australia`;
               }
-            } else {
-              const serpParams = {
-                engine: 'google',
-                q: query,
-                gl: 'au',
-                google_domain: 'google.com.au',
-                location: serpLocation,
-                num: 30,
-              };
-              if (idx < 3) console.log(`[rank-sync] "${query}" using SerpAPI location="${serpLocation}"`);
-              data = await serpApiSearch(serpParams);
+              if (provider === 'seodity') {
+                if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using Seodity location="${serpLocation}"`);
+                try {
+                  return await seoditySerpSearch({ query, location: serpLocation, device });
+                } catch (se) {
+                  // Per-keyword fallback so one Seodity hiccup never breaks a sync
+                  if (!SERPAPI_KEY) throw se;
+                  if (idx < 3) console.log(`[rank-sync] Seodity failed (${se.message.slice(0, 80)}) — SerpAPI fallback for "${query}"`);
+                  return await serpApiSearch({ engine: 'google', q: query, gl: 'au', google_domain: 'google.com.au', location: serpLocation, num: 30, device });
+                }
+              }
+              if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using SerpAPI location="${serpLocation}"`);
+              return await serpApiSearch({
+                engine: 'google', q: query, gl: 'au', google_domain: 'google.com.au',
+                location: serpLocation, num: 30, device,
+              });
             }
-          } else {
             // DataForSEO city-level
-            const loc = resolvedLoc;
-            if (idx < 3) console.log(`[rank-sync] "${query}" using DataForSEO location "${loc}"`);
-            data = await dataForSeoSerp({ keyword: query, location: loc, depth: 30 });
-          }
+            if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using DataForSEO location "${resolvedLoc}"`);
+            return await dataForSeoSerp({ keyword: query, location: resolvedLoc, depth: 30, device });
+          };
+          const data = await doSearch('desktop');
           if (idx === 0) console.log(`[rank-sync] First keyword "${query}" response keys:`, Object.keys(data));
 
           // Parse organic results
@@ -41981,6 +41981,23 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
                 kwCompetitors.push({ domain: itemHost, position: pos, url: item.link, title: item.title, source: 'serp' });
               }
             }
+          }
+
+          // Mobile organic position — same search on a mobile device profile
+          let serpMobile = { position: null, url: null };
+          try {
+            const mdata = await doSearch('mobile');
+            for (const item of (mdata.organic_results || [])) {
+              let ih = '';
+              try { ih = new URL(item.link || '').hostname.replace(/^www\./, '').toLowerCase(); }
+              catch { ih = (item.link || '').replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '').toLowerCase(); }
+              if (domainLower && (ih === domainLower || ih === 'www.' + domainLower || ih.endsWith('.' + domainLower))) {
+                serpMobile = { position: item.position, url: item.link };
+                break;
+              }
+            }
+          } catch (me) {
+            if (idx < 3) console.log(`[rank-sync] mobile fetch failed for "${query}": ${me.message}`);
           }
 
           // Parse local pack
@@ -42076,16 +42093,16 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
 
           // Save to DB
           await pool.query(
-            `INSERT INTO rank_tracking (project_id, keyword, location, location_code, language_code, serp_position, serp_url, serp_title, serp_snippet, serp_type, maps_position, maps_title, maps_rating, maps_reviews, maps_address, competitors, checked_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+            `INSERT INTO rank_tracking (project_id, keyword, location, location_code, language_code, serp_position, serp_url, serp_title, serp_snippet, serp_type, serp_position_mobile, maps_position, maps_title, maps_rating, maps_reviews, maps_address, competitors, checked_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
             [projectId, kw.keyword, kw.location || '', kw.location_code, kw.language_code,
-             serp.position, serp.url, serp.title, serp.snippet, serp.type,
+             serp.position, serp.url, serp.title, serp.snippet, serp.type, serpMobile.position,
              maps.position, maps.title, maps.rating, maps.reviews, maps.address,
              JSON.stringify(kwCompetitors), new Date(baseTime + idx).toISOString()]
           );
 
-          if (idx < 3) console.log(`[rank-sync] "${query}" → serp=${serp.position || '>30'}, maps=${maps.position || 'N/A'}`);
-          results[idx] = { keyword: kw.keyword, location: kw.location, serp_position: serp.position, maps_position: maps.position, local_pack_top3: localPackTop3.map(t => t.title), competitors: kwCompetitors.length };
+          if (idx < 3) console.log(`[rank-sync] "${query}" → serp=${serp.position || '>30'}, mobile=${serpMobile.position || '>30'}, maps=${maps.position || 'N/A'}`);
+          results[idx] = { keyword: kw.keyword, location: kw.location, serp_position: serp.position, serp_position_mobile: serpMobile.position, maps_position: maps.position, local_pack_top3: localPackTop3.map(t => t.title), competitors: kwCompetitors.length };
         } catch (err) {
           console.error(`[rank-sync] Error for "${query}":`, err.message);
           results[idx] = { keyword: kw.keyword, location: kw.location, error: err.message };
@@ -42131,8 +42148,10 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     }
 
     const synced = results.filter(r => r && !r.error).length;
-    const serpCost = provider === 'serpapi' ? kwRes.rows.length * API_COST_RATES.serpapi.google : kwRes.rows.length * API_COST_RATES.dataforseo.serp;
-    await logApiCost(parseInt(projectId), 'serp_sync', provider, kwRes.rows.length, serpCost, { synced });
+    // ×2: desktop + mobile search per keyword
+    const serpCalls = kwRes.rows.length * 2;
+    const serpCost = provider === 'serpapi' ? serpCalls * API_COST_RATES.serpapi.google : serpCalls * API_COST_RATES.dataforseo.serp;
+    await logApiCost(parseInt(projectId), 'serp_sync', provider, serpCalls, serpCost, { synced });
     console.log(`[rank-sync] Done. Synced ${synced}/${kwRes.rows.length} keywords. Cost: $${serpCost.toFixed(4)}`);
     res.json({ ok: true, synced, results: results.filter(Boolean), cost: serpCost });
   } catch (e) {
@@ -42195,7 +42214,7 @@ app.get('/api/projects/:projectId/rank-tracking/latest', async (req, res) => {
   try {
     // Get latest rank per keyword
     const { rows } = await pool.query(`
-      SELECT DISTINCT ON (rt.keyword, rt.location) rt.keyword, rt.location, rt.serp_position, rt.serp_url, rt.maps_position, rt.maps_title, rt.maps_rating, rt.maps_reviews, rt.competitors, rt.checked_at,
+      SELECT DISTINCT ON (rt.keyword, rt.location) rt.keyword, rt.location, rt.serp_position, rt.serp_position_mobile, rt.serp_url, rt.maps_position, rt.maps_title, rt.maps_rating, rt.maps_reviews, rt.competitors, rt.checked_at,
              g.position AS gsc_position, g.clicks AS gsc_clicks, g.impressions AS gsc_impressions, g.ctr AS gsc_ctr
       FROM rank_tracking rt
       LEFT JOIN gsc_keywords g ON g.project_id = rt.project_id AND LOWER(g.keyword) = LOWER(rt.keyword)

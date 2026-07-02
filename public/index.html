@@ -29059,10 +29059,10 @@
       };
       const syncRanks = async (provider, force = false) => {
         const kwCount = keywords.length;
-        if (!force && !await confirmCost(project.id, 'serp_sync', { keywords: kwCount, provider: provider || 'serpapi' })) return;
+        if (!force && !await confirmCost(project.id, 'serp_sync', { keywords: kwCount, provider: provider || 'dataforseo' })) return;
         setSyncing(true);
         try {
-          const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'serpapi', force } });
+          const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'dataforseo', force } });
           if (r.ok) loadData(); else if (r.error) alert(r.error);
         } catch (err) {
           if (err.canForce) {
@@ -29108,7 +29108,7 @@
       const [sentToActionPlan, setSentToActionPlan] = useState({});
       const [rateLimitMsg, setRateLimitMsg] = useState('');
       const [importingMaps, setImportingMaps] = useState(false);
-      const [serpProvider, setSerpProvider] = useState('serpapi');
+      const [serpProvider, setSerpProvider] = useState('dataforseo'); // DataForSEO default — cheaper
       const [serpView, setSerpView] = useState('rankings');
       // Keyword Gap state
       const [serpGap, setSerpGap] = useState(null);
@@ -29519,6 +29519,7 @@
           if (sortCol === 'keyword') { va = (a.keyword || '').toLowerCase(); vb = (b.keyword || '').toLowerCase(); }
           else if (sortCol === 'volume') { va = a.search_volume ?? -1; vb = b.search_volume ?? -1; }
           else if (sortCol === 'position') { va = a.serp_position ?? 999; vb = b.serp_position ?? 999; }
+          else if (sortCol === 'mobile') { va = a.serp_position_mobile ?? 999; vb = b.serp_position_mobile ?? 999; }
           else if (sortCol === 'competitors') { va = (a.competitors || []).filter(c => c.source === 'serp').length; vb = (b.competitors || []).filter(c => c.source === 'serp').length; }
           else if (sortCol === 'checked') { va = a.checked_at || ''; vb = b.checked_at || ''; }
           else return 0;
@@ -29688,8 +29689,8 @@
             {serpView === 'rankings' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <select value={serpProvider} onChange={e => setSerpProvider(e.target.value)} style={{ fontSize: 13, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text1)', cursor: 'pointer' }}>
+                  <option value="dataforseo">DataForSEO (City) — cheaper</option>
                   <option value="serpapi">SerpAPI (GPS)</option>
-                  <option value="dataforseo">DataForSEO (City)</option>
                 </select>
                 <button className="btn btn-primary" onClick={() => { setRateLimitMsg(''); syncRanks(serpProvider).catch(err => { if (err.canForce) setRateLimitMsg(err.message); }); }} disabled={syncing || keywords.length === 0} style={{ fontSize: 14, padding: '8px 20px' }}>
                   {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 6 }} />Checking...</> : <><i className="fa-solid fa-sync" style={{ marginRight: 6 }} />Check Rankings</>}
@@ -30241,7 +30242,8 @@
                 <div style={{ flex: 1, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Keyword</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexShrink: 0 }}>
                   <div style={{ textAlign: 'center', width: 60, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer' }} onClick={() => { setSortCol(sortCol === 'volume' ? null : 'volume'); setSortDir(sortCol === 'volume' && sortDir === 'asc' ? 'desc' : 'asc'); }}>Vol {sortCol === 'volume' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</div>
-                  <div style={{ textAlign: 'center', width: 50, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer' }} onClick={() => { setSortCol(sortCol === 'position' ? null : 'position'); setSortDir(sortCol === 'position' && sortDir === 'asc' ? 'desc' : 'asc'); }}>Serp {sortCol === 'position' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</div>
+                  <div style={{ textAlign: 'center', width: 50, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer' }} onClick={() => { setSortCol(sortCol === 'position' ? null : 'position'); setSortDir(sortCol === 'position' && sortDir === 'asc' ? 'desc' : 'asc'); }}>Desktop {sortCol === 'position' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</div>
+                  <div style={{ textAlign: 'center', width: 50, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, cursor: 'pointer' }} onClick={() => { setSortCol(sortCol === 'mobile' ? null : 'mobile'); setSortDir(sortCol === 'mobile' && sortDir === 'asc' ? 'desc' : 'asc'); }}>Mobile {sortCol === 'mobile' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</div>
                   <div style={{ textAlign: 'center', width: 50, fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>+/-</div>
                   <div style={{ width: 90 }} />
                   <div style={{ width: 12 }} />
@@ -30275,6 +30277,9 @@
                       </div>
                       <div style={{ textAlign: 'center', width: 50 }}>
                         <div style={{ fontSize: 15, fontWeight: 800, color: posColor(kw.serp_position, kw.checked_at) }}>{kw.serp_position ? '#' + kw.serp_position : (kw.checked_at ? '>100' : '—')}</div>
+                      </div>
+                      <div style={{ textAlign: 'center', width: 50 }}>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: posColor(kw.serp_position_mobile, kw.checked_at) }}>{kw.serp_position_mobile ? '#' + kw.serp_position_mobile : (kw.checked_at ? '—' : '—')}</div>
                       </div>
                       <div style={{ textAlign: 'center', width: 50 }}>
                         {kw.serp_change ? (
@@ -30907,7 +30912,7 @@
       const [sortDir, setSortDir] = useState('asc');
       const [hasRun, setHasRun] = useState(false);
       const [hasMapsRun, setHasMapsRun] = useState(false);
-      const [discoverMapsProvider, setDiscoverMapsProvider] = useState('serpapi');
+      const [discoverMapsProvider, setDiscoverMapsProvider] = useState('dataforseo'); // DataForSEO default — cheaper
       const [discErr, setDiscErr] = useState('');
 
       // Load cached SERP results on mount + poll if running
@@ -31160,8 +31165,8 @@
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}>
                 {tab === 'maps' && (
                   <select value={discoverMapsProvider} onChange={e => setDiscoverMapsProvider(e.target.value)} style={{ fontSize: 14, padding: '10px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text1)', cursor: 'pointer' }}>
+                    <option value="dataforseo">DataForSEO — cheaper</option>
                     <option value="serpapi">SerpAPI (GPS)</option>
-                    <option value="dataforseo">DataForSEO</option>
                   </select>
                 )}
                 <button className="btn btn-primary" onClick={() => tab === 'serp' ? discover() : discoverMaps()} style={{ fontSize: 16, padding: '12px 28px' }}>
@@ -31214,8 +31219,8 @@
                 </div>
                 {tab === 'maps' && (
                   <select value={discoverMapsProvider} onChange={e => setDiscoverMapsProvider(e.target.value)} style={{ fontSize: 12, padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text1)', cursor: 'pointer' }}>
+                    <option value="dataforseo">DataForSEO — cheaper</option>
                     <option value="serpapi">SerpAPI (GPS)</option>
-                    <option value="dataforseo">DataForSEO</option>
                   </select>
                 )}
                 <button className="btn btn-primary" onClick={() => tab === 'serp' ? discover() : discoverMaps()} disabled={activeLoading} style={{ fontSize: 13, padding: '8px 16px' }}>
