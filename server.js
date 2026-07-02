@@ -21339,13 +21339,36 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
       if (!firstSource) firstSource = source;
       if (pick.anchor && await applyLinkToSource(source, pick.anchor, targetUrl, null)) added++;
     }
-    // Guarantee: if no anchors matched anywhere, append a "See also" link to the most relevant source
-    if (added === 0 && firstSource) {
+    // Guarantee EVERY orphan gets at least one inbound link. If the AI matched no anchors (or picked no
+    // pages at all), deterministically rank other pages by title-word overlap with the orphan (hubs get a
+    // small boost) and append a "See also" link to the best one that isn't already linking. This is what
+    // eliminates the "skipped — no suitable links" cases.
+    if (added === 0) {
       const fallbackTitle = ((pr.target.title?.rendered || pr.target.title?.raw || '').replace(/<[^>]+>/g, '').trim()) || targetUrl;
-      if (await applyLinkToSource(firstSource, null, targetUrl, fallbackTitle)) added++;
+      const tWords = new Set(((pr.target.title?.rendered || pr.target.title?.raw || '') + ' ' + (pr.target.slug || ''))
+        .toLowerCase().replace(/<[^>]+>/g, ' ').split(/[^a-z0-9]+/).filter(w => w.length > 3));
+      const ranked = allWp
+        .filter(p => p.id !== pr.target.id)
+        .map(p => {
+          const c = getContent(p);
+          if (!c || c.includes(targetUrl)) return null;
+          const title = ((p.title?.rendered || p.title?.raw || '') + ' ' + (p.slug || '')).toLowerCase();
+          let score = 0; for (const w of tWords) if (title.includes(w)) score += 2;
+          if (/blog|news|article|resource|service|guide/i.test(p.slug || '')) score += 1; // hubs are natural sources
+          return { p, score };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score)
+        .map(x => x.p);
+      const tryOrder = [];
+      if (firstSource) tryOrder.push(firstSource);
+      for (const cand of ranked) { if (!tryOrder.find(s => s.id === cand.id)) tryOrder.push(cand); if (tryOrder.length >= 5) break; }
+      for (const src of tryOrder) {
+        if (await applyLinkToSource(src, null, targetUrl, fallbackTitle)) { added++; break; }
+      }
     }
     if (added > 0) { job.linked++; job.results.push({ page_id: pr.target.id, added }); }
-    else { job.no_links++; job.results.push({ page_id: pr.target.id, added: 0, message: pr.message || 'no anchors matched and no fallback target' }); }
+    else { job.no_links++; job.results.push({ page_id: pr.target.id, added: 0, message: pr.message || 'every other page already links here' }); }
   }
 }
 
