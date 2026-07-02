@@ -11513,14 +11513,13 @@
               {!napLoading && napReport && !napReport.error && (() => {
                 const c = napReport.canonical || {};
                 const allRows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain, confirmed: true, isWebsite: true }]
-                  .concat((napReport.directories || []).map(d => ({ source: d.name, sub: d.hasUrl === false ? 'add listing URL to check' : (d.wrongUrl ? 'saved link is a different business — click to re-find' : (d.reachable ? (d.confirmed ? '' : 'listing not confirmed') : 'blocked / manual')), found: d.found || {}, match: d.match || {}, url: d.url, confirmed: !!d.confirmed, isWebsite: false })));
+                  .concat((napReport.directories || []).map(d => ({ source: d.name, sub: d.hasUrl === false ? 'add listing URL to check' : (d.wrongUrl ? 'saved link is a different business — click to re-find' : (d.reachable ? (d.confirmed ? '' : 'listing not confirmed') : 'blocked / manual')), found: d.found || {}, match: d.match || {}, url: d.url, searchUrl: d.searchUrl, confirmed: !!d.confirmed, isWebsite: false })));
                 // Only trust a stored listing URL when we actually confirmed your business on it. Otherwise the
-                // stored URL may point at the wrong business (bad seed data), so link to a safe search instead.
-                const napSearchUrl = (dirName) => `https://www.google.com/search?q=${encodeURIComponent('"' + ((napReport.canonical || {}).name || '') + '" ' + dirName)}`;
+                // stored URL may point at the wrong business (bad seed data), so link to that platform's own search.
                 const rowHref = (r) => {
                   if (r.isWebsite && r.url) return r.url.startsWith('http') ? r.url : 'https://' + r.url;
                   if (r.confirmed && r.url) return r.url.startsWith('http') ? r.url : 'https://' + r.url;
-                  return napSearchUrl(r.source);
+                  return r.searchUrl || `https://www.google.com/search?q=${encodeURIComponent('"' + ((napReport.canonical || {}).name || '') + '" ' + r.source)}`;
                 };
                 // Classify each row: 'issues' if any mismatch/not_found, 'aligned' if fully aligned, else 'verify'.
                 const rowKind = (m) => {

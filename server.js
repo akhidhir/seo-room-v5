@@ -16837,13 +16837,43 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     // are fetched + presence-checked; ones without a URL are "manual" (add a URL to check them).
     const citRows = (await pool.query(`SELECT directory_name, listing_url FROM citations WHERE project_id=$1`, [projectId])).rows;
     const urlByName = {}; for (const r of citRows) urlByName[r.directory_name] = (r.listing_url || '').trim();
+    // Per-directory search URL — an unconfirmed row links to THAT platform's own search for the business
+    // (so "Apple Maps" opens Apple Maps, not a Google web page). Falls back to a Google site: search.
+    const napLoc = canonical.address || project.location || '';
+    const napSearchUrlFor = (d) => {
+      const nm = canonical.name || '';
+      const q = encodeURIComponent((nm + ' ' + napLoc).trim());
+      const qn = encodeURIComponent(nm);
+      const domain = (d.url || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const key = d.name.toLowerCase();
+      const t = {
+        'apple maps (apple business connect)': `https://maps.apple.com/?q=${q}`,
+        'apple maps': `https://maps.apple.com/?q=${q}`,
+        'bing places': `https://www.bing.com/maps?q=${q}`,
+        'facebook business': `https://www.facebook.com/search/top?q=${qn}`,
+        'linkedin company': `https://www.linkedin.com/search/results/companies/?keywords=${qn}`,
+        'yelp australia': `https://www.yelp.com.au/search?find_desc=${qn}&find_loc=${encodeURIComponent(napLoc)}`,
+        'yellow pages australia': `https://www.yellowpages.com.au/search/listings?clue=${qn}`,
+        'true local': `https://www.truelocal.com.au/search?query=${qn}`,
+        'hotfrog': `https://www.hotfrog.com.au/search?q=${qn}`,
+        'hipages': `https://hipages.com.au/connect/search?q=${qn}`,
+        'serviceseeking': `https://www.serviceseeking.com.au/search?q=${qn}`,
+        'localsearch': `https://www.localsearch.com.au/find/${qn}`,
+        'start local': `https://www.startlocal.com.au/search/?q=${qn}`,
+        'word of mouth': `https://www.womo.com.au/search?q=${qn}`,
+        'foursquare': `https://foursquare.com/explore?q=${qn}`,
+      };
+      if (t[key]) return t[key];
+      return domain ? `https://www.google.com/search?q=${encodeURIComponent('site:' + domain + ' "' + nm + '"')}` : `https://www.google.com/search?q=${encodeURIComponent('"' + nm + '" ' + d.name)}`;
+    };
     const directories = [];
     for (const d of AUSTRALIAN_DIRECTORIES) {
       if (/google business profile|google my business|google maps/i.test(d.name)) continue; // it's the source of truth
+      const searchUrl = napSearchUrlFor(d);
       const url = urlByName[d.name] || '';
-      if (!url) { directories.push({ name: d.name, url: '', hasUrl: false, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+      if (!url) { directories.push({ name: d.name, url: '', searchUrl, hasUrl: false, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
       const html = await napFetchHtml(url);
-      if (!html) { directories.push({ name: d.name, url, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+      if (!html) { directories.push({ name: d.name, url, searchUrl, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
       const pr = napConfirm(html);
       // We can positively CONFIRM (name/phone/address seen in text or structured data) but can't disprove —
       // an unseen field is "Verify" (manual), never a red false "Not found". A wrongUrl means the saved link
@@ -16852,7 +16882,7 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       if (pr.wrongUrl) { wrongUrl = true; match = { name: 'manual', phone: 'manual', address: 'manual' }; }
       else if (pr.name) match = { name: 'aligned', phone: pr.phone ? 'aligned' : 'manual', address: pr.address ? 'aligned' : 'manual' };
       else match = { name: 'manual', phone: 'manual', address: 'manual' };
-      directories.push({ name: d.name, url, hasUrl: true, reachable: true, confirmed: !!pr.name, wrongUrl, match });
+      directories.push({ name: d.name, url, searchUrl, hasUrl: true, reachable: true, confirmed: !!pr.name, wrongUrl, match });
       // Self-heal: a URL proven to point at a different business is purged so it can't mislead again (any project).
       if (wrongUrl) await pool.query(`UPDATE citations SET listing_url=NULL, nap_match=$1, notes='Saved link was a different business — cleared automatically' WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
       else await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
