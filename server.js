@@ -16762,6 +16762,8 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       const nameRelated = !!(projName && profName && (profName.includes(projName) || projName.includes(profName) || projWords.some(w => profName.includes(w))));
       const domainRelated = !!(projDomain && profWebsite && (profWebsite.includes(projDomain) || projDomain.includes(profWebsite)));
       if (!nameRelated && !domainRelated) {
+        // Purge any stale saved report so the wrong-business table stops reloading on this project.
+        await pool.query(`DELETE FROM project_integrations WHERE project_id=$1 AND kind='nap_report'`, [projectId]).catch(() => {});
         return res.json({ error: `The GBP profile saved for this project is "${canonical.name}"${profWebsite ? ` (${profWebsite})` : ''}, which doesn't match ${project.name}${projDomain ? ` (${projDomain})` : ''}. Set this project's own GBP Location ID in Project Settings → GBP, then re-sync from GBP Optimise.`, profile_mismatch: true });
       }
     }
