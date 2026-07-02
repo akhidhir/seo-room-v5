@@ -14847,7 +14847,7 @@
             if (!st.running) {
               clearInterval(poll);
               loadPendingChanges(); // surface the QA review queue
-              if (st.status !== 'interrupted' && st.status !== 'failed') runAudit(true); // re-crawl so all scores reflect the fixes
+              if (st.status !== 'interrupted' && st.status !== 'failed') loadExisting(); // refresh from the server's stored results — no full re-crawl
             }
           } catch (e) {}
         }, 5000);
@@ -14886,7 +14886,7 @@
             if (!st.running) {
               clearInterval(poll);
               setFixAllState({ phase: 'done', applied: 0, errors: st.errors, linked: st.linked, linkErrors: st.errors + st.no_links, current: st.done, total: st.total });
-              runAudit(true); // re-crawl so inbound counts + scores reflect the new links
+              loadExisting(); // refresh from the server's stored results — no full re-crawl
             }
           } catch (e) {}
         }, 5000);
@@ -15144,7 +15144,7 @@
               setFixModal(null);
               setSelected(new Set());
               loadHistory();
-              runAudit();
+              loadExisting(); // refresh stored results — no full re-crawl
             }
           }
         } catch (e) {
@@ -15169,7 +15169,7 @@
         try {
           await api(`/projects/${project.id}/wp-changes/rollback-page/${pageId}`, { method: 'POST' });
           loadHistory();
-          runAudit();
+          loadExisting(); // refresh stored results — no full re-crawl
         } catch (e) { alert('Rollback failed: ' + e.message); }
         setRollingBack(null);
       };
