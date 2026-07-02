@@ -16842,28 +16842,14 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     const napLoc = canonical.address || project.location || '';
     const napSearchUrlFor = (d) => {
       const nm = canonical.name || '';
-      const q = encodeURIComponent((nm + ' ' + napLoc).trim());
-      const qn = encodeURIComponent(nm);
       const domain = (d.url || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-      const key = d.name.toLowerCase();
-      const t = {
-        'apple maps (apple business connect)': `https://maps.apple.com/?q=${q}`,
-        'apple maps': `https://maps.apple.com/?q=${q}`,
-        'bing places': `https://www.bing.com/maps?q=${q}`,
-        'facebook business': `https://www.facebook.com/search/top?q=${qn}`,
-        'linkedin company': `https://www.linkedin.com/search/results/companies/?keywords=${qn}`,
-        'yelp australia': `https://www.yelp.com.au/search?find_desc=${qn}&find_loc=${encodeURIComponent(napLoc)}`,
-        'yellow pages australia': `https://www.yellowpages.com.au/search/listings?clue=${qn}`,
-        'true local': `https://www.truelocal.com.au/search?query=${qn}`,
-        'hotfrog': `https://www.hotfrog.com.au/search?q=${qn}`,
-        'hipages': `https://hipages.com.au/connect/search?q=${qn}`,
-        'serviceseeking': `https://www.serviceseeking.com.au/search?q=${qn}`,
-        'localsearch': `https://www.localsearch.com.au/find/${qn}`,
-        'start local': `https://www.startlocal.com.au/search/?q=${qn}`,
-        'word of mouth': `https://www.womo.com.au/search?q=${qn}`,
-        'foursquare': `https://foursquare.com/explore?q=${qn}`,
-      };
-      if (t[key]) return t[key];
+      if (d.search) {
+        return d.search
+          .replace(/\{q\}/g, encodeURIComponent((nm + ' ' + napLoc).trim()))
+          .replace(/\{n\}/g, encodeURIComponent(nm))
+          .replace(/\{loc\}/g, encodeURIComponent(napLoc));
+      }
+      // Fallback for any directory without a search template: Google site: search scoped to its domain.
       return domain ? `https://www.google.com/search?q=${encodeURIComponent('site:' + domain + ' "' + nm + '"')}` : `https://www.google.com/search?q=${encodeURIComponent('"' + nm + '" ' + d.name)}`;
     };
     const directories = [];
@@ -32818,32 +32804,35 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
 // ==================== GBP AUDIT (Comprehensive Local SEO Audit) ====================
 
 // Australian business directory database
+// `search` = that platform's own search URL for finding a listing. Placeholders: {n}=business name,
+// {loc}=location, {q}=name+location (all URL-encoded by napSearchUrlFor). Every directory has one so a
+// NAP row with no confirmed/valid URL still links to the RIGHT platform's search — for ALL directories.
 const AUSTRALIAN_DIRECTORIES = [
-  { name: 'Google Business Profile', url: 'business.google.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 1, description: 'Most important local listing — drives Maps rankings' },
-  { name: 'Apple Maps (Apple Business Connect)', url: 'businessconnect.apple.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 2, description: 'Growing in importance with iPhone users' },
-  { name: 'Bing Places', url: 'bingplaces.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 3, description: 'Powers Bing, Cortana, and some voice search results' },
-  { name: 'Yellow Pages Australia', url: 'yellowpages.com.au', type: 'Major', free: true, paid_option: '$30-300/mo', difficulty: 'Easy', priority: 4, description: 'High DA Australian directory, free basic listing' },
-  { name: 'True Local', url: 'truelocal.com.au', type: 'Major', free: true, paid_option: '$20-200/mo', difficulty: 'Easy', priority: 5, description: 'Popular Australian directory with good SEO authority' },
-  { name: 'Hotfrog', url: 'hotfrog.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 6, description: 'Free Australian business directory with decent DA' },
-  { name: 'Local Business Guide', url: 'localbusinessguide.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 7, description: 'Australian local business directory' },
-  { name: 'Start Local', url: 'startlocal.com.au', type: 'Major', free: true, paid_option: '$99-499/yr', difficulty: 'Easy', priority: 8, description: 'Australian directory with categories' },
-  { name: 'Yelp Australia', url: 'yelp.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 9, description: 'International directory, helps with global SEO signals' },
-  { name: 'Facebook Business', url: 'facebook.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 10, description: 'Social proof + local signals + reviews' },
-  { name: 'LinkedIn Company', url: 'linkedin.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 11, description: 'Professional presence, B2B signals' },
-  { name: 'Word of Mouth', url: 'wordofmouth.com.au', type: 'Major', free: true, paid_option: 'Contact for pricing', difficulty: 'Easy', priority: 12, description: 'Australian review platform, good for tradies' },
-  { name: 'Oneflare', url: 'oneflare.com.au', type: 'Industry', free: false, paid_option: 'Pay per lead', difficulty: 'Medium', priority: 13, description: 'Lead gen for trades/services, good citations' },
-  { name: 'hipages', url: 'hipages.com.au', type: 'Industry', free: false, paid_option: '$50-500/mo', difficulty: 'Medium', priority: 14, description: 'Top trades directory in Australia, strong local SEO' },
-  { name: 'ServiceSeeking', url: 'serviceseeking.com.au', type: 'Industry', free: false, paid_option: 'Pay per lead', difficulty: 'Medium', priority: 15, description: 'Trades lead gen platform with business profiles' },
-  { name: 'Bark', url: 'bark.com', type: 'Industry', free: true, paid_option: 'Pay per lead', difficulty: 'Easy', priority: 16, description: 'International service marketplace' },
-  { name: 'Localsearch', url: 'localsearch.com.au', type: 'Major', free: true, paid_option: '$30-200/mo', difficulty: 'Easy', priority: 17, description: 'Australian business directory and digital marketing' },
-  { name: 'Australian Business Directory', url: 'australianbusinessdirectory.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 18, description: 'Basic free Australian listing' },
-  { name: 'dLook', url: 'dlook.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 19, description: 'Free Australian business directory' },
-  { name: 'Superpages', url: 'superpages.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 20, description: 'Australian online directory' },
-  { name: 'Fyple', url: 'fyple.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 21, description: 'Free business listing directory' },
-  { name: 'EnrollBusiness', url: 'enrollbusiness.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 22, description: 'Free international business directory' },
-  { name: 'Cylex', url: 'cylex.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 23, description: 'Free business directory with map integration' },
-  { name: 'Spoke', url: 'spoke.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 24, description: 'Business profile and networking' },
-  { name: 'Foursquare', url: 'foursquare.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 25, description: 'Location data powers Apple Maps, Uber, and others' },
+  { name: 'Google Business Profile', url: 'business.google.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 1, description: 'Most important local listing — drives Maps rankings', search: 'https://www.google.com/maps/search/{q}' },
+  { name: 'Apple Maps (Apple Business Connect)', url: 'businessconnect.apple.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 2, description: 'Growing in importance with iPhone users', search: 'https://maps.apple.com/?q={q}' },
+  { name: 'Bing Places', url: 'bingplaces.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 3, description: 'Powers Bing, Cortana, and some voice search results', search: 'https://www.bing.com/maps?q={q}' },
+  { name: 'Yellow Pages Australia', url: 'yellowpages.com.au', type: 'Major', free: true, paid_option: '$30-300/mo', difficulty: 'Easy', priority: 4, description: 'High DA Australian directory, free basic listing', search: 'https://www.yellowpages.com.au/search/listings?clue={n}&locationClue={loc}' },
+  { name: 'True Local', url: 'truelocal.com.au', type: 'Major', free: true, paid_option: '$20-200/mo', difficulty: 'Easy', priority: 5, description: 'Popular Australian directory with good SEO authority', search: 'https://www.truelocal.com.au/search?query={n}' },
+  { name: 'Hotfrog', url: 'hotfrog.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 6, description: 'Free Australian business directory with decent DA', search: 'https://www.hotfrog.com.au/search?q={n}' },
+  { name: 'Local Business Guide', url: 'localbusinessguide.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 7, description: 'Australian local business directory', search: 'https://www.localbusinessguide.com.au/?s={n}' },
+  { name: 'Start Local', url: 'startlocal.com.au', type: 'Major', free: true, paid_option: '$99-499/yr', difficulty: 'Easy', priority: 8, description: 'Australian directory with categories', search: 'https://www.startlocal.com.au/search/?q={n}' },
+  { name: 'Yelp Australia', url: 'yelp.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 9, description: 'International directory, helps with global SEO signals', search: 'https://www.yelp.com.au/search?find_desc={n}&find_loc={loc}' },
+  { name: 'Facebook Business', url: 'facebook.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 10, description: 'Social proof + local signals + reviews', search: 'https://www.facebook.com/search/top?q={n}' },
+  { name: 'LinkedIn Company', url: 'linkedin.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 11, description: 'Professional presence, B2B signals', search: 'https://www.linkedin.com/search/results/companies/?keywords={n}' },
+  { name: 'Word of Mouth', url: 'wordofmouth.com.au', type: 'Major', free: true, paid_option: 'Contact for pricing', difficulty: 'Easy', priority: 12, description: 'Australian review platform, good for tradies', search: 'https://www.wordofmouth.com.au/search?q={n}' },
+  { name: 'Oneflare', url: 'oneflare.com.au', type: 'Industry', free: false, paid_option: 'Pay per lead', difficulty: 'Medium', priority: 13, description: 'Lead gen for trades/services, good citations', search: 'https://www.oneflare.com.au/search?q={n}' },
+  { name: 'hipages', url: 'hipages.com.au', type: 'Industry', free: false, paid_option: '$50-500/mo', difficulty: 'Medium', priority: 14, description: 'Top trades directory in Australia, strong local SEO', search: 'https://hipages.com.au/connect/search?q={n}' },
+  { name: 'ServiceSeeking', url: 'serviceseeking.com.au', type: 'Industry', free: false, paid_option: 'Pay per lead', difficulty: 'Medium', priority: 15, description: 'Trades lead gen platform with business profiles', search: 'https://www.serviceseeking.com.au/search?q={n}' },
+  { name: 'Bark', url: 'bark.com', type: 'Industry', free: true, paid_option: 'Pay per lead', difficulty: 'Easy', priority: 16, description: 'International service marketplace', search: 'https://www.bark.com/en/au/search/?query={n}' },
+  { name: 'Localsearch', url: 'localsearch.com.au', type: 'Major', free: true, paid_option: '$30-200/mo', difficulty: 'Easy', priority: 17, description: 'Australian business directory and digital marketing', search: 'https://www.localsearch.com.au/find/{n}' },
+  { name: 'Australian Business Directory', url: 'australianbusinessdirectory.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 18, description: 'Basic free Australian listing', search: 'https://www.australianbusinessdirectory.com.au/search?q={n}' },
+  { name: 'dLook', url: 'dlook.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 19, description: 'Free Australian business directory', search: 'https://www.dlook.com.au/search?keyword={n}' },
+  { name: 'Superpages', url: 'superpages.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 20, description: 'Australian online directory', search: 'https://www.superpages.com.au/search?q={n}' },
+  { name: 'Fyple', url: 'fyple.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 21, description: 'Free business listing directory', search: 'https://www.fyple.com.au/search/?q={n}' },
+  { name: 'EnrollBusiness', url: 'enrollbusiness.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 22, description: 'Free international business directory', search: 'https://www.enrollbusiness.com/Search?q={n}' },
+  { name: 'Cylex', url: 'cylex.com.au', type: 'Standard', free: true, difficulty: 'Easy', priority: 23, description: 'Free business directory with map integration', search: 'https://www.cylex.com.au/s?q={n}' },
+  { name: 'Spoke', url: 'spoke.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 24, description: 'Business profile and networking', search: 'https://www.spoke.com/search?q={n}' },
+  { name: 'Foursquare', url: 'foursquare.com', type: 'Standard', free: true, difficulty: 'Easy', priority: 25, description: 'Location data powers Apple Maps, Uber, and others', search: 'https://foursquare.com/explore?q={n}' },
 ];
 
 app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
