@@ -15317,12 +15317,17 @@
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
                     <i className="fas fa-check-circle" style={{ color: '#22c55e', marginRight: 8 }} />
-                    <span style={{ fontWeight: 600, color: '#22c55e' }}>
-                      {fixAllState.applied} page{fixAllState.applied !== 1 ? 's' : ''} fixed
-                    </span>
-                    {fixAllState.linked > 0 && <span style={{ color: '#22c55e', marginLeft: 8 }}>· {fixAllState.linked} orphan{fixAllState.linked !== 1 ? 's' : ''} linked</span>}
-                    {fixAllState.linkErrors > 0 && <span style={{ color: '#f59e0b', marginLeft: 8 }}>{fixAllState.linkErrors} orphan{fixAllState.linkErrors !== 1 ? 's' : ''} skipped (no suitable links)</span>}
-                    {fixAllState.errors > 0 && <span style={{ color: '#ef4444', marginLeft: 8 }}>{fixAllState.errors} error{fixAllState.errors !== 1 ? 's' : ''}</span>}
+                    {(() => {
+                      // Show only what this run actually did — don't lead with "0 pages fixed" when the
+                      // action was orphan-linking (or keywords) and no metas changed.
+                      const parts = [];
+                      if (fixAllState.applied > 0) parts.push(`${fixAllState.applied} page${fixAllState.applied !== 1 ? 's' : ''} updated`);
+                      if (fixAllState.linked > 0) parts.push(`${fixAllState.linked} orphan${fixAllState.linked !== 1 ? 's' : ''} linked`);
+                      const label = parts.length ? parts.join(' · ') : 'Done — nothing needed changing';
+                      return <span style={{ fontWeight: 600, color: '#22c55e' }}>{label}</span>;
+                    })()}
+                    {fixAllState.linkErrors > 0 && <span style={{ color: '#f59e0b', marginLeft: 8 }}>· {fixAllState.linkErrors} orphan{fixAllState.linkErrors !== 1 ? 's' : ''} skipped (every other page already links here)</span>}
+                    {fixAllState.errors > 0 && <span style={{ color: '#ef4444', marginLeft: 8 }}>· {fixAllState.errors} error{fixAllState.errors !== 1 ? 's' : ''}</span>}
                   </div>
                   <button onClick={() => setFixAllState(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 14 }}><i className="fas fa-times" /></button>
                 </div>
