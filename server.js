@@ -33185,6 +33185,7 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
 
     // ===== PHASE 2: AI Analysis =====
     let findings = [];
+    let aiFailedMsg = null;
 
     if (anthropic) {
       try {
@@ -33371,6 +33372,7 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
         }
       } catch (aiErr) {
         console.error('[gbp-audit] AI failed:', aiErr.message);
+        aiFailedMsg = aiErr.message;
       }
     }
 
@@ -33393,6 +33395,11 @@ Return ONLY valid JSON: {"profile_summary": {...}, "findings": [...]}`;
     if (findings.length === 0) {
       if (!gbpData.profile) {
         findings.push({ pillar: 'gbp', category: 'Profile Completeness', title: 'GBP profile not found on Google Maps', description: `Could not find "${businessName}".`, recommendation: 'Verify your listing at business.google.com', severity: 'Critical', current_value: 'Not found', recommended_value: 'Verified' });
+      } else if (aiFailedMsg) {
+        // AI failed with a real profile — do NOT save a clean "0 findings" audit, that would look like a perfect GBP.
+        await pool.query('UPDATE audits SET status=$1, completed_at=NOW(), audit_data=$2 WHERE id=$3',
+          ['failed', JSON.stringify({ error: 'AI analysis failed: ' + aiFailedMsg }), auditId]);
+        return res.status(502).json({ error: 'AI analysis failed (' + aiFailedMsg + '). No findings were saved — run the audit again.' });
       }
     }
 
