@@ -18537,7 +18537,11 @@ app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
         if (!writeResp.ok) { results.push({ id: s.id, success: false, error: `WP returned ${writeResp.status}` }); continue; }
 
         const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
-        const verified = verify && ((!s.suggested_title || verify.yoast_wpseo_title === s.suggested_title) || (!s.suggested_desc || verify.yoast_wpseo_metadesc === s.suggested_desc));
+        // ALL requested fields must verify (was ||, which passed half-failed writes as success)
+        const verified = verify &&
+          (!s.suggested_title || verify.yoast_wpseo_title === s.suggested_title) &&
+          (!s.suggested_desc || verify.yoast_wpseo_metadesc === s.suggested_desc) &&
+          (!s.suggested_keyword || verify.yoast_wpseo_focuskw === s.suggested_keyword);
         if (!verified) { results.push({ id: s.id, success: false, error: 'Verification failed' }); continue; }
 
         for (const ch of changes) {
@@ -18566,8 +18570,9 @@ app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
                 });
                 if (h1WriteResp.ok) {
                   h1Fixed = true;
+                  // Store FULL original content — a truncated original would destroy the page on rollback
                   await pool.query(`INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1, $2, $3, $4, 'h1_fix', 'content', $5, $6)`,
-                    [projectId, current.wpId, page.url || '', page.title || '', content.substring(0, 5000), newContent.substring(0, 5000)]);
+                    [projectId, current.wpId, page.url || '', page.title || '', content, newContent]);
                   console.log(`[bulk-fix] Added H1 to page ${current.wpId}`);
                 }
               } else { h1Fixed = true; }
@@ -18735,10 +18740,11 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
 
           // 4. Verify write succeeded by reading back
           const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
-          const verified = verify && (
-            (!fix.new_meta_title || verify.yoast_wpseo_title === fix.new_meta_title) ||
-            (!fix.new_meta_desc || verify.yoast_wpseo_metadesc === fix.new_meta_desc)
-          );
+          // ALL requested fields must verify (was ||, which passed half-failed writes as success)
+          const verified = verify &&
+            (!fix.new_meta_title || verify.yoast_wpseo_title === fix.new_meta_title) &&
+            (!fix.new_meta_desc || verify.yoast_wpseo_metadesc === fix.new_meta_desc) &&
+            (!fix.new_focus_keyword || verify.yoast_wpseo_focuskw === fix.new_focus_keyword);
 
           if (!verified) {
             console.warn(`[onpage-fix] Write returned 200 but verification failed — meta fields may not be registered for REST API`);
@@ -18780,7 +18786,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
                   await pool.query(
                     `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
                      VALUES ($1, $2, $3, $4, 'h1_fix', 'content', $5, $6)`,
-                    [projectId, current.wpId, fix.url || '', fix.title || '', content.substring(0, 5000), newContent.substring(0, 5000)]
+                    [projectId, current.wpId, fix.url || '', fix.title || '', content, newContent] // FULL content — truncated original would destroy the page on rollback
                   );
                   console.log(`[onpage-fix] Added H1 tag to page ${current.wpId}`);
                 } else {
@@ -19746,28 +19752,30 @@ ${contentForAI.slice(0, 12000)}` }]
             for (let i = 0; i < parts.length - 1; i++) cur = cur[isNaN(parts[i]) ? parts[i] : parseInt(parts[i])];
             cur[isNaN(parts[parts.length-1]) ? parts[parts.length-1] : parseInt(parts[parts.length-1])] = w.modified_content;
           }
-          await pool.query(
-            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [projectId, sourceId, fullPage.link, candidate.title, 'orphan-fix', '_elementor_data', originalJson, JSON.stringify(elementorData)]
-          );
           const wr = await fetch(`${wpUrl}/wp-json/wp/v2/${candidate.type}/${sourceId}`, {
             method: 'POST', headers: authHeaders,
             body: JSON.stringify({ meta: { _elementor_data: JSON.stringify(elementorData) } }),
             signal: AbortSignal.timeout(15000)
           });
           if (!wr.ok) { fixes.push({ id: sourceId, success: false, error: `WP write failed: ${wr.status}` }); continue; }
-        } else if (parsed.modified_content) {
-          const currentContent = fullPage.content?.raw || fullPage.content?.rendered || '';
+          // History only after confirmed write
           await pool.query(
             `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [projectId, sourceId, fullPage.link, candidate.title, 'orphan-fix', 'content', currentContent, parsed.modified_content]
+            [projectId, sourceId, fullPage.link, candidate.title, 'orphan-fix', '_elementor_data', originalJson, JSON.stringify(elementorData)]
           );
+        } else if (parsed.modified_content) {
+          const currentContent = fullPage.content?.raw || fullPage.content?.rendered || '';
           const wr = await fetch(`${wpUrl}/wp-json/wp/v2/${candidate.type}/${sourceId}`, {
             method: 'POST', headers: authHeaders,
             body: JSON.stringify({ content: parsed.modified_content }),
             signal: AbortSignal.timeout(15000)
           });
           if (!wr.ok) { fixes.push({ id: sourceId, success: false, error: `WP write failed: ${wr.status}` }); continue; }
+          // History only after confirmed write
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [projectId, sourceId, fullPage.link, candidate.title, 'orphan-fix', 'content', currentContent, parsed.modified_content]
+          );
         }
 
         fixes.push({ id: sourceId, success: true, title: candidate.title, links_added: parsed.links_added });
@@ -21311,15 +21319,19 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
       if (!modified) return false;
       const newJson = JSON.stringify(parsed);
       try {
-        await pool.query(
-          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', '_elementor_data', originalJson, newJson]
-        );
         const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
           method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
           body: JSON.stringify({ meta: { _elementor_data: newJson, _elementor_css: '' } }), signal: AbortSignal.timeout(20000),
         });
-        if (w.ok) { source._cachedElementor = newJson; (job.changed_urls = job.changed_urls || []).push(source.link); return true; }
+        if (w.ok) {
+          // History ONLY after the write actually succeeded — otherwise rollback data lies
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', '_elementor_data', originalJson, newJson]
+          );
+          source._cachedElementor = newJson; (job.changed_urls = job.changed_urls || []).push(source.link); return true;
+        }
+        console.warn('[fix-orphans] WP rejected Elementor write:', w.status, source.link);
       } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
       return false;
     } else {
@@ -21337,15 +21349,19 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
       }
       if (!newContent) return false;
       try {
-        await pool.query(
-          `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', 'content', content, newContent]
-        );
         const w = await fetch(`${wpUrl}/wp-json/wp/v2/${source._type}/${source.id}`, {
           method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000),
         });
-        if (w.ok) { source._cachedContent = newContent; (job.changed_urls = job.changed_urls || []).push(source.link); return true; }
+        if (w.ok) {
+          // History ONLY after the write actually succeeded — otherwise rollback data lies
+          await pool.query(
+            `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [projectId, source.id, source.link, source.title?.rendered || '', 'inbound-link', 'content', content, newContent]
+          );
+          source._cachedContent = newContent; (job.changed_urls = job.changed_urls || []).push(source.link); return true;
+        }
+        console.warn('[fix-orphans] WP rejected content write:', w.status, source.link);
       } catch (e) { console.warn('[fix-orphans] write error:', e.message); }
       return false;
     }
@@ -21569,6 +21585,14 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
     if (chRes.rows.length === 0) return res.status(404).json({ error: 'Change not found or already rolled back' });
     const change = chRes.rows[0];
 
+    // SAFETY: never write a placeholder or truncated original back to a live client page.
+    if (change.original_value === 'none' || change.original_value == null || change.original_value === '') {
+      return res.status(400).json({ error: 'This change has no stored original value (it was an additive fix like CWV/schema) — it cannot be rolled back automatically. Remove it manually if needed.' });
+    }
+    if (change.field_name === 'content' && change.original_value.length === 5000) {
+      return res.status(400).json({ error: 'The stored original for this change was truncated by an older version of the app — rolling it back would destroy part of the page. Restore this page manually from a WordPress revision instead.' });
+    }
+
     // Get project for WP auth
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
     const project = projRes.rows[0];
@@ -21690,7 +21714,11 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
     const metaFields = {};
     let contentValue = null;
     let elementorValue = null;
+    const skipped = [];
     for (const row of allChanges.rows) {
+      // SAFETY: never write a placeholder or truncated original back to a live client page.
+      if (row.original_value === 'none' || row.original_value == null || row.original_value === '') { skipped.push(row.field_name + ' (no stored original)'); continue; }
+      if (row.field_name === 'content' && row.original_value.length === 5000) { skipped.push('content (original was truncated by an older app version — restore via WordPress revision)'); continue; }
       if (row.field_name === 'content') {
         contentValue = row.original_value;
       } else if (row.field_name === '_elementor_data') {
@@ -21759,8 +21787,8 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
       'UPDATE wp_change_history SET rolled_back_at=NOW() WHERE project_id=$1 AND page_id=$2 AND rolled_back_at IS NULL',
       [projectId, pageId]
     );
-    console.log(`[rollback] Rolled back all changes for page ${pageId}`);
-    res.json({ success: true, rolled_back: chRes.rows.length });
+    console.log(`[rollback] Rolled back all changes for page ${pageId}${skipped.length ? ` (skipped unsafe: ${skipped.join('; ')})` : ''}`);
+    res.json({ success: true, rolled_back: chRes.rows.length - skipped.length, skipped });
   } catch (e) {
     console.error('[rollback] Error:', e.message);
     res.status(500).json({ error: e.message });
