@@ -21194,24 +21194,32 @@ async function runBulkOrphanLinks(projectId, pageIds, job) {
       const targetUrl = target.link || '';
       const targetTitle = target.title?.rendered || target.title?.raw || '';
       try {
+        // Pre-rank candidates by title-word overlap and send only the top 40 to the AI. Sending all pages
+        // (100s) makes each call huge + slow and can stall the whole job. Fewer, better candidates = fast.
+        const tWords = new Set((targetTitle + ' ' + (target.slug || '')).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3));
         const candidates = allWp
           .filter(p => p.id !== target.id)
           .map(p => {
             const plain = getContent(p).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-            return { id: p.id, title: p.title?.rendered || p.title?.raw || '', snippet: plain.slice(0, 150), alreadyLinks: getContent(p).toLowerCase().includes(targetUrl.toLowerCase().replace(/\/$/, '')) };
+            const title = p.title?.rendered || p.title?.raw || '';
+            const tl = (title + ' ' + (p.slug || '')).toLowerCase();
+            let score = 0; for (const w of tWords) if (tl.includes(w)) score += 2;
+            return { id: p.id, title, snippet: plain.slice(0, 120), score, alreadyLinks: getContent(p).toLowerCase().includes(targetUrl.toLowerCase().replace(/\/$/, '')) };
           })
-          .filter(p => !p.alreadyLinks);
+          .filter(p => !p.alreadyLinks)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 40);
         if (candidates.length === 0) { pickResults[idx] = { target, picks: [], message: 'all pages already link' }; job.done++; continue; }
         const pickResp = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2000,
+          max_tokens: 1500,
           system: `You are an SEO expert. Pick the most relevant pages that should link to a target page.
 For each selected page, identify a natural phrase in that page's content that can be wrapped in an <a> tag linking to the target.
 Pick 3-6 pages maximum. Only pick pages where a link would be genuinely relevant and natural.
 
 Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "reason": "why this link makes sense"}]}`,
           messages: [{ role: 'user', content: `Target page to link TO:\nTitle: "${targetTitle}"\nURL: ${targetUrl}\n\nCandidate pages (pick which ones should link to the target):\n${candidates.map(p => `- ID ${p.id}: "${p.title}" — ${p.snippet}`).join('\n')}` }],
-        });
+        }, { timeout: 30000, maxRetries: 1 }); // fail fast — a stuck call must not stall the job; deterministic fallback covers it
         let picks = [];
         try { picks = (JSON.parse(pickResp.content[0].text.match(/\{[\s\S]*\}/)[0]).pages) || []; } catch {}
         pickResults[idx] = { target, picks };
