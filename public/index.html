@@ -11333,6 +11333,7 @@
       const [citSort, setCitSort] = useState({ key: 'priority', dir: 'asc' });
       const [napReport, setNapReport] = useState(null);
       const [napLoading, setNapLoading] = useState(false);
+      const [napFilter, setNapFilter] = useState('all'); // all | aligned | verify | issues
       const runNapCheck = async () => {
         setNapLoading(true); setNapReport(null);
         try {
@@ -11511,9 +11512,20 @@
               {!napLoading && napReport && napReport.error && <div style={{ color: '#f59e0b', fontSize: 13 }}><i className="fas fa-circle-info" style={{ marginRight: 6 }} />{napReport.error}</div>}
               {!napLoading && napReport && !napReport.error && (() => {
                 const c = napReport.canonical || {};
-                const rows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain }]
+                const allRows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain }]
                   .concat((napReport.directories || []).map(d => ({ source: d.name, sub: d.hasUrl === false ? 'add listing URL to check' : (d.reachable ? (d.confirmed ? '' : 'listing not confirmed') : 'blocked / manual'), found: d.found || {}, match: d.match || {}, url: d.url })));
+                // Classify each row: 'issues' if any mismatch/not_found, 'aligned' if fully aligned, else 'verify'.
+                const rowKind = (m) => {
+                  const vals = [m.name, m.address, m.phone];
+                  if (vals.some(v => v === 'mismatch' || v === 'not_found')) return 'issues';
+                  if (vals.every(v => v === 'aligned')) return 'aligned';
+                  return 'verify';
+                };
+                const counts = { all: allRows.length, aligned: 0, verify: 0, issues: 0 };
+                allRows.forEach(r => { counts[rowKind(r.match)]++; });
+                const rows = napFilter === 'all' ? allRows : allRows.filter(r => rowKind(r.match) === napFilter);
                 const mismatches = napReport.summary?.mismatches || 0;
+                const linkColor = '#a78bfa';
                 return (
                   <div>
                     {/* Canonical GBP NAP */}
@@ -11529,6 +11541,15 @@
                       {mismatches ? `${mismatches} source${mismatches > 1 ? 's' : ''} don't match your GBP` : 'All checked sources match your GBP'}
                       {napReport.summary?.manual ? <span style={{ color: '#f59e0b', fontWeight: 400 }}> · {napReport.summary.manual} need manual check</span> : null}
                     </div>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+                      {[['all', 'All', counts.all], ['aligned', 'Aligned', counts.aligned], ['verify', 'Verify', counts.verify], ['issues', 'Issues', counts.issues]].map(([k, label, n]) => {
+                        const active = napFilter === k;
+                        const col = k === 'aligned' ? '#22c55e' : k === 'issues' ? '#ef4444' : k === 'verify' ? '#f59e0b' : 'var(--accent)';
+                        return (
+                          <button key={k} onClick={() => setNapFilter(k)} style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? col : 'var(--border)'}`, background: active ? col : 'transparent', color: active ? '#fff' : 'var(--text2)' }}>{label} <span style={{ opacity: 0.8 }}>{n}</span></button>
+                        );
+                      })}
+                    </div>
                     <div style={{ overflowX: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                         <thead><tr style={{ textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
@@ -11538,7 +11559,7 @@
                           {rows.map((r, i) => (
                             <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                               <td style={{ padding: '8px', fontWeight: 600 }}>
-                                {r.url ? <a href={(r.url.startsWith('http') ? r.url : 'https://' + r.url)} target="_blank" rel="noopener" style={{ color: 'var(--accent)' }}>{r.source}</a> : r.source}
+                                {r.url ? <a href={(r.url.startsWith('http') ? r.url : 'https://' + r.url)} target="_blank" rel="noopener" style={{ color: linkColor }}>{r.source}</a> : r.source}
                                 {r.sub ? <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}>{r.sub}</div> : null}
                               </td>
                               <td style={{ padding: '8px' }}>{napBadge(r.match.name)}{r.found.name ? <div style={{ fontSize: 10, color: 'var(--text3)' }}>{r.found.name}</div> : null}</td>
