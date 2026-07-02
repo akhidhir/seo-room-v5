@@ -2163,8 +2163,8 @@ app.post('/api/builds/:buildId/brief/upload', async (req, res) => {
     const rawText = pdfData.text;
     if (!rawText || rawText.trim().length < 50) return res.status(400).json({ error: 'Could not extract enough text from PDF' });
 
-    // 2. Send to Haiku for structured parsing
-    const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+    // 2. Send to Haiku for structured parsing (shared resilient client — retries + timeout)
+    if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
     const parseResponse = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8000,
@@ -18136,7 +18136,7 @@ app.post('/api/projects/:projectId/onpage-audit/research-keywords', async (req, 
     // ---- Source 2: AI-extracted candidates from page content ----
     if (page_title || h1 || content_snippet) {
       try {
-        const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+        // shared resilient client — retries + timeout (a raw new Anthropic() caused silent failures before)
         const aiResp = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 500,
