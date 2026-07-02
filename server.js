@@ -16802,8 +16802,11 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       const html = await napFetchHtml(url);
       if (!html) { directories.push({ name: d.name, url, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
       const pr = napPresence(html);
+      // Presence can only CONFIRM, never disprove: many listing pages (Bing, Yelp, Facebook, hipages…)
+      // render address/phone with JavaScript, so the raw HTML has the name but not the rest. Absent ≠ wrong —
+      // so a not-seen address/phone is "Verify" (manual), never a red "Not found" issue.
       const match = pr.name
-        ? { name: 'aligned', phone: pr.phone ? 'aligned' : 'not_found', address: pr.address ? 'aligned' : 'not_found' }
+        ? { name: 'aligned', phone: pr.phone ? 'aligned' : 'manual', address: pr.address ? 'aligned' : 'manual' }
         : { name: 'manual', phone: 'manual', address: 'manual' };
       directories.push({ name: d.name, url, hasUrl: true, reachable: true, confirmed: !!pr.name, match });
       await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
