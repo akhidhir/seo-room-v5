@@ -75,9 +75,19 @@ const pool = new Pool({
 });
 
 // Anthropic client
-// maxRetries: the SDK auto-retries connection drops ("Premature close"/ECONNRESET), 408/409/429/5xx
-// with exponential backoff. timeout gives slow responses room before the socket is cut.
-const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY, maxRetries: 5, timeout: 60000 }) : null;
+// ROOT CAUSE of the "Premature close" errors: Node 22 + undici 7 reuse a stale keep-alive socket to
+// api.anthropic.com and the response gets cut. Fix = a dedicated dispatcher with a very short keep-alive
+// so every request gets a fresh connection. maxRetries/timeout are belt-and-suspenders.
+let anthropicFetch;
+try {
+  const { Agent: UndiciAgent, fetch: undiciFetch } = require('undici');
+  const anthropicDispatcher = new UndiciAgent({ keepAliveTimeout: 1000, keepAliveMaxTimeout: 1000, connect: { timeout: 15000 }, bodyTimeout: 120000, headersTimeout: 120000 });
+  anthropicFetch = (url, init) => undiciFetch(url, { ...init, dispatcher: anthropicDispatcher });
+} catch (e) { console.error('[anthropic] undici dispatcher unavailable, using default fetch:', e.message); }
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic(Object.assign(
+  { apiKey: ANTHROPIC_API_KEY, maxRetries: 5, timeout: 60000 },
+  anthropicFetch ? { fetch: anthropicFetch } : {}
+)) : null;
 
 // Universal utility page slugs — pages that are NEVER service pages on any website
 const UTILITY_SLUGS = new Set([
