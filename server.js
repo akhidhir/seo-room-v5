@@ -41809,7 +41809,15 @@ app.get('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Sync ranks — calls DataForSEO or SerpAPI for all tracked keywords
+// Sync ranks — calls DataForSEO or SerpAPI for all tracked keywords.
+// Runs as a BACKGROUND JOB: 2 searches per keyword (desktop+mobile) takes minutes — a single
+// HTTP request dies (proxy timeout) before it finishes. Client polls /sync/status.
+const rankSyncJobs = {};
+app.get('/api/projects/:projectId/rank-tracking/sync/status', (req, res) => {
+  const job = rankSyncJobs[req.params.projectId];
+  if (!job) return res.json({ status: 'none' });
+  res.json({ status: job.running ? 'running' : (job.error ? 'failed' : 'done'), done: job.done, total: job.total, synced: job.synced, error: job.error || null, started_at: job.started_at, finished_at: job.finished_at || null });
+});
 app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
   // DataForSEO is the default — cheaper per query than SerpAPI. Falls back if not configured.
   let provider = (req.body?.provider || (DATAFORSEO_AUTH ? 'dataforseo' : 'serpapi')).toLowerCase(); // 'seodity', 'serpapi' or 'dataforseo'
@@ -41883,6 +41891,17 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const competitors = project.competitors || [];
     const competitorDomains = competitors.map(c => (c.domain || c).replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '').toLowerCase());
     const baseTime = Date.now();
+
+    // ── Start background job and respond immediately ──
+    const existingJob = rankSyncJobs[projectId];
+    if (existingJob && existingJob.running) {
+      return res.json({ started: true, already_running: true, done: existingJob.done, total: existingJob.total });
+    }
+    const job = { running: true, done: 0, total: kwRes.rows.length, synced: 0, error: null, started_at: new Date().toISOString() };
+    rankSyncJobs[projectId] = job;
+    res.json({ started: true, total: kwRes.rows.length });
+
+    (async () => { try {
 
     // Process keywords in parallel (5 at a time)
     for (let i = 0; i < kwRes.rows.length; i += 5) {
@@ -42109,6 +42128,8 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
         }
       });
       await Promise.all(promises);
+      job.done = Math.min(kwRes.rows.length, i + 5);
+      job.synced = results.filter(r => r && !r.error).length;
     }
 
     // Fetch search volumes via DataForSEO for all tracked keywords
@@ -42153,10 +42174,18 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const serpCost = provider === 'serpapi' ? serpCalls * API_COST_RATES.serpapi.google : serpCalls * API_COST_RATES.dataforseo.serp;
     await logApiCost(parseInt(projectId), 'serp_sync', provider, serpCalls, serpCost, { synced });
     console.log(`[rank-sync] Done. Synced ${synced}/${kwRes.rows.length} keywords. Cost: $${serpCost.toFixed(4)}`);
-    res.json({ ok: true, synced, results: results.filter(Boolean), cost: serpCost });
+    job.synced = synced;
+
+    } catch (bgErr) {
+      console.error('[rank-sync] Background job error:', bgErr.message);
+      job.error = bgErr.message;
+    } finally {
+      job.running = false;
+      job.finished_at = new Date().toISOString();
+    } })();
   } catch (e) {
     console.error('[rank-sync] Error:', e.message);
-    res.status(500).json({ error: e.message });
+    if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
 

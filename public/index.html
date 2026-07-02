@@ -29062,8 +29062,20 @@
         if (!force && !await confirmCost(project.id, 'serp_sync', { keywords: kwCount, provider: provider || 'dataforseo' })) return;
         setSyncing(true);
         try {
+          // Server runs the sync as a background job (desktop+mobile per keyword takes minutes) — poll status
           const r = await api(`/projects/${project.id}/rank-tracking/sync`, { method: 'POST', body: { provider: provider || 'dataforseo', force } });
-          if (r.ok) loadData(); else if (r.error) alert(r.error);
+          if (r.error) { alert(r.error); setSyncing(false); return; }
+          if (r.started) {
+            for (let tries = 0; tries < 400; tries++) {
+              await new Promise(rs => setTimeout(rs, 3000));
+              let st;
+              try { st = await api(`/projects/${project.id}/rank-tracking/sync/status`); } catch { continue; }
+              if (st.status === 'running') { loadData(); continue; } // refresh as partial results land
+              if (st.status === 'failed') { alert('Rank check failed: ' + (st.error || 'unknown error') + '. Results saved so far are shown.'); break; }
+              break; // done or none (e.g. server restarted mid-run — whatever saved is shown)
+            }
+          }
+          loadData();
         } catch (err) {
           if (err.canForce) {
             setSyncing(false);
