@@ -16760,34 +16760,69 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     };
     const matchAll = (nap) => ({ name: matchField(nap.name, 'name'), phone: matchField(nap.phone, 'phone'), address: matchField(nap.address, 'address') });
 
-    // Website check
+    // Presence check: does the canonical NAP actually appear on the page? Far more reliable than scraping
+    // the first business's schema — directory search pages list many businesses / show their own info,
+    // which is why the old approach reported random businesses. We never read another business's details.
+    const napPresence = (html) => {
+      const text = ' ' + String(html).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&') + ' ';
+      const tNorm = napNormName(text);
+      const digits = text.replace(/\D/g, '');
+      const cNameWords = cName.split(' ').filter(w => w.length > 2);
+      const cAddrWords = cAddr.split(' ').filter(w => w.length > 2);
+      const pc = (String(canonical.address).match(/\b(\d{4})\b/) || [])[1];
+      const name = !!(cName && (tNorm.includes(cName) || (cNameWords.length && cNameWords.every(w => tNorm.includes(w)))));
+      const phone = !!(cPhone && cPhone.length >= 8 && digits.includes(cPhone));
+      const addrHits = cAddrWords.filter(w => tNorm.includes(w)).length;
+      const address = !!((pc && text.includes(pc) && addrHits >= 1) || (cAddrWords.length && addrHits >= Math.min(3, cAddrWords.length)));
+      return { name, phone, address };
+    };
+
+    // Website (your own site) — a real mismatch if the NAP isn't present in the page.
     const dom = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
     const base = dom ? 'https://' + dom : null;
-    let websiteNAP = { name: null, phone: null, address: null }, websiteReachable = false;
+    let websiteReachable = false, wp = { name: false, phone: false, address: false };
     if (base) {
       for (const path of ['', '/contact', '/contact-us', '/contact-us/']) {
         const html = await napFetchHtml(base + path);
-        if (html) { websiteReachable = true; const nap = napExtract(html); websiteNAP.name = websiteNAP.name || nap.name; websiteNAP.phone = websiteNAP.phone || nap.phone; websiteNAP.address = websiteNAP.address || nap.address; if (websiteNAP.name && websiteNAP.phone && websiteNAP.address) break; }
+        if (html) { websiteReachable = true; const pr = napPresence(html); wp.name = wp.name || pr.name; wp.phone = wp.phone || pr.phone; wp.address = wp.address || pr.address; if (wp.name && wp.phone && wp.address) break; }
       }
     }
-    const website = { reachable: websiteReachable, found: websiteNAP, match: matchAll(websiteNAP) };
+    const website = { reachable: websiteReachable, match: websiteReachable ? { name: wp.name ? 'aligned' : 'mismatch', phone: wp.phone ? 'aligned' : 'mismatch', address: wp.address ? 'aligned' : 'mismatch' } : { name: 'manual', phone: 'manual', address: 'manual' } };
 
-    // Directory checks — only those with a saved listing URL
+    // Directories — ONLY report a result when your business name is actually on the page. If it isn't
+    // (wrong page, or a blocked/generic search page), we say "manual" instead of inventing a mismatch.
     const cits = (await pool.query(`SELECT directory_name, listing_url FROM citations WHERE project_id=$1 AND listing_url IS NOT NULL AND listing_url <> ''`, [projectId])).rows;
     const directories = [];
     for (const c of cits.slice(0, 30)) {
       const html = await napFetchHtml(c.listing_url);
-      if (!html) { directories.push({ name: c.directory_name, url: c.listing_url, reachable: false, found: {}, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
-      const nap = napExtract(html);
-      const match = matchAll(nap);
-      directories.push({ name: c.directory_name, url: c.listing_url, reachable: true, found: nap, match });
-      await pool.query(`UPDATE citations SET found_name=$1, found_phone=$2, found_address=$3, nap_match=$4 WHERE project_id=$5 AND directory_name=$6`,
-        [nap.name || null, nap.phone || null, nap.address || null, JSON.stringify(match), projectId, c.directory_name]).catch(() => {});
+      if (!html) { directories.push({ name: c.directory_name, url: c.listing_url, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+      const pr = napPresence(html);
+      const match = pr.name
+        ? { name: 'aligned', phone: pr.phone ? 'aligned' : 'not_found', address: pr.address ? 'aligned' : 'not_found' }
+        : { name: 'manual', phone: 'manual', address: 'manual' };
+      directories.push({ name: c.directory_name, url: c.listing_url, reachable: true, confirmed: !!pr.name, match });
+      await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, c.directory_name]).catch(() => {});
     }
 
-    const allChecks = [website, ...directories.filter(d => d.reachable)];
-    const mismatches = allChecks.filter(x => x.match.name === 'mismatch' || x.match.phone === 'mismatch' || x.match.address === 'mismatch').length;
-    res.json({ canonical, website, directories, summary: { sources_checked: allChecks.length, mismatches, manual: directories.filter(d => !d.reachable).length }, checked_at: new Date().toISOString() });
+    const confirmed = directories.filter(d => d.confirmed);
+    const mismatches = (websiteReachable ? [website] : []).concat(confirmed).filter(x => x.match.name === 'mismatch' || x.match.phone === 'mismatch' || x.match.address === 'mismatch').length;
+    const report = { canonical, website, directories, summary: { sources_checked: (websiteReachable ? 1 : 0) + confirmed.length, mismatches, manual: directories.filter(d => !d.confirmed).length }, checked_at: new Date().toISOString() };
+    // Persist so it survives navigation/reload.
+    try {
+      await pool.query(`DELETE FROM project_integrations WHERE project_id=$1 AND kind='nap_report'`, [projectId]);
+      await pool.query(`INSERT INTO project_integrations (project_id, kind, config, status, updated_at) VALUES ($1, 'nap_report', $2, 'ok', NOW())`, [projectId, JSON.stringify(report)]);
+    } catch (e) {}
+    res.json(report);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Load the last saved NAP report (so results don't disappear on navigation/reload).
+app.get('/api/projects/:projectId/nap-check', async (req, res) => {
+  try {
+    const row = (await pool.query(`SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='nap_report'`, [req.params.projectId])).rows[0];
+    if (!row) return res.json({ saved: false });
+    const report = typeof row.config === 'string' ? JSON.parse(row.config) : row.config;
+    res.json({ saved: true, ...report, saved_at: row.updated_at });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

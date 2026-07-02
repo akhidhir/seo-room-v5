@@ -11342,6 +11342,10 @@
         } catch (e) { setNapReport({ error: e.message }); }
         setNapLoading(false);
       };
+      const loadNapReport = async () => {
+        if (!project?.id) return;
+        try { const r = await api(`/projects/${project.id}/nap-check`); if (r && r.saved) setNapReport(r); } catch (e) {}
+      };
       const napBadge = (s) => {
         const map = { aligned: ['#22c55e', '✓', 'Aligned'], mismatch: ['#ef4444', '✗', 'Mismatch'], not_found: ['#9ca3af', '—', 'Not found'], manual: ['#f59e0b', '?', 'Verify'] };
         const [c, icon, label] = map[s] || map.not_found;
@@ -11365,7 +11369,7 @@
       };
 
       useEffect(() => {
-        if (project?.id) loadCitations();
+        if (project?.id) { loadCitations(); loadNapReport(); }
       }, [project?.id]);
 
       const loadCitations = async () => {
