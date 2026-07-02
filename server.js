@@ -17626,8 +17626,11 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
     const wpAuth = getWpAuthHeaders(project);
     let allPages = [];
     try {
-      allPages = await fetchAllWpItems(wpBase, wpAuth, 'pages');
-      allPages = allPages.concat(await fetchAllWpItems(wpBase, wpAuth, 'posts'));
+      // context=edit (when authed) so meta._elementor_data comes back — Elementor-added links
+      // (e.g. from Fix Orphans) live there, NOT in content.rendered, and must count as inbound links
+      const editCtx = wpAuth ? '&context=edit' : '';
+      allPages = await fetchAllWpItems(wpBase, wpAuth, 'pages', editCtx);
+      allPages = allPages.concat(await fetchAllWpItems(wpBase, wpAuth, 'posts', editCtx));
     } catch (crawlErr) {
       console.error('[onpage-audit] Crawl aborted:', crawlErr.message);
       return res.status(502).json({ error: 'WordPress crawl failed mid-way: ' + crawlErr.message + '. No partial audit was saved — run the audit again.' });
@@ -17799,7 +17802,11 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       const inboundFrom = [];
       for (const pg of allPages) {
         if (pg.id === result.id) continue;
-        const pgContent = pg.content?.rendered || '';
+        let pgContent = pg.content?.rendered || '';
+        // Elementor pages: builder-added links live in _elementor_data (JSON), not content.rendered.
+        // Unescape the JSON (\/ and \") so the same href regex finds those links too.
+        const elRaw = pg.meta?._elementor_data;
+        if (elRaw && typeof elRaw === 'string') pgContent += ' ' + elRaw.replace(/\\\//g, '/').replace(/\\"/g, '"');
         // Check if this page's content links to our target
         const hrefRegex = /href=["']([^"']+)["']/gi;
         let hm;
