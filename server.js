@@ -21188,6 +21188,19 @@ async function runBulkOrphanLinks(projectId, pageIds, job) {
   // Mutable content cache so sequential writes never clobber each other
   const getContent = (p) => (p._cachedContent != null) ? p._cachedContent : (p.content?.raw || p.content?.rendered || '');
   const getElementor = (p) => (p._cachedElementor != null) ? p._cachedElementor : p.meta?._elementor_data;
+  // TRUE only if str contains a real <a href> link to url — NOT just the URL as plain text.
+  // Must match the audit's inbound-link standard, or we skip pages the audit still counts as orphans.
+  const linksTo = (str, url) => {
+    if (!str || !url) return false;
+    const u = url.replace(/\/$/, '');
+    return str.includes(`href="${u}`) || str.includes(`href='${u}`) || str.includes(`href=\\"${u}`) || str.includes(`href=\\'${u}`);
+  };
+  // Does this source page already REALLY link to the target (content or Elementor data)?
+  const alreadyLinksTo = (p, url) => {
+    const el = getElementor(p);
+    const elStr = el ? (typeof el === 'string' ? el : JSON.stringify(el)) : '';
+    return linksTo(getContent(p), url) || linksTo(elStr, url);
+  };
 
   // 2. AI picks in parallel (5 workers) — read-only, safe to parallelise
   const targets = pageIds.map(pid => allWp.find(p => String(p.id) === String(pid))).filter(Boolean);
@@ -21211,7 +21224,7 @@ async function runBulkOrphanLinks(projectId, pageIds, job) {
             const title = p.title?.rendered || p.title?.raw || '';
             const tl = (title + ' ' + (p.slug || '')).toLowerCase();
             let score = 0; for (const w of tWords) if (tl.includes(w)) score += 2;
-            return { id: p.id, title, snippet: plain.slice(0, 120), score, alreadyLinks: getContent(p).toLowerCase().includes(targetUrl.toLowerCase().replace(/\/$/, '')) };
+            return { id: p.id, title, snippet: plain.slice(0, 120), score, alreadyLinks: alreadyLinksTo(p, targetUrl) };
           })
           .filter(p => !p.alreadyLinks)
           .sort((a, b) => b.score - a.score)
@@ -21267,7 +21280,7 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
       let parsed;
       try { parsed = typeof elData === 'string' ? JSON.parse(elData) : JSON.parse(JSON.stringify(elData)); } catch { return false; }
       const originalJson = typeof elData === 'string' ? elData : JSON.stringify(elData);
-      if (originalJson.includes(targetUrl)) return false;
+      if (linksTo(originalJson, targetUrl)) return false;
       let modified = false;
       let lastTextEl = null;
       const walk = (els) => {
@@ -21309,7 +21322,7 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
       return false;
     } else {
       const content = getContent(source);
-      if (!content || content.includes(targetUrl)) return false;
+      if (!content || linksTo(content, targetUrl)) return false;
       let newContent = null;
       if (anchor) {
         const idx = findAnchorPos(content, anchor);
@@ -21366,7 +21379,7 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
         .filter(p => p.id !== pr.target.id)
         .map(p => {
           const c = getContent(p);
-          if (!c || c.includes(targetUrl)) return null;
+          if (!c || alreadyLinksTo(p, targetUrl)) return null;
           const title = ((p.title?.rendered || p.title?.raw || '') + ' ' + (p.slug || '')).toLowerCase();
           let score = 0; for (const w of tWords) if (title.includes(w)) score += 2;
           if (/blog|news|article|resource|service|guide/i.test(p.slug || '')) score += 1; // hubs are natural sources
