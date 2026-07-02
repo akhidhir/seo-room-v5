@@ -11513,7 +11513,7 @@
               {!napLoading && napReport && !napReport.error && (() => {
                 const c = napReport.canonical || {};
                 const allRows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain, confirmed: true, isWebsite: true }]
-                  .concat((napReport.directories || []).map(d => ({ source: d.name, sub: d.hasUrl === false ? 'add listing URL to check' : (d.reachable ? (d.confirmed ? '' : 'listing not confirmed') : 'blocked / manual'), found: d.found || {}, match: d.match || {}, url: d.url, confirmed: !!d.confirmed, isWebsite: false })));
+                  .concat((napReport.directories || []).map(d => ({ source: d.name, sub: d.hasUrl === false ? 'add listing URL to check' : (d.wrongUrl ? 'saved link is a different business — click to re-find' : (d.reachable ? (d.confirmed ? '' : 'listing not confirmed') : 'blocked / manual')), found: d.found || {}, match: d.match || {}, url: d.url, confirmed: !!d.confirmed, isWebsite: false })));
                 // Only trust a stored listing URL when we actually confirmed your business on it. Otherwise the
                 // stored URL may point at the wrong business (bad seed data), so link to a safe search instead.
                 const napSearchUrl = (dirName) => `https://www.google.com/search?q=${encodeURIComponent('"' + ((napReport.canonical || {}).name || '') + '" ' + dirName)}`;

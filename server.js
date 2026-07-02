@@ -16760,21 +16760,64 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     };
     const matchAll = (nap) => ({ name: matchField(nap.name, 'name'), phone: matchField(nap.phone, 'phone'), address: matchField(nap.address, 'address') });
 
-    // Presence check: does the canonical NAP actually appear on the page? Far more reliable than scraping
-    // the first business's schema — directory search pages list many businesses / show their own info,
-    // which is why the old approach reported random businesses. We never read another business's details.
-    const napPresence = (html) => {
-      const text = ' ' + String(html).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&') + ' ';
+    // Confirm the canonical NAP against a page. Reads BOTH the visible text AND the structured data
+    // (JSON-LD, tel: links, og/title) that sits in the raw HTML even when the page is JS-rendered —
+    // that's how we read address/phone off Bing/Yelp/Facebook/TrueLocal without a headless browser.
+    // We only ever confirm OUR business, never read another listing's details. If the page clearly names
+    // a DIFFERENT business and ours is nowhere on it, the saved URL is wrong (wrongUrl=true).
+    const cNameWords = cName.split(' ').filter(w => w.length > 2);
+    const cAddrWords = cAddr.split(' ').filter(w => w.length > 2);
+    const pc = (String(canonical.address).match(/\b(\d{4})\b/) || [])[1];
+    const nameMatchesNorm = (n) => !!(n && (n.includes(cName) || (cNameWords.length && cNameWords.every(w => n.includes(w)))));
+    const napConfirm = (html) => {
+      const raw = String(html || '');
+      // --- Structured data (present in raw HTML even for JS-rendered pages) ---
+      const sdNames = [], sdPhones = [], sdAddrs = [];
+      const ldBlocks = raw.match(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi) || [];
+      for (const b of ldBlocks) {
+        const jsonStr = b.replace(/<script[^>]*>/i, '').replace(/<\/script>/i, '').trim();
+        try {
+          const walk = (o) => {
+            if (!o || typeof o !== 'object') return;
+            if (Array.isArray(o)) { o.forEach(walk); return; }
+            if (typeof o.name === 'string') sdNames.push(o.name);
+            if (o.telephone) sdPhones.push(String(o.telephone));
+            if (o.address) {
+              const a = o.address;
+              if (typeof a === 'string') sdAddrs.push(a);
+              else if (typeof a === 'object') sdAddrs.push([a.streetAddress, a.addressLocality, a.addressRegion, a.postalCode].filter(Boolean).join(', '));
+            }
+            Object.values(o).forEach(v => { if (v && typeof v === 'object') walk(v); });
+          };
+          walk(JSON.parse(jsonStr));
+        } catch (e) {}
+      }
+      const telHrefs = (raw.match(/href=["']tel:([^"']+)["']/gi) || []).map(m => m.replace(/.*tel:/i, ''));
+      const ogName = (raw.match(/property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i) || raw.match(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || [])[1] || '';
+      const titleTag = (raw.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
+      // --- Visible text ---
+      const text = ' ' + raw.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&') + ' ';
       const tNorm = napNormName(text);
       const digits = text.replace(/\D/g, '');
-      const cNameWords = cName.split(' ').filter(w => w.length > 2);
-      const cAddrWords = cAddr.split(' ').filter(w => w.length > 2);
-      const pc = (String(canonical.address).match(/\b(\d{4})\b/) || [])[1];
-      const name = !!(cName && (tNorm.includes(cName) || (cNameWords.length && cNameWords.every(w => tNorm.includes(w)))));
-      const phone = !!(cPhone && cPhone.length >= 8 && digits.includes(cPhone));
+      // Name
+      const structNamesNorm = sdNames.concat(ogName, titleTag).map(napNormName).filter(Boolean);
+      const name = !!(cName && (tNorm.includes(cName) || (cNameWords.length && cNameWords.every(w => tNorm.includes(w))) || structNamesNorm.some(nameMatchesNorm)));
+      // Phone (structured tel + tel: links + visible digits)
+      const allPhones = sdPhones.concat(telHrefs).map(napNormPhone).filter(Boolean);
+      const phone = !!(cPhone && cPhone.length >= 8 && (allPhones.includes(cPhone) || digits.includes(cPhone)));
+      // Address (structured PostalAddress overlap, or visible text overlap)
+      const structAddrHit = sdAddrs.some(a => {
+        const ft = new Set(napNormAddr(a).split(' ').filter(w => w.length > 2));
+        const ov = cAddrWords.filter(w => ft.has(w)).length;
+        return (pc && String(a).includes(pc) && ov >= 1) || (cAddrWords.length && ov >= Math.min(3, cAddrWords.length));
+      });
       const addrHits = cAddrWords.filter(w => tNorm.includes(w)).length;
-      const address = !!((pc && text.includes(pc) && addrHits >= 1) || (cAddrWords.length && addrHits >= Math.min(3, cAddrWords.length)));
-      return { name, phone, address };
+      const addrInText = !!((pc && text.includes(pc) && addrHits >= 1) || (cAddrWords.length && addrHits >= Math.min(3, cAddrWords.length)));
+      const address = !!(structAddrHit || addrInText);
+      // Wrong URL: page names a clearly different business and ours is nowhere on it.
+      const otherBusiness = structNamesNorm.some(n => n.length > 3 && !nameMatchesNorm(n));
+      const wrongUrl = !name && otherBusiness;
+      return { name, phone, address, wrongUrl };
     };
 
     // Website (your own site) — a real mismatch if the NAP isn't present in the page.
@@ -16784,7 +16827,7 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     if (base) {
       for (const path of ['', '/contact', '/contact-us', '/contact-us/']) {
         const html = await napFetchHtml(base + path);
-        if (html) { websiteReachable = true; const pr = napPresence(html); wp.name = wp.name || pr.name; wp.phone = wp.phone || pr.phone; wp.address = wp.address || pr.address; if (wp.name && wp.phone && wp.address) break; }
+        if (html) { websiteReachable = true; const pr = napConfirm(html); wp.name = wp.name || pr.name; wp.phone = wp.phone || pr.phone; wp.address = wp.address || pr.address; if (wp.name && wp.phone && wp.address) break; }
       }
     }
     const website = { reachable: websiteReachable, match: websiteReachable ? { name: wp.name ? 'aligned' : 'mismatch', phone: wp.phone ? 'aligned' : 'mismatch', address: wp.address ? 'aligned' : 'mismatch' } : { name: 'manual', phone: 'manual', address: 'manual' } };
@@ -16801,14 +16844,15 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       if (!url) { directories.push({ name: d.name, url: '', hasUrl: false, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
       const html = await napFetchHtml(url);
       if (!html) { directories.push({ name: d.name, url, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
-      const pr = napPresence(html);
-      // Presence can only CONFIRM, never disprove: many listing pages (Bing, Yelp, Facebook, hipages…)
-      // render address/phone with JavaScript, so the raw HTML has the name but not the rest. Absent ≠ wrong —
-      // so a not-seen address/phone is "Verify" (manual), never a red "Not found" issue.
-      const match = pr.name
-        ? { name: 'aligned', phone: pr.phone ? 'aligned' : 'manual', address: pr.address ? 'aligned' : 'manual' }
-        : { name: 'manual', phone: 'manual', address: 'manual' };
-      directories.push({ name: d.name, url, hasUrl: true, reachable: true, confirmed: !!pr.name, match });
+      const pr = napConfirm(html);
+      // We can positively CONFIRM (name/phone/address seen in text or structured data) but can't disprove —
+      // an unseen field is "Verify" (manual), never a red false "Not found". A wrongUrl means the saved link
+      // points at a different business, so we flag it for re-linking instead of pretending it's checked.
+      let match, wrongUrl = false;
+      if (pr.wrongUrl) { wrongUrl = true; match = { name: 'manual', phone: 'manual', address: 'manual' }; }
+      else if (pr.name) match = { name: 'aligned', phone: pr.phone ? 'aligned' : 'manual', address: pr.address ? 'aligned' : 'manual' };
+      else match = { name: 'manual', phone: 'manual', address: 'manual' };
+      directories.push({ name: d.name, url, hasUrl: true, reachable: true, confirmed: !!pr.name, wrongUrl, match });
       await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
     }
 
