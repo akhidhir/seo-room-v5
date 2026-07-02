@@ -16789,19 +16789,24 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     }
     const website = { reachable: websiteReachable, match: websiteReachable ? { name: wp.name ? 'aligned' : 'mismatch', phone: wp.phone ? 'aligned' : 'mismatch', address: wp.address ? 'aligned' : 'mismatch' } : { name: 'manual', phone: 'manual', address: 'manual' } };
 
-    // Directories — ONLY report a result when your business name is actually on the page. If it isn't
-    // (wrong page, or a blocked/generic search page), we say "manual" instead of inventing a mismatch.
-    const cits = (await pool.query(`SELECT directory_name, listing_url FROM citations WHERE project_id=$1 AND listing_url IS NOT NULL AND listing_url <> ''`, [projectId])).rows;
+    // Show EVERY directory (not just ones with a URL). Google Business Profile is the source of truth,
+    // so it's excluded — checking it against itself is meaningless. Directories with a saved listing URL
+    // are fetched + presence-checked; ones without a URL are "manual" (add a URL to check them).
+    const citRows = (await pool.query(`SELECT directory_name, listing_url FROM citations WHERE project_id=$1`, [projectId])).rows;
+    const urlByName = {}; for (const r of citRows) urlByName[r.directory_name] = (r.listing_url || '').trim();
     const directories = [];
-    for (const c of cits.slice(0, 30)) {
-      const html = await napFetchHtml(c.listing_url);
-      if (!html) { directories.push({ name: c.directory_name, url: c.listing_url, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+    for (const d of AUSTRALIAN_DIRECTORIES) {
+      if (/google business profile|google my business|google maps/i.test(d.name)) continue; // it's the source of truth
+      const url = urlByName[d.name] || '';
+      if (!url) { directories.push({ name: d.name, url: '', hasUrl: false, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+      const html = await napFetchHtml(url);
+      if (!html) { directories.push({ name: d.name, url, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
       const pr = napPresence(html);
       const match = pr.name
         ? { name: 'aligned', phone: pr.phone ? 'aligned' : 'not_found', address: pr.address ? 'aligned' : 'not_found' }
         : { name: 'manual', phone: 'manual', address: 'manual' };
-      directories.push({ name: c.directory_name, url: c.listing_url, reachable: true, confirmed: !!pr.name, match });
-      await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, c.directory_name]).catch(() => {});
+      directories.push({ name: d.name, url, hasUrl: true, reachable: true, confirmed: !!pr.name, match });
+      await pool.query(`UPDATE citations SET nap_match=$1 WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});
     }
 
     const confirmed = directories.filter(d => d.confirmed);

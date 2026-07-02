@@ -11512,7 +11512,7 @@
               {!napLoading && napReport && !napReport.error && (() => {
                 const c = napReport.canonical || {};
                 const rows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain }]
-                  .concat((napReport.directories || []).map(d => ({ source: d.name, sub: d.reachable ? '' : 'blocked / manual', found: d.found || {}, match: d.match || {}, url: d.url })));
+                  .concat((napReport.directories || []).map(d => ({ source: d.name, sub: d.hasUrl === false ? 'add listing URL to check' : (d.reachable ? (d.confirmed ? '' : 'listing not confirmed') : 'blocked / manual'), found: d.found || {}, match: d.match || {}, url: d.url })));
                 const mismatches = napReport.summary?.mismatches || 0;
                 return (
                   <div>
