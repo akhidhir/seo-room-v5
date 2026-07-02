@@ -15197,6 +15197,12 @@
                   <i className="fas fa-clipboard-check" style={{ marginRight: 5 }} />Review AI Changes ({pendingChanges.count})
                 </button>
               )}
+              {pages.filter(p => !p.focusKeyword).length > 0 && (
+                <button className="btn btn-primary" onClick={handleSuggestKeywords} disabled={fixAllState && (fixAllState.phase === 'keywords' || fixAllState.phase === 'applying-kw')}
+                  style={{ fontSize: 13, padding: '6px 14px', background: 'rgba(99,102,241,0.15)', color: 'var(--accent)', border: '1px solid var(--accent)', fontWeight: 700 }}>
+                  <i className="fas fa-lightbulb" style={{ marginRight: 5 }} />Suggest Keywords ({pages.filter(p => !p.focusKeyword).length})
+                </button>
+              )}
               {pages.length > 0 && (
                 <button className="btn btn-primary" onClick={handleFixEverything} disabled={fixEverything && fixEverything.running}
                   style={{ fontSize: 13, padding: '6px 14px', background: (fixEverything && fixEverything.running) ? 'var(--bg3)' : 'linear-gradient(135deg, #22c55e, #14b8a6)', color: '#fff', border: 'none', fontWeight: 700 }}>
