@@ -1606,7 +1606,7 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/drive/callback', '/api/debug/serp-test', '/api/debug/maps-test', '/api/debug/dfs-test', '/api/test-gpthuman'];
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/drive/callback', '/api/debug/serp-test', '/api/debug/maps-test', '/api/debug/dfs-test', '/api/test-gpthuman', '/api/debug/ai-test'];
   // Allow emergency restore without auth
   if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
   // Allow invite routes without auth (client signup flow)
@@ -15336,6 +15336,17 @@ async function aiCreate(params, tries = 3) {
   }
   throw lastErr;
 }
+// DEBUG: hit Anthropic once and return the exact result/error (open in browser to see the real cause).
+app.get('/api/debug/ai-test', async (req, res) => {
+  if (!anthropic) return res.json({ ok: false, error: 'ANTHROPIC_API_KEY not set on the server' });
+  const t0 = Date.now();
+  try {
+    const r = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 40, messages: [{ role: 'user', content: 'Reply with the single word: hello' }] });
+    res.json({ ok: true, ms: Date.now() - t0, model: r.model, text: (r.content && r.content[0] && r.content[0].text) || '' });
+  } catch (e) {
+    res.json({ ok: false, ms: Date.now() - t0, status: e && e.status, name: e && e.name, cause: e && e.cause && (e.cause.code || e.cause.message), message: String((e && e.message) || e) });
+  }
+});
 app.post('/api/projects/:projectId/gbp-optimise/draft', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const type = (req.body?.type || '').toLowerCase();
