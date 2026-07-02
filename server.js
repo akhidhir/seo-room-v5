@@ -16750,6 +16750,22 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     };
     if (!canonical.name && !canonical.phone) return res.json({ error: 'No GBP profile found for this project — connect/sync RatingCaptain first.' });
 
+    // Guard: the saved GBP profile must actually belong to THIS project. If a different business's profile
+    // was synced (wrong/empty GBP Location ID), don't silently compare every listing against the wrong NAP —
+    // surface it so the user fixes the source instead of chasing phantom mismatches.
+    if (rc || gbp) {
+      const projDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*/, '').toLowerCase();
+      const profWebsite = String(rc?.websiteUri || gbp?.website || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*/, '').toLowerCase();
+      const projName = napNormName(project.business_name || project.name || '');
+      const profName = napNormName(canonical.name);
+      const projWords = projName.split(' ').filter(w => w.length > 3);
+      const nameRelated = !!(projName && profName && (profName.includes(projName) || projName.includes(profName) || projWords.some(w => profName.includes(w))));
+      const domainRelated = !!(projDomain && profWebsite && (profWebsite.includes(projDomain) || projDomain.includes(profWebsite)));
+      if (!nameRelated && !domainRelated) {
+        return res.json({ error: `The GBP profile saved for this project is "${canonical.name}"${profWebsite ? ` (${profWebsite})` : ''}, which doesn't match ${project.name}${projDomain ? ` (${projDomain})` : ''}. Set this project's own GBP Location ID in Project Settings → GBP, then re-sync from GBP Optimise.`, profile_mismatch: true });
+      }
+    }
+
     const cName = napNormName(canonical.name), cPhone = napNormPhone(canonical.phone), cAddr = napNormAddr(canonical.address);
     const matchField = (found, kind) => {
       if (!found) return 'not_found';
