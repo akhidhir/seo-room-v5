@@ -16737,6 +16737,54 @@ async function napFetchHtml(url) {
     return await r.text();
   } catch (e) { return null; }
 }
+// ── Headless Chromium (puppeteer-core + system chromium from nixpacks.toml) ──
+// Used to CONFIRM NAP on JS-rendered directory pages (Bing, Apple, Facebook…) where the raw HTML
+// has no address/phone. Fully optional: if chromium is missing or fails, everything degrades to
+// the static check exactly as before — never breaks the app.
+let _headlessBrowser = null;
+async function getHeadlessBrowser() {
+  if (_headlessBrowser) return _headlessBrowser;
+  try {
+    const puppeteer = require('puppeteer-core');
+    const { execSync } = require('child_process');
+    const exe = process.env.CHROME_PATH || (() => {
+      try { return execSync('which chromium chromium-browser google-chrome 2>/dev/null | head -1', { encoding: 'utf8' }).trim(); } catch { return ''; }
+    })();
+    if (!exe) { console.log('[headless] no chromium binary — JS-rendered NAP confirmation unavailable'); return null; }
+    _headlessBrowser = await puppeteer.launch({
+      executablePath: exe, headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote'],
+    });
+    _headlessBrowser.on('disconnected', () => { _headlessBrowser = null; });
+    console.log('[headless] chromium launched:', exe);
+    return _headlessBrowser;
+  } catch (e) { console.log('[headless] launch failed:', e.message); _headlessBrowser = null; return null; }
+}
+async function renderPageText(url, timeoutMs = 18000) {
+  const browser = await getHeadlessBrowser();
+  if (!browser) return null;
+  let page;
+  try {
+    page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36');
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: timeoutMs });
+    await new Promise(r => setTimeout(r, 1500)); // late-loading widgets
+    return await page.evaluate(() => document.body ? document.body.innerText : '');
+  } catch (e) {
+    console.log('[headless] render failed:', url.slice(0, 80), '-', e.message.slice(0, 80));
+    return null;
+  } finally { try { if (page) await page.close(); } catch {} }
+}
+
+// NAP check runs as a background job — headless renders can take minutes, an HTTP request dies first.
+const napCheckJobs = {};
+app.get('/api/projects/:projectId/nap-check/status', (req, res) => {
+  const job = napCheckJobs[req.params.projectId];
+  if (!job) return res.json({ status: 'none' });
+  res.json({ status: job.running ? 'running' : (job.error ? 'failed' : 'done'), done: job.done, total: job.total, current: job.current || '', error: job.error || null });
+});
+
 app.post('/api/projects/:projectId/nap-check', async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   try {
@@ -16771,6 +16819,15 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
         return res.json({ error: `The GBP profile saved for this project is "${canonical.name}"${profWebsite ? ` (${profWebsite})` : ''}, which doesn't match ${project.name}${projDomain ? ` (${projDomain})` : ''}. Set this project's own GBP Location ID in Project Settings → GBP, then re-sync from GBP Optimise.`, profile_mismatch: true });
       }
     }
+
+    // ── Background job: 25 directory fetches + headless renders take minutes — HTTP dies first ──
+    const existingNap = napCheckJobs[projectId];
+    if (existingNap && existingNap.running) return res.json({ started: true, already_running: true });
+    const job = { running: true, done: 0, total: AUSTRALIAN_DIRECTORIES.length + 1, current: 'Checking your website…', error: null };
+    napCheckJobs[projectId] = job;
+    res.json({ started: true, total: job.total });
+
+    (async () => { try {
 
     const cName = napNormName(canonical.name), cPhone = napNormPhone(canonical.phone), cAddr = napNormAddr(canonical.address);
     const matchField = (found, kind) => {
@@ -16875,14 +16932,41 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       return domain ? `https://www.google.com/search?q=${encodeURIComponent('site:' + domain + ' "' + nm + '"')}` : `https://www.google.com/search?q=${encodeURIComponent('"' + nm + '" ' + d.name)}`;
     };
     const directories = [];
+    let rendersLeft = 12; // headless budget per run — enough for every JS-heavy directory with a saved URL
     for (const d of AUSTRALIAN_DIRECTORIES) {
       if (/google business profile|google my business|google maps/i.test(d.name)) continue; // it's the source of truth
+      job.done++; job.current = `Checking ${d.name}…`;
       const searchUrl = napSearchUrlFor(d);
       const url = urlByName[d.name] || '';
       if (!url) { directories.push({ name: d.name, url: '', searchUrl, hasUrl: false, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
-      const html = await napFetchHtml(url);
+      let html = await napFetchHtml(url);
+      let reachedVia = html ? 'static' : null;
+      // Static fetch failed entirely (bot-blocked / JS shell) — try a real browser once
+      if (!html && rendersLeft > 0) {
+        rendersLeft--;
+        const rendered = await renderPageText(url);
+        if (rendered && rendered.length > 100) { html = rendered; reachedVia = 'headless'; }
+      }
       if (!html) { directories.push({ name: d.name, url, searchUrl, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
-      const pr = napConfirm(html);
+      let pr = napConfirm(html);
+      // Escalate: static HTML confirmed only partially (JS-rendered listing) → read the REAL page
+      // with headless chromium and merge what the browser sees. This is what turns Bing/Apple
+      // "Verify" rows into confirmed Aligned rows with accurate data.
+      if (reachedVia === 'static' && !pr.wrongUrl && (!pr.name || !pr.phone || !pr.address) && rendersLeft > 0) {
+        rendersLeft--;
+        job.current = `Rendering ${d.name} in browser…`;
+        const rendered = await renderPageText(url);
+        if (rendered && rendered.length > 100) {
+          const pr2 = napConfirm(rendered);
+          pr = {
+            name: pr.name || pr2.name,
+            phone: pr.phone || pr2.phone,
+            address: pr.address || pr2.address,
+            // only "wrong URL" if neither view found our business and the rendered page names another
+            wrongUrl: (pr.wrongUrl || pr2.wrongUrl) && !pr.name && !pr2.name,
+          };
+        }
+      }
       // We can positively CONFIRM (name/phone/address seen in text or structured data) but can't disprove —
       // an unseen field is "Verify" (manual), never a red false "Not found". A wrongUrl means the saved link
       // points at a different business, so we flag it for re-linking instead of pretending it's checked.
@@ -16904,8 +16988,18 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       await pool.query(`DELETE FROM project_integrations WHERE project_id=$1 AND kind='nap_report'`, [projectId]);
       await pool.query(`INSERT INTO project_integrations (project_id, kind, config, status, updated_at) VALUES ($1, 'nap_report', $2, 'ok', NOW())`, [projectId, JSON.stringify(report)]);
     } catch (e) {}
-    res.json(report);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    console.log(`[nap-check] Done for project ${projectId}: ${confirmed.length} confirmed, ${report.summary.manual} manual, ${mismatches} mismatches`);
+
+    } catch (bgErr) {
+      console.error('[nap-check] Background job error:', bgErr.message);
+      job.error = bgErr.message;
+    } finally {
+      job.running = false;
+    } })();
+  } catch (e) {
+    console.error('[nap-check] Error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
 });
 
 // Load the last saved NAP report (so results don't disappear on navigation/reload).

@@ -11334,14 +11334,30 @@
       const [napReport, setNapReport] = useState(null);
       const [napLoading, setNapLoading] = useState(false);
       const [napFilter, setNapFilter] = useState('all'); // all | aligned | verify | issues
+      const [napProgress, setNapProgress] = useState('');
       const runNapCheck = async () => {
-        setNapLoading(true); setNapReport(null);
+        setNapLoading(true); setNapReport(null); setNapProgress('');
         try {
+          // Background job (headless browser renders take minutes) — start, poll, then load the saved report
           const r = await api(`/projects/${project.id}/nap-check`, { method: 'POST' });
-          if (r && r.error) setNapReport({ error: r.error });
-          else setNapReport(r);
+          if (r && r.error) { setNapReport({ error: r.error }); setNapLoading(false); return; }
+          if (r && r.started) {
+            for (let tries = 0; tries < 200; tries++) {
+              await new Promise(rs => setTimeout(rs, 3000));
+              let st;
+              try { st = await api(`/projects/${project.id}/nap-check/status`); } catch { continue; }
+              if (st.status === 'running') { setNapProgress(st.current || `${st.done || 0}/${st.total || ''}`); continue; }
+              if (st.status === 'failed') { setNapReport({ error: 'NAP check failed: ' + (st.error || 'unknown error') }); setNapLoading(false); setNapProgress(''); return; }
+              break; // done (or server restarted — load whatever was saved)
+            }
+            const saved = await api(`/projects/${project.id}/nap-check`);
+            if (saved && saved.saved) setNapReport(saved);
+            else setNapReport({ error: 'Check finished but no report was saved — try again.' });
+          } else if (r) {
+            setNapReport(r); // old-server shape (report returned directly)
+          }
         } catch (e) { setNapReport({ error: e.message }); }
-        setNapLoading(false);
+        setNapLoading(false); setNapProgress('');
       };
       const loadNapReport = async () => {
         if (!project?.id) return;
@@ -11507,7 +11523,7 @@
               </button>
             </div>
             <div style={{ padding: 16 }}>
-              {napLoading && <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 13, padding: 12 }}><span className="spinner" style={{ marginRight: 8 }} />Crawling website + directory listings and comparing to GBP…</div>}
+              {napLoading && <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 13, padding: 12 }}><span className="spinner" style={{ marginRight: 8 }} />{napProgress || 'Crawling website + directory listings and comparing to GBP…'}</div>}
               {!napLoading && !napReport && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Run a check to compare your website and directory listings against the Name, Address and Phone on your Google Business Profile.</div>}
               {!napLoading && napReport && napReport.error && <div style={{ color: '#f59e0b', fontSize: 13 }}><i className="fas fa-circle-info" style={{ marginRight: 6 }} />{napReport.error}</div>}
               {!napLoading && napReport && !napReport.error && (() => {
