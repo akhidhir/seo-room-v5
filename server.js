@@ -1617,8 +1617,8 @@ function authMiddleware(req, res, next) {
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
   const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/drive/callback', '/api/debug/serp-test', '/api/debug/maps-test', '/api/debug/dfs-test', '/api/test-gpthuman', '/api/debug/ai-test'];
-  // Allow emergency restore without auth
-  if (req.path.match(/\/api\/projects\/\d+\/content-queue\/restore-page\/\d+/)) return next();
+  // (removed) emergency restore-page is no longer auth-exempt — it writes to client WordPress
+  // sites and could fall back to the wrong project's credentials. JWT required like everything else.
   // Allow invite routes without auth (client signup flow)
   if (req.path.match(/^\/api\/invite\//)) return next();
   // Allow team-invite routes without auth (team member signup flow)
@@ -1637,8 +1637,7 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/plugin-verify/)) return next();
   // Allow plugin endpoints (license check, update check, download — no JWT)
   if (req.path.match(/^\/api\/plugin\//)) return next();
-  // Temporary diagnostic: gsc-debug reachable with a fixed key (no secrets exposed — emails/permissions only)
-  if (req.path.match(/\/api\/projects\/\d+\/indexing\/gsc-debug$/) && req.query.key === 'gscdebug2026') return next();
+  // (removed) gsc-debug hardcoded-key bypass — JWT required like everything else
   // Allow internal-links approved pull + confirm (WP plugin pulls/reports without JWT; no sensitive data)
   if (req.path.match(/^\/api\/projects\/\d+\/internal-links\/(approved|confirm)$/)) return next();
   // Allow the Elementor AI Writer extension (called from the browser, no JWT; resolves project by host)
@@ -6690,7 +6689,10 @@ app.post('/api/elementor/ai-fill', async (req, res) => {
     // Drafts have an ugly ?page_id= permalink with no slug — fetch the real slug from the post ID via the reader plugin.
     if (!slug && post_id) { const rp = await pbResolvePage(host, post_id); slug = rp.slug || ''; }
     const all = (await pool.query('SELECT * FROM projects')).rows;
-    const project = all.find(p => hostNorm(p.wordpress_url) === targetHost || hostNorm(p.domain) === targetHost) || {};
+    const project = all.find(p => hostNorm(p.wordpress_url) === targetHost || hostNorm(p.domain) === targetHost);
+    // No JWT on this endpoint (browser extension) — so at minimum the site must be one of ours.
+    // Otherwise anyone on the internet can burn AI tokens through it.
+    if (!project) return res.status(403).json({ error: 'This site is not registered as a project in SEO Room.' });
     const suburb = (suburbIn && String(suburbIn).trim())
       ? String(suburbIn).trim().replace(/\b\w/g, c => c.toUpperCase())
       : (pbDeriveSuburb(slug, project) || 'this suburb');
@@ -23611,27 +23613,13 @@ app.post('/api/projects/:projectId/content-queue/:id/rollback', async (req, res)
 app.post('/api/projects/:projectId/content-queue/restore-page/:pageId', async (req, res) => {
   try {
     const { projectId, pageId } = req.params;
-    // Try all projects to find one with WP credentials
-    const allProjects = (await pool.query('SELECT * FROM projects ORDER BY id')).rows;
-    console.log('[restore] Projects found:', allProjects.map(p => ({ id: p.id, wp: p.wordpress_url, user: p.wp_username ? 'SET' : 'EMPTY', pass: p.wp_app_password ? 'SET' : 'EMPTY' })));
-    let project = allProjects.find(p => p.id == projectId && p.wp_username && p.wp_app_password);
-    if (!project) project = allProjects.find(p => p.wp_username && p.wp_app_password);
-    if (!project) {
-      // Fallback: try project_integrations table
-      const integ = (await pool.query(`SELECT value FROM project_integrations WHERE project_id=$1 AND type='wordpress'`, [projectId])).rows[0];
-      if (integ) console.log('[restore] Found project_integrations wordpress entry');
-      // Last resort: use the project's wordpress_url with creds from request body
-      project = allProjects.find(p => p.id == projectId) || allProjects[0];
-      if (!project) return res.status(400).json({ error: 'No projects found at all' });
-    }
+    // ONLY this project's own credentials — never fall back to another project's WordPress.
+    // (The old fallback could publish a page on the WRONG client site.)
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
     const wpUrl = project.wordpress_url?.replace(/\/$/, '');
-    let authHeaders = getWpAuthHeaders(project);
-    // Accept creds from request body as emergency fallback
-    if (!authHeaders && req.body && req.body.wp_username && req.body.wp_password) {
-      const token = Buffer.from(`${req.body.wp_username}:${req.body.wp_password}`).toString('base64');
-      authHeaders = { 'Authorization': `Basic ${token}`, 'Content-Type': 'application/json' };
-    }
-    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured', debug: { wpUrl: wpUrl || 'MISSING', hasAuth: !!authHeaders } });
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'This project has no WordPress credentials configured — add them in Project Settings.' });
 
     let writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/pages/${pageId}`, {
       method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
