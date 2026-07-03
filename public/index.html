@@ -12582,7 +12582,7 @@
               style: btnStyle('#22c55e'), onClick: autoRedirectAll, disabled: autoRedirecting
             },
               autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-bolt' }),
-              autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 50).length} Confident Matches`
+              autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${filtered404s.filter(f => { const k = f.url || f.url_path || ''; const s = suggestions[k]; const _n = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0]; return s && s.score >= 50 && _n(s.url) !== _n(k); }).length} Confident Matches`
             ),
             e('button', {
               style: { ...btnStyle('#8b5cf6'), padding: '5px 12px', fontSize: 12 },
@@ -12593,7 +12593,7 @@
               aiMatching ? ' AI matching…' : ' AI Match Remaining'
             ),
             Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
-              (() => { const conf = Object.values(suggestions).filter(s => s && s.score >= 50).length; const weak = Object.values(suggestions).filter(s => s && s.score < 50).length; return `${conf} confident (auto-applies) · ${weak} weak (use AI Match or review per row)`; })()
+              (() => { const _n = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0]; let conf = 0, weak = 0; for (const f of filtered404s) { const k = f.url || f.url_path || ''; const s = suggestions[k]; if (!s) continue; if (s.score >= 50 && _n(s.url) !== _n(k)) conf++; else weak++; } return `${conf} confident (auto-applies) · ${weak} weak (use AI Match or review per row)`; })()
             ),
             Object.keys(diagnoses).length > 0 && e('span', { style: { fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '3px 8px', borderRadius: 6 } },
               (() => {
