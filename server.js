@@ -1634,6 +1634,8 @@ function optionalAuth(req, res, next) {
   if (req.path.match(/\/api\/projects\/\d+\/rc-sync$/)) return next();
   // Allow GBP sync targets list (read-only: project id/name/location id — called by scheduled automation)
   if (req.path === '/api/gbp-sync/targets') return next();
+  // Allow posts sync from the daily flusher (guarded by its own GBP_FLUSH_KEY)
+  if (req.path === '/api/gbp-sync/posts') return next();
   // Allow GBP queue flush routes (own GBP_FLUSH_KEY auth via ?key= — called by Claude/scheduled flusher)
   if (req.path.match(/^\/api\/gbp-queue\//)) return next();
   // Allow plugin-verify (WP plugin uses connection code, not JWT)
@@ -15627,6 +15629,44 @@ app.post('/api/gbp-queue/:id/result', async (req, res) => {
        SET status=$1, error=$2, published_at = CASE WHEN $1='published' THEN NOW() ELSE published_at END
        WHERE id=$3`, [status, error, id]);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Posts sync from the flusher — RC's posts API 404s from this server, so the daily Claude flush
+// task reads posts via the RatingCaptain MCP and pushes them here. Fixes "Last post: none" stats.
+app.post('/api/gbp-sync/posts', async (req, res) => {
+  if (!gbpFlushKeyOk(req)) return res.status(403).json({ error: 'Invalid or missing flush key' });
+  try {
+    const { location_id, posts } = req.body || {};
+    if (!location_id || !Array.isArray(posts)) return res.status(400).json({ error: 'location_id and posts[] required' });
+    const proj = (await pool.query(`SELECT id FROM projects WHERE gbp_location_id=$1 OR gbp_location_id=$2`, [location_id, String(location_id).replace(/^locations\//, '')])).rows[0];
+    if (!proj) return res.status(404).json({ error: `No project has GBP location ${location_id}` });
+    const projectId = proj.id;
+    const postsData = { count: posts.length, published_posts: posts.slice(0, 100), synced_at: new Date().toISOString() };
+    // Merge into rc_profile.posts (the field gbp-optimise/audit and local-intel read)
+    const rcRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId])).rows[0];
+    if (rcRow) {
+      const cfg = typeof rcRow.config === 'string' ? JSON.parse(rcRow.config) : (rcRow.config || {});
+      cfg.posts = postsData;
+      await pool.query(`UPDATE project_integrations SET config=$1, updated_at=NOW() WHERE project_id=$2 AND kind='rc_profile'`, [JSON.stringify(cfg), projectId]);
+    } else {
+      await pool.query(
+        `INSERT INTO project_integrations (project_id, kind, config, status, updated_at) VALUES ($1, 'rc_profile', $2, 'connected', NOW())
+         ON CONFLICT (project_id, kind) DO UPDATE SET config=$2, updated_at=NOW()`,
+        [projectId, JSON.stringify({ location_id, posts: postsData, synced_at: new Date().toISOString() })]
+      );
+    }
+    // Also update the flattened gbp_profile stats
+    const gbpRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`, [projectId])).rows[0];
+    if (gbpRow) {
+      const cfg = typeof gbpRow.config === 'string' ? JSON.parse(gbpRow.config) : (gbpRow.config || {});
+      cfg.posts_count = posts.length;
+      const fp = posts[0];
+      cfg.last_post_date = fp ? (fp.createTime || fp.created_at || fp.updateTime || null) : null;
+      await pool.query(`UPDATE project_integrations SET config=$1, updated_at=NOW() WHERE project_id=$2 AND kind='gbp_profile'`, [JSON.stringify(cfg), projectId]);
+    }
+    console.log(`[gbp-sync-posts] Project ${projectId}: synced ${posts.length} posts from RC MCP`);
+    res.json({ ok: true, project_id: projectId, posts: posts.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
