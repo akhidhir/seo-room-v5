@@ -11056,12 +11056,12 @@
         setDrafting(false);
       };
       const [copied, setCopied] = useState(false);
-      // Copy-to-paste model: the AI writes it, you paste it into Google yourself. No publishing/flushing.
+      // Publish-first model: Publish via RatingCaptain queues it for the daily auto-flush; Copy remains for manual pasting.
       const pasteHints = {
-        description: 'Paste into Google Business Profile → Edit profile → "About" → Business description.',
-        post: 'Paste into Google Business Profile → Add update / Create post.',
-        services: 'Add each of these in Google Business Profile → Edit profile → Services.',
-        categories: 'Add these in Google Business Profile → Edit profile → Categories (pick the closest match Google offers).',
+        description: 'Publish via RatingCaptain replaces your GBP description automatically. Manual alternative: Google Business Profile → Edit profile → "About".',
+        post: 'Publish via RatingCaptain creates the Google Post automatically. Manual alternative: Google Business Profile → Add update.',
+        services: 'Publish via RatingCaptain will try to add these automatically (flagged Failed if Google rejects services updates). Manual alternative: Edit profile → Services.',
+        categories: 'Publish via RatingCaptain adds these automatically (only real Google categories, existing ones kept). Manual alternative: Edit profile → Categories.',
       };
       const copyDraft = async () => {
         if (!editVal.trim()) return;
@@ -11123,7 +11123,7 @@
               <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}><i className={loading ? 'fas fa-spinner fa-spin' : 'fas fa-rotate'} style={{ marginRight: 6 }} />Re-audit</button>
             </div>
           </div>
-          <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors and AI-drafts each fix — you copy it and paste it into Google yourself.</p>
+          <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors and AI-drafts each fix — approve it and it publishes to Google automatically (daily 8:05am via RatingCaptain).</p>
 
           {queue.length > 0 && (
             <div style={{ marginBottom: 20, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
@@ -11160,15 +11160,15 @@
             const grouped = {};
             (data.findings || []).forEach(f => { (grouped[f.factor] = grouped[f.factor] || []).push(f); });
             const tiles = [
-              { label: 'Primary category', value: p.primaryCategory || '—', ok: !!p.primaryCategory },
-              { label: 'Secondary categories', value: (p.additionalCategories || []).length, ok: (p.additionalCategories || []).length >= 3 },
-              { label: 'Services listed', value: p.servicesCount || 0, ok: (p.servicesCount || 0) >= 10 },
-              { label: 'Description', value: (p.description_chars || 0) + ' chars', ok: (p.description_chars || 0) >= 600 },
-              { label: 'Service areas', value: p.service_areas || 0, ok: (p.service_areas || 0) >= 3 },
-              { label: 'Open days/wk', value: p.open_days || 0, ok: (p.open_days || 0) >= 5 },
-              { label: 'Reviews', value: p.reviews || 0, ok: (p.reviews || 0) >= 25 },
-              { label: 'Rating', value: p.rating ? p.rating + '★' : '—', ok: !p.rating || p.rating >= 4.5 },
-              { label: 'Last post', value: p.last_post_days == null ? 'none' : p.last_post_days + 'd ago', ok: p.last_post_days != null && p.last_post_days <= 14 },
+              { label: 'Primary category', value: p.primaryCategory || '—', ok: !!p.primaryCategory, hint: 'the #1 relevance signal' },
+              { label: 'Secondary categories', value: (p.additionalCategories || []).length, ok: (p.additionalCategories || []).length >= 3, hint: 'target 3–8' },
+              { label: 'Services listed', value: p.servicesCount || 0, ok: (p.servicesCount || 0) >= 10, hint: 'target 10+' },
+              { label: 'Description', value: (p.description_chars || 0) + ' / 750 chars', ok: (p.description_chars || 0) >= 600, hint: 'target 600–750 (Google max 750)' },
+              { label: 'Service areas', value: p.service_areas || 0, ok: (p.service_areas || 0) >= 3, hint: 'target 3–20 suburbs' },
+              { label: 'Open days/wk', value: p.open_days || 0, ok: (p.open_days || 0) >= 5, hint: 'target 5+ days' },
+              { label: 'Reviews', value: p.reviews || 0, ok: (p.reviews || 0) >= 25, hint: 'target 25+' },
+              { label: 'Rating', value: p.rating ? p.rating + '★' : '—', ok: !p.rating || p.rating >= 4.5, hint: 'target 4.5★+' },
+              { label: 'Last post', value: p.last_post_days == null ? 'none' : p.last_post_days + 'd ago', ok: p.last_post_days != null && p.last_post_days <= 14, hint: 'post every 7–14 days' },
             ];
             return <>
               {/* Score + profile name */}
@@ -11190,6 +11190,7 @@
                   <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
                     <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{t.label}</div>
                     <div style={{ fontSize: 16, fontWeight: 700, color: t.ok ? '#22c55e' : '#f59e0b' }}>{t.value} {t.ok ? <i className="fas fa-check" style={{ fontSize: 11 }} /> : <i className="fas fa-triangle-exclamation" style={{ fontSize: 11 }} />}</div>
+                    {t.hint && <div style={{ fontSize: 10.5, color: t.ok ? 'var(--text3)' : '#f59e0b', marginTop: 3, opacity: t.ok ? 0.8 : 1 }}>{t.hint}</div>}
                   </div>
                 ))}
               </div>
@@ -11197,7 +11198,7 @@
               {/* Optimise your profile — always available, not just when a gap is flagged */}
               <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 20 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: '#14b8a6', marginBottom: 4 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }} />Optimise your profile</div>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>AI-drafts each profile field for you — review, edit, then copy and paste it into Google Business Profile yourself.</div>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 12 }}>AI-drafts each profile field — review, edit, then hit Publish via RatingCaptain (goes live at the daily 8:05am flush) or Copy to paste manually.</div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {[
                     { type: 'description', label: 'Improve description', icon: 'fa-align-left' },
@@ -11242,7 +11243,7 @@
                   <h3 style={{ margin: 0, fontSize: 18 }}><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 8, color: '#14b8a6' }} />{optTitle[opt.type] || 'Optimise'}</h3>
                   <button onClick={() => !publishing && setOpt(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', fontSize: 18, cursor: 'pointer' }}>✕</button>
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 14 }}>Review and edit the AI draft, then Copy it and paste it into Google yourself. Nothing is sent automatically.</div>
+                <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 14 }}>Review and edit the AI draft, then hit Publish via RatingCaptain — it goes to the queue and publishes to Google automatically at the daily 8:05am flush. Or Copy to paste manually.</div>
 
                 {drafting && <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }} />Drafting with AI…</div>}
 
