@@ -11918,6 +11918,7 @@
       };
 
       const [fourCategory, setFourCategory] = useState('real'); // 'all', 'real', 'bot', 'preview', 'malformed'
+      const [fourCause, setFourCause] = useState('all'); // 'all' | 'indexed' | 'internal' | 'external' | 'deleted' | 'junk'
 
       const classify404 = (url) => {
         const u = (url || '').toLowerCase();
@@ -12410,7 +12411,19 @@
         { id: 'broken', label: 'Broken Links', icon: 'fas fa-chain-broken' },
       ];
 
-      const filtered404s = fourCategory === 'all' ? fourOhFours : fourOhFours.filter(x => x._category === fourCategory);
+      // Root-cause filter — group by WHAT TO DO about it, not just what it is
+      const causeOf = (item) => {
+        const lbl = instantCause(item).label;
+        if (lbl === 'Indexed by search engine') return 'indexed';
+        if (lbl === 'Broken internal link' || lbl === 'Broken link (site JS bug)') return 'internal';
+        if (lbl === 'External broken link') return 'external';
+        if (lbl === 'Deleted / moved page' || lbl === 'Old WordPress ID') return 'deleted';
+        return 'junk';
+      };
+      const _catFiltered = fourCategory === 'all' ? fourOhFours : fourOhFours.filter(x => x._category === fourCategory);
+      const causeCounts = { all: _catFiltered.length, indexed: 0, internal: 0, external: 0, deleted: 0, junk: 0 };
+      for (const it of _catFiltered) causeCounts[causeOf(it)]++;
+      const filtered404s = fourCause === 'all' ? _catFiltered : _catFiltered.filter(x => causeOf(x) === fourCause);
       const catCounts = { all: fourOhFours.length, real: fourOhFours.filter(x => x._category === 'real').length, bot: fourOhFours.filter(x => x._category === 'bot').length, preview: fourOhFours.filter(x => x._category === 'preview').length, malformed: fourOhFours.filter(x => x._category === 'malformed').length };
       const unique404Urls = new Set(filtered404s.map(x => x.url)).size;
       const last24h = filtered404s.filter(x => x.last_seen && (Date.now() - new Date(x.last_seen).getTime()) < 86400000).reduce((s, x) => s + parseInt(x.hit_count || 0, 10), 0);
@@ -12453,6 +12466,33 @@
             cat.label,
             catCounts[cat.id] > 0 && e('span', { style: { background: fourCategory === cat.id ? cat.color : 'var(--border)', color: fourCategory === cat.id ? '#fff' : 'var(--text3)', padding: '1px 6px', borderRadius: 10, fontSize: 10, marginLeft: 2 } }, catCounts[cat.id])
           ))
+        ),
+        // Root-cause filter — "what do I DO about these" view
+        e('div', { style: { display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' } },
+          e('span', { style: { fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5 } }, 'By cause:'),
+          [
+            { id: 'all', label: 'All causes', color: '#6b7280', hint: '' },
+            { id: 'indexed', label: 'Indexed by Google', color: '#ef4444', hint: 'redirect these FIRST — real visitors land on them' },
+            { id: 'internal', label: 'Broken internal link', color: '#f59e0b', hint: 'fix the link at its source (Diagnose → Fix Link)' },
+            { id: 'external', label: 'External broken link', color: '#a78bfa', hint: 'redirect so the referred visitor isn\'t lost' },
+            { id: 'deleted', label: 'Deleted / moved', color: '#9ca3af', hint: 'redirect to the closest page, or 410 if truly gone' },
+            { id: 'junk', label: 'Junk', color: '#14b8a6', hint: '410 these — spam/bot/malformed' },
+          ].map(c => e('button', {
+            key: c.id, onClick: () => setFourCause(c.id), title: c.hint,
+            style: { padding: '5px 12px', borderRadius: 20, border: fourCause === c.id ? `2px solid ${c.color}` : '1px solid var(--border)', background: fourCause === c.id ? (c.color + '18') : 'transparent', color: fourCause === c.id ? c.color : 'var(--text3)', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }
+          },
+            c.label,
+            (c.id === 'all' ? causeCounts.all : causeCounts[c.id]) > 0 && e('span', { style: { background: fourCause === c.id ? c.color : 'var(--border)', color: fourCause === c.id ? '#fff' : 'var(--text3)', padding: '1px 6px', borderRadius: 10, fontSize: 10 } }, c.id === 'all' ? causeCounts.all : causeCounts[c.id])
+          ))
+        ),
+        // What-to-do hint for the selected cause
+        fourCause !== 'all' && e('div', { style: { fontSize: 12.5, color: 'var(--text2)', marginBottom: 10, padding: '8px 12px', borderRadius: 8, background: 'var(--card)', border: '1px solid var(--border)' } },
+          e('i', { className: 'fas fa-arrow-right', style: { marginRight: 6, color: '#14b8a6' } }),
+          fourCause === 'indexed' ? 'These URLs are still in Google — real searchers are hitting dead pages. Redirect each to its closest live page NOW (Fix All handles the confident ones).'
+          : fourCause === 'internal' ? 'Your own site links to these dead URLs. Run Diagnose Root Cause, then use Fix Link to repair the link at its source — otherwise the 404 keeps coming back.'
+          : fourCause === 'external' ? 'Another website links here — a redirect keeps that visitor (and the backlink value). Redirect each to the most relevant page.'
+          : fourCause === 'deleted' ? 'Old pages that no longer exist. Fix All (Auto) redirects the ones with a confident match; redirect the rest manually, or 410 anything with no successor.'
+          : '410 these — they\'re spam, bot probes or malformed URLs. The 410 Junk button clears the lot safely.'
         ),
         // Result banner — how many got redirected & cleared
         redirectResult && e('div', { style: { marginBottom: 12, padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, background: redirectResult.charAt(0) === '✓' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)', color: redirectResult.charAt(0) === '✓' ? '#22c55e' : '#ef4444', border: '1px solid ' + (redirectResult.charAt(0) === '✓' ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)') } },
