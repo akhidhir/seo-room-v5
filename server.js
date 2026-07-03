@@ -1222,7 +1222,9 @@ async function initDb() {
     // Seed RC data for Houseworks (project 1) if missing or empty
     const hw = await client.query(`SELECT config FROM project_integrations WHERE project_id=1 AND kind='rc_profile'`).catch(() => ({ rows: [] }));
     const hwConfig = hw.rows[0]?.config ? (typeof hw.rows[0].config === 'string' ? JSON.parse(hw.rows[0].config) : hw.rows[0].config) : null;
-    if (!hwConfig?.profile?.title) {
+    const p1 = await client.query(`SELECT business_name, name FROM projects WHERE id=1`).catch(() => ({ rows: [] }));
+    const p1IsHouseworks = /houseworks/i.test((p1.rows[0]?.business_name || p1.rows[0]?.name || ''));
+    if (!hwConfig?.profile?.title && p1IsHouseworks) {
       console.log('[boot] Seeding RC data for Houseworks (project 1)...');
       const rcData = {
         location_id: 'locations/12755344744730282615',
@@ -15360,6 +15362,16 @@ async function syncRcProfileFromApi(projectId) {
     } catch {}
   }
   if (!profile || !profile.title) return { ok: false, error: 'RatingCaptain returned no profile for this location. Confirm the GBP Location ID matches an active RC profile.' };
+  // IDENTITY GUARD: never save another business's profile onto this project (wrong GBP Location ID).
+  {
+    const dn = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const pName = dn(project.business_name || project.name);
+    const pDom = dn((project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*/, ''));
+    const rName = dn(profile.title);
+    const rSite = dn(profile.websiteUri || '');
+    const related = (pName && rName && (rName.includes(pName) || pName.includes(rName))) || (pDom && rSite && rSite.includes(pDom));
+    if (!related) return { ok: false, error: `The GBP Location ID on this project points at "${profile.title}", which is not ${project.business_name || project.name}. Fix it in Project Settings → GBP, then sync again.` };
+  }
   try {
     const pp = await fetch(`${RC_BASE}/posts?location_id=${encodeURIComponent(gbpLocationId)}&status=published&page=1&per_page=50`, { headers: rcHeaders, signal: AbortSignal.timeout(20000) });
     if (pp.ok) { const pd = await pp.json(); const arr = pd.data || pd.posts || []; posts = { count: arr.length, published_posts: arr }; }
@@ -15855,10 +15867,11 @@ async function getRcLocationDetails(projectId) {
   const cached = rcLocationCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < RC_LOCATION_CACHE_TTL) return cached.data;
 
-  const proj = await pool.query('SELECT rc_location_id FROM projects WHERE id=$1', [projectId]);
+  const proj = await pool.query('SELECT rc_location_id, business_name, name FROM projects WHERE id=$1', [projectId]);
   if (proj.rows.length === 0) throw new Error('Project not found');
   const rcLocId = proj.rows[0].rc_location_id;
   if (!rcLocId) throw new Error('No rc_location_id set for this project');
+  const projBizName = proj.rows[0].business_name || proj.rows[0].name || '';
 
   const RC_TOKEN = process.env.RC_API_TOKEN;
   if (!RC_TOKEN) throw new Error('RC_API_TOKEN not configured');
@@ -15871,6 +15884,13 @@ async function getRcLocationDetails(projectId) {
   const locations = data.data || [];
   const match = locations.find(l => l.id === rcLocId);
   if (!match) throw new Error(`RC location with id=${rcLocId} not found. Available: ${locations.map(l => `${l.id}:${l.name}`).join(', ')}`);
+
+  // IDENTITY GUARD: the RC location must actually BE this project's business — a stale/wrong
+  // rc_location_id must fail loudly instead of silently pulling another client's posts/reviews.
+  const dn = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (projBizName && match.name && !dn(match.name).includes(dn(projBizName)) && !dn(projBizName).includes(dn(match.name))) {
+    throw new Error(`rc_location_id=${rcLocId} points at "${match.name}", not "${projBizName}" — fix it in Project Settings.`);
+  }
 
   const result = { location_id: match.location_id, account_id: match.account_id, name: match.name };
   rcLocationCache.set(cacheKey, { data: result, ts: Date.now() });
@@ -46461,10 +46481,19 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           if (results[extIdx]?.status === 'fulfilled' && results[extIdx].value.ok) {
             const extData = await results[extIdx].value.json();
             // Match by gbp_location_id OR rc_location_id
-            const loc = (extData.data || []).find(l =>
+            let loc = (extData.data || []).find(l =>
               l.location_id === project.gbp_location_id ||
               l.id === project.rc_location_id
             );
+            // IDENTITY GUARD: reject a matched RC location whose name is a different business
+            if (loc) {
+              const dn2 = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              const pn2 = dn2(project.business_name || project.name);
+              if (pn2 && loc.name && !dn2(loc.name).includes(pn2) && !pn2.includes(dn2(loc.name))) {
+                console.warn(`[local-intel] RC extended match "${loc.name}" is NOT project ${projectId}'s business — ignored. Fix rc_location_id / GBP Location ID in Project Settings.`);
+                loc = null;
+              }
+            }
             if (loc) {
               reviews_stats = { total_reviews: loc.reviews_amount || 0, average_rating: loc.rating || 0, reply_rate: 0, replied_count: 0, unreplied_count: 0 };
               // If profile fetch failed, use extended data name as fallback
@@ -46475,15 +46504,26 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           }
 
           if (profile) {
-            const rcData = { location_id: project.gbp_location_id, profile, healthcheck: [], reviews_stats: reviews_stats || {}, posts: { count: 0, published_posts: [] }, synced_at: new Date().toISOString() };
-            await pool.query(
-              `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
-               VALUES ($1, 'rc_profile', $2, 'connected', NOW())
-               ON CONFLICT (project_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
-              [projectId, JSON.stringify(rcData)]
-            );
-            rc = rcData;
-            console.log(`[local-intel] Auto-synced RC profile for project ${projectId}: ${profile.title}`);
+            // IDENTITY GUARD: never save another business's profile onto this project.
+            // (A wrong rc_location_id used to silently store e.g. Houseworks data on Projection Plumbing.)
+            const dn = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const pName = dn(project.business_name || project.name);
+            const rName = dn(profile.title);
+            const rSite = dn(profile.website || profile.websiteUri || '');
+            const related = (pName && rName && (rName.includes(pName) || pName.includes(rName))) || (domain && rSite && rSite.includes(dn(domain)));
+            if (!related) {
+              console.warn(`[local-intel] RC profile "${profile.title}" does NOT match project ${projectId} ("${project.business_name || project.name}") — NOT saved. Fix rc_location_id / GBP Location ID in Project Settings.`);
+            } else {
+              const rcData = { location_id: project.gbp_location_id, profile, healthcheck: [], reviews_stats: reviews_stats || {}, posts: { count: 0, published_posts: [] }, synced_at: new Date().toISOString() };
+              await pool.query(
+                `INSERT INTO project_integrations (project_id, kind, config, status, updated_at)
+                 VALUES ($1, 'rc_profile', $2, 'connected', NOW())
+                 ON CONFLICT (project_id, kind) DO UPDATE SET config=$2, status='connected', updated_at=NOW()`,
+                [projectId, JSON.stringify(rcData)]
+              );
+              rc = rcData;
+              console.log(`[local-intel] Auto-synced RC profile for project ${projectId}: ${profile.title}`);
+            }
           }
         } catch (e) {
           console.log(`[local-intel] Auto-sync failed for project ${projectId}: ${e.message}`);
