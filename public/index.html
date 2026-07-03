@@ -2400,7 +2400,11 @@
     // ============ GENERIC AGENT AUDIT PAGE ============
     const _agentAuditCache = {};
     function AgentAuditPage({ project, section, setActiveTab, auditKey = 'gbp-external', title = 'External GBP Audit', iconClass = 'fas fa-globe', pillar = 'gbp_external', loadingText = 'Managed agent is researching your business across the web. This takes 2-5 minutes.', skipPatterns = null, mergeDirectories = true, allowedSections = null }) {
-      const defaultSkip = [/houseworks/i, /plumbing.*gas/i, /^summary$/i, /^audit conclusion$/i];
+      // Skip the section titled with THIS project's own business name (report title heading) —
+      // was hardcoded /houseworks/ + /plumbing.*gas/, which hid real sections on other plumbing clients.
+      const _bizName = ((project?.business_name || project?.name || '') + '').trim();
+      const _bizRe = _bizName ? new RegExp(_bizName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'i') : null;
+      const defaultSkip = [...(_bizRe ? [_bizRe] : []), /^summary$/i, /^audit conclusion$/i];
       const skip = skipPatterns || defaultSkip;
       const cacheKey = project?.id + ':' + auditKey;
       const [report, setReport] = useState(_agentAuditCache[cacheKey] || '');
@@ -2731,7 +2735,7 @@
           const t = line.trim();
           if (!t) return false;
           if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|ModuleNotFoundError|ImportError|SyntaxError|NameError|TypeError|ValueError|KeyError|IndexError|AttributeError)/i.test(t)) return true;
-          if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created|Here are|I would|Based on|This (is|was)|For:|Contents:|Length:|# Houseworks|Houseworks Plumbing & Gas|> Assumptions:|> Data quality|> Note:|Assumptions:)/i.test(t)) return true;
+          if (/^(I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|Here's what|I need to|First,|Next,|I can see|I found|I notice|Looking at|Let's |I've |I will |Now I|File created|Here are|I would|Based on|This (is|was)|For:|Contents:|Length:|> Assumptions:|> Data quality|> Note:|Assumptions:)/i.test(t)) return true;
           if (/^(data = |import |from |print\(|with open|json\.|os\.|sys\.|result|output|```)/i.test(t)) return true;
           if (/^>\s*(Assumptions|Data quality|Note:|Data cap|CTR benchmark|Local plumbing|Brand|Strong brand)/i.test(t)) return true;
           if (/^\s*(def |class |if |for |while |try:|except|finally)/.test(t)) return true;
@@ -2855,7 +2859,7 @@
               const clean = (s) => (s || '').replace(/\*\*/g, '').trim();
               const notes = notesColIdx !== -1 ? clean(row[notesColIdx]) : '';
               // Find your value column (usually col 1) and competitor columns
-              const yourCol = headers.findIndex(h => /houseworks|your|business|gbp value/i.test(h));
+              const yourCol = headers.findIndex(h => /your|business|gbp value/i.test(h));
               const yourVal = yourCol !== -1 ? clean(row[yourCol]) : clean(row[1] || '');
 
               // NAP/Alignment tables — partial/mismatch: use notes for specifics
@@ -3023,7 +3027,7 @@
           // Skip agent chatter/tracebacks/processing noise
           if (/^(Traceback|File "|>>>|\.\.\.|\^{5,}|FileNotFoundError|ModuleNotFoundError|I'll |Let me |Now let me |Perfect[\.\!]|Great[\.\!]|OK,|Alright|I need to|First,|data = |import |print\(|```|File created|Here's |I've |I can see|I found|Looking at|I notice|I will|Now I|result|output =)/i.test(trimmed)) continue;
           // Skip file metadata lines
-          if (/^(#{1,3}\s*(Files Included|\d+\.\s*\w+_\w+.*\.md|GSC_Audit|EXECUTIVE_SUMMARY|TACTICAL_PLAYBOOK|Houseworks.*Report Package))/i.test(trimmed)) continue;
+          if (/^(#{1,3}\s*(Files Included|\d+\.\s*\w+_\w+.*\.md|GSC_Audit|EXECUTIVE_SUMMARY|TACTICAL_PLAYBOOK|.*Report Package))/i.test(trimmed)) continue;
           if (/^(For:|Contents:|Length:)/i.test(trimmed)) continue;
 
           const clean = trimmed.replace(/\*\*/g, '');

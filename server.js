@@ -613,12 +613,14 @@ async function initDb() {
     // One-time bootstrap defaults ONLY — never overwrite a location the user has set in Project Settings.
     // (These previously ran unconditionally and clobbered gbp_location_id on every deploy, breaking the
     //  project→GBP mapping. Now they only fill blanks.)
-    await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 1 AND rc_location_id IS NULL`).catch(() => {});
-    await client.query(`UPDATE projects SET gbp_location_id = 'locations/12755344744730282615' WHERE id = 1 AND (gbp_location_id IS NULL OR gbp_location_id = '')`).catch(() => {});
-    await client.query(`UPDATE projects SET rc_location_id = 190720 WHERE id = 2 AND rc_location_id IS NULL`).catch(() => {});
-    await client.query(`UPDATE projects SET gbp_location_id = 'locations/8702513397324148400' WHERE id = 2 AND (gbp_location_id IS NULL OR gbp_location_id = '')`).catch(() => {});
-    await client.query(`UPDATE projects SET rc_location_id = 192823 WHERE id = 3 AND rc_location_id IS NULL`).catch(() => {});
-    await client.query(`UPDATE projects SET gbp_location_id = 'locations/17933670947974765351' WHERE id = 3 AND (gbp_location_id IS NULL OR gbp_location_id = '')`).catch(() => {});
+    // Guarded by business NAME as well as id — if a project slot is ever reused for a different
+    // business, these seeds must never plant another client's location IDs on it.
+    await client.query(`UPDATE projects SET rc_location_id = 16189 WHERE id = 1 AND rc_location_id IS NULL AND (business_name ILIKE '%houseworks%' OR name ILIKE '%houseworks%')`).catch(() => {});
+    await client.query(`UPDATE projects SET gbp_location_id = 'locations/12755344744730282615' WHERE id = 1 AND (gbp_location_id IS NULL OR gbp_location_id = '') AND (business_name ILIKE '%houseworks%' OR name ILIKE '%houseworks%')`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 190720 WHERE id = 2 AND rc_location_id IS NULL AND (business_name ILIKE '%gold%pc%' OR name ILIKE '%gold%pc%')`).catch(() => {});
+    await client.query(`UPDATE projects SET gbp_location_id = 'locations/8702513397324148400' WHERE id = 2 AND (gbp_location_id IS NULL OR gbp_location_id = '') AND (business_name ILIKE '%gold%pc%' OR name ILIKE '%gold%pc%')`).catch(() => {});
+    await client.query(`UPDATE projects SET rc_location_id = 192823 WHERE id = 3 AND rc_location_id IS NULL AND (business_name ILIKE '%car%key%' OR name ILIKE '%car%key%')`).catch(() => {});
+    await client.query(`UPDATE projects SET gbp_location_id = 'locations/17933670947974765351' WHERE id = 3 AND (gbp_location_id IS NULL OR gbp_location_id = '') AND (business_name ILIKE '%car%key%' OR name ILIKE '%car%key%')`).catch(() => {});
     await client.query(`UPDATE projects SET rc_location_id = 116961 WHERE id = 4 AND rc_location_id IS NULL`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_username TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
@@ -6716,9 +6718,11 @@ app.post('/api/elementor/ai-fill', async (req, res) => {
     const company = project.business_name || project.name || 'the business';
     const industry = project.industry || 'local services';
     const focusKw = ((slug || '').replace(/-/g, ' ').trim()) || ((industry + ' ' + suburb).toLowerCase());
+    // Region from THIS project — was hardcoded "Perth WA", which wrote Perth-flavoured copy onto other cities' pages
+    const region = (project.location || '').replace(/,?\s*Australia\s*$/i, '').trim() || 'Australia';
 
     if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
-    const sys = `You are an Australian local-SEO copywriter. You are filling a SUBURB LANDING PAGE template for "${company}" (${industry}) targeting the suburb "${suburb}", Perth WA.
+    const sys = `You are an Australian local-SEO copywriter. You are filling a SUBURB LANDING PAGE template for "${company}" (${industry}) targeting the suburb "${suburb}", ${region}.
 
 You receive an array of page sections. Each has the wireframe placeholder text or copywriting instruction (it may contain {{suburb}}, {{tradies}}, {{company}}, {{offered service}}, {{surrounding suburbs}}, lorem ipsum, or instructions like "Write a description about..."). Rewrite EACH into finished, publish-ready copy.
 
@@ -6736,7 +6740,7 @@ Rules:
 Return ONLY a JSON array: [{"id":"<id>","field":"<field>","new_text":"<copy>"}] — one object per input section, same ids.`;
     // Per-section copywriter: one focused AI call per section (nothing gets skipped).
     const surb = surrounding.slice(0, 5).join(', ') || 'nearby suburbs';
-    const perSys = `You are an Australian local-SEO copywriter writing ONE section of a suburb landing page for "${company}" (${industry}) targeting the suburb "${suburb}", Perth WA. Nearby suburbs: ${surb}. Focus keyword: "${focusKw}".
+    const perSys = `You are an Australian local-SEO copywriter writing ONE section of a suburb landing page for "${company}" (${industry}) targeting the suburb "${suburb}", ${region}. Nearby suburbs: ${surb}. Focus keyword: "${focusKw}".
 
 You are given ONE section's template text — it may be a placeholder, a brief like "Write a description about...", lorem ipsum, or a label like "H1(KEYWORD + SUBURB)", "TOP SERVICE IN DEMAND IN THE SUBURB + SUBURB", "SERVICE KW + SUBURB", or "Paragraph (short blurb - an appeal to the customers)". Write the FINISHED, publish-ready copy for it.
 
@@ -11525,7 +11529,7 @@ async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
     task.location_coordinate = `${lat},${lng},14z`;
   } else {
     // Use location name — normalize to DataForSEO format (no spaces after commas)
-    task.location_name = (location || 'Perth,Western Australia,Australia').replace(/,\s+/g, ',');
+    task.location_name = (location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */).replace(/,\s+/g, ',');
   }
   const resp = await fetch('https://api.dataforseo.com/v3/serp/google/maps/live/advanced', {
     method: 'POST',
@@ -11606,7 +11610,7 @@ async function dataForSeoBusinessInfo({ keyword, location }) {
 async function dataForSeoSerp({ keyword, location, depth, device }) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.');
   // DataForSEO requires location_name without spaces after commas, e.g. "Perth,Western Australia,Australia"
-  const normalizedLocation = (location || 'Perth,Western Australia,Australia').replace(/,\s+/g, ',');
+  const normalizedLocation = (location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */).replace(/,\s+/g, ',');
   const task = {
     keyword,
     language_code: 'en',
@@ -14476,7 +14480,7 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
           try {
             const searchData = await dataForSeoMaps({
               keyword: `${businessName} ${location}`,
-              location: location || 'Perth,Western Australia,Australia',
+              location: location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */,
             });
             const match = (searchData.local_results || []).find(r =>
               (r.title || '').toLowerCase().includes(businessName.toLowerCase().split(' ')[0])
@@ -14560,7 +14564,7 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
           await updateStage('Searching for competitors...');
           try {
             const q = project.industry ? `${project.industry} ${location}` : `${businessName} ${location}`;
-            const searchData = await dataForSeoMaps({ keyword: q, location: location || 'Perth,Western Australia,Australia' });
+            const searchData = await dataForSeoMaps({ keyword: q, location: location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */ });
             const results = (searchData.local_results || []).slice(0, 10);
             for (const r of results) {
               const name = (r.title || '').trim();
@@ -14624,7 +14628,7 @@ app.post('/api/projects/:projectId/handshake/run', async (req, res) => {
           try {
             const searchData = await dataForSeoMaps({
               keyword: `${comp.name} ${location}`,
-              location: location || 'Perth,Western Australia,Australia',
+              location: location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */,
             });
             const match = (searchData.local_results || []).find(r =>
               (r.title || '').toLowerCase().includes(comp.name.toLowerCase().split(' ')[0])
@@ -46541,7 +46545,7 @@ app.get('/api/debug/maps-test', async (req, res) => {
 // DataForSEO debug — test SERP results for a keyword
 app.get('/api/debug/dfs-test', async (req, res) => {
   const q = req.query.q || 'computer repairs bayswater';
-  const loc = req.query.location || 'Perth,Western Australia,Australia';
+  const loc = req.query.location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */;
   const depth = parseInt(req.query.depth) || 30;
   try {
     const data = await dataForSeoSerp({ keyword: q, location: loc, depth });
