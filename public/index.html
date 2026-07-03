@@ -12106,7 +12106,13 @@
           const key = f.url || f.url_path || '';
           return suggestions[key] && suggestions[key].score >= 50 && _norm2(suggestions[key].url) !== _norm2(key);
         });
-        if (!matchedItems.length) return;
+        if (!matchedItems.length) {
+          const lowConf = Object.values(suggestions).filter(s => s && s.score >= 25 && s.score < 50).length;
+          alert(lowConf
+            ? `No matches above 50% confidence to auto-apply. ${lowConf} low-confidence match(es) (25–49%) need a human eye — review each row's suggestion and click Redirect on the ones that look right.`
+            : 'No confident matches found — redirect the remaining rows manually or 410 the genuinely gone ones.');
+          return;
+        }
         setAutoRedirecting(true);
         setAutoProgress({ done: 0, total: matchedItems.length });
         let done = 0, failed = 0;
@@ -12533,7 +12539,7 @@
               style: btnStyle('#22c55e'), onClick: autoRedirectAll, disabled: autoRedirecting
             },
               autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-bolt' }),
-              autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 25).length} Matches`
+              autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 50).length} Confident Matches`
             ),
             Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
               `${Object.values(suggestions).filter(Boolean).length}/${filtered404s.length} matched`
