@@ -2682,6 +2682,15 @@ app.post('/api/builds/:buildId/site-pages/generate', async (req, res) => {
 });
 
 // List projects for current user
+// Never send real WordPress app passwords to the browser. The masked value keeps
+// "credentials configured" checks truthy; update endpoints ignore the mask on save,
+// so prefilled settings forms can't wipe or leak the stored secret.
+const WP_PASS_MASK = '********';
+const maskWpSecrets = (row) => {
+  if (row && row.wp_app_password) row.wp_app_password = WP_PASS_MASK;
+  return row;
+};
+
 app.get('/api/projects', async (req, res) => {
   try {
     let result;
@@ -2696,7 +2705,7 @@ app.get('/api/projects', async (req, res) => {
     } else {
       result = await pool.query('SELECT * FROM projects ORDER BY created_at DESC');
     }
-    res.json({ projects: result.rows });
+    res.json({ projects: result.rows.map(maskWpSecrets) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2729,7 +2738,7 @@ app.get('/api/projects/:id', async (req, res) => {
     const params = userId ? [req.params.id, userId] : [req.params.id];
     const result = await pool.query(query, params);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Project not found' });
-    res.json({ project: result.rows[0] });
+    res.json({ project: maskWpSecrets(result.rows[0]) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2797,7 +2806,9 @@ app.put('/api/projects/:id', async (req, res) => {
   const gbp_location_id = b.gbp_location_id || b.gbpLocationId;
   const gbp_location_name = b.gbp_location_name || b.gbpLocationName;
   const wp_username = b.wp_username || b.wpUsername;
-  const wp_app_password = b.wp_app_password || b.wpAppPassword;
+  // The mask means "unchanged" — never save it as the actual password
+  const _wpPassIn = b.wp_app_password || b.wpAppPassword;
+  const wp_app_password = _wpPassIn === WP_PASS_MASK ? undefined : _wpPassIn;
   const map_services = b.map_services;
   const map_custom_suburbs = b.map_custom_suburbs;
   const nw_name = b.nw_name;
@@ -2911,7 +2922,7 @@ app.put('/api/projects/:id', async (req, res) => {
       ).catch(e => console.error('[project-update] Failed to clear gbp_profile:', e.message));
     }
 
-    res.json({ project: result.rows[0] });
+    res.json({ project: maskWpSecrets(result.rows[0]) });
   } catch (e) {
     console.error('[project-update] Error:', e.message, e.stack);
     res.status(500).json({ error: e.message });
@@ -3980,7 +3991,7 @@ app.get('/api/migrations/:migrationId', async (req, res) => {
   try {
     const result = await pool.query(`SELECT * FROM seo_migrations WHERE id = $1`, [req.params.migrationId]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Migration not found' });
-    res.json(result.rows[0]);
+    res.json(maskWpSecrets(result.rows[0]));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3995,7 +4006,7 @@ app.post('/api/migrations', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [userId, name || 'Migration', old_site_url.replace(/\/$/, ''), new_site_url.replace(/\/$/, ''), wp_url || null, wp_username || null, wp_app_password || null]
     );
-    res.json(result.rows[0]);
+    res.json(maskWpSecrets(result.rows[0]));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -4008,14 +4019,14 @@ app.put('/api/migrations/:migrationId', async (req, res) => {
     let idx = 1;
     if (wp_url !== undefined) { sets.push(`wp_url = $${idx++}`); vals.push(wp_url || null); }
     if (wp_username !== undefined) { sets.push(`wp_username = $${idx++}`); vals.push(wp_username || null); }
-    if (wp_app_password !== undefined) { sets.push(`wp_app_password = $${idx++}`); vals.push(wp_app_password || null); }
+    if (wp_app_password !== undefined && wp_app_password !== WP_PASS_MASK) { sets.push(`wp_app_password = $${idx++}`); vals.push(wp_app_password || null); }
     if (name !== undefined) { sets.push(`name = $${idx++}`); vals.push(name); }
     if (sets.length === 0) return res.json({ ok: true });
     sets.push(`updated_at = NOW()`);
     vals.push(req.params.migrationId);
     await pool.query(`UPDATE seo_migrations SET ${sets.join(', ')} WHERE id = $${idx}`, vals);
     const result = await pool.query(`SELECT * FROM seo_migrations WHERE id = $1`, [req.params.migrationId]);
-    res.json(result.rows[0]);
+    res.json(maskWpSecrets(result.rows[0]));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
