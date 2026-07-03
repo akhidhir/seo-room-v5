@@ -34762,6 +34762,12 @@
                             <i className="fas fa-link" style={{ marginRight: 5 }} />Copy Client Link
                           </button>
                         )}
+                        <button onClick={(e) => {
+                          e.stopPropagation();
+                          window.open(`/api/projects/${project.id}/reports/${report.id}/pdf?token=${encodeURIComponent(localStorage.getItem('token') || '')}`, '_blank');
+                        }} style={{ fontSize: 12, padding: '6px 14px', background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>
+                          <i className="fas fa-file-pdf" style={{ marginRight: 5 }} />Download PDF
+                        </button>
                         <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase' }}>{isExpanded ? 'Collapse' : 'View Report'}</span>
                         <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ color: 'var(--text3)', fontSize: 14 }} />
                       </div>

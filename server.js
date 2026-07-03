@@ -45226,6 +45226,149 @@ app.get('/api/projects/:projectId/reports', async (req, res) => {
 });
 
 // PUBLIC client-facing report — clean, print-friendly, no login (token-protected URL)
+// Monthly report → branded PDF (client deliverable). Mirrors the baseline PDF style,
+// plus month-over-month deltas and the "Work Completed" proof-of-work section.
+app.get('/api/projects/:projectId/reports/:reportId/pdf', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM monthly_reports WHERE id=$1 AND project_id=$2', [req.params.reportId, req.params.projectId]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Report not found' });
+    const data = typeof r.rows[0].report_data === 'string' ? JSON.parse(r.rows[0].report_data) : (r.rows[0].report_data || {});
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${(data.project?.name || 'Monthly').replace(/[^a-zA-Z0-9 ]/g, '')}-${(data.monthLabel || r.rows[0].month || '').replace(/[^a-zA-Z0-9 ]/g, '')}-SEO-Report.pdf"`);
+    doc.pipe(res);
+
+    const teal = '#14b8a6', dark = '#1a1a2e', red = '#ef4444', green = '#22c55e', blue = '#3b82f6', amber = '#f59e0b', gray = '#6b7280', purple = '#8b5cf6';
+    const pageW = doc.page.width - 100;
+
+    // ── Cover ──
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(dark);
+    doc.fillColor('#fff').fontSize(34).font('Helvetica-Bold').text('MONTHLY SEO REPORT', 50, 180, { width: pageW, align: 'center' });
+    doc.fillColor(teal).fontSize(22).font('Helvetica').text(data.monthLabel || r.rows[0].month, 50, 235, { width: pageW, align: 'center' });
+    doc.fillColor('#fff').fontSize(18).text(data.project?.name || 'Project', 50, 285, { width: pageW, align: 'center' });
+    doc.fillColor('#999').fontSize(13).text(data.project?.domain || '', 50, 312, { width: pageW, align: 'center' });
+    const scoreColor = (data.healthScore || 0) >= 70 ? green : (data.healthScore || 0) >= 40 ? amber : red;
+    doc.circle(doc.page.width / 2, 430, 45).lineWidth(4).strokeColor(scoreColor).stroke();
+    doc.fillColor(scoreColor).fontSize(32).font('Helvetica-Bold').text(String(data.healthScore || 0), doc.page.width / 2 - 30, 415, { width: 60, align: 'center' });
+    doc.fillColor('#999').fontSize(10).font('Helvetica').text('HEALTH SCORE', 50, 485, { width: pageW, align: 'center' });
+    if (data.previousMonth?.healthScore != null) {
+      const d = (data.healthScore || 0) - data.previousMonth.healthScore;
+      doc.fillColor(d >= 0 ? green : red).fontSize(12).text(`${d >= 0 ? '▲ +' : '▼ '}${d} vs last month`, 50, 505, { width: pageW, align: 'center' });
+    }
+    doc.fillColor('#fff').fontSize(11).font('Helvetica').text('Prepared by The SEO Room', 50, 700, { width: pageW, align: 'center' });
+
+    // ── Helpers ──
+    const sectionTitle = (title) => {
+      doc.fillColor(teal).fontSize(16).font('Helvetica-Bold').text(title.toUpperCase(), 50, doc.y);
+      doc.moveTo(50, doc.y + 4).lineTo(50 + pageW, doc.y + 4).lineWidth(1).strokeColor(teal).stroke();
+      doc.moveDown(0.8);
+    };
+    const delta = (cur, prev, invert = false) => {
+      if (cur == null || prev == null) return '';
+      const c = parseFloat(cur), p = parseFloat(prev);
+      if (isNaN(c) || isNaN(p) || p === 0) return '';
+      const diff = c - p;
+      const good = invert ? diff < 0 : diff > 0;
+      return diff === 0 ? '' : ` (${good ? '+' : ''}${(Math.round(diff * 10) / 10)})`;
+    };
+    const kpiRow = (items) => {
+      const colW = pageW / items.length;
+      const startY = doc.y;
+      items.forEach((item, i) => {
+        doc.fillColor(gray).fontSize(9).font('Helvetica').text(item.label, 50 + i * colW, startY, { width: colW, align: 'center' });
+        doc.fillColor(item.color || '#333').fontSize(17).font('Helvetica-Bold').text(String(item.value), 50 + i * colW, startY + 13, { width: colW, align: 'center' });
+        if (item.sub) doc.fillColor(gray).fontSize(8).font('Helvetica').text(item.sub, 50 + i * colW, startY + 33, { width: colW, align: 'center' });
+      });
+      doc.y = startY + 48;
+    };
+
+    const maps = data.mapsRankings || {}, serp = data.serpRankings || {}, gsc = data.gscData || {}, onPage = data.onPageStats || {}, ps = data.pageSpeedStats || {}, prev = data.previousMonth || {};
+
+    // ── Page 2: Summary + KPIs ──
+    doc.addPage();
+    sectionTitle('Executive Summary');
+    doc.fillColor('#333').fontSize(12).font('Helvetica').text(data.executiveSummary || 'Summary not generated for this month.', { width: pageW, lineGap: 4 });
+    doc.moveDown(1.5);
+    sectionTitle('Key Numbers This Month');
+    kpiRow([
+      { label: 'MAPS VISIBILITY', value: maps.avgVisibility != null ? Math.round(maps.avgVisibility) + '%' : '—', color: teal, sub: delta(maps.avgVisibility, prev.mapsRankings?.avgVisibility) },
+      { label: 'GSC CLICKS', value: gsc.clicks != null ? gsc.clicks.toLocaleString() : '—', color: purple, sub: delta(gsc.clicks, prev.gscData?.clicks) },
+      { label: 'IMPRESSIONS', value: gsc.impressions != null ? gsc.impressions.toLocaleString() : '—', color: purple, sub: delta(gsc.impressions, prev.gscData?.impressions) },
+      { label: 'CTR', value: gsc.ctr != null ? gsc.ctr + '%' : '—', color: purple, sub: delta(gsc.ctr, prev.gscData?.ctr) },
+    ]);
+    kpiRow([
+      { label: 'AVG GSC POSITION', value: gsc.avgPosition || '—', color: blue, sub: delta(gsc.avgPosition, prev.gscData?.avgPosition, true) },
+      { label: 'ON-PAGE SCORE', value: onPage.avgScore ? onPage.avgScore + '%' : '—', color: green, sub: delta(onPage.avgScore, prev.onPageStats?.avgScore) },
+      { label: 'PAGESPEED', value: ps.avgPerformance ? ps.avgPerformance + '%' : '—', color: green, sub: delta(ps.avgPerformance, prev.pageSpeedStats?.avgPerformance) },
+      { label: 'ACTIONS DONE', value: (data.actions?.completed ?? '—'), color: amber, sub: data.actions?.completionRate != null ? data.actions.completionRate + '% complete' : '' },
+    ]);
+    doc.moveDown(1);
+
+    // Maps snapshot
+    if (maps.totalKeywords || (maps.dominant != null)) {
+      sectionTitle('Google Maps Rankings');
+      kpiRow([
+        { label: 'KEYWORDS TRACKED', value: maps.totalKeywords || 0, color: teal },
+        { label: 'DOMINANT (TOP 3)', value: maps.dominant ?? '—', color: green },
+        { label: 'VISIBLE', value: maps.visible ?? '—', color: blue },
+        { label: 'NOT VISIBLE', value: maps.notVisible ?? '—', color: red },
+      ]);
+      doc.moveDown(1);
+    }
+
+    // ── Page 3: Work Completed (proof of work) ──
+    doc.addPage();
+    sectionTitle('Work Completed This Month');
+    const wc = data.workCompleted;
+    if (wc && (wc.total_changes > 0 || wc.findings_resolved > 0)) {
+      doc.fillColor('#333').fontSize(12).font('Helvetica').text(`${wc.total_changes} optimisations applied to the website this month, and ${wc.findings_resolved} audit findings resolved.`, { width: pageW, lineGap: 3 });
+      doc.moveDown(0.8);
+      for (const t of (wc.by_type || [])) {
+        doc.fillColor(teal).fontSize(11).font('Helvetica-Bold').text(`•  ${t.label}`, { continued: true }).fillColor('#333').font('Helvetica').text(`  — ${t.count} change${t.count !== 1 ? 's' : ''}`);
+        doc.moveDown(0.2);
+      }
+      if ((wc.recent || []).length) {
+        doc.moveDown(0.8);
+        doc.fillColor(gray).fontSize(10).font('Helvetica-Bold').text('MOST RECENT CHANGES');
+        doc.moveDown(0.3);
+        for (const rc of wc.recent.slice(0, 12)) {
+          const dstr = rc.date ? new Date(rc.date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : '';
+          doc.fillColor('#333').fontSize(9).font('Helvetica').text(`${dstr}  ·  ${rc.type}  ·  ${(rc.page || '').slice(0, 70)}`, { width: pageW });
+          doc.moveDown(0.15);
+        }
+      }
+    } else {
+      doc.fillColor(gray).fontSize(12).font('Helvetica').text('No tracked website changes were applied this month.');
+    }
+    doc.moveDown(1.5);
+
+    // Critical findings
+    if ((data.criticalFindings || []).length) {
+      sectionTitle('Top Priorities Next Month');
+      for (const f of data.criticalFindings.slice(0, 5)) {
+        doc.fillColor(red).fontSize(11).font('Helvetica-Bold').text(`•  ${f.title || ''}`, { width: pageW });
+        if (f.recommendation) { doc.fillColor(gray).fontSize(9).font('Helvetica').text(`   ${String(f.recommendation).slice(0, 180)}`, { width: pageW }); }
+        doc.moveDown(0.3);
+      }
+    }
+
+    // Footer on all pages
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      if (i > range.start) {
+        doc.fillColor(gray).fontSize(8).font('Helvetica').text(`${data.project?.name || ''} — ${data.monthLabel || ''} · The SEO Room · Page ${i + 1} of ${range.count}`, 50, doc.page.height - 40, { width: pageW, align: 'center' });
+      }
+    }
+    doc.end();
+  } catch (e) {
+    console.error('[reports-pdf] Error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/report/:token', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM monthly_reports WHERE share_token=$1', [req.params.token]);
