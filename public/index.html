@@ -12177,6 +12177,28 @@
         setAiMatching(false);
       };
 
+      // Apply ALL loaded AI suggestions in one click (after you've eyeballed the list).
+      const applyAllAiMatches = async () => {
+        const _n = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0];
+        const items = filtered404s.filter(f => { const k = f.url || f.url_path || ''; const s = suggestions[k]; return s && s.url && (s.title || '').includes('(AI') && _n(s.url) !== _n(k); });
+        if (!items.length) { alert('No AI suggestions loaded — run AI Match Remaining first.'); return; }
+        if (!confirm(`Apply all ${items.length} AI-matched redirects?\n\nEach one redirects a dead page to the live page the AI judged closest in intent (targets verified to exist). You can undo any of them from the Redirects tab.`)) return;
+        setAutoRedirecting(true);
+        setAutoProgress({ done: 0, total: items.length });
+        let done = 0, failed = 0;
+        for (const item of items) {
+          const k = item.url || item.url_path || '';
+          try {
+            await api(`/projects/${project.id}/plugin/404s/${item.id}/redirect`, { method: 'POST', body: { target_url: suggestions[k].url, source_url: k } });
+            await finishRedirect(item.id); done++;
+            setAutoProgress({ done, total: items.length });
+          } catch (e) { failed++; }
+        }
+        setAutoRedirecting(false); setAutoProgress(null);
+        setRedirectResult(`✓ Applied ${done} AI redirects.` + (failed ? ` ${failed} failed.` : ''));
+        await load404s();
+      };
+
       const diagnose404s = async () => {
         if (!fourOhFours.length) return;
         setDiagnosing(true);
@@ -12591,6 +12613,20 @@
             },
               aiMatching ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-brain' }),
               aiMatching ? ' AI matching…' : ' AI Match Remaining'
+            ),
+            (() => {
+              const _n = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0];
+              const aiCount = filtered404s.filter(f => { const k = f.url || f.url_path || ''; const s = suggestions[k]; return s && s.url && (s.title || '').includes('(AI') && _n(s.url) !== _n(k); }).length;
+              if (!aiCount) return null;
+              return e('button', {
+                style: { ...btnStyle('#22c55e'), padding: '5px 12px', fontSize: 12 },
+                onClick: applyAllAiMatches, disabled: autoRedirecting || aiMatching,
+                title: 'Applies every AI-matched redirect currently loaded — targets are verified live pages, undoable from the Redirects tab'
+              },
+                e('i', { className: 'fas fa-check-double' }),
+                ` Apply All ${aiCount} AI Matches`
+              );
+            })(
             ),
             Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
               (() => { const _n = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0]; let conf = 0, weak = 0; for (const f of filtered404s) { const k = f.url || f.url_path || ''; const s = suggestions[k]; if (!s) continue; if (s.score >= 50 && _n(s.url) !== _n(k)) conf++; else weak++; } return `${conf} confident (auto-applies) · ${weak} weak (use AI Match or review per row)`; })()
