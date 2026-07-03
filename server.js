@@ -49313,20 +49313,39 @@ app.post('/api/projects/:projectId/maintenance/fix-related-heading', async (req,
         if (listResp.ok) items = await listResp.json();
       } catch (e) { continue; }
       for (const item of (Array.isArray(items) ? items : [])) {
-        const content = item.content?.raw || item.content?.rendered || '';
-        if (!content.includes(OLD)) continue;
-        const newContent = content.split(OLD).join(NEW);
-        try {
-          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.id}`, { method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000) });
-          if (w.ok) {
-            fixed.push(item.link);
-            await pool.query(
-              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'heading_fix','content',$5,$6)`,
-              [project.id, item.id, item.link, item.title?.rendered || '', content, newContent]
-            ).catch(() => {});
-            console.log(`[fix-related-heading] Fixed ${item.link}`);
-          }
-        } catch (e) { console.warn('[fix-related-heading] write failed:', item.link, e.message); }
+        let changed = false;
+        // 1. Classic post_content (also keeps Elementor's plain copy consistent)
+        const content = item.content?.raw || '';
+        if (content.includes(OLD)) {
+          const newContent = content.split(OLD).join(NEW);
+          try {
+            const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.id}`, { method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000) });
+            if (w.ok) {
+              changed = true;
+              await pool.query(
+                `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'heading_fix','content',$5,$6)`,
+                [project.id, item.id, item.link, item.title?.rendered || '', content, newContent]
+              ).catch(() => {});
+            }
+          } catch (e) { console.warn('[fix-related-heading] content write failed:', item.link, e.message); }
+        }
+        // 2. Elementor data — THE FIELD THE PAGE ACTUALLY RENDERS. The plugin appended the block
+        // here as a text-editor widget, so the heading must be replaced here too.
+        const elRaw = (item.meta && typeof item.meta._elementor_data === 'string') ? item.meta._elementor_data : '';
+        if (elRaw && elRaw.includes(OLD)) {
+          const newEl = elRaw.split(OLD).join(NEW);
+          try {
+            const w2 = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.id}`, { method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ meta: { _elementor_data: newEl, _elementor_css: '' } }), signal: AbortSignal.timeout(20000) });
+            if (w2.ok) {
+              changed = true;
+              await pool.query(
+                `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'heading_fix','_elementor_data',$5,$6)`,
+                [project.id, item.id, item.link, item.title?.rendered || '', elRaw, newEl]
+              ).catch(() => {});
+            } else { console.warn('[fix-related-heading] elementor write failed:', item.link, w2.status); }
+          } catch (e) { console.warn('[fix-related-heading] elementor write failed:', item.link, e.message); }
+        }
+        if (changed) { fixed.push(item.link); console.log(`[fix-related-heading] Fixed ${item.link}`); }
       }
     }
     try { if (fixed.length) await purgeCloudflareCache(project, fixed.slice(0, 30)); } catch (e) {}
