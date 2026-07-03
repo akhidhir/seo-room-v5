@@ -15528,6 +15528,15 @@ app.post('/api/projects/:projectId/gbp-optimise/publish', async (req, res) => {
     if (!['description', 'categories', 'services', 'post'].includes(type)) {
       return res.status(400).json({ error: 'Unknown optimisation type' });
     }
+    // PRE-PUBLISH VALIDATION — never queue something Google will truncate or reject.
+    // (A truncated post once went out ending mid-sentence; hard limits are enforced here now.)
+    const vLen = String(value).length;
+    if (type === 'post' && vLen > 1500) {
+      return res.status(400).json({ error: `Post is ${vLen} characters — Google's limit is 1500, so it would be cut off mid-sentence. Use "Modify" to shorten it (ask for under 1300 characters), then publish again.` });
+    }
+    if (type === 'description' && vLen > 750) {
+      return res.status(400).json({ error: `Description is ${vLen} characters — Google's limit is 750. Use "Modify" to shorten it, then publish again.` });
+    }
     const locForQueue = `locations/${numericId}`;
     // For single-value profile fields, supersede any earlier still-queued write (one row per field).
     // Posts are independent (you can queue many), so they are NOT superseded.
@@ -15540,7 +15549,7 @@ app.post('/api/projects/:projectId/gbp-optimise/publish', async (req, res) => {
     const ins = await pool.query(
       `INSERT INTO gbp_pending_writes (project_id, location_id, field, value, status)
        VALUES ($1, $2, $3, $4, 'queued') RETURNING id`,
-      [projectId, locForQueue, type, String(value).slice(0, type === 'post' ? 1500 : 5000)]
+      [projectId, locForQueue, type, String(value).slice(0, 5000)] // length already validated above — no silent truncation
     );
     const label = type === 'post' ? 'Google Post' : type;
     res.json({ ok: true, queued: true, id: ins.rows[0].id, field: type,

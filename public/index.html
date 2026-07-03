@@ -11077,10 +11077,20 @@
       const [pubQueueing, setPubQueueing] = useState(false);
       const publishDraft = async () => {
         if (!editVal.trim() || pubQueueing) return;
+        // PRE-PUBLISH WARNINGS — catch problems BEFORE anything is queued
+        const len = editVal.length;
+        if (opt.type === 'post' && len > 1500) {
+          setOptResult({ ok: false, msg: `⚠ Not queued: this post is ${len} characters — Google's limit is 1500, so it would be cut off mid-sentence. Use "Modify" (e.g. "make it under 1300 characters"), then publish again.` });
+          return;
+        }
+        if (opt.type === 'description' && len > 750) {
+          setOptResult({ ok: false, msg: `⚠ Not queued: this description is ${len} characters — Google's limit is 750. Use "Modify" to shorten it, then publish again.` });
+          return;
+        }
         setPubQueueing(true);
         try {
           const r = await api(`/projects/${project.id}/gbp-optimise/publish`, { method: 'POST', body: { type: opt.type, value: editVal } });
-          if (r && r.ok) setOptResult({ ok: true, msg: r.message || 'Queued — it will publish to Google automatically on the next flush (daily 8am).' });
+          if (r && r.ok) { setOptResult({ ok: true, msg: (r.message || 'Queued.') + ' Track it in the Publish Queue panel at the top of this page.' }); loadQueue(); }
           else setOptResult({ ok: false, msg: (r && r.error) || 'Could not queue the publish.' });
         } catch (e) { setOptResult({ ok: false, msg: e.message }); }
         setPubQueueing(false);
@@ -11115,7 +11125,7 @@
           </div>
           <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0, marginBottom: 20 }}>Grades your Google Business Profile against Google's local ranking factors and AI-drafts each fix — you copy it and paste it into Google yourself.</p>
 
-          {false && (
+          {queue.length > 0 && (
             <div style={{ marginBottom: 20, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(20,184,166,0.08)', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#14b8a6' }}><i className="fas fa-cloud-arrow-up" style={{ marginRight: 7 }} />Publish queue</span>
@@ -11124,7 +11134,7 @@
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <tbody>
                   {queue.map(q => {
-                    const st = { queued: { c: '#f59e0b', t: 'Queued — awaiting flush' }, published: { c: '#22c55e', t: 'Published to Google' }, failed: { c: '#ef4444', t: 'Failed' } }[q.status] || { c: '#9ca3af', t: q.status };
+                    const st = { queued: { c: '#f59e0b', t: 'Queued — publishes at the daily 8:05am flush' }, published: { c: '#22c55e', t: 'Published to Google' + (q.published_at ? ' · ' + new Date(q.published_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '') }, failed: { c: '#ef4444', t: 'Failed / cancelled' } }[q.status] || { c: '#9ca3af', t: q.status };
                     return (
                       <tr key={q.id} style={{ borderTop: '1px solid var(--border)' }}>
                         <td style={{ padding: '8px 14px', textTransform: 'capitalize', fontWeight: 600, width: 110 }}>{q.field}</td>
@@ -11138,7 +11148,7 @@
                   })}
                 </tbody>
               </table>
-              <div style={{ padding: '7px 14px', fontSize: 11, color: 'var(--text3)', background: 'var(--bg2)' }}>Profile-field changes publish to Google through the RatingCaptain MCP, which only Claude can reach. Queued items stay here until you tell Claude "flush" — then they publish in seconds.</div>
+              <div style={{ padding: '7px 14px', fontSize: 11, color: 'var(--text3)', background: 'var(--bg2)' }}>Queued items publish to Google automatically every morning at 8:05am (via RatingCaptain). Hit Refresh to see them move from Queued → Published. Failed items show the reason and never publish.</div>
             </div>
           )}
 
