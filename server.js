@@ -19563,19 +19563,41 @@ app.post('/api/projects/:projectId/onpage-audit/add-links-permanent', async (req
     if (inserted === 0) {
       const clean = (t, u) => { const s = (t || '').split('/').pop().replace(/\s*[\|\-–—].*$/, '').trim(); return s || (u || '').split('/').filter(Boolean).pop().replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); };
       const isArea = u => /\/service-areas\//.test(u);
-      const SERVICE_RE = /(lost|broken|spare|keyless|stolen|fob|lockout|locksmith|programming|immobilis|transponder|cutting|car-key|key-replacement)/i;
+      // Service-page detector + copy derived from THIS project (was hardcoded car-key terms/headings
+      // that leaked "Related car key services" onto plumbing sites)
+      const industryLabel = (project.industry || '').trim();
+      const svcWordsRaw = []
+        .concat(Array.isArray(project.defined_services) ? project.defined_services : [])
+        .concat(Array.isArray(project.map_services) ? project.map_services : [])
+        .map(s => String((s && s.name) || s || '').toLowerCase()).filter(Boolean)
+        .flatMap(s => s.split(/[^a-z0-9]+/)).filter(w => w.length > 3);
+      const indWords = industryLabel.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
+      const dynWords = [...new Set([...svcWordsRaw, ...indWords, 'service', 'services', 'repair', 'repairs', 'install', 'installation', 'emergency', 'replacement'])];
+      const SERVICE_RE = new RegExp('(' + dynWords.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '')).join('|') + ')', 'i');
       const UTIL_RE = /(about|contact|privacy|refund|return|terms|disclaimer|gallery|photo|blog|category|tag|cart|checkout|thank|policy|cookie|sitemap)/i;
       const servicePages = allPages.filter(p => { const u = (p.url || '').replace(/\/+$/, ''); return u && u !== src && !isArea(u) && SERVICE_RE.test(u) && !UTIL_RE.test(u); }).slice(0, 6);
       const nearbyAreas = allPages.filter(p => { const u = (p.url || '').replace(/\/+$/, ''); return u && u !== src && isArea(u); }).slice(0, 6);
 
-      const suburb = (() => { const seg = (src.split('/').filter(Boolean).pop() || ''); return seg.replace(/^car-key-replacement-/, '').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'your area'; })();
+      // Suburb from the slug: prefer a known suburb inside it, else strip the project's service words
+      const suburb = (() => {
+        const seg = (src.split('/').filter(Boolean).pop() || '').toLowerCase();
+        let best = '';
+        try { for (const s of Object.keys(SUBURB_GPS)) { const sl = s.toLowerCase().replace(/\s+/g, '-'); if (seg.includes(sl) && sl.length > best.length) best = s; } } catch (e) {}
+        if (best) return best.replace(/\b\w/g, c => c.toUpperCase());
+        const words = seg.split('-').filter(w => !dynWords.includes(w));
+        return (words.join(' ').replace(/\b\w/g, c => c.toUpperCase())) || 'your area';
+      })();
+      // Strip leading service words from area link labels (e.g. "Car Key Replacement Craigie" → "Craigie")
+      const stripSvcPrefix = (t) => { let out = t; for (let i = 0; i < 4; i++) { const m = out.match(/^([A-Za-z]+)\s+/); if (m && dynWords.includes(m[1].toLowerCase())) out = out.slice(m[0].length); else break; } return out || t; };
       const svcItems = servicePages.map(p => `<li><a href="${(p.url || '').replace(/\/+$/, '')}/">${clean(p.title, p.url)}</a></li>`).join('');
-      const areaItems = nearbyAreas.map(p => `<a href="${(p.url || '').replace(/\/+$/, '')}/">${clean(p.title, p.url).replace(/^Car Key Replacement\s*/i, '')}</a>`).join(', ');
+      const areaItems = nearbyAreas.map(p => `<a href="${(p.url || '').replace(/\/+$/, '')}/">${stripSvcPrefix(clean(p.title, p.url))}</a>`).join(', ');
       const blockLinks = servicePages.length + nearbyAreas.length;
 
       if (blockLinks > 0) {
-        const html = `<div class="seoroom-related"><h3>Car Key Services in ${suburb}</h3>`
-          + (svcItems ? `<p>Explore our mobile car key services available in ${suburb} and surrounding suburbs:</p><ul>${svcItems}</ul>` : '')
+        const headText = industryLabel ? `${industryLabel.replace(/\b\w/g, c => c.toUpperCase())} Services in ${suburb}` : `Our Services in ${suburb}`;
+        const introText = industryLabel ? `Explore our ${industryLabel.toLowerCase()} services available in ${suburb} and surrounding suburbs:` : `Explore our services available in ${suburb} and surrounding suburbs:`;
+        const html = `<div class="seoroom-related"><h3>${headText}</h3>`
+          + (svcItems ? `<p>${introText}</p><ul>${svcItems}</ul>` : '')
           + (areaItems ? `<p><strong>Nearby areas we also cover:</strong> ${areaItems}.</p>` : '')
           + `</div>`;
         let blockOk = false, blockPageId = 0;
@@ -49219,7 +49241,12 @@ app.post('/api/projects/:projectId/internal-links/link-remaining-orphans', async
     const pages = (discovered || []).map(d => ({ url: norm(d.url), title: (d.title || '').trim() })).filter(p => p.url);
 
     const orphanSet = new Set(orphanList.map(o => norm(o.url)));
-    const STOP = new Set(['car','key','keys','replacement','replacements','perth','the','of','and','in','a','to','for','services','service','repair','repairs','programming','spares','from','lost','mobile','locksmith','rescue','your','our','professional','automotive','vehicle','best','need','how','what','guide','tips']);
+    // Generic stop words + this project's OWN brand/industry/location words (derived, not hardcoded —
+    // the old list was hardcoded for Car Key Rescue and leaked car-key terms onto every project)
+    const STOP = new Set(['the','of','and','in','a','to','for','services','service','repair','repairs','from','your','our','professional','best','need','how','what','guide','tips','near']);
+    const projWords = `${project.business_name || ''} ${project.name || ''} ${project.industry || ''} ${project.location || ''}`
+      .toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+    for (const w of projWords) STOP.add(w);
     const distinctive = (title) => new Set((title || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 3 && !STOP.has(w)));
 
     // Candidate targets = pages that are NOT orphans (they already have authority to pass down)
@@ -49245,7 +49272,9 @@ app.post('/api/projects/:projectId/internal-links/link-remaining-orphans', async
     for (const key of Object.keys(byTarget)) {
       const { target, orphans } = byTarget[key];
       const items = orphans.slice(0, 10).map(o => `<li><a href="${norm(o.url)}/">${cleanLabel(o.title, o.url)}</a></li>`).join('');
-      const html = `<div class="seoroom-related"><h3>Related car key services</h3><ul>${items}</ul></div>`;
+      // Heading derived from the project's industry — was hardcoded "Related car key services" for every project
+      const relHeading = (project.industry || '').trim() ? `Related ${project.industry.trim().toLowerCase()} services` : 'Related services';
+      const html = `<div class="seoroom-related"><h3>${relHeading}</h3><ul>${items}</ul></div>`;
       try {
         const r = await callPluginApi(project, '/insert-content-block', 'POST', { url: target.url, html, marker: 'seoroom-related' });
         if (r && r.ok && (r.inserted || r.already)) { linked += orphans.length; purgeUrls.push(target.url); results.push({ target: target.url, orphans: orphans.length }); }
