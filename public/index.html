@@ -12254,6 +12254,7 @@
         load404s();
       };
 
+      const [orphanAction, setOrphanAction] = useState(null); // which orphan bulk action is running: 'homepage' | '410' | null
       const bulkRedirectOrphans = async (mode) => {
         // mode: 'homepage' or '410'
         var orphanItems = fourOhFours.filter(function(f) {
@@ -12264,6 +12265,7 @@
         if (!orphanItems.length) return;
         var label = mode === '410' ? '410 Gone' : 'redirect to homepage';
         if (!confirm('Apply ' + label + ' to ' + orphanItems.length + ' orphan 404(s)?')) return;
+        setOrphanAction(mode);
         setAutoRedirecting(true);
         setAutoProgress({ done: 0, total: orphanItems.length });
         var done = 0;
@@ -12280,6 +12282,7 @@
           } catch (err) { console.error('Bulk redirect error:', err); }
         }
         setAutoRedirecting(false);
+        setOrphanAction(null);
         setAutoProgress(null);
         await load404s();
       };
@@ -12526,7 +12529,7 @@
                   onClick: function() { bulkRedirectOrphans('homepage'); },
                   disabled: autoRedirecting
                 },
-                  autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-home' }),
+                  orphanAction === 'homepage' ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-home' }),
                   ' All Orphans → Homepage'
                 ),
                 e('button', {
@@ -12534,7 +12537,7 @@
                   onClick: function() { bulkRedirectOrphans('410'); },
                   disabled: autoRedirecting
                 },
-                  autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-ban' }),
+                  orphanAction === '410' ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-ban' }),
                   ' All Orphans → 410 Gone'
                 )
               );
