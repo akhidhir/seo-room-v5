@@ -9467,6 +9467,16 @@ async function ensureTicketCode(projectId, projCode, rcKey, pCode) {
 // CONTROL CENTRE — grouped tickets (one per root cause), the lean replacement for the raw Action Plan dump.
 const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 
+// Which dashboard page FIXES each pillar — powers the ticket's "Open Fix Tool" button so issues
+// are actionable straight from the Control Centre (no hunting through the sidebar).
+const PILLAR_FIX_ROUTE = {
+  MAPS: 'maps-rankings', SERP: 'serp-rankings', AISR: 'ai-search',
+  CWV: 'web-sec-pagespeed-scores', INDX: 'indexing', CANB: 'competing-pages',
+  CITE: 'citations', BLNK: 'backlinks', LINK: 'internal-linking',
+  REVW: 'gbp-optimise', CONT: 'ow-project', ONPG: 'onpage-audit',
+  SEC: 'security-audit', TECH: 'website-audit', GBP: 'gbp-optimise', GEN: null,
+};
+
 // Root-cause playbooks: WHAT to do for each pillar code and WHERE to do it.
 const TICKET_PLAYBOOK = {
   CWV:  { where: 'Website Audit → PageSpeed Scores', steps: [
@@ -9686,6 +9696,7 @@ async function buildControlTickets(project) {
       pillar_code: pCode,
       category: normCategory(it.category) || it.pillar,
       fix_type: deriveFixType(it),
+      fix_route: PILLAR_FIX_ROUTE[pCode] || null,
       severity: it.severity || 'medium',
       // Some old extractions saved the severity word as the title — use the real text instead
       title: /^(critical|high|medium|low)$/i.test((it.title || '').trim())
@@ -17262,10 +17273,13 @@ app.post('/api/projects/:projectId/citations/build-tasks', async (req, res) => {
         `Cost: ${costLabel} · Difficulty: ${d.difficulty || '—'} · Type: ${d.type || '—'}\n\n` +
         `Use EXACTLY this NAP (must match the Google Business Profile):\n${napLines}\n\n` +
         `When done: paste the live listing URL into Citations & NAP for "${d.name}", then run Check NAP alignment to verify.`;
+      // Mint a permanent Control Centre ticket code (CITE pillar) so the task shows on the board
+      const rcKey = `cite:${projectId}:${d.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      const code = await ensureTicketCode(projectId, deriveProjectCode(project), rcKey, 'CITE');
       await pool.query(
-        `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, category, status, execution_type)
-         VALUES ($1, 'gbp', 'citation_listing', $2, $3, $4, 'Not listed', 'Listed with matching NAP', 'Citations', 'pending', 'manual')`,
-        [projectId, title, description, (d.priority || 99) <= 5 ? 'high' : (d.type === 'Major' ? 'medium' : 'low')]
+        `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, category, status, execution_type, code, root_cause_key)
+         VALUES ($1, 'gbp', 'citation_listing', $2, $3, $4, 'Not listed', 'Listed with matching NAP', 'Citations', 'pending', 'manual', $5, $6)`,
+        [projectId, title, description, (d.priority || 99) <= 5 ? 'high' : (d.type === 'Major' ? 'medium' : 'low'), code, rcKey]
       );
       created++;
     }
