@@ -50587,7 +50587,26 @@ app.post('/api/projects/:projectId/aio/scan', async (req, res) => {
       competitor_cited: results.filter(r => r.competitors_cited.length > 0).length,
       opportunity: results.filter(r => r.ai_overview && !r.you_cited).length, // overview shows but you're not in it
     };
-    const payload = { keywords: results, summary, competitors, scanned_at: new Date().toISOString() };
+    // ── History + deltas: compare against the previous scan so wins/losses are visible ──
+    let changes = null, hist = [];
+    try {
+      const prevRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='aio_cache'`, [projectId])).rows[0];
+      const prev = prevRow?.config || null;
+      if (prev && Array.isArray(prev.keywords) && prev.keywords.length) {
+        const findPrev = (kw) => prev.keywords.find(k => (k.keyword || '').toLowerCase() === kw.toLowerCase());
+        const newly_cited = results.filter(r => r.you_cited && !(findPrev(r.keyword)?.you_cited)).map(r => r.keyword);
+        const lost_cited = prev.keywords.filter(k => k.you_cited && !(results.find(r => r.keyword.toLowerCase() === (k.keyword || '').toLowerCase())?.you_cited)).map(k => k.keyword);
+        const new_overviews = results.filter(r => r.ai_overview && findPrev(r.keyword) && !findPrev(r.keyword).ai_overview).map(r => r.keyword);
+        changes = { since: prev.scanned_at || null, newly_cited, lost_cited, new_overviews };
+      }
+      const histRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='aio_history'`, [projectId])).rows[0];
+      hist = (histRow?.config?.scans) || [];
+      hist.push({ scanned_at: new Date().toISOString(), total: summary.total, with_overview: summary.with_overview, you_cited: summary.you_cited, opportunity: summary.opportunity, cited_keywords: results.filter(r => r.you_cited).map(r => r.keyword) });
+      while (hist.length > 24) hist.shift();
+      await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'aio_history',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify({ scans: hist })]);
+    } catch (e) { console.log('[aio] history skipped:', e.message); }
+
+    const payload = { keywords: results, summary, competitors, scanned_at: new Date().toISOString(), changes, history: hist };
     await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'aio_cache',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify(payload)]).catch(() => {});
     try { await pool.query('INSERT INTO api_costs (project_id, feature, provider, api_calls, cost, details) VALUES ($1,$2,$3,$4,$5,$6)', [projectId, 'aio_scan', 'serpapi', keywords.length, cost, JSON.stringify({ count: keywords.length })]); } catch (e) {}
     res.json({ ...payload, cost });

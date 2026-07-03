@@ -37433,9 +37433,30 @@
               <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
                 {stat('Keywords scanned', s.total || 0)}
                 {stat('Show an AI Overview', s.with_overview || 0, `${s.total ? Math.round((s.with_overview / s.total) * 100) : 0}% of keywords`, accent)}
-                {stat('You are cited', s.you_cited || 0, 'in the AI answer', '#22c55e')}
+                {stat('You are cited', s.you_cited || 0, (data.history && data.history.length > 1) ? `was ${data.history[data.history.length - 2].you_cited} last scan` : 'in the AI answer', '#22c55e')}
                 {stat('Citation opportunities', s.opportunity || 0, 'overview shows, you\'re not in it', '#f59e0b')}
               </div>
+
+              {/* Wins / losses since the previous scan */}
+              {data.changes && (data.changes.newly_cited?.length > 0 || data.changes.lost_cited?.length > 0 || data.changes.new_overviews?.length > 0) && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+                  {data.changes.newly_cited?.length > 0 && (
+                    <div style={{ flex: '1 1 240px', padding: '10px 14px', borderRadius: 10, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.35)', fontSize: 13 }}>
+                      <b style={{ color: '#22c55e' }}><i className="fas fa-arrow-trend-up" style={{ marginRight: 6 }}></i>Newly cited ({data.changes.newly_cited.length}):</b> {data.changes.newly_cited.join(', ')}
+                    </div>
+                  )}
+                  {data.changes.lost_cited?.length > 0 && (
+                    <div style={{ flex: '1 1 240px', padding: '10px 14px', borderRadius: 10, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', fontSize: 13 }}>
+                      <b style={{ color: '#ef4444' }}><i className="fas fa-arrow-trend-down" style={{ marginRight: 6 }}></i>Lost citation ({data.changes.lost_cited.length}):</b> {data.changes.lost_cited.join(', ')}
+                    </div>
+                  )}
+                  {data.changes.new_overviews?.length > 0 && (
+                    <div style={{ flex: '1 1 240px', padding: '10px 14px', borderRadius: 10, background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.35)', fontSize: 13 }}>
+                      <b style={{ color: '#a78bfa' }}><i className="fas fa-robot" style={{ marginRight: 6 }}></i>New AI Overviews ({data.changes.new_overviews.length}):</b> {data.changes.new_overviews.join(', ')}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                 {[['all', 'All'], ['overview', 'Has AI Overview'], ['cited', 'You cited'], ['opportunity', 'Opportunities']].map(([k, l]) => (
