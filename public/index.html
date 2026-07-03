@@ -11355,6 +11355,7 @@
       const [editNotes, setEditNotes] = useState('');
       const [saving, setSaving] = useState(null);
       const [scanning, setScanning] = useState(false);
+      const [buildingTasks, setBuildingTasks] = useState(false);
       const [filter, setFilter] = useState('all');
       const [canonicalNAP, setCanonicalNAP] = useState({});
       const [expandedNAP, setExpandedNAP] = useState({});
@@ -11499,9 +11500,23 @@
               </h2>
               <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>Track your business listings across directories — checks if listed and verifies Name, Address, Phone consistency</p>
             </div>
-            <button className="btn btn-primary" onClick={scanCitations} disabled={scanning} style={{ fontSize: 13 }}>
-              {scanning ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Scan All Directories</>}
-            </button>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn" onClick={async () => {
+                if (buildingTasks) return;
+                setBuildingTasks(true);
+                try {
+                  const r = await api(`/projects/${project.id}/citations/build-tasks`, { method: 'POST' });
+                  if (r && r.ok) alert(`${r.created} listing task${r.created !== 1 ? 's' : ''} created in the Action Plan (${r.already_listed} already listed, ${r.already_tasked} already had a task). Each task contains the exact NAP to enter.`);
+                  else alert((r && r.error) || 'Could not create tasks.');
+                } catch (e) { alert(e.message); }
+                setBuildingTasks(false);
+              }} disabled={buildingTasks} style={{ fontSize: 13, background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.4)' }}>
+                {buildingTasks ? <><span className="spinner"></span>Creating…</> : <><i className="fas fa-list-check" style={{ marginRight: 6 }} />Create Listing Tasks</>}
+              </button>
+              <button className="btn btn-primary" onClick={scanCitations} disabled={scanning} style={{ fontSize: 13 }}>
+                {scanning ? <><span className="spinner"></span>Scanning...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Scan All Directories</>}
+              </button>
+            </div>
           </div>
 
           {scanning && (

@@ -17191,6 +17191,70 @@ app.get('/api/projects/:projectId/nap-check', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// CITATION BUILDER — turn every not-listed directory into an actionable task with the exact
+// NAP data pre-filled (from the project's own GBP profile), so listings can be created without
+// hunting for details and always match the GBP. Generic: works for any project.
+app.post('/api/projects/:projectId/citations/build-tasks', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Canonical NAP from the project's own synced GBP profile
+    const intg = await pool.query(`SELECT kind, config FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_profile','gbp_profile')`, [projectId]);
+    const byKind = {}; for (const r of intg.rows) byKind[r.kind] = (typeof r.config === 'string' ? JSON.parse(r.config) : r.config);
+    const rc = byKind.rc_profile?.profile || null;
+    const gbp = byKind.gbp_profile || null;
+    const name = rc?.title || gbp?.business?.name || project.business_name || project.name || '';
+    const address = rc ? [...(rc.storefrontAddress?.addressLines || []), rc.storefrontAddress?.locality, rc.storefrontAddress?.administrativeArea, rc.storefrontAddress?.postalCode].filter(Boolean).join(', ') : (gbp?.address || '');
+    const phone = rc?.phoneNumbers?.primaryPhone || gbp?.phone || project.phone || '';
+    const website = rc?.websiteUri || gbp?.website || (project.domain ? 'https://' + project.domain.replace(/^https?:\/\//, '') : '');
+    const gbpDesc = rc?.profile?.description || gbp?.description || '';
+    const primaryCat = rc?.categories?.primaryCategory?.displayName || (gbp?.categories || [])[0] || project.industry || '';
+    const serviceAreas = (rc?.serviceArea?.places?.placeInfos || []).map(p => p.placeName).filter(Boolean);
+    if (!name || !phone) return res.status(400).json({ error: 'No GBP profile synced for this project — sync from GBP Optimise first so tasks carry the exact NAP.' });
+
+    // Which directories already have a listing, and which already have an open task
+    const citRows = (await pool.query(`SELECT directory_name, status, listing_url FROM citations WHERE project_id=$1`, [projectId])).rows;
+    const citByName = {}; for (const r of citRows) citByName[r.directory_name] = r;
+    const existing = (await pool.query(`SELECT title FROM action_items WHERE project_id=$1 AND type='citation_listing' AND status NOT IN ('done','dismissed','completed')`, [projectId])).rows;
+    const existingTitles = new Set(existing.map(r => r.title));
+
+    const napLines = [
+      `Business name (exact): ${name}`,
+      address ? `Address (exact): ${address}` : `Address: SERVICE-AREA business — do NOT show a street address; set service areas instead${serviceAreas.length ? ': ' + serviceAreas.slice(0, 10).join(', ') : ''}`,
+      `Phone (exact): ${phone}`,
+      website ? `Website: ${website}` : null,
+      primaryCat ? `Category: ${primaryCat}` : null,
+      gbpDesc ? `Description (reuse from GBP): ${gbpDesc.slice(0, 500)}` : null,
+    ].filter(Boolean).join('\n');
+
+    let created = 0, alreadyListed = 0, alreadyTasked = 0;
+    for (const d of AUSTRALIAN_DIRECTORIES) {
+      if (/google business profile|google my business|google maps/i.test(d.name)) continue; // source of truth
+      const row = citByName[d.name];
+      if (row && (row.status === 'listed' || (row.listing_url || '').trim())) { alreadyListed++; continue; }
+      const title = `Get listed on ${d.name}`;
+      if (existingTitles.has(title)) { alreadyTasked++; continue; }
+      const costLabel = d.free ? ('Free' + (d.paid_option ? ` (paid option ${d.paid_option})` : '')) : (d.paid_option || 'Paid');
+      const description =
+        `${d.description || ''}\n\n` +
+        `Create the listing at: https://${d.url}\n` +
+        `Cost: ${costLabel} · Difficulty: ${d.difficulty || '—'} · Type: ${d.type || '—'}\n\n` +
+        `Use EXACTLY this NAP (must match the Google Business Profile):\n${napLines}\n\n` +
+        `When done: paste the live listing URL into Citations & NAP for "${d.name}", then run Check NAP alignment to verify.`;
+      await pool.query(
+        `INSERT INTO action_items (project_id, pillar, type, title, description, severity, current_value, new_value, category, status, execution_type)
+         VALUES ($1, 'gbp', 'citation_listing', $2, $3, $4, 'Not listed', 'Listed with matching NAP', 'Citations', 'pending', 'manual')`,
+        [projectId, title, description, (d.priority || 99) <= 5 ? 'high' : (d.type === 'Major' ? 'medium' : 'low')]
+      );
+      created++;
+    }
+    console.log(`[citations] Project ${projectId}: created ${created} listing tasks (${alreadyListed} already listed, ${alreadyTasked} already tasked)`);
+    res.json({ ok: true, created, already_listed: alreadyListed, already_tasked: alreadyTasked });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Helper: fetch a URL with timeout, return {html, blocked} or null
 async function fetchPage(url, timeoutMs = 8000) {
   const controller = new AbortController();
