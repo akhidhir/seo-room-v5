@@ -15867,10 +15867,11 @@ async function getRcLocationDetails(projectId) {
   const cached = rcLocationCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < RC_LOCATION_CACHE_TTL) return cached.data;
 
-  const proj = await pool.query('SELECT rc_location_id, business_name, name FROM projects WHERE id=$1', [projectId]);
+  const proj = await pool.query('SELECT rc_location_id, gbp_location_id, business_name, name FROM projects WHERE id=$1', [projectId]);
   if (proj.rows.length === 0) throw new Error('Project not found');
   const rcLocId = proj.rows[0].rc_location_id;
-  if (!rcLocId) throw new Error('No rc_location_id set for this project');
+  const gbpLocId = proj.rows[0].gbp_location_id;
+  if (!rcLocId && !gbpLocId) throw new Error('No rc_location_id or GBP Location ID set for this project');
   const projBizName = proj.rows[0].business_name || proj.rows[0].name || '';
 
   const RC_TOKEN = process.env.RC_API_TOKEN;
@@ -15882,15 +15883,26 @@ async function getRcLocationDetails(projectId) {
   if (!resp.ok) throw new Error(`RC locations API returned ${resp.status}`);
   const data = await resp.json();
   const locations = data.data || [];
-  const match = locations.find(l => l.id === rcLocId);
-  if (!match) throw new Error(`RC location with id=${rcLocId} not found. Available: ${locations.map(l => `${l.id}:${l.name}`).join(', ')}`);
-
-  // IDENTITY GUARD: the RC location must actually BE this project's business — a stale/wrong
-  // rc_location_id must fail loudly instead of silently pulling another client's posts/reviews.
+  // IDENTITY GUARD + SELF-HEAL: the RC location must actually BE this project's business.
+  // A stale/wrong rc_location_id (e.g. another client's) is auto-corrected from the project's
+  // own GBP Location ID when possible, otherwise it fails loudly — never silently pulls
+  // another client's posts/reviews.
   const dn = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (projBizName && match.name && !dn(match.name).includes(dn(projBizName)) && !dn(projBizName).includes(dn(match.name))) {
-    throw new Error(`rc_location_id=${rcLocId} points at "${match.name}", not "${projBizName}" — fix it in Project Settings.`);
+  const nameOk = (n) => !projBizName || !n || dn(n).includes(dn(projBizName)) || dn(projBizName).includes(dn(n));
+  let match = locations.find(l => l.id === rcLocId) || null;
+  if (match && !nameOk(match.name)) {
+    console.warn(`[rc-posts] rc_location_id=${rcLocId} points at "${match.name}", not "${projBizName}" — trying to self-heal from GBP Location ID`);
+    match = null;
   }
+  if (!match && gbpLocId) {
+    const byGbp = locations.find(l => l.location_id === gbpLocId || l.location_id === `locations/${String(gbpLocId).replace(/^locations\//, '')}`);
+    if (byGbp && nameOk(byGbp.name)) {
+      match = byGbp;
+      await pool.query('UPDATE projects SET rc_location_id=$1 WHERE id=$2', [byGbp.id, projectId]).catch(() => {});
+      console.log(`[rc-posts] Self-healed rc_location_id for project ${projectId}: ${rcLocId || 'none'} → ${byGbp.id} ("${byGbp.name}")`);
+    }
+  }
+  if (!match) throw new Error(`No RC location matches this project (rc_location_id=${rcLocId || 'none'}, business="${projBizName}"). Re-select the business in Project Settings → GBP. Available: ${locations.map(l => `${l.id}:${l.name}`).join(', ')}`);
 
   const result = { location_id: match.location_id, account_id: match.account_id, name: match.name };
   rcLocationCache.set(cacheKey, { data: result, ts: Date.now() });
