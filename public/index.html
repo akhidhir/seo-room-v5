@@ -12134,6 +12134,49 @@
         setRedirectResult(`✓ Redirected ${done} of ${matchedItems.length} matched URLs and removed them from the list.` + (failed ? ` ${failed} failed.` : ''));
       };
 
+      // AI MATCH — semantic matching for what word-overlap couldn't confidently place.
+      // High-confidence AI matches auto-apply; medium ones load as per-row suggestions to review;
+      // "gone" ones are offered as a single confirmed 410 batch. AI can only pick real live pages.
+      const [aiMatching, setAiMatching] = useState(false);
+      const aiMatchRemaining = async () => {
+        const _n = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0];
+        const remaining = filtered404s.filter(f => { const k = f.url || f.url_path || ''; const s = suggestions[k]; return !(s && s.score >= 50 && _n(s.url) !== _n(k)); });
+        if (!remaining.length) { alert('Nothing left to match — everything has a confident redirect already.'); return; }
+        if (!confirm(`AI-match ${remaining.length} remaining 404(s)?\n\n• Clear matches are redirected automatically\n• Uncertain ones appear as per-row suggestions for you to approve\n• Genuinely-gone ones are offered as one 410 batch (you confirm first)`)) return;
+        setAiMatching(true);
+        try {
+          const r = await api(`/projects/${project.id}/plugin/404s/ai-match`, { method: 'POST', body: { urls: remaining.map(f => f.url || f.url_path || '') } });
+          const map = r.results || {};
+          let applied = 0, review = 0; const goneItems = [];
+          const newSug = { ...suggestions };
+          for (const item of remaining) {
+            const k = item.url || item.url_path || '';
+            const m = map[k];
+            if (!m) continue;
+            if (m.gone) { goneItems.push(item); continue; }
+            if (m.confidence === 'high' && m.target) {
+              try {
+                await api(`/projects/${project.id}/plugin/404s/${item.id}/redirect`, { method: 'POST', body: { target_url: m.target, source_url: k } });
+                await finishRedirect(item.id); applied++;
+              } catch (e) { newSug[k] = { url: m.target, title: (m.target_title || '') + ' (AI)', score: 49 }; review++; }
+            } else if (m.target) {
+              newSug[k] = { url: m.target, title: (m.target_title || '') + ' (AI: ' + (m.reason || 'review') + ')', score: 49 };
+              review++;
+            }
+          }
+          setSuggestions(newSug);
+          let goneDone = 0;
+          if (goneItems.length && confirm(`AI found ${goneItems.length} URL(s) with NO live page serving their intent (genuinely gone). Apply 410 Gone to these? (Reversible from the Redirects tab.)`)) {
+            for (const g of goneItems) {
+              try { await api(`/projects/${project.id}/plugin/404s/${g.id}/redirect`, { method: 'POST', body: { target_url: '', redirect_type: 410 } }); goneDone++; } catch (e) {}
+            }
+          }
+          setRedirectResult(`✓ AI match: ${applied} redirected automatically, ${review} loaded as suggestions to review (Apply per row), ${goneDone ? goneDone + ' marked 410 gone' : goneItems.length + ' flagged gone (not applied)'}.`);
+          await load404s();
+        } catch (e) { setRedirectResult('✗ AI match error: ' + (e.message || e)); }
+        setAiMatching(false);
+      };
+
       const diagnose404s = async () => {
         if (!fourOhFours.length) return;
         setDiagnosing(true);
@@ -12541,8 +12584,16 @@
               autoRedirecting ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-bolt' }),
               autoRedirecting ? ` ${autoProgress?.done || 0}/${autoProgress?.total || 0}` : ` Auto-Redirect ${Object.values(suggestions).filter(s => s && s.score >= 50).length} Confident Matches`
             ),
+            e('button', {
+              style: { ...btnStyle('#8b5cf6'), padding: '5px 12px', fontSize: 12 },
+              onClick: aiMatchRemaining, disabled: aiMatching || autoRedirecting,
+              title: 'AI semantically matches the leftovers (e.g. a deleted suburb page → its service page). Clear matches apply automatically; uncertain ones become per-row suggestions; gone ones are offered as a confirmed 410 batch.'
+            },
+              aiMatching ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-brain' }),
+              aiMatching ? ' AI matching…' : ' AI Match Remaining'
+            ),
             Object.keys(suggestions).length > 0 && e('span', { style: { fontSize: 12, color: '#22c55e' } },
-              `${Object.values(suggestions).filter(Boolean).length}/${filtered404s.length} matched`
+              (() => { const conf = Object.values(suggestions).filter(s => s && s.score >= 50).length; const weak = Object.values(suggestions).filter(s => s && s.score < 50).length; return `${conf} confident (auto-applies) · ${weak} weak (use AI Match or review per row)`; })()
             ),
             Object.keys(diagnoses).length > 0 && e('span', { style: { fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '3px 8px', borderRadius: 6 } },
               (() => {

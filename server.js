@@ -3255,6 +3255,85 @@ app.post('/api/projects/:id/plugin/404s/suggest-redirects', async (req, res) => 
   }
 });
 
+// AI MATCH — semantic redirect matching for 404s the word-overlap matcher couldn't confidently
+// place (e.g. "pc-repairs-landsdale" → the PC repairs service page). SAFETY: the AI can only
+// pick from the REAL list of live pages we fetched — an invented URL is rejected; unsure = "gone
+// or no match", never a guess.
+app.post('/api/projects/:id/plugin/404s/ai-match', async (req, res) => {
+  try {
+    if (!anthropic) return res.status(503).json({ error: 'AI not configured.' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const { urls } = req.body || {};
+    if (!Array.isArray(urls) || !urls.length) return res.status(400).json({ error: 'No URLs to match' });
+    const capped = urls.slice(0, 100);
+
+    // Live pages (same sources as suggest-redirects)
+    const wpUrl = (project.wordpress_url || project.domain || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    const baseUrl = `https://${(project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
+    let livePages = [];
+    const fetchWp = async (type, page) => {
+      try {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=100&page=${page}&status=publish&_fields=slug,title,link`, { headers: authHeaders, signal: AbortSignal.timeout(8000) });
+        if (!r.ok) return [];
+        const items = await r.json();
+        return Array.isArray(items) ? items.map(p => ({ path: (() => { try { return new URL(p.link).pathname; } catch { return '/' + p.slug + '/'; } })(), title: p.title?.rendered || '', url: p.link })) : [];
+      } catch { return []; }
+    };
+    const jobs = []; for (const t of ['pages', 'posts']) for (let pg = 1; pg <= 3; pg++) jobs.push(fetchWp(t, pg));
+    for (const b of await Promise.all(jobs)) livePages.push(...b);
+    if (!livePages.length) return res.status(502).json({ error: 'Could not fetch the live page list from WordPress.' });
+    const byPath = {}; for (const p of livePages) byPath[p.path.replace(/\/+$/, '')] = p;
+
+    const industry = project.industry || 'local business';
+    const results = {};
+    for (let i = 0; i < capped.length; i += 25) {
+      const chunk = capped.slice(i, i + 25);
+      const deadList = chunk.map(u => u.replace(/^https?:\/\/[^/]+/, '')).join('\n');
+      const liveList = livePages.slice(0, 250).map(p => `${p.path} — ${p.title}`).join('\n');
+      try {
+        const msg = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 2500,
+          messages: [{ role: 'user', content: `A ${industry} website has dead URLs (404s). For EACH dead path, pick the single most relevant LIVE page a visitor should be redirected to — the page that best serves the same intent (e.g. a deleted "service in suburb" page → that service's main page). If no live page genuinely serves the intent, answer "gone".
+
+RULES:
+- target MUST be copied EXACTLY from the live list below. Never invent a path.
+- confidence "high" only when the target clearly serves the same visitor intent. Otherwise "medium". Use "gone" when nothing fits.
+- Never pick the homepage unless the dead page was a general/about page.
+
+DEAD PATHS:
+${deadList}
+
+LIVE PAGES:
+${liveList}
+
+Return STRICT JSON only: {"<dead path>": {"target": "<live path or GONE>", "confidence": "high|medium", "reason": "<8 words max>"}, ...} — one entry per dead path.` }],
+        }, { timeout: 45000, maxRetries: 1 });
+        let txt = (msg.content?.[0]?.text || '').trim();
+        const s = txt.indexOf('{'), e2 = txt.lastIndexOf('}'); if (s >= 0 && e2 > s) txt = txt.slice(s, e2 + 1);
+        let parsed = {}; try { parsed = JSON.parse(txt); } catch {}
+        for (const u of chunk) {
+          const path = u.replace(/^https?:\/\/[^/]+/, '');
+          const m = parsed[path] || parsed[path.replace(/\/+$/, '')] || null;
+          if (!m || !m.target || /^gone$/i.test(m.target)) { results[u] = { gone: true, reason: (m && m.reason) || 'no live page serves this intent' }; continue; }
+          const live = byPath[String(m.target).replace(/\/+$/, '')];
+          // VALIDATION: target must be a real live page from our list, and not the dead path itself
+          if (!live || String(m.target).replace(/\/+$/, '') === path.replace(/\/+$/, '')) { results[u] = { gone: true, reason: 'AI target not in live list' }; continue; }
+          results[u] = { target: live.url, target_title: live.title, confidence: m.confidence === 'high' ? 'high' : 'medium', reason: m.reason || '' };
+        }
+      } catch (e) {
+        for (const u of chunk) results[u] = { error: e.message };
+      }
+    }
+    const high = Object.values(results).filter(r => r.confidence === 'high').length;
+    const medium = Object.values(results).filter(r => r.confidence === 'medium').length;
+    const gone = Object.values(results).filter(r => r.gone).length;
+    console.log(`[404-ai-match] project ${project.id}: ${high} high, ${medium} medium, ${gone} gone of ${capped.length}`);
+    res.json({ ok: true, results, high, medium, gone, total: capped.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/projects/:id/plugin/404s/diagnose — root cause analysis for 404s
 app.post('/api/projects/:id/plugin/404s/diagnose', async (req, res) => {
   try {
