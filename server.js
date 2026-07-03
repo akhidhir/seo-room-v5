@@ -11551,6 +11551,52 @@ async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
   return { local_results, cost: data.cost, source: 'dataforseo' };
 }
 
+// DataForSEO Business Data — full GBP profile (description, hours, attributes, photo count,
+// claimed status) that SerpAPI/Places don't expose. Used by the GBP audit as fallback + enrichment.
+async function dataForSeoBusinessInfo({ keyword, location }) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured.');
+  const normalizedLocation = (location || 'Australia').replace(/,\s+/g, ',');
+  const resp = await fetch('https://api.dataforseo.com/v3/business_data/google/my_business_info/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{ keyword, location_name: normalizedLocation, language_code: 'en' }]),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!resp.ok) throw new Error(`DataForSEO Business Data error ${resp.status}`);
+  const data = await resp.json();
+  const item = data.tasks?.[0]?.result?.[0]?.items?.[0] || null;
+  if (!item) return null;
+  // Days with opening hours set
+  let hoursDays = 0, hoursText = null;
+  try {
+    const tt = item.work_time?.work_hours?.timetable || item.work_hours?.timetable || null;
+    if (tt) {
+      const days = Object.entries(tt).filter(([, v]) => Array.isArray(v) && v.length > 0);
+      hoursDays = days.length;
+      hoursText = days.map(([d, v]) => `${d}: ${v.map(s => `${s.open?.hour}:${String(s.open?.minute || 0).padStart(2, '0')}-${s.close?.hour}:${String(s.close?.minute || 0).padStart(2, '0')}`).join(', ')}`).join('; ');
+    }
+  } catch (e) {}
+  return {
+    name: item.title || null,
+    address: item.address || '',
+    phone: item.phone || null,
+    website: item.url || null,
+    rating: item.rating?.value ?? null,
+    reviewCount: item.rating?.votes_count || 0,
+    primaryType: item.category || null,
+    categories: [item.category, ...(item.additional_categories || [])].filter(Boolean),
+    description: item.description || null,
+    hoursSet: hoursDays > 0,
+    hoursDays, hoursText,
+    photoCount: item.total_photos || 0,
+    placeId: item.place_id || null,
+    cid: item.cid || null,
+    verified: item.is_claimed === true,
+    attributes: item.attributes || null,
+    raw_snippet: item.snippet || null,
+  };
+}
+
 // DataForSEO Organic SERP — replaces serpApiSearch({ engine: 'google', ... })
 // Returns normalized results matching the shape the dashboard expects
 async function dataForSeoSerp({ keyword, location, depth, device }) {
@@ -33176,6 +33222,41 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
         }
       }
     } catch (e) { console.log(`[gbp-audit] Extension data check error: ${e.message}`); }
+
+    // 1b-2. DataForSEO Business Data — fallback when RC/extension are missing, enrichment otherwise.
+    // Fills the fields RC can't provide (photo count, address, claimed status) with REAL Google data,
+    // so the AI never flags "missing description/photos" just because our own cache lacked the field.
+    if (DATAFORSEO_AUTH && (!gbpData.profile || !gbpData.profile.photoCount || !gbpData.profile.description || !gbpData.profile.address)) {
+      try {
+        const dfsQuery = `${businessName} ${(location || '').split(',')[0]}`.trim();
+        const dfs = await dataForSeoBusinessInfo({ keyword: dfsQuery, location: resolveDataForSeoLocation(location) });
+        if (dfs && dfs.name) {
+          // Same guard as elsewhere: only trust the result if it's actually OUR business
+          const dn = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const isOurs = dn(dfs.name).includes(dn(businessName)) || dn(businessName).includes(dn(dfs.name)) ||
+            (dfs.website && domain && dn(dfs.website).includes(dn(domain)));
+          if (isOurs) {
+            if (!gbpData.profile) {
+              gbpData.source = 'dataforseo';
+              gbpData.profile = { ...dfs, services: [], serviceCount: 0, serviceAreas: [], sampleReviews: [], healthcheck: [], socialProfiles: [] };
+              console.log(`[gbp-audit] PROFILE (DataForSEO): rating=${dfs.rating}, reviews=${dfs.reviewCount}, photos=${dfs.photoCount}, desc=${dfs.description ? 'YES' : 'NO'}`);
+            } else {
+              if (!gbpData.profile.photoCount && dfs.photoCount) gbpData.profile.photoCount = dfs.photoCount;
+              if (!gbpData.profile.address && dfs.address) gbpData.profile.address = dfs.address;
+              if (!gbpData.profile.description && dfs.description) gbpData.profile.description = dfs.description;
+              if (gbpData.profile.rating == null && dfs.rating != null) { gbpData.profile.rating = dfs.rating; gbpData.profile.reviewCount = gbpData.profile.reviewCount || dfs.reviewCount; }
+              if (!gbpData.profile.verified && dfs.verified) gbpData.profile.verified = true;
+              if (!gbpData.profile.placeId && dfs.placeId) gbpData.profile.placeId = dfs.placeId;
+              gbpData.profile.dataforseoEnriched = true;
+              console.log(`[gbp-audit] DataForSEO enrichment: photos=${dfs.photoCount}, desc=${dfs.description ? 'YES' : 'NO'}, address=${dfs.address ? 'YES' : 'NO'}`);
+            }
+            await logApiCost(projectId, 'gbp_audit', 'dataforseo', 1, 0.002, { endpoint: 'my_business_info' }).catch(() => {});
+          } else {
+            console.log(`[gbp-audit] DataForSEO returned a different business ("${dfs.name}") — ignored`);
+          }
+        }
+      } catch (e) { console.log(`[gbp-audit] DataForSEO business info error: ${e.message}`); }
+    }
 
     // 1c. Scrape website for NAP consistency + schema
     if (domain) {
