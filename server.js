@@ -49289,6 +49289,51 @@ app.post('/api/projects/:projectId/internal-links/link-remaining-orphans', async
   }
 });
 
+// ONE-TIME CLEANUP: replace the old hardcoded "Related car key services" heading (leaked onto
+// non-locksmith sites by the previously hardcoded link-block) with this project's correct heading.
+// Full originals saved to wp_change_history for rollback.
+app.post('/api/projects/:projectId/maintenance/fix-related-heading', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const authHeaders = getWpAuthHeaders(project);
+    if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress credentials not configured' });
+    const OLD = 'Related car key services';
+    if (/car key|locksmith/i.test(`${project.industry || ''} ${project.business_name || ''} ${project.name || ''}`)) {
+      return res.json({ ok: true, fixed: 0, message: 'This project IS the car-key business — heading is correct here.' });
+    }
+    const industry = (project.industry || '').trim();
+    const NEW = industry ? `Related ${industry.toLowerCase()} services` : 'Related services';
+    const fixed = [];
+    for (const type of ['posts', 'pages']) {
+      let items = [];
+      try {
+        const listResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?search=${encodeURIComponent('"' + OLD + '"')}&per_page=100&context=edit`, { headers: authHeaders, signal: AbortSignal.timeout(30000) });
+        if (listResp.ok) items = await listResp.json();
+      } catch (e) { continue; }
+      for (const item of (Array.isArray(items) ? items : [])) {
+        const content = item.content?.raw || item.content?.rendered || '';
+        if (!content.includes(OLD)) continue;
+        const newContent = content.split(OLD).join(NEW);
+        try {
+          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.id}`, { method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(20000) });
+          if (w.ok) {
+            fixed.push(item.link);
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,'heading_fix','content',$5,$6)`,
+              [project.id, item.id, item.link, item.title?.rendered || '', content, newContent]
+            ).catch(() => {});
+            console.log(`[fix-related-heading] Fixed ${item.link}`);
+          }
+        } catch (e) { console.warn('[fix-related-heading] write failed:', item.link, e.message); }
+      }
+    }
+    try { if (fixed.length) await purgeCloudflareCache(project, fixed.slice(0, 30)); } catch (e) {}
+    res.json({ ok: true, fixed: fixed.length, urls: fixed, new_heading: NEW });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Clean Anchors — dismiss pending suggestions where one anchor is reused across 3+ different target pages
 // (keeps the 2 best by priority). Stops the "same generic anchor to 15 pages" pattern.
 app.post('/api/projects/:projectId/internal-links/clean-anchors', async (req, res) => {
