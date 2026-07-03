@@ -16368,6 +16368,17 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
       if (profileResp.status === 'fulfilled' && profileResp.value.ok) {
         profile = await profileResp.value.json();
         console.log(`[gbp-internal] Fetched profile: ${profile.title || 'unknown'}`);
+        // IDENTITY GUARD: never audit/store another business's profile on this project
+        if (profile && profile.title) {
+          const dnG = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const pN = dnG(businessName);
+          const rN = dnG(profile.title);
+          const pD = dnG((project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*/, ''));
+          const rS = dnG(profile.websiteUri || '');
+          if (!((pN && rN && (rN.includes(pN) || pN.includes(rN))) || (pD && rS && rS.includes(pD)))) {
+            return res.status(400).json({ error: `The GBP Location ID on this project points at "${profile.title}", not ${businessName}. Fix it in Project Settings → GBP, then run the audit again.` });
+          }
+        }
       } else {
         console.log(`[gbp-internal] Profile fetch failed:`, profileResp.status === 'fulfilled' ? `HTTP ${profileResp.value.status}` : profileResp.reason?.message);
       }
@@ -16475,7 +16486,30 @@ app.post('/api/projects/:projectId/audits/gbp-internal/run', async (req, res) =>
     }
 
     const rcData = typeof rcResult.rows[0].config === 'string' ? JSON.parse(rcResult.rows[0].config) : rcResult.rows[0].config;
-    const { profile, healthcheck, reviews_stats, posts } = rcData;
+    let { profile, healthcheck, reviews_stats, posts } = rcData;
+
+    // DataForSEO enrichment — fill gaps with REAL Google data so the audit never flags a field
+    // that merely wasn't returned by RC (description, rating/review count).
+    if (DATAFORSEO_AUTH && profile && (!profile.profile?.description || !(reviews_stats?.total_reviews))) {
+      try {
+        const dfs = await dataForSeoBusinessInfo({ keyword: `${businessName} ${(project.location || '').split(',')[0]}`.trim(), location: resolveDataForSeoLocation(project.location) });
+        const dnE = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (dfs && dfs.name && (dnE(dfs.name).includes(dnE(businessName)) || dnE(businessName).includes(dnE(dfs.name)))) {
+          if (!profile.profile?.description && dfs.description) {
+            profile.profile = profile.profile || {};
+            profile.profile.description = dfs.description;
+            console.log(`[gbp-internal] DataForSEO filled description (${dfs.description.length} chars)`);
+          }
+          if (!(reviews_stats?.total_reviews) && dfs.reviewCount) {
+            reviews_stats = { ...(reviews_stats || {}), total_reviews: dfs.reviewCount, average_rating: dfs.rating || 0 };
+            console.log(`[gbp-internal] DataForSEO filled reviews: ${dfs.reviewCount} @ ${dfs.rating}`);
+          }
+          await logApiCost(parseInt(projectId), 'gbp_audit', 'dataforseo', 1, 0.002, { endpoint: 'my_business_info' }).catch(() => {});
+        } else if (dfs) {
+          console.log(`[gbp-internal] DataForSEO returned a different business ("${dfs.name}") — ignored`);
+        }
+      } catch (e) { console.log(`[gbp-internal] DataForSEO enrichment error: ${e.message}`); }
+    }
 
     console.log(`[gbp-internal] Re-running internal audit from stored RC data for project ${projectId} (${businessName})`);
 
