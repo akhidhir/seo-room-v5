@@ -23804,6 +23804,12 @@
                         {t.late && <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 5, color: '#ef4444' }}>LATE</span>}
                       </td>
                       <td style={{ padding: '9px 12px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                        {t.direct_fix && t.status !== 'Done' && (
+                          <button onClick={() => act(async () => {
+                            const r = await api(`/control-centre/tickets/${t.code}/fix`, { method: 'POST', body: {} });
+                            alert(r && r.ok ? `Fixed: ${r.detail}` : ((r && r.error) || 'Fix failed'));
+                          })} disabled={busy} title="Executes the fix automatically and closes the ticket" style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#8b5cf6', color: '#fff', marginRight: 6 }}>{busy ? 'Fixing…' : <><i className="fas fa-bolt" style={{ marginRight: 4 }} />Fix</>}</button>
+                        )}
                         <button onClick={() => openInTool(t)} disabled={busy} title={`Opens ${TICKET_ROUTE[t.pillar_code] ? 'the right tool' : 'Fix Center'} in this ticket's project`} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#22c55e', color: '#000', marginRight: 6 }}><i className="fas fa-up-right-from-square" style={{ marginRight: 4 }} />Open</button>
                         {t.status === 'In Progress' && <button onClick={() => finishTicket(t)} disabled={busy} title={t.auto_verified ? 'The system will check the pages and close the ticket only if they pass' : 'Sends to the lead for review'} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 5, border: 'none', cursor: 'pointer', background: '#3b82f6', color: '#fff' }}>{busy ? 'Checking…' : 'Finish'}</button>}
                         {t.status === 'Ready for Review' && <>

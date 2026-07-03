@@ -9697,6 +9697,8 @@ async function buildControlTickets(project) {
       category: normCategory(it.category) || it.pillar,
       fix_type: deriveFixType(it),
       fix_route: PILLAR_FIX_ROUTE[pCode] || null,
+      direct_fix: /404/i.test(`${it.title || ''} ${it.category || ''}`), // categories with a one-click server executor
+
       severity: it.severity || 'medium',
       // Some old extractions saved the severity word as the title — use the real text instead
       title: /^(critical|high|medium|low)$/i.test((it.title || '').trim())
@@ -10187,6 +10189,36 @@ app.post('/api/control-centre/tickets/:code/finish', async (req, res) => {
 });
 
 // Status moves: Finish (→ Ready for Review), Done, Reopen (→ In Progress)
+// DIRECT FIX from the Control Centre — executes the system's automation for this ticket right
+// from the board, marks the ticket Done on success. Only ticket types with a safe, existing
+// one-click executor get this (the board flags them with direct_fix:true); everything else
+// keeps the Open button. Executors are added per category as they're proven.
+app.post('/api/control-centre/tickets/:code/fix', async (req, res) => {
+  try {
+    const tc = (await pool.query('SELECT * FROM ticket_codes WHERE code=$1', [req.params.code])).rows[0];
+    if (!tc) return res.status(404).json({ error: 'Ticket not found' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [tc.project_id])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const items = (await pool.query('SELECT * FROM action_items WHERE code=$1', [req.params.code])).rows;
+    const hay = `${items.map(i => `${i.title || ''} ${i.category || ''} ${i.type || ''}`).join(' ')}`.toLowerCase();
+
+    let result = null;
+    if (/404/.test(hay)) {
+      // Junk-404 sweep: 410s spam/bot/malformed 404s via the site's SEO Room plugin (existing, proven)
+      const summary = await autoSweepJunk404s(project);
+      result = { executor: '404 auto-sweep', detail: `${summary.fixed} junk URLs set to 410, ${summary.skipped_real} real pages kept for manual review` };
+    } else {
+      return res.status(400).json({ error: 'No direct executor for this ticket type yet — use Open to fix it in its tool.' });
+    }
+
+    // Success → close the ticket + its finding rows
+    await pool.query(`UPDATE ticket_codes SET status='Done', finished_at=NOW(), closed_by=$2 WHERE code=$1`, [req.params.code, req.auth?.userId || null]);
+    await pool.query(`UPDATE action_items SET status='done' WHERE code=$1`, [req.params.code]);
+    console.log(`[cc-fix] ${req.params.code} fixed via ${result.executor}: ${result.detail}`);
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/control-centre/tickets/:code/status', async (req, res) => {
   try {
     const allowed = ['New', 'Assigned', 'In Progress', 'Ready for Review', 'Done'];
