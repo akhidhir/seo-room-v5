@@ -3095,7 +3095,9 @@ app.get('/api/projects/:id/plugin/404s', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const data = await callPluginApi(project, '/404s');
+    // limit=500: the plugin defaults to 100 rows, which made big backlogs look like the "same
+    // number coming back" after each fix cycle — the window just refilled from the queue.
+    const data = await callPluginApi(project, '/404s?limit=500');
     // Filter out garbage/bot URLs
     if (Array.isArray(data)) {
       // Debug: log first 3 raw URLs to see format
