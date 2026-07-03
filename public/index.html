@@ -37338,6 +37338,7 @@
       const [filter, setFilter] = useState('all'); // all | overview | cited | opportunity
       const [aioAnalysis, setAioAnalysis] = useState({}); // keyword -> {loading, data, error}
       const [aioSent, setAioSent] = useState({}); // keyword -> 'sending' | 'sent' | 'exists' | 'error'
+      const [geoFactors, setGeoFactors] = useState({}); // keyword -> {loading, data, error}
 
       // Arriving from a Control Centre ticket: jump straight to Opportunities and expand the ticket's keyword
       useEffect(() => {
@@ -37525,6 +37526,42 @@
                                 <a href={src.link} target="_blank" rel="noopener" style={{ color: accent, fontSize: 12, textDecoration: 'none', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{src.title || src.link}</a>
                               </div>
                             ))}
+                            {/* GEO factor checklist — which citation factors this keyword's page passes/fails */}
+                            {(() => {
+                              const f = geoFactors[r.keyword];
+                              return (
+                                <div style={{ marginTop: 10 }}>
+                                  {!f && (
+                                    <button className="btn" onClick={async () => {
+                                      setGeoFactors(p => ({ ...p, [r.keyword]: { loading: true } }));
+                                      try { const resp = await api(`/projects/${pid}/aio/factors`, { method: 'POST', body: { keyword: r.keyword } }); setGeoFactors(p => ({ ...p, [r.keyword]: { data: resp } })); }
+                                      catch (e) { setGeoFactors(p => ({ ...p, [r.keyword]: { error: e.message } })); }
+                                    }} style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.4)', padding: '8px 14px', borderRadius: 8, fontWeight: 700, fontSize: 12, marginRight: 8 }}>
+                                      <i className="fas fa-list-check" style={{ marginRight: 6 }}></i>Check GEO factors
+                                    </button>
+                                  )}
+                                  {f?.loading && <div style={{ fontSize: 13, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Checking your ranking page, robots.txt, Bing & NAP…</div>}
+                                  {f?.error && <div style={{ fontSize: 13, color: '#ef4444' }}>Error: {f.error}</div>}
+                                  {f?.data && (
+                                    <div style={{ background: 'var(--card)', border: '1px solid rgba(139,92,246,0.35)', borderRadius: 10, padding: 14, marginBottom: 10, maxWidth: 920 }}>
+                                      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>
+                                        <i className="fas fa-list-check" style={{ marginRight: 6, color: '#a78bfa' }}></i>
+                                        GEO factors — {f.data.passed}/{f.data.total} passed · checked {String(f.data.page_url || '').replace(/^https?:\/\//, '').slice(0, 60)}
+                                      </div>
+                                      {(f.data.factors || []).map((fc, fi) => (
+                                        <div key={fi} style={{ padding: '7px 0', borderTop: fi ? '1px solid var(--border)' : 'none' }}>
+                                          <div style={{ fontSize: 13, fontWeight: 700, color: fc.ok ? '#22c55e' : '#f59e0b' }}>
+                                            <i className={'fas ' + (fc.ok ? 'fa-circle-check' : 'fa-circle-xmark')} style={{ marginRight: 7 }}></i>{fc.label}
+                                            <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 8, fontSize: 12 }}>{fc.detail}</span>
+                                          </div>
+                                          {!fc.ok && fc.fix && <div style={{ fontSize: 12.5, color: 'var(--text2)', margin: '3px 0 0 23px', lineHeight: 1.5 }}><b style={{ color: '#f59e0b' }}>Fix:</b> {fc.fix}</div>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                             {!r.you_cited && (() => {
                               const a = aioAnalysis[r.keyword];
                               if (!a) return (

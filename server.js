@@ -51138,6 +51138,111 @@ AI Overviews cite content that gives a clear, direct, well-structured answer (co
   } catch (e) { console.error('[aio-analyze]', e.message); res.status(500).json({ error: e.message }); }
 });
 
+// ── GEO FACTOR CHECKLIST ──
+// Checks the concrete AI-citation ranking factors for one keyword against the project's REAL
+// ranking page + site, returns ✓/✗ per factor with a specific fix for every ✗. No guesses:
+// every tick comes from fetched page HTML, robots.txt, rank tracking, citations or the NAP report.
+app.post('/api/projects/:projectId/aio/factors', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { keyword } = req.body || {};
+  try {
+    if (!keyword) return res.status(400).json({ error: 'keyword required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const base = 'https://' + domain;
+    const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' };
+
+    // Target page = your latest organic ranking page for this keyword (fallback: homepage)
+    const rt = (await pool.query(
+      `SELECT serp_position, serp_url FROM rank_tracking WHERE project_id=$1 AND LOWER(keyword)=LOWER($2) ORDER BY checked_at DESC LIMIT 1`,
+      [projectId, keyword])).rows[0] || {};
+    const pageUrl = rt.serp_url || base + '/';
+
+    // Fetch the page + robots.txt in parallel
+    const [pageR, robotsR] = await Promise.allSettled([
+      fetch(pageUrl, { headers: UA, signal: AbortSignal.timeout(12000) }).then(r => r.ok ? r.text() : null),
+      fetch(base + '/robots.txt', { headers: UA, signal: AbortSignal.timeout(8000) }).then(r => r.ok ? r.text() : ''),
+    ]);
+    const html = pageR.status === 'fulfilled' ? (pageR.value || '') : '';
+    const robots = robotsR.status === 'fulfilled' ? (robotsR.value || '') : '';
+    const bodyText = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const kwWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+    // Site-level context: Bing listing + NAP report
+    const bing = (await pool.query(`SELECT status, listing_url FROM citations WHERE project_id=$1 AND directory_name ILIKE '%bing%'`, [projectId])).rows[0];
+    const napRow = (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='nap_report'`, [projectId])).rows[0];
+    const napRep = napRow?.config || null;
+    const napMismatches = napRep?.summary?.mismatches ?? null;
+
+    const factors = [];
+    const add = (id, label, ok, detail, fix) => factors.push({ id, label, ok: !!ok, detail, fix: ok ? null : fix });
+
+    // 1. Classic ranking (entry ticket)
+    const pos = rt.serp_position || null;
+    add('ranking', 'Ranking in Google top 20', pos != null && pos <= 20,
+      pos ? `Your page ranks #${pos} (${pageUrl.replace(/^https?:\/\//, '').slice(0, 60)})` : 'No ranking page found for this keyword',
+      'AI Overviews almost only cite pages already in the top ~20. Fix rankings first: On-Page Audit & Fix for metas/content, internal links to this page, then re-check.');
+
+    if (html) {
+      // 2. Direct answer at the top
+      const firstP = (html.match(/<p[^>]*>([\s\S]*?)<\/p>/i) || [])[1] || '';
+      const firstPText = firstP.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const fpWords = firstPText.split(/\s+/).filter(Boolean).length;
+      const fpHasKw = kwWords.filter(w => firstPText.toLowerCase().includes(w)).length >= Math.min(2, kwWords.length);
+      add('answer', 'Direct answer in the first paragraph', fpWords >= 25 && fpWords <= 120 && fpHasKw,
+        firstPText ? `First paragraph: ${fpWords} words${fpHasKw ? ', mentions the keyword' : ', does NOT mention the keyword'}` : 'No opening paragraph found',
+        'Put a 40–70 word factual answer to the query as the very first paragraph. "Build a plan to get cited" writes it for you — publish it at the top of the page.');
+      // 3. Question-style headings / FAQ
+      const heads = [...html.matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi)].map(m => m[1].replace(/<[^>]+>/g, ' ').trim());
+      const qHeads = heads.filter(h => /\?|^how |^what |^why |^when |^which |^can |^do |^is |^are |faq/i.test(h));
+      add('faq', 'Question-style headings / FAQ section', qHeads.length >= 2,
+        `${heads.length} H2/H3 headings, ${qHeads.length} question-style`,
+        'Add an FAQ section with 3–5 real customer questions as H2/H3s, each answered in 1–2 sentences. The plan builder drafts these.');
+      // 4. Lists / tables / steps
+      const hasList = /<(ol|table)[^>]*>/i.test(html) || (html.match(/<ul[^>]*>/gi) || []).length >= 2;
+      add('structure', 'Lists, steps or tables', hasList,
+        hasList ? 'Structured content found' : 'No ordered lists, tables or multiple lists found',
+        'Convert key info into a numbered step list or comparison table — AI answers lift structured blocks far more often than prose.');
+      // 5. Schema
+      const hasFaqSchema = /"@type"\s*:\s*"(FAQPage|Question)"/i.test(html);
+      const hasBizSchema = /"@type"\s*:\s*"([A-Za-z]*Business|Service|Plumber|Electrician|Locksmith)"/i.test(html);
+      add('schema', 'FAQ / LocalBusiness schema on the page', hasFaqSchema || hasBizSchema,
+        `${hasFaqSchema ? 'FAQPage ✓ ' : ''}${hasBizSchema ? 'LocalBusiness/Service ✓' : ''}` || 'No relevant JSON-LD found',
+        'Add FAQPage schema (from the FAQ section) and LocalBusiness/Service schema. Website Audit → the schema Fix button writes these automatically.');
+      // 6. Freshness
+      const modMatch = html.match(/article:modified_time["']?\s*content=["']([^"']+)/i) || html.match(/"dateModified"\s*:\s*"([^"]+)"/i);
+      const modDate = modMatch ? new Date(modMatch[1]) : null;
+      const fresh = modDate && !isNaN(modDate) && (Date.now() - modDate.getTime()) < 365 * 86400000;
+      add('freshness', 'Updated within the last 12 months', !!fresh,
+        modDate && !isNaN(modDate) ? `Last modified ${modDate.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'No modified date found on the page',
+        'Refresh the page: update facts/prices/dates, add a current-year reference, and republish so the modified date updates.');
+    } else {
+      add('page', 'Ranking page reachable', false, `Could not fetch ${pageUrl}`, 'The page did not load — check it exists and is not blocking crawlers.');
+    }
+
+    // 7. AI crawlers allowed
+    const blocksAi = /User-agent:\s*(GPTBot|Google-Extended|ClaudeBot|PerplexityBot|CCBot)[\s\S]{0,80}?Disallow:\s*\/\s*$/im.test(robots);
+    add('crawlers', 'AI crawlers allowed (robots.txt)', !blocksAi,
+      blocksAi ? 'robots.txt blocks one or more AI crawlers' : 'No AI-crawler blocks found',
+      'Remove the Disallow rules for GPTBot / Google-Extended / PerplexityBot from robots.txt — blocked crawlers mean no citations in those AI tools.');
+
+    // 8. Bing listing (feeds ChatGPT)
+    const bingListed = !!(bing && (bing.status === 'listed' || (bing.listing_url || '').trim()));
+    add('bing', 'Bing Places listing (feeds ChatGPT)', bingListed,
+      bingListed ? 'Listed on Bing Places' : 'No Bing Places listing recorded',
+      'Create the free Bing Places listing (Citations & NAP → Create Listing Tasks includes it with your exact NAP). ChatGPT browsing runs on Bing.');
+
+    // 9. NAP / entity consistency
+    add('entity', 'NAP consistent across the web', napMismatches === 0,
+      napMismatches == null ? 'No NAP check run yet' : `${napMismatches} mismatch(es) in the last NAP check`,
+      'Run Citations & NAP → Check NAP alignment and fix any mismatches — consistent entity data is how AI systems learn to trust facts about your business.');
+
+    const passed = factors.filter(f => f.ok).length;
+    res.json({ ok: true, keyword, page_url: pageUrl, passed, total: factors.length, factors });
+  } catch (e) { console.error('[aio-factors]', e.message); res.status(500).json({ error: e.message }); }
+});
+
 // ── Outreach / Prospects CRUD ──
 
 app.get('/api/projects/:projectId/backlinks/prospects', async (req, res) => {
