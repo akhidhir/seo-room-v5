@@ -1,6 +1,0 @@
-# Railway build config (Nixpacks).
-# '...' keeps the default Node packages; chromium adds a system browser for
-# puppeteer-core — used by the NAP checker to read JS-rendered directory pages
-# (Bing Places, Apple Maps, Facebook) that plain HTTP fetches can't see.
-[phases.setup]
-nixPkgs = ['...', 'chromium']
