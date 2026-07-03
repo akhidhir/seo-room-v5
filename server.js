@@ -9396,9 +9396,21 @@ function deriveProjectCode(project) {
   return code.toUpperCase().slice(0, 3);
 }
 
+// ── HUMAN-ONLY ACTION PLAN ──
+// The Action Plan is a human to-do list. Anything the SYSTEM can execute itself (meta fixes,
+// schema/canonical/H1, internal links, image/CWV fixes, GBP description/categories/posts) is
+// handled in place by the audit pages' fix buttons and the RC publish queue — it must not
+// clutter the human board. ?all=1 returns everything (for debugging/legacy views).
+const SYSTEM_DOABLE_RE = /\b(meta[- ]?(title|desc(ription)?)|title tag|focus keyword|schema|structured data|canonical|noindex|missing h1|h1 tag|mixed content|internal link|inbound link|outbound link|orphan(ed)? page|image (compress|optimi[sz])|webp|core web vitals|\bcwv\b|\blcp\b|hero (slideshow|slider|image)|business description|(add|secondary|additional) categor|google post|add services|service list)/i;
+function isSystemHandled(r) {
+  if (r.execution_type && r.execution_type !== 'manual') return true; // automated / api / extension / copywriter flows live elsewhere
+  return SYSTEM_DOABLE_RE.test(`${r.title || ''} ${r.category || ''} ${r.type || ''}`);
+}
+
 app.get('/api/projects/:id/action-items', async (req, res) => {
   try {
     const { pillar } = req.query;
+    const includeAll = req.query.all === '1' || req.query.all === 'true';
     let query = 'SELECT * FROM action_items WHERE project_id=$1';
     const params = [req.params.id];
     if (pillar) {
@@ -9407,7 +9419,14 @@ app.get('/api/projects/:id/action-items', async (req, res) => {
     }
     query += ' ORDER BY created_at DESC';
     const result = await pool.query(query, params);
-    res.json({ action_items: result.rows.map(normalizeActionRow) });
+    let rows = result.rows.map(normalizeActionRow);
+    let systemHandled = 0;
+    if (!includeAll) {
+      const before = rows.length;
+      rows = rows.filter(r => !isSystemHandled(r));
+      systemHandled = before - rows.length;
+    }
+    res.json({ action_items: rows, system_handled: systemHandled });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
