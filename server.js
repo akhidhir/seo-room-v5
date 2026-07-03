@@ -10206,6 +10206,10 @@ app.post('/api/control-centre/tickets/:code/fix', async (req, res) => {
     if (/404/.test(hay)) {
       // Junk-404 sweep: 410s spam/bot/malformed 404s via the site's SEO Room plugin (existing, proven)
       const summary = await autoSweepJunk404s(project);
+      if (!summary.fixed) {
+        // Nothing the system could safely do — do NOT close the ticket, tell the truth instead.
+        return res.json({ ok: false, error: `No junk 404s left to sweep. The remaining 404s are REAL pages (${summary.skipped_real}) that need redirect decisions — use Open (404s & Redirects) to point each to the right page.` });
+      }
       result = { executor: '404 auto-sweep', detail: `${summary.fixed} junk URLs set to 410, ${summary.skipped_real} real pages kept for manual review` };
     } else {
       return res.status(400).json({ error: 'No direct executor for this ticket type yet — use Open to fix it in its tool.' });
