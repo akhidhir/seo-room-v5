@@ -3706,6 +3706,16 @@ app.post('/api/projects/:id/plugin/404s/:fid/redirect', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.id])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
+    // SAFETY: a redirect target must be a real http(s) URL (or empty for 410), and never the
+    // same path as the 404 itself — a self-redirect is an infinite loop on the live site.
+    const target = (req.body?.target_url || '').trim();
+    const isGone = req.body?.redirect_type === 410 || req.body?.redirect_type === '410';
+    if (!isGone) {
+      if (!/^https?:\/\//i.test(target)) return res.status(400).json({ error: 'Redirect target must be a full http(s) URL.' });
+      const norm = (u) => String(u || '').replace(/^https?:\/\/[^/]+/i, '').replace(/\/+$/, '').split('?')[0].toLowerCase();
+      const srcUrl = (req.body?.source_url || '').trim();
+      if (srcUrl && norm(srcUrl) === norm(target)) return res.status(400).json({ error: 'Redirect target is the same path as the 404 — that would create an infinite loop.' });
+    }
     const data = await callPluginApi(project, `/404s/${req.params.fid}/redirect`, 'POST', req.body);
     res.json(data);
   } catch (e) {

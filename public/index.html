@@ -12077,7 +12077,10 @@
           const data = await api(`/projects/${project.id}/plugin/404s/suggest-redirects`, { method: 'POST', body: { urls } });
           const sug = data.suggestions || {};
           setSuggestions(sug);
-          const matched = fourOhFours.filter(f => { const k = f.url || f.url_path || ''; return sug[k] && sug[k].score >= 25; });
+          // Confidence >= 50 only — a 25-score match redirected users to barely-related pages
+          // (Google treats irrelevant mass redirects as soft-404s). Also never redirect a URL to itself.
+          const _norm = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0];
+          const matched = fourOhFours.filter(f => { const k = f.url || f.url_path || ''; return sug[k] && sug[k].score >= 50 && _norm(sug[k].url) !== _norm(k); });
           setAutoProgress({ done: 0, total: matched.length });
           let done = 0, failed = 0;
           for (const item of matched) {
@@ -12097,9 +12100,10 @@
       };
 
       const autoRedirectAll = async () => {
+        const _norm2 = (u) => (u || '').replace(/^https?:\/\/[^/]+/, '').replace(/\/+$/, '').split('?')[0];
         const matchedItems = fourOhFours.filter(f => {
           const key = f.url || f.url_path || '';
-          return suggestions[key] && suggestions[key].score >= 25;
+          return suggestions[key] && suggestions[key].score >= 50 && _norm2(suggestions[key].url) !== _norm2(key);
         });
         if (!matchedItems.length) return;
         setAutoRedirecting(true);
@@ -12192,11 +12196,25 @@
       };
 
       const bulk410Selected = async () => {
-        const items = selected404s.size > 0
-          ? filtered404s.filter(x => x.id && selected404s.has(x.id))
-          : filtered404s.filter(x => x.id);
+        // SAFETY: without an explicit selection, bulk 410 only ever touches JUNK categories.
+        // 410 = "gone forever" to Google — real pages must be selected one by one, never swept.
+        const JUNK = ['spam', 'bot', 'malformed', 'noise', 'preview'];
+        let items;
+        if (selected404s.size > 0) {
+          items = filtered404s.filter(x => x.id && selected404s.has(x.id));
+        } else {
+          items = filtered404s.filter(x => x.id && JUNK.includes(x._category));
+          const realSkipped = filtered404s.filter(x => x.id && !JUNK.includes(x._category)).length;
+          if (!items.length) {
+            alert(realSkipped
+              ? `Nothing 410'd. The ${realSkipped} URL(s) in this view are REAL pages — 410 tells Google they're gone forever, so select specific URLs (tick the boxes) if you're sure. Real-page 404s usually deserve a Redirect instead.`
+              : 'No junk 404s in this view to 410.');
+            return;
+          }
+          if (realSkipped) alert(`Heads up: only the ${items.length} junk URL(s) will be 410'd. The ${realSkipped} real page(s) in this view are skipped — select those individually if you really want them gone (a Redirect is usually the right call).`);
+        }
         if (!items.length) return;
-        const label = selected404s.size > 0 ? `${items.length} selected` : `all ${items.length} filtered`;
+        const label = selected404s.size > 0 ? `${items.length} selected` : `${items.length} junk`;
         if (!confirm(`Apply 410 Gone to ${label} URL(s)? This tells search engines these pages are permanently gone.`)) return;
         setBulk410ing(true);
         setBulk410Progress({ done: 0, total: items.length });
@@ -12543,7 +12561,7 @@
               disabled: bulk410ing
             },
               bulk410ing ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin' }), ` ${bulk410Progress?.done || 0}/${bulk410Progress?.total || 0}`) :
-              e('span', null, e('i', { className: 'fas fa-ban' }), selected404s.size > 0 ? ` 410 Selected (${selected404s.size})` : ` Bulk 410 (${filtered404s.length})`)
+              e('span', null, e('i', { className: 'fas fa-ban' }), selected404s.size > 0 ? ` 410 Selected (${selected404s.size})` : ` 410 Junk (${filtered404s.filter(x => ['spam','bot','malformed','noise','preview'].includes(x._category)).length})`)
             ),
             e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
               clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
