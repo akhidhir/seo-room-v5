@@ -12459,11 +12459,16 @@
           e('span', null, redirectResult),
           e('button', { onClick: () => setRedirectResult(''), style: { background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 15 } }, '✕')
         ),
-        // How it works
-        filtered404s.length > 0 && e('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 8, lineHeight: 1.5 } },
-          e('i', { className: 'fas fa-circle-info', style: { marginRight: 6 } }),
-          'Click ', e('b', { style: { color: 'var(--text2)' } }, 'Fix All 404s (Auto)'), ' — it matches each dead URL to its best live page, creates the redirect, and removes it from this list. (Or ', e('b', { style: { color: 'var(--text2)' } }, 'Suggest Redirects'), ' to preview matches first, then ', e('b', { style: { color: 'var(--text2)' } }, 'Auto-Redirect'), '. Use ', e('b', { style: { color: 'var(--text2)' } }, '410'), ' for junk/gone URLs.)',
-          redirectedCount > 0 && e('span', { style: { marginLeft: 8, color: '#22c55e', fontWeight: 700 } }, `· ${redirectedCount} redirected & cleared`)
+        // THE RECOMMENDED PATH — direction, not just instructions: do these in order.
+        filtered404s.length > 0 && e('div', { style: { marginBottom: 12, padding: '12px 16px', borderRadius: 10, background: 'var(--card)', border: '1px solid var(--border)', fontSize: 12.5, lineHeight: 1.6 } },
+          e('div', { style: { fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.6, color: '#14b8a6', marginBottom: 6 } },
+            e('i', { className: 'fas fa-route', style: { marginRight: 6 } }), 'The right order — do these top to bottom',
+            redirectedCount > 0 && e('span', { style: { marginLeft: 10, color: '#22c55e' } }, `${redirectedCount} redirected & cleared so far`)
+          ),
+          e('div', null, e('b', { style: { color: '#22c55e' } }, '1. Fix All 404s (Auto)'), ' — best for SEO. Redirects each real dead page to its closest live page (min 50% match confidence), keeping its link value. Weak matches are left alone, never guessed. Use ', e('b', { style: { color: 'var(--text2)' } }, 'Suggest Redirects'), ' first if you want to preview the matches.'),
+          e('div', null, e('b', { style: { color: '#94a3b8' } }, '2. 410 Junk'), ' — clears spam, bot probes and malformed URLs. Never touches real pages. Reversible from the Redirects tab.'),
+          e('div', null, e('b', { style: { color: '#f59e0b' } }, '3. What’s left'), ' — real pages with no confident match: click ', e('b', { style: { color: 'var(--text2)' } }, 'Redirect'), ' on each row and pick the most relevant page yourself. Run ', e('b', { style: { color: 'var(--text2)' } }, 'Diagnose Root Cause'), ' for repeat offenders — broken internal links get a one-click Fix Link.'),
+          e('div', null, e('b', { style: { color: '#6366f1' } }, '4. Last resort only'), ' — ', e('b', { style: { color: 'var(--text2)' } }, 'All Orphans → Homepage'), ' for leftovers with no sensible target (Google treats MASS homepage redirects as soft-404s, so keep this small), or ', e('b', { style: { color: 'var(--text2)' } }, 'All Orphans → 410'), ' if those pages are genuinely gone with nothing to inherit their traffic.')
         ),
         // Action buttons
         filtered404s.length > 0 && e('div', { style: { marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 } },
