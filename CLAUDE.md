@@ -19,12 +19,13 @@ SEO automation system for The SEO Room agency. PDCA-cycle local SEO dashboard.
 ## Architecture
 
 - **Dashboard v5**: `~/Desktop/seo-room-v5/` — Node + Express + PostgreSQL on Railway
-- **Single-file React**: `public/index.html` via Babel standalone (~33000+ lines)
-- **Server**: `server.js` (~37000+ lines)
+- **Single-file React**: `public/index.html` via Babel standalone (~40,000+ lines)
+- **Server**: `server.js` (~52,000+ lines)
 - **Live URL**: https://seo-room-v5-production.up.railway.app
 - **GitHub**: https://github.com/akhidhir/seo-room-v5.git
 - **Auto-deploys** from `main` branch
-- **Railway CLI**: `cd ~/Desktop/seo-room-v5 && railway logs --tail 20`
+- **Railway CLI**: `cd ~/Desktop/seo-room-v5 && railway logs` — NOTE: only returns the last ~100 lines; grep immediately after an action or use the Railway web dashboard for history
+- **Railway builds with RAILPACK** (not Nixpacks) — apt packages go in `railpack.json` (`deploy.aptPackages`). Chromium is installed this way for headless NAP checks.
 
 ## File Sync Workflow (Critical)
 
@@ -38,16 +39,16 @@ Sandbox can't git push. The workflow is:
 
 ## APIs & Integrations
 
-- **SerpAPI**: SERPAPI_KEY env var — used for rank tracking (SERP + Maps), GBP profile lookup, competitor analysis, **grid scanning** (replaces Local Falcon)
+- **SerpAPI**: SERPAPI_KEY env var — grid scanning (replaces Local Falcon), GPS-precision option in rank tracking dropdowns. NO LONGER the default rank provider.
 - **Anthropic (Claude)**: ANTHROPIC_API_KEY — AI analysis for audits (GBP, GSC). Model: claude-haiku-4-5-20251001. Future: user-selectable model (Sonnet/Opus) per project.
 - **Google OAuth 2.0**: GSC + GBP connections (user-level via `user_integrations` table)
 - **Google Search Console API**: searchconsole.googleapis.com — URL Inspection for indexing checks, search analytics for GSC audit
 - **PageSpeed Insights API**: PAGESPEED_API_KEY — Core Web Vitals scoring per page (mobile). Batched 5-at-a-time for speed.
 - **WordPress REST API**: Read (pages/posts via WP REST) + Write (Yoast meta via Application Passwords)
+- **DataForSEO IS THE DEFAULT PROVIDER** for SERP + Maps rank tracking (cheaper). Also: Business Data API (`my_business_info`) enriches GBP audits with real description/photos/claimed status.
 - **DataForSEO**: DATAFORSEO_LOGIN/PASSWORD — used for keyword search volume estimation in Maps keyword generator, **Discover Maps** (ranked_keywords + Maps SERP checks), **Discover SERP** (ranked_keywords for organic discovery), **Backlinks API** (requires separate subscription activation at app.dataforseo.com/backlinks-subscription, $100 min prepaid balance shared across all APIs, ~$0.13 per full scan)
 - **Local Falcon**: ~~Connected~~ **REPLACED by SerpAPI grid scanning**. Can be cancelled ($50/month saved)
 - **Winston AI**: WINSTON_API_KEY — plagiarism detection for copywriter content. Synchronous API (no webhooks). POST to `https://api.gowinston.ai/v2/plagiarism` with Bearer token → instant results. 2 credits per word. Results saved to `plagiarism_checks` table.
-- **Ahrefs**: Via Chrome extension scraping (not API) — needs ingestion endpoint ported from v4
 
 ## Google Cloud Project
 
@@ -99,7 +100,7 @@ Sandbox can't git push. The workflow is:
 - `action_items` table has scheduling columns: `scheduled_date`, `estimated_hours`, `assigned_to`. **Known data rot:** severity stored mixed-case (`high`/`High`); duplicate category labels (`Quick Wins`/`Quick Win`, `Low CTR Pages`/`Low CTR`, etc.).
 
 ### COPYWRITER
-- Content Queue, Drafts, Approved, Published — ALL FAKE DATA. Needs real implementation.
+- ✅ REAL — content_queue table + endpoints (suggest keywords, drafts, publish to WP, rollback, client share links via share_token). No fake data.
 
 ### PLAYERS HANDSHAKE (Competitive Intelligence)
 - **Players Handshake** 🔄 REDESIGNING — Competitive intelligence page. Runs handshake analysis: builds "Our Player" profile (SerpAPI Maps + grid scan data), fetches competitor details (SerpAPI Place Details + homepage crawl + PageSpeed), generates AI strategy (Claude Haiku).
@@ -134,7 +135,7 @@ Sandbox can't git push. The workflow is:
 ### REPORTS
 - **Maps Rankings** ✅ WORKING — Full Local Falcon replacement. AI-powered keyword generator (Haiku suggests service+suburb combos with DataForSEO volume estimation). **SerpAPI Grid Scan**: configurable NxN grid (3×3, 5×5, 7×7) at configurable radius (5-30km). Generates GPS grid around business, calls SerpAPI `google_maps` from each point, calculates ARP/ATRP/SOLV/coverage. **Grid Heatmap**: visual NxN grid with color-coded positions per keyword. **Competitor Gap Analysis**: captures top 3 at each grid point, shows You vs Threats cards with rating/reviews/dominance comparison, review gap bar, and prioritized "What To Do" actions. Bulk select/delete. CSV import/export.
 - **SERP Rankings** — SerpAPI-based keyword tracking
-- **Monthly Reports** — in progress
+- **Monthly Reports** ✅ WORKING — generate per month (`/reports/generate`), stored in monthly_reports (UNIQUE project+month), stable client share link (`/report/:token`), and branded PDF export (`GET /api/projects/:id/reports/:reportId/pdf`) with MoM deltas + Work Completed (from wp_change_history) + top priorities. AI executive summary via Haiku.
 
 ### SETTINGS
 - **Project Settings** — Basic info (name, domain, business name, industry, location), Project Type (Local Business toggle, Elementor toggle), WordPress URL, **WP Username + Application Password** fields, Google Connections (GSC property dropdown, GBP Place ID text field), Service Areas list, Competitors list
@@ -310,18 +311,58 @@ const PILLAR_CATEGORIES = {
 
 ## Pending / Next Up (Priority Order)
 
-1. **Suburb Template System → Generic Solution** — Currently hardcoded for Sureflow. Needs: per-project theme settings in DB (primary_color, accent_color, heading_font, body_font, hero_image), seoroom-api plugin installed per client site with API key in `project_integrations`, dynamic template builder `POST /api/projects/:id/create-suburb-template` that pulls colors/fonts/services/domain from project row. The Elementor raw-meta approach + `tree_json` + seoroom-api plugin is proven — just needs parameterization.
-2. **Update technical-fix endpoint** — Switch schema injection from post_content to `_seoroom_schema` meta field. Install seoroom-schema plugin on all client sites. Clean up old auto-fix routes (remove seoroom-helper dependency from Route 2/3).
-3. **Model selector** — Add AI model dropdown to Project Settings (Sonnet/Opus/Haiku). Currently hardcoded Haiku.
-4. **Remove "Sync from Audits" button** — Audits are diagnostic only, don't auto-push to Action Plan.
-5. **Monthly hours budget** — Settings field for monthly hours per project. Calendar auto-distributes tasks within budget.
-6. **Shared helper refactor** — Extract duplicated logic: `resolvePageId`, `resolvePageUrl`, `getPageContent`, `loadItemIntoEditor`. Do incrementally.
-7. **GBP fix automation** — Chrome extension executes approved GBP action items.
-8. **Copywriter pages** — replace fake data with real content workflow.
-9. **Ahrefs data ingestion** — port from v4.
-10. **DataForSEO integration** — richer GBP profile data.
-11. **Grid scan history** — track position changes over time.
-12. **Scheduled grid scans** — auto-run weekly/monthly, alert on ranking drops.
+1. **GBP publish automation via RatingCaptain API** — complete the audit → approve → auto-fix loop for GBP (update description, reply to reviews, publish posts) through RC (locations-update-tool applies via Business Profile API). 'GBP Auto-Optimise' draft→review→publish partially exists — verify whats built before adding.
+2. **Suburb Template System → Generic Solution** — Currently hardcoded for Sureflow. Needs: per-project theme settings in DB, seoroom-api plugin per client site, dynamic template builder pulling colors/fonts/services from project row. Elementor raw-meta approach proven — just needs parameterization.
+3. **Citation building workflow** — the NAP checker now accurately shows which of the 25 AU directories a business is NOT listed on. Turn those into action items with pre-filled listing data per directory (most are free: Bing Places, Apple Business Connect, True Local, Yellow Pages).
+4. **Lock automation endpoints** — /api/gbp-sync/targets, rc-sync, rc-grid-sync are auth-exempt (called by scheduled automations without JWT). Locking them requires updating the scheduled tasks to send a key AT THE SAME TIME — coordinated change.
+5. **Update technical-fix endpoint** — Switch schema injection from post_content to _seoroom_schema meta field. Clean up old auto-fix routes.
+6. **Model selector** — AI model dropdown in Project Settings (Sonnet/Opus/Haiku). Currently hardcoded Haiku.
+7. **Monthly hours budget** — Calendar auto-distributes tasks within budget.
+8. **Shared helper refactor** — Extract duplicated resolvePageId/resolvePageUrl/getPageContent/loadItemIntoEditor.
+9. **Grid scan history + scheduled scans** — track position changes over time, alert on drops.
+10. **Own SERP scraping API** — long-term cost play to replace SerpAPI/DataForSEO.
+
+## Recent Changes (July 3 2026 session — full system audit + fixes)
+
+### System-wide audit (4 batches, all deployed)
+- **Security**: emergency restore-page now requires JWT and can ONLY use the requested project's own WP creds (old fallback could publish pages on the WRONG client site); hardcoded gsc-debug key removed; /api/elementor/ai-fill rejects hosts that aren't a registered project (was an open door to the Anthropic budget). NOTE: global auth = app.use(optionalAuth) at ~line 2080 — all /api/* routes require JWT except a whitelist inside optionalAuth.
+- **Site safety**: meta-fix write verification was ||, now && across title+desc+focuskw (half-failed writes no longer count as success); wp_change_history rows written ONLY after WordPress confirms the write; H1-fix originals stored in FULL (old 5000-char truncation would have destroyed pages on rollback); rollback endpoints refuse 'none'/empty/truncated originals — including bad legacy rows.
+- **Data accuracy**: GBP audit (audits/gbp/run) marks itself FAILED when the AI errors instead of saving a clean 0-findings audit.
+- **Reliability**: all AI calls now go through the shared resilient anthropic client (retries + 60s timeout + undici keep-alive fix) — raw new Anthropic() instances caused silent failures.
+
+### Mobile rank tracking + DataForSEO default
+- rank-tracking/sync checks every keyword on desktop AND mobile (serp_position_mobile column; Mobile column in SERP Rankings UI, sortable). Cost estimator + logApiCost reflect 2 calls/keyword.
+- DataForSEO is the DEFAULT provider everywhere (server fallbacks + all frontend dropdowns). SerpAPI remains as GPS-precision option.
+- rank-tracking/sync is now a BACKGROUND JOB (rankSyncJobs + GET /sync/status polled every 3s; table refreshes as partial results land). Long desktop+mobile runs killed the old single HTTP request.
+
+### NAP checker (Citations & NAP) — accuracy complete
+- Presence-based confirmation: reads JSON-LD/tel:/og from raw HTML; headless Chromium (puppeteer-core + system chromium via railpack.json aptPackages) renders JS-heavy directories (Bing/Apple/Facebook) when static HTML cant confirm — budget 12 renders/run. Degrades gracefully if chromium missing.
+- Runs as background job (napCheckJobs + /nap-check/status) with live progress text.
+- Service-area businesses (no public GBP address): address columns show N/A instead of false Mismatch/Verify; rows judged on name+phone only.
+- Wrong saved listing URLs are detected (page names a different business) and PURGED from citations automatically; unconfirmed rows link to that platforms own search (per-directory search templates on AUSTRALIAN_DIRECTORIES).
+
+### Identity guards — wrong-business data leaks ENDED
+- Root causes found: hardcoded Houseworks seed into project 1 on boot (now only if project 1 IS Houseworks); stale rc_location_id values pointing at other clients RC locations.
+- Guards added in: local-intel auto-sync, its extended-list fallback, syncRcProfileFromApi, getRcLocationDetails, gbp-internal audit. A fetched profile whose name/domain doesnt match the project is NEVER saved — clear error tells the user which setting to fix.
+- getRcLocationDetails SELF-HEALS: wrong/missing rc_location_id is auto-corrected from the projects gbp_location_id via the RC extended list, and written back to the projects table.
+- nap-check also guards against a mismatched canonical GBP profile (clears stale reports).
+
+### GBP audit endpoints — know the difference
+- audits/gbp-internal/run — THE ONE THE UI USES (Local Intel → Run GBP Audit). RC profile + DataForSEO enrichment (fills missing description/review counts from real Google data) + identity guard. Logs [gbp-internal].
+- audits/gbp/run — older AI-audit endpoint (SerpAPI+Haiku 3-pillars), also has DataForSEO fallback/enrichment. Not called by current UI.
+- gbp-optimise/audit — GET, grades RC-synced profile, loads on GBP Optimise page open (no Run button).
+
+### Security hardening
+- WP app passwords NEVER sent to the browser: maskWpSecrets() masks as ******** in all project/migration responses; update endpoints treat the mask as unchanged (projects PUT via COALESCE, migrations PUT skips). Frontend needed no changes.
+
+### Monthly Reports — DONE
+- PDF export added (see REPORTS section). Copy Client Link + Download PDF buttons on each report card.
+
+### Ops notes
+- railway logs CLI returns only ~100 lines — grep immediately or use web dashboard.
+- Railway migrated to RAILPACK builder: nixpacks.toml is IGNORED. Use railpack.json ({ "deploy": { "aptPackages": [...] } }).
+- Desktop file sync from sandbox is flaky: after cp to /sessions/.../mnt/Desktop/, VERIFY with host-side Glob before giving the user the deploy command; use a fresh filename if a copy goes missing.
+- package.json: puppeteer-core added (uses system chromium, no bundled download).
 
 ## Recent Changes (June 12 2026 session)
 
@@ -451,7 +492,6 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 - **Import Current Copy on some sites** — WP REST API returns classic editor content only; Elementor/ACF sites may have content elsewhere. Live HTML fetch works but depends on server-side rendering.
 - **Duplicated logic** — URL resolution, content fetching, editor state loading duplicated across endpoints. See "Shared helper refactor" in Pending.
 - **Gold PC reviews API returns duplicates** — RC API returns each review 3× for this location. Seed file is deduplicated (8 unique from 25 returned).
-- GBP audit AI sometimes flags "Missing Business Description" even when SerpAPI doesn't return that field.
 - GBP Management API: 0 quota. Using manual Place ID input.
 - Places API (New): billing project limit reached, can't enable.
 - PageSpeed audit with 50 pages takes ~2 minutes. Railway may timeout on very large sites.
@@ -502,12 +542,10 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 - `GET /seoroom/v1/read-meta/{id}` — debug: show page meta (ps_type, data validity, section count)
 - `GET /seoroom/v1/fix-page/{id}` — fix: page_settings string→array, empty settings []→{}, ensure meta fields
 
-## Chrome Extension
+## Chrome Extension — RETIRED (July 2026)
 
-- Path: `~/Desktop/seo-room-extension/`
-- Currently scrapes Ahrefs (site-overview, backlink-profile, content-gap, backlink-gap, organic-keywords)
-- Future: extend to automate GBP fixes (update description, categories, respond to reviews)
-- Future: extend to scrape Google Maps for grid scan (cost optimization — replace SerpAPI for maps)
+- User no longer uses the extension. Do NOT propose extension-based features.
+- Its old roles are replaced by: DataForSEO Backlinks API (Ahrefs scraping) and RatingCaptain API (GBP write automation — see backlog).
 
 ## WordPress Plugin: SEO Room Schema (seoroom-schema)
 
