@@ -16830,6 +16830,9 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
     (async () => { try {
 
     const cName = napNormName(canonical.name), cPhone = napNormPhone(canonical.phone), cAddr = napNormAddr(canonical.address);
+    // Service-area businesses (plumbers, sparkies…) have NO public address on GBP. Comparing
+    // against an empty address produces false "Mismatch"/eternal "Verify" — mark those N/A instead.
+    const hasAddr = cAddr.replace(/\s/g, '').length > 2;
     const matchField = (found, kind) => {
       if (!found) return 'not_found';
       if (kind === 'phone') { return cPhone && napNormPhone(found) === cPhone ? 'aligned' : 'mismatch'; }
@@ -16909,7 +16912,7 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
         if (html) { websiteReachable = true; const pr = napConfirm(html); wp.name = wp.name || pr.name; wp.phone = wp.phone || pr.phone; wp.address = wp.address || pr.address; if (wp.name && wp.phone && wp.address) break; }
       }
     }
-    const website = { reachable: websiteReachable, match: websiteReachable ? { name: wp.name ? 'aligned' : 'mismatch', phone: wp.phone ? 'aligned' : 'mismatch', address: wp.address ? 'aligned' : 'mismatch' } : { name: 'manual', phone: 'manual', address: 'manual' } };
+    const website = { reachable: websiteReachable, match: websiteReachable ? { name: wp.name ? 'aligned' : 'mismatch', phone: wp.phone ? 'aligned' : 'mismatch', address: hasAddr ? (wp.address ? 'aligned' : 'mismatch') : 'na' } : { name: 'manual', phone: 'manual', address: hasAddr ? 'manual' : 'na' } };
 
     // Show EVERY directory (not just ones with a URL). Google Business Profile is the source of truth,
     // so it's excluded — checking it against itself is meaningless. Directories with a saved listing URL
@@ -16938,7 +16941,7 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       job.done++; job.current = `Checking ${d.name}…`;
       const searchUrl = napSearchUrlFor(d);
       const url = urlByName[d.name] || '';
-      if (!url) { directories.push({ name: d.name, url: '', searchUrl, hasUrl: false, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+      if (!url) { directories.push({ name: d.name, url: '', searchUrl, hasUrl: false, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: hasAddr ? 'manual' : 'na' } }); continue; }
       let html = await napFetchHtml(url);
       let reachedVia = html ? 'static' : null;
       // Static fetch failed entirely (bot-blocked / JS shell) — try a real browser once
@@ -16947,12 +16950,12 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
         const rendered = await renderPageText(url);
         if (rendered && rendered.length > 100) { html = rendered; reachedVia = 'headless'; }
       }
-      if (!html) { directories.push({ name: d.name, url, searchUrl, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: 'manual' } }); continue; }
+      if (!html) { directories.push({ name: d.name, url, searchUrl, hasUrl: true, reachable: false, confirmed: false, match: { name: 'manual', phone: 'manual', address: hasAddr ? 'manual' : 'na' } }); continue; }
       let pr = napConfirm(html);
       // Escalate: static HTML confirmed only partially (JS-rendered listing) → read the REAL page
       // with headless chromium and merge what the browser sees. This is what turns Bing/Apple
       // "Verify" rows into confirmed Aligned rows with accurate data.
-      if (reachedVia === 'static' && !pr.wrongUrl && (!pr.name || !pr.phone || !pr.address) && rendersLeft > 0) {
+      if (reachedVia === 'static' && !pr.wrongUrl && (!pr.name || !pr.phone || (hasAddr && !pr.address)) && rendersLeft > 0) {
         rendersLeft--;
         job.current = `Rendering ${d.name} in browser…`;
         const rendered = await renderPageText(url);
@@ -16971,9 +16974,9 @@ app.post('/api/projects/:projectId/nap-check', async (req, res) => {
       // an unseen field is "Verify" (manual), never a red false "Not found". A wrongUrl means the saved link
       // points at a different business, so we flag it for re-linking instead of pretending it's checked.
       let match, wrongUrl = false;
-      if (pr.wrongUrl) { wrongUrl = true; match = { name: 'manual', phone: 'manual', address: 'manual' }; }
-      else if (pr.name) match = { name: 'aligned', phone: pr.phone ? 'aligned' : 'manual', address: pr.address ? 'aligned' : 'manual' };
-      else match = { name: 'manual', phone: 'manual', address: 'manual' };
+      if (pr.wrongUrl) { wrongUrl = true; match = { name: 'manual', phone: 'manual', address: hasAddr ? 'manual' : 'na' }; }
+      else if (pr.name) match = { name: 'aligned', phone: pr.phone ? 'aligned' : 'manual', address: hasAddr ? (pr.address ? 'aligned' : 'manual') : 'na' };
+      else match = { name: 'manual', phone: 'manual', address: hasAddr ? 'manual' : 'na' };
       directories.push({ name: d.name, url, searchUrl, hasUrl: true, reachable: true, confirmed: !!pr.name, wrongUrl, match });
       // Self-heal: a URL proven to point at a different business is purged so it can't mislead again (any project).
       if (wrongUrl) await pool.query(`UPDATE citations SET listing_url=NULL, nap_match=$1, notes='Saved link was a different business — cleared automatically' WHERE project_id=$2 AND directory_name=$3`, [JSON.stringify(match), projectId, d.name]).catch(() => {});

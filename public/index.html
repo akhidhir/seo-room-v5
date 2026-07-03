@@ -11364,7 +11364,7 @@
         try { const r = await api(`/projects/${project.id}/nap-check`); if (r && r.saved) setNapReport(r); } catch (e) {}
       };
       const napBadge = (s) => {
-        const map = { aligned: ['#22c55e', '✓', 'Aligned'], mismatch: ['#ef4444', '✗', 'Mismatch'], not_found: ['#9ca3af', '—', 'Not found'], manual: ['#f59e0b', '?', 'Verify'] };
+        const map = { aligned: ['#22c55e', '✓', 'Aligned'], mismatch: ['#ef4444', '✗', 'Mismatch'], not_found: ['#9ca3af', '—', 'Not found'], manual: ['#f59e0b', '?', 'Verify'], na: ['#6b7280', '–', 'N/A (no GBP address)'] };
         const [c, icon, label] = map[s] || map.not_found;
         return <span style={{ color: c, fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{icon} {label}</span>;
       };
@@ -11539,9 +11539,9 @@
                 };
                 // Classify each row: 'issues' if any mismatch/not_found, 'aligned' if fully aligned, else 'verify'.
                 const rowKind = (m) => {
-                  const vals = [m.name, m.address, m.phone];
+                  const vals = [m.name, m.address, m.phone].filter(v => v !== 'na'); // N/A (no GBP address) doesn't count either way
                   if (vals.some(v => v === 'mismatch' || v === 'not_found')) return 'issues';
-                  if (vals.every(v => v === 'aligned')) return 'aligned';
+                  if (vals.length && vals.every(v => v === 'aligned')) return 'aligned';
                   return 'verify';
                 };
                 const counts = { all: allRows.length, aligned: 0, verify: 0, issues: 0 };
