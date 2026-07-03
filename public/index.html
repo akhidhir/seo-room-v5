@@ -11073,6 +11073,18 @@
           setOptResult({ ok: false, msg: 'Copy blocked — select the text in the box and copy it manually (Cmd/Ctrl+C).' });
         }
       };
+      // Queue the approved draft for automatic publish to Google via RatingCaptain (daily flush task)
+      const [pubQueueing, setPubQueueing] = useState(false);
+      const publishDraft = async () => {
+        if (!editVal.trim() || pubQueueing) return;
+        setPubQueueing(true);
+        try {
+          const r = await api(`/projects/${project.id}/gbp-optimise/publish`, { method: 'POST', body: { type: opt.type, value: editVal } });
+          if (r && r.ok) setOptResult({ ok: true, msg: r.message || 'Queued — it will publish to Google automatically on the next flush (daily 8am).' });
+          else setOptResult({ ok: false, msg: (r && r.error) || 'Could not queue the publish.' });
+        } catch (e) { setOptResult({ ok: false, msg: e.message }); }
+        setPubQueueing(false);
+      };
       const load = () => {
         if (!project?.id) return;
         setLoading(true); setErr('');
@@ -11307,6 +11319,7 @@
                       )}
                       <button onClick={() => opt.type === 'post' ? draftPostWithSubject(chosenSubject) : startOptimise(opt.type, opt.label)} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 16px', color: 'var(--text2)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-rotate" style={{ marginRight: 6 }} />Regenerate</button>
                       <button onClick={copyDraft} disabled={!editVal.trim()} style={{ background: copied ? '#16a34a' : '#14b8a6', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}><i className={'fas ' + (copied ? 'fa-check' : 'fa-copy')} style={{ marginRight: 6 }} />{copied ? 'Copied!' : 'Copy'}</button>
+                      <button onClick={publishDraft} disabled={!editVal.trim() || pubQueueing} style={{ background: 'rgba(139,92,246,0.9)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: pubQueueing ? 'wait' : 'pointer' }}>{pubQueueing ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Queuing…</> : <><i className="fas fa-paper-plane" style={{ marginRight: 6 }} />Publish via RatingCaptain</>}</button>
                     </div>
                   </React.Fragment>
                 )}
