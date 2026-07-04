@@ -50050,20 +50050,46 @@ app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req,
     const byPage = {};
     for (const r of rows) { const s = (r.source_url || '').replace(/\/+$/, ''); if (s) (byPage[s] = byPage[s] || []).push(r); }
 
-    let inserted = 0, failed = 0; const purgeUrls = [];
+    let inserted = 0, failed = 0, alreadyThere = 0; const purgeUrls = [];
     for (const src of Object.keys(byPage)) {
-      const linkList = byPage[src].map(r => ({ anchor: r.suggested_anchor, target: r.target_url }));
+      // LIVE-PAGE DEDUP — re-runs used to stack duplicate "Related reading" blocks because the
+      // query re-selects 'live' rows and nothing checked the page. Read the live page once
+      // (cache-busted) and skip any link whose target is already present.
+      let liveHtml = '';
+      try {
+        liveHtml = await (await fetch(`${src}${src.includes('?') ? '&' : '?'}nocache=${Date.now()}`, {
+          signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0' }
+        })).text();
+      } catch (e) { /* page unreadable — proceed, plugin insert is still idempotent per anchor */ }
+      const pathOfU = (u) => { try { return new URL(u, src).pathname.replace(/\/+$/, '').toLowerCase(); } catch { return ''; } };
+      const hasLink = (target) => {
+        if (!liveHtml) return false;
+        const p = pathOfU(target);
+        if (!p || p === '/') return false;
+        const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`href=["'][^"']*${esc}/?["']`, 'i').test(liveHtml);
+      };
+      const toInsert = [];
+      for (const r of byPage[src]) {
+        if (hasLink(r.target_url)) {
+          await pool.query(`UPDATE internal_link_suggestions SET status='live' WHERE id=$1`, [r.id]);
+          alreadyThere++;
+        } else toInsert.push(r);
+      }
+      if (!toInsert.length) continue;
+
+      const linkList = toInsert.map(r => ({ anchor: r.suggested_anchor, target: r.target_url }));
       let result = null;
       try {
         result = await callPluginApi(project, '/insert-links', 'POST', { url: src, links: linkList });
       } catch (e) {
         console.log('[insert-permanent] plugin call failed for', src, e.message);
-        for (const r of byPage[src]) { await pool.query(`UPDATE internal_link_suggestions SET status='failed' WHERE id=$1`, [r.id]); failed++; }
+        for (const r of toInsert) { await pool.query(`UPDATE internal_link_suggestions SET status='failed' WHERE id=$1`, [r.id]); failed++; }
         continue;
       }
       const okSet = new Set((result && result.inserted || []).map(a => (a || '').toLowerCase().trim()));
       const unplaced = [];
-      for (const r of byPage[src]) {
+      for (const r of toInsert) {
         const a = (r.suggested_anchor || '').toLowerCase().trim();
         if (okSet.has(a)) {
           await pool.query(`UPDATE internal_link_suggestions SET status='live' WHERE id=$1`, [r.id]);
@@ -50110,9 +50136,99 @@ app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req,
     // Purge edge cache for the modified pages
     try { if (purgeUrls.length) await purgeCloudflareCache(project, purgeUrls.slice(0, 30)); } catch (e) {}
 
-    res.json({ ok: true, inserted, failed, message: `${inserted} link(s) written into page content (permanent), ${failed} could not be placed.` });
+    res.json({ ok: true, inserted, failed, already_there: alreadyThere, message: `${inserted} link(s) written into page content (permanent), ${failed} could not be placed${alreadyThere ? `, ${alreadyThere} already on the page (skipped)` : ''}.` });
   } catch (e) {
-    console.error('[insert-permanent] error:', e.message);
+    console.error('[insert-permanent] Error:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// MAINTENANCE: remove duplicate "Related reading/services" blocks that stacked up from re-runs
+// before live-page dedup existed. Keeps the FIRST block per unique link-set, removes the rest.
+// Works on classic content AND Elementor text widgets. Full before/after in wp_change_history.
+app.post('/api/projects/:projectId/maintenance/dedupe-related-blocks', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    const auth = getWpAuthHeaders(project);
+    if (!wpUrl || !auth) return res.status(400).json({ error: 'WordPress credentials not configured' });
+
+    const BLOCK_RE = /<div class=["']seoroom-related["']>[\s\S]*?<\/div>/gi;
+    const hrefKey = (block) => [...block.matchAll(/href=["']([^"']+)["']/gi)].map(m => m[1].replace(/\/+$/, '').toLowerCase()).sort().join('|');
+    // Remove duplicate blocks from an HTML string; `seen` persists across strings of the same page.
+    const dedupe = (html, seen) => {
+      let changed = false;
+      const out = String(html).replace(BLOCK_RE, (block) => {
+        const key = hrefKey(block);
+        if (!key) return block;
+        if (seen.has(key)) { changed = true; return ''; }
+        seen.add(key);
+        return block;
+      });
+      return { out, changed };
+    };
+
+    const results = [];
+    for (const type of ['pages', 'posts']) {
+      let offset = 0;
+      while (true) {
+        const r = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=20&offset=${offset}&status=publish&context=edit&_cb=${Date.now()}`, { headers: auth, signal: AbortSignal.timeout(30000) });
+        if (!r.ok) break;
+        const items = await r.json();
+        if (!Array.isArray(items) || !items.length) break;
+        for (const p of items) {
+          const raw = p.content?.raw || '';
+          const elRaw = p.meta?._elementor_data;
+          if (!/seoroom-related/.test(raw) && !(elRaw && /seoroom-related/.test(String(elRaw)))) continue;
+          const seen = new Set();
+          const body = { };
+          let touched = false;
+          if (raw && /seoroom-related/.test(raw)) {
+            const d = dedupe(raw, seen);
+            if (d.changed) { body.content = d.out; touched = true; }
+          }
+          if (elRaw && /seoroom-related/.test(String(elRaw))) {
+            try {
+              const tree = typeof elRaw === 'string' ? JSON.parse(elRaw) : elRaw;
+              let elChanged = false;
+              const walk = (els) => (els || []).forEach(el => {
+                if (el && el.widgetType === 'text-editor' && el.settings && typeof el.settings.editor === 'string' && /seoroom-related/.test(el.settings.editor)) {
+                  const d = dedupe(el.settings.editor, seen);
+                  if (d.changed) { el.settings.editor = d.out; elChanged = true; }
+                }
+                if (el && el.elements) walk(el.elements);
+              });
+              walk(tree);
+              if (elChanged) { body.meta = { _elementor_data: JSON.stringify(tree), _elementor_css: '' }; touched = true; }
+            } catch (e) { /* unparseable elementor — skip, never risk corruption */ }
+          }
+          if (!touched) continue;
+          const w = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${p.id}`, {
+            method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
+          });
+          if (w.ok) {
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+               VALUES ($1,$2,$3,$4,'dedupe_related','content',$5,$6)`,
+              [projectId, p.id, p.link || '', p.title?.rendered || '', body.content ? raw : String(elRaw).slice(0, 100000), body.content || (body.meta ? body.meta._elementor_data.slice(0, 100000) : '')]
+            ).catch(() => {});
+            results.push({ id: p.id, url: p.link, type });
+            try { await fetch(`${wpUrl}/wp-json/seoroom-opt/v1/clear-cache/${p.id}`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000) }); } catch (e) {}
+          } else {
+            results.push({ id: p.id, url: p.link, type, error: `WP write ${w.status}` });
+          }
+        }
+        offset += items.length;
+        if (items.length < 20) break;
+      }
+    }
+    try { await purgeCloudflareCache(project, results.filter(r => !r.error).map(r => r.url).slice(0, 30)); } catch (e) {}
+    res.json({ ok: true, cleaned: results.filter(r => !r.error).length, failed: results.filter(r => r.error).length, pages: results });
+  } catch (e) {
+    console.error('[dedupe-related] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
