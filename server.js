@@ -21050,7 +21050,9 @@ app.post('/api/projects/:projectId/onpage-audit/fix-all', async (req, res) => {
     // ---- 1) META (title / description / focus keyword) — only when it actually needs fixing ----
     const curTitle = String(page.meta?._yoast_wpseo_title || '');
     const curDesc = String(page.meta?._yoast_wpseo_metadesc || '');
-    const metaNeedsFix = !focusKw || !curTitle || !curTitle.toLowerCase().includes(focusKw.toLowerCase()) || curTitle.length > 60 || !curDesc || curDesc.length > 155 || curDesc.length < 120;
+    // Thresholds MUST match the audit's own scoring (title 50-60, desc 120-155) — if the audit
+    // shows a warning, this button must act on it, never reply "already looks good".
+    const metaNeedsFix = !focusKw || !curTitle || !curTitle.toLowerCase().includes(focusKw.toLowerCase()) || curTitle.length < 50 || curTitle.length > 60 || !curDesc || curDesc.length > 155 || curDesc.length < 120;
     if (metaNeedsFix) try {
       const mResp = await anthropic.messages.create({ model: MODEL, max_tokens: 400,
         messages: [{ role: 'user', content: `Write SEO meta for this page.
