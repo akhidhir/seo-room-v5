@@ -21054,16 +21054,38 @@ app.post('/api/projects/:projectId/onpage-audit/fix-all', async (req, res) => {
     // shows a warning, this button must act on it, never reply "already looks good".
     const metaNeedsFix = !focusKw || !curTitle || !curTitle.toLowerCase().includes(focusKw.toLowerCase()) || curTitle.length < 50 || curTitle.length > 60 || !curDesc || curDesc.length > 155 || curDesc.length < 120;
     if (metaNeedsFix) try {
+      // STABILITY RULES: keep the existing focus keyword (no synonym flip-flops like repair↔fix on
+      // repeated runs), keep the city in local keywords, and only change fields that violate limits.
       const mResp = await anthropic.messages.create({ model: MODEL, max_tokens: 400,
-        messages: [{ role: 'user', content: `Write SEO meta for this page.
+        messages: [{ role: 'user', content: `Fix the SEO meta for this page. Change ONLY what violates the limits — keep everything else exactly as it is.
 Business: "${project.business_name || project.name || ''}" in ${project.location || 'its area'}.
-Page heading: "${h1Text || pageTitle}". Current focus keyword: "${focusKw || 'none'}".
+Page heading: "${h1Text || pageTitle}".
+CURRENT meta title (${curTitle.length} chars, must be 50-60): "${curTitle || '(empty)'}"
+CURRENT meta description (${curDesc.length} chars, must be 120-155): "${curDesc || '(empty)'}"
+CURRENT focus keyword: "${focusKw || '(none)'}"
 Content: ${contentPlain.substring(0, 800)}
-Return ONLY JSON: {"title":"SEO title 50-60 chars incl. focus keyword","metadesc":"meta description 120-155 chars","focuskw":"primary focus keyword phrase"}` }] });
+RULES:
+- KEEP the current focus keyword unchanged unless it is empty or clearly wrong. Never swap synonyms (e.g. "repair" ↔ "fix").
+- Local business: keep the city in the focus keyword and title.
+- Title must be 50-60 characters INCLUDING spaces — count carefully. Extend a short title with the location or a benefit, never pad with filler.
+Return ONLY JSON: {"title":"...","metadesc":"...","focuskw":"..."}` }] });
       const mp = JSON.parse(mResp.content[0].text.match(/\{[\s\S]*\}/)[0]);
       // Enforce SEO length limits so we don't introduce a "too long" warning.
       if (mp.title && mp.title.length > 60) mp.title = mp.title.slice(0, 60).replace(/\s+\S*$/, '').trim();
       if (mp.metadesc && mp.metadesc.length > 155) mp.metadesc = mp.metadesc.slice(0, 155).replace(/\s+\S*$/, '').trim();
+      // Too-short title: one focused retry with explicit feedback (models rarely count chars right first time)
+      if (mp.title && mp.title.length < 48) {
+        try {
+          const r2 = await anthropic.messages.create({ model: MODEL, max_tokens: 150,
+            messages: [{ role: 'user', content: `This SEO title is ${mp.title.length} chars — too short. Extend it to 50-60 chars (including spaces) by adding the location or a concrete benefit. Keep the exact keyword and brand. Title: "${mp.title}". Business: "${project.business_name || project.name || ''}" in ${project.location || ''}. Return ONLY the new title text.` }] });
+          const t2 = String(r2.content[0].text || '').trim().replace(/^["']|["']$/g, '');
+          if (t2 && t2.length >= 48 && t2.length <= 65) mp.title = t2.length > 60 ? t2.slice(0, 60).replace(/\s+\S*$/, '').trim() : t2;
+        } catch (e) { /* keep first attempt */ }
+      }
+      // No-op guard: don't churn history with identical values
+      if (mp.title === curTitle) delete mp.title;
+      if (mp.metadesc === curDesc) delete mp.metadesc;
+      if (mp.focuskw === focusKw) delete mp.focuskw;
       const ymeta = {};
       if (mp.title) ymeta._yoast_wpseo_title = mp.title;
       if (mp.metadesc) ymeta._yoast_wpseo_metadesc = mp.metadesc;
