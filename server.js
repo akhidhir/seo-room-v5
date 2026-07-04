@@ -3268,7 +3268,7 @@ app.post('/api/projects/:id/plugin/404s/ai-match', async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const { urls } = req.body || {};
     if (!Array.isArray(urls) || !urls.length) return res.status(400).json({ error: 'No URLs to match' });
-    const capped = urls.slice(0, 100);
+    const capped = urls.slice(0, 100); // caller batches larger sets — one HTTP call must stay under the gateway timeout
 
     // Live pages (same sources as suggest-redirects)
     const wpUrl = (project.wordpress_url || project.domain || '').replace(/\/$/, '');

@@ -12145,8 +12145,15 @@
         if (!confirm(`AI-match ${remaining.length} remaining 404(s)?\n\n• Clear matches are redirected automatically\n• Uncertain ones appear as per-row suggestions for you to approve\n• Genuinely-gone ones are offered as one 410 batch (you confirm first)`)) return;
         setAiMatching(true);
         try {
-          const r = await api(`/projects/${project.id}/plugin/404s/ai-match`, { method: 'POST', body: { urls: remaining.map(f => f.url || f.url_path || '') } });
-          const map = r.results || {};
+          // Batch 100 per call (server + gateway limits) — loops until the whole backlog is matched
+          const allUrls = remaining.map(f => f.url || f.url_path || '');
+          const map = {};
+          for (let bi = 0; bi < allUrls.length; bi += 100) {
+            setAutoProgress({ done: Math.min(bi, allUrls.length), total: allUrls.length });
+            const r = await api(`/projects/${project.id}/plugin/404s/ai-match`, { method: 'POST', body: { urls: allUrls.slice(bi, bi + 100) } });
+            Object.assign(map, r.results || {});
+          }
+          setAutoProgress(null);
           let applied = 0, review = 0; const goneItems = [];
           const newSug = { ...suggestions };
           for (const item of remaining) {
