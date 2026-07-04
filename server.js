@@ -51048,12 +51048,27 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
         const key = urls.map(normU).sort().join('|'); if (seen.has(key)) return; seen.add(key);
         const primary = urls.slice().sort((a, b) => (COPY_SUFFIX.test(pathOf(a)) ? 1 : 0) - (COPY_SUFFIX.test(pathOf(b)) ? 1 : 0) || pathOf(a).length - pathOf(b).length)[0];
         const primaryPath = pathOf(primary);
+        // Homepage sharing a title with a service page is a TITLE problem, not a duplicate page —
+        // never advise redirecting either one. Retitle the homepage brand-first instead.
+        const hasHome = urls.some(u => normU(u) === '/');
+        const isTitleDup = /^Duplicate title/i.test(label);
+        const homeCase = hasHome && isTitleDup;
+        const svcPath = homeCase ? pathOf(urls.find(u => normU(u) !== '/') || primary) : '';
         competing.push({
           keyword: label, type: 'duplicate_page', page_count: urls.length, total_impressions: 0, total_clicks: 0, best_position: 0,
-          severity: 'high', is_real_issue: true, primary_page: primary,
-          reasons: [{ type: 'duplicate', label: `${urls.length} near-duplicate pages found (${urls.map(pathOf).join(', ')}). Google treats them as competing copies even if they don't rank yet.`, fix: `Keep ${primaryPath}. 301-redirect the copy/copies to it, or delete them if they were staging duplicates. If you must keep one, set its canonical to ${primaryPath}.` }],
+          severity: 'high', is_real_issue: true, primary_page: homeCase ? (urls.find(u => normU(u) !== '/') || primary) : primary,
+          reasons: [homeCase
+            ? { type: 'duplicate', label: `Your homepage and ${svcPath} have the IDENTICAL meta title, so Google can't tell which page should rank for that keyword.`, fix: `Do NOT redirect anything. Retitle the homepage brand-first (e.g. "${project.business_name || project.name} — <what you do> <city>") and let ${svcPath} keep the keyword-led title. Use On-Page Audit & Fix to update the homepage title.` }
+            : { type: 'duplicate', label: `${urls.length} near-duplicate pages found (${urls.map(pathOf).join(', ')}). Google treats them as competing copies even if they don't rank yet.`, fix: `Keep ${primaryPath}. 301-redirect the copy/copies to it, or delete them if they were staging duplicates. If you must keep one, set its canonical to ${primaryPath}.` }],
           coverage: {},
-          pages: urls.map(u => ({ url: u, is_primary: u === primary, impressions: 0, clicks: 0, position: 0, ctr: 0, meta_title: (urlSet.get(normU(u)) || {}).title || '', why: u === primary ? 'Keep this page (primary)' : 'Near-duplicate — redirect to primary or delete', fix: u === primary ? '' : `301-redirect to ${primaryPath} (or delete if it was a copy)`, fix_type: 'redirect' }))
+          pages: urls.map(u => {
+            const isHomeU = normU(u) === '/';
+            const isPrim = homeCase ? !isHomeU : u === primary;
+            return { url: u, is_primary: isPrim, impressions: 0, clicks: 0, position: 0, ctr: 0, meta_title: (urlSet.get(normU(u)) || {}).title || '',
+              why: homeCase ? (isHomeU ? 'Homepage — retitle brand-first, do not redirect' : 'Service page — keep the keyword-led title') : (isPrim ? 'Keep this page (primary)' : 'Near-duplicate — redirect to primary or delete'),
+              fix: homeCase ? (isHomeU ? 'Change title to a brand-first title via On-Page Audit & Fix' : '') : (isPrim ? '' : `301-redirect to ${primaryPath} (or delete if it was a copy)`),
+              fix_type: homeCase ? 'retitle' : 'redirect' };
+          })
         });
       };
       for (const [b, members] of slugGroups) if (members.length > 1) addDup(members, `Duplicate page: /${b}`);
