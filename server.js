@@ -19035,12 +19035,31 @@ app.post('/api/projects/:projectId/onpage-audit/bulk-fix', async (req, res) => {
         }
         if (!writeResp.ok) { results.push({ id: s.id, success: false, error: `WP returned ${writeResp.status}` }); continue; }
 
-        const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
-        // ALL requested fields must verify (was ||, which passed half-failed writes as success)
-        const verified = verify &&
-          (!s.suggested_title || verify.yoast_wpseo_title === s.suggested_title) &&
-          (!s.suggested_desc || verify.yoast_wpseo_metadesc === s.suggested_desc) &&
-          (!s.suggested_keyword || verify.yoast_wpseo_focuskw === s.suggested_keyword);
+        // Verify — prefer the write response body (reflects saved values, immune to stale caches);
+        // fall back to read-back with one 2s retry. See onpage-audit/fix for the incident this fixes.
+        const wantOk = (want, got) => !want || got === want;
+        const checkVals = (v) => !!v &&
+          wantOk(s.suggested_title, v.yoast_wpseo_title) &&
+          wantOk(s.suggested_desc, v.yoast_wpseo_metadesc) &&
+          wantOk(s.suggested_keyword, v.yoast_wpseo_focuskw);
+        let verified = false;
+        try {
+          const wj = await writeResp.json();
+          const m = wj && wj.meta ? wj.meta : null;
+          if (m) verified =
+            wantOk(s.suggested_title, m._yoast_wpseo_title || m.yoast_wpseo_title) &&
+            wantOk(s.suggested_desc, m._yoast_wpseo_metadesc || m.yoast_wpseo_metadesc) &&
+            wantOk(s.suggested_keyword, m._yoast_wpseo_focuskw || m.yoast_wpseo_focuskw);
+        } catch (e) { /* body unreadable — fall through to read-back */ }
+        if (!verified) {
+          let verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+          verified = checkVals(verify);
+          if (!verified) {
+            await new Promise(r => setTimeout(r, 2000));
+            verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+            verified = checkVals(verify);
+          }
+        }
         if (!verified) { results.push({ id: s.id, success: false, error: 'Verification failed' }); continue; }
 
         for (const ch of changes) {
@@ -19237,13 +19256,33 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
             }
           }
 
-          // 4. Verify write succeeded by reading back
-          const verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
-          // ALL requested fields must verify (was ||, which passed half-failed writes as success)
-          const verified = verify &&
-            (!fix.new_meta_title || verify.yoast_wpseo_title === fix.new_meta_title) &&
-            (!fix.new_meta_desc || verify.yoast_wpseo_metadesc === fix.new_meta_desc) &&
-            (!fix.new_focus_keyword || verify.yoast_wpseo_focuskw === fix.new_focus_keyword);
+          // 4. Verify — PREFER the write response body: it reflects the values WordPress just saved
+          // and is immune to page/REST caches, which can serve a stale read-back and falsely report
+          // failure even though the write applied (seen live: fix applied, user told "0 succeeded").
+          const wantOk = (want, got) => !want || got === want;
+          const checkVals = (v) => !!v &&
+            wantOk(fix.new_meta_title, v.yoast_wpseo_title) &&
+            wantOk(fix.new_meta_desc, v.yoast_wpseo_metadesc) &&
+            wantOk(fix.new_focus_keyword, v.yoast_wpseo_focuskw);
+          let verified = false;
+          try {
+            const wj = writeResp.ok ? await writeResp.json() : null;
+            const m = wj && wj.meta ? wj.meta : null;
+            if (m) verified =
+              wantOk(fix.new_meta_title, m._yoast_wpseo_title || m.yoast_wpseo_title) &&
+              wantOk(fix.new_meta_desc, m._yoast_wpseo_metadesc || m.yoast_wpseo_metadesc) &&
+              wantOk(fix.new_focus_keyword, m._yoast_wpseo_focuskw || m.yoast_wpseo_focuskw);
+          } catch (e) { /* body unreadable — fall through to read-back */ }
+          if (!verified) {
+            let verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+            verified = checkVals(verify);
+            if (!verified) {
+              // one retry after 2s — caches often need a moment to reflect the write
+              await new Promise(r => setTimeout(r, 2000));
+              verify = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+              verified = checkVals(verify);
+            }
+          }
 
           if (!verified) {
             console.warn(`[onpage-fix] Write returned 200 but verification failed — meta fields may not be registered for REST API`);
