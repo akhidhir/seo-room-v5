@@ -22064,7 +22064,14 @@ async function runBulkOrphanLinks(projectId, pageIds, job) {
   const linksTo = (str, url) => {
     if (!str || !url) return false;
     const u = url.replace(/\/$/, '');
-    return str.includes(`href="${u}`) || str.includes(`href='${u}`) || str.includes(`href=\\"${u}`) || str.includes(`href=\\'${u}`);
+    if (str.includes(`href="${u}`) || str.includes(`href='${u}`) || str.includes(`href=\\"${u}`) || str.includes(`href=\\'${u}`)) return true;
+    // A RELATIVE link to the same path also counts (the audit matches by path) — without this,
+    // pages already linking relatively get picked again and duplicate links pile up on re-runs.
+    try {
+      const p = new URL(u).pathname.replace(/\/+$/, '');
+      if (p && p.length > 1) return str.includes(`href="${p}`) || str.includes(`href='${p}`) || str.includes(`href=\\"${p}`) || str.includes(`href=\\'${p}`);
+    } catch (e) {}
+    return false;
   };
   // Does this source page already REALLY link to the target (content or Elementor data)?
   const alreadyLinksTo = (p, url) => {
@@ -22277,6 +22284,29 @@ Return JSON: {"pages": [{"id": <page_id>, "anchor": "exact phrase to link", "rea
     if (added > 0) { job.linked++; job.results.push({ page_id: pr.target.id, added }); }
     else { job.no_links++; job.results.push({ page_id: pr.target.id, added: 0, message: pr.message || 'every other page already links here' }); }
   }
+
+  // Update the cached audit so the "Fix Orphans (N)" badge drops IMMEDIATELY — without this the
+  // stale count kept showing 18 after every successful run, inviting harmful repeat runs.
+  try {
+    const oc = await pool.query(`SELECT results FROM onpage_audit_cache WHERE project_id=$1`, [projectId]);
+    const results = oc.rows[0] ? (typeof oc.rows[0].results === 'string' ? JSON.parse(oc.rows[0].results) : oc.rows[0].results) : null;
+    if (results) {
+      let touched = 0;
+      for (const r of job.results) {
+        if (!r.added) continue;
+        const pg = results.find(p => String(p.id) === String(r.page_id));
+        if (!pg) continue;
+        pg.inboundLinks = (pg.inboundLinks || 0) + r.added;
+        pg.issues = (pg.issues || []).filter(i => !/no inbound links/i.test(i.text || ''));
+        pg.issues.push(pg.inboundLinks < 3
+          ? { type: 'warning', text: `Only ${pg.inboundLinks} inbound link${pg.inboundLinks > 1 ? 's' : ''} — aim for 3+` }
+          : { type: 'good', text: `Good inbound linking (${pg.inboundLinks} pages link here)` });
+        touched++;
+      }
+      if (touched) await pool.query(`UPDATE onpage_audit_cache SET results=$2, updated_at=NOW() WHERE project_id=$1`, [projectId, JSON.stringify(results)]);
+      console.log(`[fix-orphans] Cache refreshed for ${touched} linked pages`);
+    }
+  } catch (cacheErr) { console.log('[fix-orphans] cache refresh skipped:', cacheErr.message); }
 }
 
 // Bulk orphan fix — server-side background job (survives navigation/reload)
