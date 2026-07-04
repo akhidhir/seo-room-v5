@@ -15398,6 +15398,17 @@
             const slugNotes = data.results.filter(r => r.slug && (r.slug.changed || r.slug.error)).map(r => r.slug.changed
               ? `URL changed → ${r.slug.new_url} (old address ${r.slug.redirect_verified ? '301-redirects ✓' : 'redirect NOT verified — check manually'})${r.slug.warning ? '\n⚠ ' + r.slug.warning : ''}`
               : `Slug not changed: ${r.slug.error}`);
+            // Content-level fixes (H1 + exact keyword phrase) — queued for approval, never applied unseen
+            let contentQueued = 0;
+            if (fixModal.includeContent !== false) {
+              for (const pg of fixModal.pages) {
+                try {
+                  const rc = await api(`/projects/${project.id}/onpage-audit/fix-content`, { method: 'POST', body: { page_id: pg.id } });
+                  if (rc && rc.queued) contentQueued += rc.queued;
+                } catch (e) { /* content pass is best-effort */ }
+              }
+            }
+            if (contentQueued > 0) slugNotes.push(`${contentQueued} content change(s) queued in "Review AI Changes" for your approval (H1 / keyword phrase)`);
             if (failCount > 0) {
               alert(`Applied fixes: ${successCount} succeeded, ${failCount} failed\n\nErrors:\n${failErrors.join('\n')}${slugNotes.length ? '\n\n' + slugNotes.join('\n') : ''}`);
             } else {
@@ -16016,13 +16027,10 @@
                                 })()}
 
                                 <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-                                  {isFixable && (
-                                    <button className="btn btn-primary" onClick={() => handleFixSingle(page)} style={{ fontSize: 11, padding: '6px 12px' }}>
-                                      <i className="fas fa-magic" style={{ marginRight: 4 }} />Generate AI Fix
-                                    </button>
-                                  )}
-                                  <button className="btn btn-primary" onClick={() => handleFixContent(page)} disabled={fixingContent === page.id} title="AI-fix every on-page issue: meta, H1 and the exact keyword phrase in content (rollback-able)" style={{ fontSize: 11, padding: '6px 12px' }}>
-                                    <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 4 }} />{fixingContent === page.id ? 'Fixing all…' : 'Fix All with AI'}
+                                  {/* ONE fix button — always review-first. Meta edited in the modal;
+                                      content fixes (H1 + keyword phrase) queue for approval via checkbox. */}
+                                  <button className="btn btn-primary" onClick={() => handleFixSingle(page)} style={{ fontSize: 11, padding: '6px 12px' }}>
+                                    <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix with AI
                                   </button>
                                   <button className="btn" onClick={() => handleAddOutboundLinks(page)}
                                     style={{ fontSize: 11, padding: '6px 12px', color: '#3b82f6', borderColor: '#3b82f6' }}
@@ -16044,16 +16052,12 @@
                                   </button>
                                   {/* Copywriter is ONLY for real content rewrites (thin pages). Meta is fixed
                                       right here via the Fix modal — never routed to the copywriter queue. */}
-                                  {page.wordCount < 500 ? (
+                                  {page.wordCount < 500 && (
                                     <button className="btn" onClick={() => handleSendToCopywriter(page, 'rewrite')}
                                       style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
                                       disabled={sendingToCopywriter === page.id}>
                                       <i className="fas fa-pen-fancy" style={{ marginRight: 4 }} />
                                       {sendingToCopywriter === page.id ? 'Sending...' : 'Send to Copywriter'}
-                                    </button>
-                                  ) : !isFixable && (
-                                    <button className="btn btn-primary" onClick={() => handleFixSingle(page)} style={{ fontSize: 11, padding: '6px 12px' }}>
-                                      <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix Meta with AI
                                     </button>
                                   )}
                                 </div>
@@ -16224,6 +16228,10 @@
                       <button className="btn" onClick={function() { openFixModal(fixModal.pages, true); }} disabled={fixing || fixModal.loading} style={{ fontSize: 12, padding: '7px 14px', color: '#06b6d4', borderColor: '#06b6d4' }}>
                         <i className="fas fa-sync-alt" style={{ marginRight: 5 }} />Regenerate
                       </button>
+                      <label style={{ fontSize: 11.5, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }} title="Also weave the focus keyword into the H1 and one content sentence — those changes queue in Review AI Changes for your approval, nothing applies unseen.">
+                        <input type="checkbox" checked={fixModal.includeContent !== false} onChange={e => { const v = e.target.checked; setFixModal(m => ({ ...m, includeContent: v })); }} />
+                        Also fix H1 + keyword in content (queued for approval)
+                      </label>
                       {fixModal.history && fixModal.history.length > 1 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                           <button className="btn" onClick={function() { navigateFixHistory(-1); }} disabled={fixModal.historyIdx <= 0} style={{ fontSize: 11, padding: '6px 10px', minWidth: 32 }}>
