@@ -14954,6 +14954,9 @@
 
       const handleFixSingle = (page) => openFixModal([page]);
 
+      // Orphan = zero inbound links, but NEVER the homepage (linked from every menu, not page content)
+      const isOrphanPage = (p) => (p.inboundLinks || 0) === 0 && !/^https?:\/\/[^/]+\/?$/.test(p.url || '');
+
       // Fix ALL AI-fixable on-page issues for this page: meta + H1 + exact keyword phrase (applied with rollback).
       const handleFixContent = async (page) => {
         if (!confirm('AI-fix all on-page issues for "' + (page.title || page.url) + '"? Updates the SEO meta, the H1, and weaves the focus keyword into the content. Every change is rollback-able in Change History.')) return;
@@ -15039,7 +15042,7 @@
         }));
 
         // Phase 4 (optional): auto-add inbound internal links for orphan pages — SERVER-SIDE background job
-        const orphans = pages.filter(p => (p.inboundLinks || 0) === 0);
+        const orphans = pages.filter(isOrphanPage);
         if (orphans.length > 0 && confirm('Metas done (' + applied + ' fixed). Also auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nRuns on the server in parallel (' + orphans.length + ' pages ≈ ' + Math.max(2, Math.ceil(orphans.length / 8)) + ' min). You can navigate away — it keeps going. AI picks 3-6 relevant pages per orphan and inserts a natural link, logged for rollback.')) {
           await api('/projects/' + project.id + '/onpage-audit/fix-orphans/run', { method: 'POST', body: { page_ids: orphans.map(o => o.id) } });
           setFixAllState({ phase: 'links', current: 0, total: orphans.length, currentTitle: 'Running on server…', suggestions: [], applied, errors });
@@ -15151,7 +15154,7 @@
         }, 5000);
       };
       const handleFixOrphans = async () => {
-        const orphans = pages.filter(p => (p.inboundLinks || 0) === 0);
+        const orphans = pages.filter(isOrphanPage);
         if (orphans.length === 0) return;
         if (!confirm('Auto-add inbound internal links for ' + orphans.length + ' orphan page(s)?\n\nRuns on the server in parallel (≈ ' + Math.max(2, Math.ceil(orphans.length / 8)) + ' min). You can navigate away — it keeps going. AI picks 3-6 relevant pages per orphan and inserts a natural link, logged for rollback.')) return;
         try {
@@ -15468,9 +15471,9 @@
                   <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix {selected.size} Selected Page{selected.size !== 1 ? 's' : ''}
                 </button>
               )}
-              {pages.filter(p => (p.inboundLinks || 0) === 0).length > 0 && !fixAllState && (
+              {pages.filter(isOrphanPage).length > 0 && !fixAllState && (
                 <button className="btn btn-primary" onClick={handleFixOrphans} style={{ fontSize: 12, padding: '6px 12px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.4)' }}>
-                  <i className="fas fa-link" style={{ marginRight: 4 }} />Fix Orphans ({pages.filter(p => (p.inboundLinks || 0) === 0).length})
+                  <i className="fas fa-link" style={{ marginRight: 4 }} />Fix Orphans ({pages.filter(isOrphanPage).length})
                 </button>
               )}
               {pendingChanges.count > 0 && (

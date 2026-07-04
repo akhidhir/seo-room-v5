@@ -18297,16 +18297,19 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       });
     }
 
-    // Calculate inbound links — for each page, count how many other pages link to it
-    const allUrls = allPages.map(pg => (pg.link || '').replace(/\/$/, ''));
+    // Calculate inbound links — for each page, count how many other pages link to it.
+    // Compare by PATHNAME so absolute (https://site/x/), relative (/x/), www and http variants
+    // all count. The old string math built garbage targets (domain doubled) and only matched
+    // exact absolute URLs — relative links were invisible, so fixed orphans kept re-flagging.
+    const toPath = (u) => { try { return new URL(u, wpBase).pathname.replace(/\/+$/, '').toLowerCase() || '/'; } catch { return String(u || '').replace(/\/+$/, '').toLowerCase() || '/'; } };
     for (const result of results) {
-      const targetUrl = (wpBase + result.url).replace(/\/$/, '');
-      const targetSlug = result.url.replace(/\//g, '');
+      const targetPath = toPath(result.url);
+      const isHomePage = targetPath === '/';
       let inbound = 0;
       const inboundFrom = [];
       for (const pg of allPages) {
         if (pg.id === result.id) continue;
-        let pgContent = pg.content?.rendered || '';
+        let pgContent = pg.content?.rendered || pg.content?.raw || '';
         // Elementor pages: builder-added links live in _elementor_data (JSON), not content.rendered.
         // Unescape the JSON (\/ and \") so the same href regex finds those links too.
         const elRaw = pg.meta?._elementor_data;
@@ -18315,8 +18318,7 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
         const hrefRegex = /href=["']([^"']+)["']/gi;
         let hm;
         while ((hm = hrefRegex.exec(pgContent)) !== null) {
-          const href = hm[1].replace(/\/$/, '');
-          if (href === targetUrl || href === result.url.replace(/\/$/, '') || href.endsWith('/' + targetSlug)) {
+          if (toPath(hm[1]) === targetPath) {
             inbound++;
             inboundFrom.push({ title: pg.title?.rendered || '', url: (pg.link || '').replace(wpBase, '') || '/' });
             break; // count each source page once
@@ -18325,8 +18327,10 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
       }
       result.inboundLinks = inbound;
       result.inboundFrom = inboundFrom;
-      // Add inbound link issue to the issues array
-      if (inbound === 0) {
+      // Add inbound link issue to the issues array (homepage is linked from every menu — never an orphan)
+      if (isHomePage) {
+        result.issues.push({ type: 'good', text: 'Homepage — linked from the site navigation' });
+      } else if (inbound === 0) {
         result.issues.push({ type: 'problem', text: 'No inbound links — orphan page, no other pages link here' });
       } else if (inbound < 3) {
         result.issues.push({ type: 'warning', text: `Only ${inbound} inbound link${inbound > 1 ? 's' : ''} — aim for 3+` });
