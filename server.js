@@ -18089,10 +18089,13 @@ Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics
 // Run on-page audit — fetches Yoast scores + WP pages, analyzes content
 app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
   const { projectId } = req.params;
+  let ownLockOA = false;
   try {
     const lockedOA = acquireHeavyLock(projectId, 'On-Page Audit');
     if (lockedOA) return heavyLockResponse(res, lockedOA);
-    res.on('finish', () => releaseHeavyLock(projectId));
+    ownLockOA = true;
+    // NOTE: 'finish' never fires if the user navigates away mid-audit (the connection emits
+    // 'close' instead) — the finally below is the guaranteed release when the work actually ends.
     const force = req.body?.force === true;
     const limit = await checkMonthlyAuditLimit(projectId, 'onpage', force);
     if (limit.limited) return res.status(429).json({ error: `On-Page audit already completed this month (${limit.lastAudit.toLocaleDateString()}). Next available in ${limit.daysUntil} days.`, canForce: true });
@@ -18363,6 +18366,8 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
   } catch (e) {
     console.error('[onpage-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
+  } finally {
+    if (ownLockOA) releaseHeavyLock(projectId); // guaranteed release — even if the client disconnected mid-audit
   }
 });
 
@@ -35550,10 +35555,11 @@ app.get('/api/connector-push/:projectId/status', async (req, res) => {
 // ==================== CODE-BASED WEBSITE AUDIT ====================
 app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
   const { projectId } = req.params;
+  let ownLockWA = false;
   try {
     const lockedWA = acquireHeavyLock(projectId, 'Website Audit');
     if (lockedWA) return heavyLockResponse(res, lockedWA);
-    res.on('finish', () => releaseHeavyLock(projectId));
+    ownLockWA = true; // released in finally — 'finish' never fires if the client disconnects mid-run
     // Rule-based audit is free — 5 min buffer to prevent accidental double-clicks
     const { rows: recentAudits } = await pool.query(
       `SELECT completed_at FROM audits WHERE project_id=$1 AND pillar='website' AND status='completed' AND completed_at >= NOW() - INTERVAL '5 minutes' ORDER BY completed_at DESC LIMIT 1`,
@@ -36791,6 +36797,8 @@ app.post('/api/projects/:projectId/audits/website/run', async (req, res) => {
   } catch (e) {
     console.error('[website-audit] Error:', e.message);
     res.status(500).json({ error: e.message });
+  } finally {
+    if (ownLockWA) releaseHeavyLock(projectId); // guaranteed release even on client disconnect
   }
 });
 
