@@ -49689,6 +49689,7 @@ app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req,
         continue;
       }
       const okSet = new Set((result && result.inserted || []).map(a => (a || '').toLowerCase().trim()));
+      const unplaced = [];
       for (const r of byPage[src]) {
         const a = (r.suggested_anchor || '').toLowerCase().trim();
         if (okSet.has(a)) {
@@ -49702,7 +49703,33 @@ app.post('/api/projects/:projectId/internal-links/insert-permanent', async (req,
               [projectId, result.page_id || 0, src, '', '[no link]', `<a href="${r.target_url}">${r.suggested_anchor}</a>`]
             );
           } catch (e) {}
-        } else { await pool.query(`UPDATE internal_link_suggestions SET status='failed' WHERE id=$1`, [r.id]); failed++; }
+        } else { unplaced.push(r); }
+      }
+      // GUARANTEED FALLBACK — the anchor phrase wasn't in the page ("no suitable line"). Instead of
+      // failing, append ONE compact "Related reading" line carrying all unplaced links for this page.
+      // Elementor-safe via the plugin's insert-content-block; unique marker so every batch lands.
+      if (unplaced.length) {
+        const items = unplaced.map(r => `<a href="${r.target_url}">${(r.target_title || r.suggested_anchor || r.target_url).toString().replace(/<[^>]+>/g, '').slice(0, 80)}</a>`).join(', ');
+        const html = `<div class="seoroom-related"><p><strong>Related reading:</strong> ${items}.</p></div>`;
+        const marker = 'seoroom-il-' + Date.now().toString(36) + Math.floor(Math.random() * 1e4);
+        let fb = null;
+        try { fb = await callPluginApi(project, '/insert-content-block', 'POST', { url: src, html, marker }); } catch (e) { fb = null; }
+        if (fb && fb.ok && (fb.inserted || fb.already)) {
+          for (const r of unplaced) {
+            await pool.query(`UPDATE internal_link_suggestions SET status='live' WHERE id=$1`, [r.id]);
+            inserted++;
+            try {
+              await pool.query(
+                `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+                 VALUES ($1,$2,$3,$4,'internal_link_block','post_content', '[no link]', $5)`,
+                [projectId, fb.page_id || 0, src, '', html]
+              );
+            } catch (e) {}
+          }
+          console.log(`[insert-permanent] ${unplaced.length} link(s) appended as Related-reading block on ${src} (no inline anchor found)`);
+        } else {
+          for (const r of unplaced) { await pool.query(`UPDATE internal_link_suggestions SET status='failed' WHERE id=$1`, [r.id]); failed++; }
+        }
       }
       purgeUrls.push(src);
     }
