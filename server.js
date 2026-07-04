@@ -18266,8 +18266,11 @@ app.post('/api/projects/:projectId/onpage-audit/run', async (req, res) => {
         const exactCount = (plainText.toLowerCase().match(new RegExp(kwEsc, 'g')) || []).length;
         const kwWords = kwLower.split(/\s+/).filter(w => w.length > 2);
         const allWordsPresent = kwWords.length > 0 && kwWords.every(w => plainText.toLowerCase().includes(w));
-        if (exactCount > 0) issues.push({ type: 'good', text: `Focus keyword appears ${exactCount}x in content` });
-        else if (allWordsPresent) issues.push({ type: 'warning', text: 'Focus keyword words present in content but not as exact phrase' });
+        // All keyword words present = GOOD. Google matches close variants ("fix a slow Mac in Perth"
+        // ranks for "slow Mac fix Perth") — demanding the exact ungrammatical phrase forced the AI
+        // fixer to write keyword-stuffed sentences. Exact match is a bonus, not a requirement.
+        if (exactCount > 0) issues.push({ type: 'good', text: `Focus keyword appears ${exactCount}x in content (exact match)` });
+        else if (allWordsPresent) issues.push({ type: 'good', text: 'Focus keyword covered in content (all words present — Google matches close variants)' });
         else issues.push({ type: 'problem', text: 'Focus keyword not found in content' });
         const h1Lower = (h1 || '').toLowerCase();
         if (h1Lower.includes(kwLower) || (kwWords.length > 0 && kwWords.every(w => h1Lower.includes(w)))) issues.push({ type: 'good', text: 'H1 contains focus keyword' });
@@ -21013,24 +21016,33 @@ app.post('/api/projects/:projectId/onpage-audit/fix-content', async (req, res) =
 
     const queued = [];
 
-    // 1) H1 — add the focus keyword if missing
-    if (h1Text && !h1Text.toLowerCase().includes(kwLc)) {
+    // Natural-variant standard: "covered" = exact phrase OR all significant words present.
+    // Forcing the exact (often ungrammatical) phrase is what produced keyword-stuffed sentences.
+    const kwWordsN = kwLc.split(/\s+/).filter(w => w.length > 2);
+    const kwOk = (s) => { const t = String(s || '').toLowerCase(); return t.includes(kwLc) || (kwWordsN.length > 0 && kwWordsN.every(w => t.includes(w))); };
+    // Utility pages (Terms/Contact/About/etc) never get keyword treatment
+    if (UTILITY_PAGE_RE.test(pageUrl || '')) {
+      return res.json({ ok: true, queued: 0, changes: [], source: sourceMode, message: 'Utility page — keyword optimisation is intentionally skipped (Terms/Contact/About pages should not target keywords).' });
+    }
+
+    // 1) H1 — add the focus keyword if missing (natural variants allowed)
+    if (h1Text && !kwOk(h1Text)) {
       const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 120,
-        messages: [{ role: 'user', content: `Rewrite this page heading so it naturally includes the exact phrase "${focusKw}". Keep it concise (max ~10 words) and natural. Current heading: "${h1Text}". Return ONLY the new heading text — no quotes, no explanation.` }] });
+        messages: [{ role: 'user', content: `Rewrite this page heading so it naturally covers the keyword "${focusKw}". You may inflect or reorder the keyword's words for grammar — never paste it as an ungrammatical chunk. Concise (max ~10 words), natural. If it cannot be done naturally, return exactly NONE. Current heading: "${h1Text}". Return ONLY the new heading text — no quotes, no explanation.` }] });
       const newH1 = String(resp.content[0].text || '').trim().replace(/^["']|["']$/g, '');
-      if (newH1 && newH1 !== h1Text && newH1.toLowerCase().includes(kwLc)) {
+      if (newH1 && newH1 !== 'NONE' && newH1 !== h1Text && kwOk(newH1)) {
         await pool.query(`INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,'keyword-h1',$5,$6,$7)`,
           [projectId, page_id, pageUrl, pageTitle, h1Text, newH1, `Add focus keyword "${focusKw}" to the H1`]);
         queued.push({ kind: 'H1', find: h1Text, replace: newH1 });
       }
     }
 
-    // 2) Content — weave the exact phrase into one sentence if missing
-    if (contentPlain.length > 80 && !contentPlain.toLowerCase().includes(kwLc)) {
+    // 2) Content — weave the keyword into one sentence if not covered (natural variants allowed)
+    if (contentPlain.length > 80 && !kwOk(contentPlain)) {
       const resp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 600,
-        messages: [{ role: 'user', content: `Rewrite ONE sentence from this page so it naturally contains the exact phrase "${focusKw}". Pick a sentence from the first half. It must read naturally, not keyword-stuffed. Return ONLY JSON: {"find":"the exact original sentence copied character-for-character","replace":"the rewritten sentence containing the exact phrase"}\n\nPAGE TEXT:\n${contentPlain.substring(0, 2000)}` }] });
+        messages: [{ role: 'user', content: `Work the keyword "${focusKw}" naturally into ONE existing sentence from the first half of this page. You may inflect the words, reorder them, or add small connecting words (in/for/a/the) between them — Google matches close variants. NEVER paste the keyword as an ungrammatical chunk.\nGOOD (keyword "slow Mac fix Perth"): "...we fix slow Macs across Perth quickly."\nBAD: "...the frustration of a slow Mac fix Perth specialists recommend."\nIf it cannot be done so a human would never notice, return {"find":"","replace":""}.\nReturn ONLY JSON: {"find":"the exact original sentence copied character-for-character","replace":"the natural rewrite"}\n\nPAGE TEXT:\n${contentPlain.substring(0, 2000)}` }] });
       let patch = null; try { patch = JSON.parse(resp.content[0].text.match(/\{[\s\S]*\}/)[0]); } catch {}
-      if (patch && patch.find && patch.replace && String(patch.replace).toLowerCase().includes(kwLc)) {
+      if (patch && patch.find && patch.replace && kwOk(patch.replace)) {
         await pool.query(`INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,'keyword-content',$5,$6,$7)`,
           [projectId, page_id, pageUrl, pageTitle, patch.find, patch.replace, `Weave focus keyword "${focusKw}" into content`]);
         queued.push({ kind: 'Content', find: patch.find, replace: patch.replace });
@@ -21156,22 +21168,25 @@ Return ONLY JSON: {"title":"...","metadesc":"...","focuskw":"..."}` }] });
     } catch (e) { /* meta best-effort */ }
 
     const kwLc = (focusKw || '').toLowerCase();
+    // Natural-variant standard (see fix-content): covered = exact phrase OR all significant words.
+    const kwWordsA = kwLc.split(/\s+/).filter(w => w.length > 2);
+    const kwOkA = (s) => { const t = String(s || '').toLowerCase(); return t.includes(kwLc) || (kwWordsA.length > 0 && kwWordsA.every(w => t.includes(w))); };
 
-    // ---- 2) H1 + 3) content exact phrase ----
-    if (focusKw) {
+    // ---- 2) H1 + 3) keyword coverage in content (utility pages are never keyword-optimised) ----
+    if (focusKw && !UTILITY_PAGE_RE.test(pageUrl || '')) {
       let newH1 = null, sentencePatch = null;
-      if (h1Text && !h1Text.toLowerCase().includes(kwLc)) {
+      if (h1Text && !kwOkA(h1Text)) {
         try {
-          const hr = await anthropic.messages.create({ model: MODEL, max_tokens: 120, messages: [{ role: 'user', content: `Rewrite this heading so it naturally includes the exact phrase "${focusKw}". Concise (max ~10 words), natural. Current: "${h1Text}". Return ONLY the new heading text, no quotes.` }] });
+          const hr = await anthropic.messages.create({ model: MODEL, max_tokens: 120, messages: [{ role: 'user', content: `Rewrite this heading so it naturally covers the keyword "${focusKw}". You may inflect or reorder the keyword's words for grammar — never paste it as an ungrammatical chunk. Concise (max ~10 words). If it cannot be done naturally, return exactly NONE. Current: "${h1Text}". Return ONLY the new heading text, no quotes.` }] });
           const v = String(hr.content[0].text || '').trim().replace(/^["']|["']$/g, '');
-          if (v && v !== h1Text && v.toLowerCase().includes(kwLc)) newH1 = v;
+          if (v && v !== 'NONE' && v !== h1Text && kwOkA(v)) newH1 = v;
         } catch (e) {}
       }
-      if (contentPlain.length > 80 && !contentPlain.toLowerCase().includes(kwLc)) {
+      if (contentPlain.length > 80 && !kwOkA(contentPlain)) {
         try {
-          const cr = await anthropic.messages.create({ model: MODEL, max_tokens: 600, messages: [{ role: 'user', content: `Rewrite ONE sentence from this page so it naturally contains the exact phrase "${focusKw}". Pick a sentence from the first half. Natural, not stuffed. Return ONLY JSON: {"find":"exact original sentence character-for-character","replace":"rewritten sentence with the exact phrase"}\n\nPAGE TEXT:\n${contentPlain.substring(0, 2000)}` }] });
+          const cr = await anthropic.messages.create({ model: MODEL, max_tokens: 600, messages: [{ role: 'user', content: `Work the keyword "${focusKw}" naturally into ONE existing sentence from the first half of this page. You may inflect the words, reorder them, or add small connecting words (in/for/a/the) between them — Google matches close variants. NEVER paste the keyword as an ungrammatical chunk.\nGOOD (keyword "slow Mac fix Perth"): "...we fix slow Macs across Perth quickly."\nBAD: "...the frustration of a slow Mac fix Perth specialists recommend."\nIf it cannot be done so a human would never notice, return {"find":"","replace":""}.\nReturn ONLY JSON: {"find":"exact original sentence character-for-character","replace":"the natural rewrite"}\n\nPAGE TEXT:\n${contentPlain.substring(0, 2000)}` }] });
           const p = JSON.parse(cr.content[0].text.match(/\{[\s\S]*\}/)[0]);
-          if (p && p.find && p.replace && String(p.replace).toLowerCase().includes(kwLc)) sentencePatch = p;
+          if (p && p.find && p.replace && kwOkA(p.replace)) sentencePatch = p;
         } catch (e) {}
       }
 
@@ -21352,11 +21367,35 @@ async function applyPendingChange(project, ch) {
     if (i === -1) i = hay.toLowerCase().indexOf(String(ch.find_text).toLowerCase());
     return i;
   };
+  // FUZZY MATCH — the find text was captured as PLAIN text (tags stripped), but we search raw
+  // HTML/JSON. Sentences containing <strong>, links or entities (&#038;) never matched exactly,
+  // failing 2/3 of approvals. Tolerate tags/entities/escapes between words; refuse spans that
+  // contain a link (replacing would silently destroy the <a>).
+  const fuzzyMatch = (hay) => {
+    try {
+      const tokens = String(ch.find_text).trim().split(/\s+/).filter(Boolean);
+      if (tokens.length < 2) return null;
+      const tok = tokens.map(t => {
+        let e = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        e = e.replace(/&/g, '(?:&(?:amp;|#0?38;)?)');
+        e = e.replace(/'/g, "(?:'|’|&#8217;|&rsquo;|\\\\u2019)");
+        e = e.replace(/"/g, '(?:"|“|”|&#822[01];|&quot;|\\\\")');
+        return e;
+      });
+      const SEP = '(?:\\s|<[^>]*>|&nbsp;|&#160;|\\\\n|\\\\t)+';
+      const m = hay.match(new RegExp(tok.join(SEP), 'i'));
+      if (!m) return null;
+      if (/<a[\s\\]/i.test(m[0])) throw new Error('The sentence contains a link — approve manually so the link is not destroyed');
+      return { index: m.index, length: m[0].length };
+    } catch (e) { if (/contains a link/.test(e.message)) throw e; return null; }
+  };
 
   // 1) Classic editor content
   let idx = content ? findInStr(content) : -1;
+  let matchLen = ch.find_text.length;
+  if (idx === -1 && content) { const fm = fuzzyMatch(content); if (fm) { idx = fm.index; matchLen = fm.length; } }
   if (idx !== -1) {
-    const newContent = content.substring(0, idx) + ch.replace_text + content.substring(idx + ch.find_text.length);
+    const newContent = content.substring(0, idx) + ch.replace_text + content.substring(idx + matchLen);
     await pool.query(
       `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,'content',$6,$7)`,
       [ch.project_id, ch.page_id, ch.page_url, ch.page_title, ch.change_type || 'keyword-content', content, newContent]
@@ -21376,10 +21415,12 @@ async function applyPendingChange(project, ch) {
     // _elementor_data stores HTML with escaped quotes; match against both raw and JSON-escaped find text
     const jsonEsc = JSON.stringify(ch.find_text).slice(1, -1);
     let ei = elStr.indexOf(jsonEsc);
-    let needle = jsonEsc, repl = JSON.stringify(ch.replace_text).slice(1, -1);
-    if (ei === -1) { ei = findInStr(elStr); needle = ch.find_text; repl = ch.replace_text; }
+    let needleLen = jsonEsc.length, repl = JSON.stringify(ch.replace_text).slice(1, -1);
+    if (ei === -1) { ei = findInStr(elStr); needleLen = ch.find_text.length; repl = ch.replace_text; }
+    if (ei === -1) { const fm = fuzzyMatch(elStr); if (fm) { ei = fm.index; needleLen = fm.length; repl = JSON.stringify(ch.replace_text).slice(1, -1); } }
     if (ei === -1) throw new Error('Original text no longer found in Elementor data — page changed since queued');
-    const newEl = elStr.substring(0, ei) + repl + elStr.substring(ei + needle.length);
+    const newEl = elStr.substring(0, ei) + repl + elStr.substring(ei + needleLen);
+    try { JSON.parse(newEl); } catch (e) { throw new Error('Edit would corrupt the Elementor layout — approve this one manually in WordPress'); }
     await pool.query(
       `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value) VALUES ($1,$2,$3,$4,$5,'_elementor_data',$6,$7)`,
       [ch.project_id, ch.page_id, ch.page_url, ch.page_title, ch.change_type || 'keyword-content', elStr, newEl]
@@ -21430,6 +21471,17 @@ app.post('/api/projects/:projectId/pending-changes/:changeId/reject', async (req
       [req.params.changeId, req.params.projectId]
     );
     res.json({ ok: true, rejected: r.rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Requeue failed changes so they can be re-approved (e.g. after the fuzzy matcher improved)
+app.post('/api/projects/:projectId/pending-changes/retry-failed', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `UPDATE pending_changes SET status='pending', error=NULL WHERE project_id=$1 AND status='failed' RETURNING id`,
+      [req.params.projectId]
+    );
+    res.json({ ok: true, requeued: r.rows.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -21936,11 +21988,18 @@ Return ONLY JSON: {"pages":[{"id":123,"focus_keyword":"...","meta_title":"...","
   const missingKwContent = [];
   for (const p of contentPages) {
     if (!p.focusKeyword) continue;
+    if (UTILITY_PAGE_RE.test(p.url || '')) continue; // Terms/Contact/About etc NEVER get keyword treatment
     const wp = allWp.find(w => String(w.id) === String(p.id));
     if (!wp) continue;
     const content = wp.content?.raw || wp.content?.rendered || '';
     if (!content || content.replace(/<[^>]+>/g, ' ').length < 200) continue; // page-builder pages without editable text — skip
-    if (!content.replace(/<[^>]+>/g, ' ').toLowerCase().includes(p.focusKeyword.toLowerCase())) missingKwContent.push({ p, wp, content });
+    // "Covered" = exact phrase OR all significant words present — Google matches close variants,
+    // and demanding the exact ungrammatical phrase is what produced keyword-stuffed sentences.
+    const plainLc = content.replace(/<[^>]+>/g, ' ').toLowerCase();
+    const kwLc2 = p.focusKeyword.toLowerCase();
+    const kwWords2 = kwLc2.split(/\s+/).filter(w => w.length > 2);
+    const covered = plainLc.includes(kwLc2) || (kwWords2.length > 0 && kwWords2.every(w => plainLc.includes(w)));
+    if (!covered) missingKwContent.push({ p, wp, content });
   }
   job.phase = 'Weaving keywords into content';
   job.total = missingKwContent.length; job.done = 0;
@@ -21954,7 +22013,11 @@ Return ONLY JSON: {"pages":[{"id":123,"focus_keyword":"...","meta_title":"...","
         const plain = m.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 2000);
         const resp = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001', max_tokens: 600,
-          messages: [{ role: 'user', content: `Rewrite ONE sentence from this page so it naturally contains the exact phrase "${m.p.focusKeyword}". Pick a sentence from the first half of the text. The rewrite must read naturally, not stuffed. Return ONLY JSON: {"find":"the exact original sentence copied character-for-character","replace":"the rewritten sentence containing the exact phrase"}
+          messages: [{ role: 'user', content: `Work the keyword "${m.p.focusKeyword}" naturally into ONE existing sentence from the first half of this page. You may inflect the words, reorder them, or add small connecting words (in/for/a/the) between them — Google matches close variants. NEVER paste the keyword as an ungrammatical chunk.
+GOOD (keyword "slow Mac fix Perth"): "...we fix slow Macs across Perth quickly."
+BAD: "...the frustration of a slow Mac fix Perth specialists recommend."
+If it cannot be done so a human would never notice, return {"find":"","replace":""}.
+Return ONLY JSON: {"find":"the exact original sentence copied character-for-character","replace":"the natural rewrite"}
 
 PAGE TEXT:
 ${plain}` }]
@@ -21972,6 +22035,13 @@ ${plain}` }]
     const m = missingKwContent[i];
     const r = kwPatches[i];
     if (!r || !r.find || !r.replace) { job.errors++; job.done++; continue; }
+    // The rewrite must actually cover the keyword (all significant words) — drop lost-keyword patches
+    {
+      const rl = String(r.replace).toLowerCase();
+      const kl = m.p.focusKeyword.toLowerCase();
+      const ws = kl.split(/\s+/).filter(w => w.length > 2);
+      if (!(rl.includes(kl) || (ws.length > 0 && ws.every(w => rl.includes(w))))) { job.errors++; job.done++; continue; }
+    }
     // Sanity: the find text must exist in the current content, or the patch is junk
     const content = m.content;
     let idx2 = content.indexOf(r.find);
