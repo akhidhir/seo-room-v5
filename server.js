@@ -20371,6 +20371,23 @@ ${content.slice(0, 12000)}` }]
       return res.status(500).json({ error: `WordPress write failed: ${errText.slice(0, 300)}` });
     }
 
+    // Update the cached audit so the Issue Analysis list agrees with the tiles immediately
+    // (was: tile showed the new count while the issue line still said "No external links").
+    try {
+      const nAdded = (parsed.links_added || selected_links || []).length;
+      const oc = await pool.query(`SELECT results FROM onpage_audit_cache WHERE project_id=$1`, [projectId]);
+      const results = oc.rows[0] ? (typeof oc.rows[0].results === 'string' ? JSON.parse(oc.rows[0].results) : oc.rows[0].results) : null;
+      if (results && nAdded > 0) {
+        const pg = results.find(p => String(p.id) === String(page_id));
+        if (pg) {
+          pg.externalLinks = (pg.externalLinks || 0) + nAdded;
+          pg.issues = (pg.issues || []).filter(i => !/no external links/i.test(i.text || ''));
+          pg.issues.push({ type: 'good', text: `Has ${pg.externalLinks} external link${pg.externalLinks > 1 ? 's' : ''}` });
+          await pool.query(`UPDATE onpage_audit_cache SET results=$2, updated_at=NOW() WHERE project_id=$1`, [projectId, JSON.stringify(results)]);
+        }
+      }
+    } catch (cacheErr) { console.log('[add-external-links] cache refresh skipped:', cacheErr.message); }
+
     console.log(`[add-external-links] Applied ${parsed.links_added?.length || 0} external links to page ${page_id}`);
     res.json({ success: true, links_added: parsed.links_added || selected_links, count: selected_links.length });
   } catch (e) {
