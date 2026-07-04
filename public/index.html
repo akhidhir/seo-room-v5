@@ -38329,7 +38329,7 @@
                   <button onClick={runGap} disabled={gapLoading} style={{ ...btnStyle, opacity: gapLoading ? 0.6 : 1 }}>
                     {gapLoading ? <><span className="spinner" style={{ marginRight: 6 }}></span>Analyzing...</> : <><i className="fas fa-not-equal" style={{ marginRight: 6 }}></i>Run Gap Analysis</>}
                   </button>
-                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>Uses competitor domains from settings — or auto-finds them from your Maps grid scans & Players Handshake</span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>Uses competitor domains from settings — or auto-finds them from your Maps grid scans</span>
                 </div>
 
                 {discoveredComps && discoveredComps.length > 0 && (
@@ -38358,7 +38358,7 @@
                 )}
                 {discoveredComps && discoveredComps.length === 0 && !gapData && (
                   <div style={{ ...cardStyle, marginBottom: 16, padding: 14, fontSize: 12, color: 'var(--text3)' }}>
-                    <i className="fas fa-circle-info" style={{ marginRight: 6 }}></i>No competitors found in your data yet — run a Maps grid scan or Players Handshake first, or add competitor domains in project settings.
+                    <i className="fas fa-circle-info" style={{ marginRight: 6 }}></i>No competitors found in your data yet — run a Maps grid scan first, or add competitor domains in project settings.
                   </div>
                 )}
                 {gapData ? (
@@ -40182,9 +40182,10 @@ case 'action-plan':
         { section: 'BACKLINKS', items: [
           { id: 'backlinks', label: 'Backlinks', icon: 'fas fa-external-link-alt' },
         ]},
-        { section: 'STRATEGY', items: [
-          { id: 'handshake', label: 'Players Handshake', icon: 'fas fa-handshake', localOnly: true },
-        ]},
+        // STRATEGY / Players Handshake removed 2026-07-04: comparison data was unreliable
+        // (fake completeness %, wrong word counts, "unknown" metrics) and its AI strategy
+        // recommended building pages the sites already have. Component kept in code — restore
+        // here only after rebuilding on real data sources (DataForSEO + live crawls).
         { section: 'RANKINGS', items: [
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
           { id: 'smart-map', label: 'Smart Map Ranking', icon: 'fas fa-wand-magic-sparkles', localOnly: true },
