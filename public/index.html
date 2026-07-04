@@ -6732,11 +6732,15 @@
         }
       };
 
+      // Copywriter is ONLY for real content rewrites. Meta titles/descriptions are fixed
+      // directly in On-Page Audit & Fix — never routed to the copywriter queue.
       const isCopywriterFinding = (f) => {
         const c = (f.category || '').toLowerCase();
         const t = (f.title || '').toLowerCase();
-        return c.includes('content quality') || /duplicate title|meta title|thin content/.test(t);
+        if (/duplicate title|meta title|meta description/.test(t)) return false;
+        return c.includes('content quality') || /thin content/.test(t);
       };
+      const isMetaFinding = (f) => /duplicate title|meta title|meta description/.test((f.title || '').toLowerCase());
 
       // Generate clear, non-technical copywriter instructions from a finding
       const buildCopywriterNotes = (f) => {
@@ -7380,6 +7384,11 @@
                       {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />Verifying...</> : <><i className="fas fa-search" style={{ marginRight: 6 }} />Verify Fixed</>}
                     </button>
                   </>
+                ) : isMetaFinding(f) ? (
+                  <button className="btn btn-primary" onClick={() => { setReviewFinding(null); if (setActiveTab) setActiveTab('onpage-audit'); }}
+                    style={{ fontSize: 16, padding: '12px 28px' }}>
+                    <i className="fas fa-magic" style={{ marginRight: 8 }} />Fix in On-Page Audit
+                  </button>
                 ) : isCopywriterFinding(f) ? (
                   <button className="btn" onClick={async () => {
                     setFixing(f.id);
@@ -7832,6 +7841,11 @@
                                 {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 3 }} />Checking...</> : <><i className="fas fa-redo" style={{ marginRight: 3 }} />Re-verify</>}
                               </button>
                             </div>
+                          ) : isMetaFinding(f) ? (
+                            <button className="btn btn-small btn-primary" onClick={(e) => { e.stopPropagation(); if (setActiveTab) setActiveTab('onpage-audit'); }}
+                              style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
+                              <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix in On-Page Audit
+                            </button>
                           ) : isCopywriterFinding(f) ? (
                             <button className="btn btn-small" onClick={async (e) => {
                               e.stopPropagation();
@@ -16005,12 +16019,20 @@
                                     <i className={addingLinks === 'external-' + page.id ? 'fas fa-spinner fa-spin' : 'fas fa-external-link-alt'} style={{ marginRight: 4 }} />
                                     {addingLinks === 'external-' + page.id ? 'Finding...' : 'Add External'}
                                   </button>
-                                  <button className="btn" onClick={() => handleSendToCopywriter(page, page.wordCount < 500 ? 'rewrite' : 'meta_only')}
-                                    style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
-                                    disabled={sendingToCopywriter === page.id}>
-                                    <i className="fas fa-pen-fancy" style={{ marginRight: 4 }} />
-                                    {sendingToCopywriter === page.id ? 'Sending...' : (page.wordCount < 500 ? 'Send to Copywriter' : 'Send Meta to Copywriter')}
-                                  </button>
+                                  {/* Copywriter is ONLY for real content rewrites (thin pages). Meta is fixed
+                                      right here via the Fix modal — never routed to the copywriter queue. */}
+                                  {page.wordCount < 500 ? (
+                                    <button className="btn" onClick={() => handleSendToCopywriter(page, 'rewrite')}
+                                      style={{ fontSize: 11, padding: '6px 12px', color: '#8b5cf6', borderColor: '#8b5cf6' }}
+                                      disabled={sendingToCopywriter === page.id}>
+                                      <i className="fas fa-pen-fancy" style={{ marginRight: 4 }} />
+                                      {sendingToCopywriter === page.id ? 'Sending...' : 'Send to Copywriter'}
+                                    </button>
+                                  ) : !isFixable && (
+                                    <button className="btn btn-primary" onClick={() => handleFixSingle(page)} style={{ fontSize: 11, padding: '6px 12px' }}>
+                                      <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix Meta with AI
+                                    </button>
+                                  )}
                                 </div>
 
                                 {/* Links Added Result Panel */}
