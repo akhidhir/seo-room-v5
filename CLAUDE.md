@@ -584,3 +584,15 @@ no transfers, no navigating to another page to fix it. Applies to all projects, 
   fall back to read-back with one 2s retry. Never report failure when the write applied.
 - Never mark a finding/ticket fixed when nothing changed.
 - Homepage guards: never trash/redirect/slug-change the homepage; duplicate title with homepage = retitle homepage brand-first.
+
+## Session Log 2026-07-04 (evening): Full v5 Audit + Cleanup
+
+Full-system audit report: ~/Desktop/SEO-ROOM-V5-FULL-AUDIT.md (inventory: 21 audit engines, 42 fix executors, 60 pages).
+Done this session: removed Players Handshake + InternalGBPAuditPage fallback + dead 'action-plan' route; one review-first
+"Fix with AI" button; meta fixed in-place everywhere (registry helpers: aiFixMetaForPages / fix-meta-inplace /
+findings/:id/fix-meta); slug change w/ 301 verify; cache-proof write verification; AI link-target validation;
+inbound counter path-matching; Fix Orphans live badge + relative-link dedup; fix-duplicate live 301 verify;
+heavy-lock finally release; Not-Indexed page fix CTA.
+NEXT (agreed roadmap): (1) finding→fix registry for 10 core types, (2) consolidate meta+linking executor families,
+(3) Prospect Audit (URL → external audit → 6-month strategy PDF → convert-to-project), (4) verification sweep on
+remaining executors. See report sections 4-6.

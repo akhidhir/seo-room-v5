@@ -10720,7 +10720,7 @@
     }
 
     // ============ GSC INDEXED / NOT INDEXED PAGES ============
-    function GSCIndexedPage({ project, filter: pageFilter }) {
+    function GSCIndexedPage({ project, filter: pageFilter, setActiveTab }) {
       const [results, setResults] = useState([]);
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState('');
@@ -10732,6 +10732,12 @@
       const [running, setRunning] = useState(false);
       const [progress, setProgress] = useState(null);
       const isIndexed = pageFilter === 'indexed';
+      // Fix-at-point-of-discovery: the not-indexed view must route straight to the fix flow
+      const fixCta = !isIndexed && setActiveTab ? (
+        <button className="btn btn-primary" onClick={() => setActiveTab('indexing')} style={{ fontSize: 12, padding: '7px 14px', marginLeft: 8 }}>
+          <i className="fas fa-magic" style={{ marginRight: 5 }} />Fix these — Indexing Status (per-page reasons + fix steps)
+        </button>
+      ) : null;
 
       const loadData = async () => {
         if (!project?.id) return;
@@ -10859,6 +10865,7 @@
                 style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: running ? '#94a3b8' : '#6366f1', color: '#fff', fontWeight: 600, fontSize: 13, cursor: running ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                 {running ? <><i className="fas fa-spinner fa-spin" /> {progress ? `${progress.current}/${progress.total}` : 'Checking...'}</> : <><i className="fas fa-sync-alt" /> Run Check</>}
               </button>
+              {fixCta}
             </div>
           </div>
 
@@ -40042,9 +40049,9 @@
           case 'indexing':
             return <IndexingPage project={project} setActiveTab={setActiveTab} />;
           case 'gsc-indexed':
-            return <GSCIndexedPage project={project} filter="indexed" />;
+            return <GSCIndexedPage project={project} filter="indexed" setActiveTab={setActiveTab} />;
           case 'gsc-not-indexed':
-            return <GSCIndexedPage project={project} filter="not-indexed" />;
+            return <GSCIndexedPage project={project} filter="not-indexed" setActiveTab={setActiveTab} />;
           case 'gbp-optimise':
             return <GBPOptimisePage project={project} />;
           case 'citations':
@@ -40059,8 +40066,8 @@
             return <SecurityAuditPage project={project} setActiveTab={setActiveTab} />;
           case 'handshake':
             return <PlayersHandshakePage project={project} />;
-case 'action-plan':
-            return <UnifiedActionPlanPage project={project} setActiveTab={setActiveTab} />;
+          // 'action-plan' case removed 2026-07-04: nothing navigated to it — Control Centre is
+          // THE action plan (UnifiedActionPlanPage component kept in code for reference).
           case 'control-centre':
             return <ControlCentrePage setPage={setActiveTab} allProjects={allProjects} onSwitchProject={handleProjectSwitch} currentProject={project} />;
           case 'nw-project':
@@ -40151,7 +40158,8 @@ case 'action-plan':
             if (activeTab.startsWith('gsc-sec-')) {
               return <GSCAuditPage project={project} setActiveTab={setActiveTab} />;
             }
-            return <InternalGBPAuditPage project={project} />;
+            // Unknown tab → Local Intel (the old InternalGBPAuditPage fallback was a dead duplicate)
+            return <LocalIntelPage project={project} onNavigate={(tab) => setActiveTab(tab)} />;
         }
       };
 

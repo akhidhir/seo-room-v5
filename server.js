@@ -51621,7 +51621,21 @@ app.post('/api/projects/:projectId/competing-pages/fix-duplicate', async (req, r
       if (r && r.error) redirectError = r.error;
     } catch (e) { redirectError = e.message; }
 
+    // 4. LIVE verification — the page cache (BerqWP/CDN) can keep serving the trashed page,
+    // so confirm the old URL actually 301s now. Purge first, then check with a cache-buster.
+    let redirect_verified = false;
+    if (redirected) {
+      try { await purgeCloudflareCache(project, [url]); } catch (e) {}
+      try {
+        const chk = await fetch(`${url}${url.includes('?') ? '&' : '?'}nocache=${Date.now()}`, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+        const loc = chk.headers.get('location') || '';
+        redirect_verified = [301, 302, 308].includes(chk.status) && loc.includes(dstPath.replace(/\/+$/, ''));
+      } catch (e) {}
+    }
+
     res.json({
+      redirect_verified,
+      verify_note: redirected ? (redirect_verified ? 'Old URL 301-redirects — verified live.' : 'Redirect saved, but the old URL did not redirect on a live check yet — likely page cache; re-check in a few minutes.') : undefined,
       success: trashed && redirected,
       trashed, redirected,
       message: [
