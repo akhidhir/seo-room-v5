@@ -18579,6 +18579,179 @@ async function readWpYoastMeta(wpBase, pageId, authHeaders) {
   return null;
 }
 
+// ---- IN-PLACE META FIX (standing rule: fixes happen at the closest place the issue is found) ----
+// Resolve a WordPress page/post ID from its public URL. Handles the homepage (no slug) by scanning.
+async function resolveWpPageByUrl(wpBase, authHeaders, pageUrl) {
+  const norm = (u) => String(u || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  const want = norm(pageUrl);
+  const slug = want.split('/').pop();
+  const isHomeUrl = !want.includes('/');
+  if (!isHomeUrl && slug) {
+    for (const type of ['pages', 'posts']) {
+      try {
+        const r = await fetch(`${wpBase}/wp-json/wp/v2/${type}?slug=${encodeURIComponent(slug)}&per_page=5&_fields=id,link`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+        if (r.ok) {
+          const items = await r.json();
+          const hit = (items || []).find(p => norm(p.link) === want);
+          if (hit) return { id: hit.id, type };
+        }
+      } catch (e) { /* try next */ }
+    }
+  }
+  // Homepage or slug miss: scan the pages list for an exact link match
+  try {
+    const r = await fetch(`${wpBase}/wp-json/wp/v2/pages?per_page=100&_fields=id,link`, { headers: authHeaders, signal: AbortSignal.timeout(20000) });
+    if (r.ok) {
+      const items = await r.json();
+      const hit = (items || []).find(p => norm(p.link) === want);
+      if (hit) return { id: hit.id, type: 'pages' };
+    }
+  } catch (e) {}
+  return null;
+}
+
+// Write a meta title/description to one page: snapshot → write → verify from the write response
+// (immune to stale caches) → history row. Throws on any failure; never fakes success.
+async function applyMetaInPlace(project, projectId, pageUrl, { new_title, new_desc }) {
+  const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+  const authHeaders = getWpAuthHeaders(project);
+  if (!wpBase || !authHeaders) throw new Error('WordPress credentials not configured');
+  const ref = await resolveWpPageByUrl(wpBase, authHeaders, pageUrl);
+  if (!ref) throw new Error(`Page not found in WordPress: ${pageUrl}`);
+  const current = await readWpYoastMeta(wpBase, ref.id, authHeaders);
+  if (!current) throw new Error(`Could not read current meta for ${pageUrl}`);
+  const meta = {};
+  if (new_title && new_title !== current.yoast_wpseo_title) meta._yoast_wpseo_title = String(new_title).slice(0, 70);
+  if (new_desc && new_desc !== current.yoast_wpseo_metadesc) meta._yoast_wpseo_metadesc = String(new_desc).slice(0, 170);
+  if (!Object.keys(meta).length) return { changed: false, url: pageUrl };
+  const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+    method: 'POST', headers: authHeaders, body: JSON.stringify({ meta }), signal: AbortSignal.timeout(20000)
+  });
+  if (!writeResp.ok) throw new Error(`WordPress returned ${writeResp.status} for ${pageUrl}`);
+  let verified = false;
+  try {
+    const wj = await writeResp.json();
+    const m = wj && wj.meta ? wj.meta : null;
+    if (m) verified =
+      (!meta._yoast_wpseo_title || (m._yoast_wpseo_title || m.yoast_wpseo_title) === meta._yoast_wpseo_title) &&
+      (!meta._yoast_wpseo_metadesc || (m._yoast_wpseo_metadesc || m.yoast_wpseo_metadesc) === meta._yoast_wpseo_metadesc);
+  } catch (e) {}
+  if (!verified) {
+    const v = await readWpYoastMeta(wpBase, current.wpId, authHeaders);
+    verified = !!v &&
+      (!meta._yoast_wpseo_title || v.yoast_wpseo_title === meta._yoast_wpseo_title) &&
+      (!meta._yoast_wpseo_metadesc || v.yoast_wpseo_metadesc === meta._yoast_wpseo_metadesc);
+  }
+  if (!verified) throw new Error(`Write not verified for ${pageUrl}`);
+  for (const [field, oldV, newV] of [
+    ['yoast_wpseo_title', current.yoast_wpseo_title || '', meta._yoast_wpseo_title],
+    ['yoast_wpseo_metadesc', current.yoast_wpseo_metadesc || '', meta._yoast_wpseo_metadesc],
+  ]) {
+    if (!newV) continue;
+    await pool.query(
+      `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+       VALUES ($1, $2, $3, $4, 'meta_fix', $5, $6, $7)`,
+      [projectId, current.wpId, pageUrl, current.title || '', field, oldV, newV]
+    );
+  }
+  return { changed: true, url: pageUrl, old_title: current.yoast_wpseo_title, new_title: meta._yoast_wpseo_title, old_desc: current.yoast_wpseo_metadesc, new_desc: meta._yoast_wpseo_metadesc };
+}
+
+// AI-fix meta for a set of pages given the issue context. Only changes what the issue requires.
+async function aiFixMetaForPages(project, projectId, pageUrls, contextText) {
+  const wpBase = (project.wordpress_url || '').replace(/\/$/, '');
+  const authHeaders = getWpAuthHeaders(project);
+  if (!wpBase || !authHeaders) throw new Error('WordPress credentials not configured');
+  if (!anthropic) throw new Error('AI not configured (ANTHROPIC_API_KEY missing)');
+  const pages = [];
+  for (const u of pageUrls.slice(0, 5)) {
+    const ref = await resolveWpPageByUrl(wpBase, authHeaders, u);
+    if (!ref) continue;
+    const cur = await readWpYoastMeta(wpBase, ref.id, authHeaders);
+    if (cur) pages.push({ url: u, title: cur.title, meta_title: cur.yoast_wpseo_title, meta_desc: cur.yoast_wpseo_metadesc });
+  }
+  if (!pages.length) throw new Error('None of the affected pages could be found in WordPress');
+  const isHome = (u) => { try { return new URL(u).pathname.replace(/\/+$/, '') === ''; } catch { return false; } };
+  const resp = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001', max_tokens: 1200,
+    messages: [{ role: 'user', content: `You are an SEO expert fixing meta tags on a live business website. Fix ONLY what the issue requires — leave good values alone.
+
+ISSUE:
+${contextText}
+
+BUSINESS: ${project.business_name || project.name} — ${project.industry || ''} in ${project.location || ''}
+
+PAGES (current values):
+${pages.map(p => `URL: ${p.url}${isHome(p.url) ? ' (HOMEPAGE)' : ''}\nPage title: ${p.title}\nMeta title: ${p.meta_title || '(empty)'}\nMeta description: ${p.meta_desc || '(empty)'}`).join('\n\n')}
+
+RULES:
+- Every meta title must be UNIQUE across these pages (50-60 chars, main keyword near the start).
+- If the HOMEPAGE shares a title with a service page, give the HOMEPAGE a brand-first title and keep the service page keyword-led.
+- Meta descriptions 120-155 chars with a call to action.
+- Only include a page if it needs changing; omit any field that should stay as-is.
+
+Return ONLY JSON: [{"url": "...", "new_title": "...", "new_desc": "..."}]` }]
+  });
+  let patches = [];
+  try { patches = JSON.parse(resp.content[0].text.match(/\[[\s\S]*\]/)[0]); } catch (e) { throw new Error('AI did not return valid fixes'); }
+  const results = [];
+  for (const p of (Array.isArray(patches) ? patches : [])) {
+    const pg = pages.find(x => String(x.url).replace(/\/+$/, '') === String(p.url || '').replace(/\/+$/, ''));
+    if (!pg || (!p.new_title && !p.new_desc)) continue;
+    try { results.push(await applyMetaInPlace(project, projectId, pg.url, { new_title: p.new_title, new_desc: p.new_desc })); }
+    catch (e) { results.push({ changed: false, url: pg.url, error: e.message }); }
+  }
+  if (!results.length) throw new Error('AI suggested no applicable changes');
+  try { await purgeCloudflareCache(project); } catch (e) {}
+  return results;
+}
+
+// Fix a meta finding IN PLACE from the Website Audit page — no transfer to other pages.
+app.post('/api/projects/:projectId/audit-findings/:findingId/fix-meta', async (req, res) => {
+  try {
+    const { projectId, findingId } = req.params;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const f = (await pool.query('SELECT * FROM audit_findings WHERE id=$1 AND project_id=$2', [findingId, projectId])).rows[0];
+    if (!f) return res.status(404).json({ error: 'Finding not found' });
+    const domain = (project.domain || '').replace(/^www\./, '');
+    const text = [f.title, f.description, f.current_value, f.recommendation].filter(Boolean).join('\n');
+    const urls = new Set();
+    for (const m of text.matchAll(/https?:\/\/[^\s"'<>)\],]+/g)) {
+      try { const u = new URL(m[0]); if (u.hostname.replace(/^www\./, '') === domain) urls.add(`https://${domain}${u.pathname.replace(/\/+$/, '')}/`); } catch (e) {}
+    }
+    for (const m of text.matchAll(/(?:^|[\s("',:])(\/[a-z0-9][a-z0-9\-\/]{2,})/gi)) {
+      const p = m[1].replace(/\/+$/, '');
+      if (!/\.(png|jpe?g|webp|gif|svg|css|js|xml|pdf|ico)$/i.test(p)) urls.add(`https://${domain}${p}/`);
+    }
+    if (/home ?page/i.test(text)) urls.add(`https://${domain}/`);
+    const pageUrls = [...urls];
+    if (!pageUrls.length) return res.status(400).json({ error: 'Could not identify the affected page URL(s) from this finding.' });
+    const results = await aiFixMetaForPages(project, projectId, pageUrls, text);
+    const okChanges = results.filter(r => r.changed);
+    const failed = results.filter(r => r.error);
+    // NEVER mark fixed when nothing changed
+    if (okChanges.length && !failed.length) await pool.query(`UPDATE audit_findings SET status='fixed', updated_at=NOW() WHERE id=$1`, [findingId]);
+    res.json({ ok: okChanges.length > 0, finding_fixed: okChanges.length > 0 && failed.length === 0, results,
+      message: okChanges.length ? `${okChanges.length} page(s) updated${failed.length ? `, ${failed.length} failed` : ''} — rollback in change history` : 'Nothing was changed' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Generic in-place AI meta fix for any page(s) — used wherever an issue is displayed.
+app.post('/api/projects/:projectId/fix-meta-inplace', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { page_urls, context } = req.body || {};
+    if (!Array.isArray(page_urls) || !page_urls.length) return res.status(400).json({ error: 'page_urls required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const results = await aiFixMetaForPages(project, projectId, page_urls, String(context || 'Improve the meta title and description.'));
+    const okChanges = results.filter(r => r.changed);
+    res.json({ ok: okChanges.length > 0, results,
+      message: okChanges.length ? `${okChanges.length} page(s) updated — rollback in change history` : 'Nothing was changed' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- Keyword Research: GSC + DataForSEO + AI ----
 app.post('/api/projects/:projectId/onpage-audit/research-keywords', async (req, res) => {
   const { projectId } = req.params;
@@ -51293,6 +51466,8 @@ app.post('/api/projects/:projectId/competing-pages/fix-duplicate', async (req, r
     const pathOf = (u) => { try { return new URL(u, 'https://x.invalid').pathname; } catch { return u; } };
     const srcPath = pathOf(url);
     const dstPath = pathOf(redirect_to);
+    // NEVER trash the homepage — a duplicate-TITLE with the homepage is a retitle job, not a delete.
+    if (srcPath.replace(/\/+$/, '') === '') return res.status(400).json({ error: 'Refusing to trash the homepage. If it shares a title with another page, retitle the homepage instead (Fix now — retitle homepage).' });
     const slug = srcPath.replace(/\/$/, '').split('/').pop();
 
     // 1. Resolve the WP page/post by slug (exact link match preferred)

@@ -7385,9 +7385,22 @@
                     </button>
                   </>
                 ) : isMetaFinding(f) ? (
-                  <button className="btn btn-primary" onClick={() => { setReviewFinding(null); if (setActiveTab) setActiveTab('onpage-audit'); }}
+                  <button className="btn btn-primary" onClick={async () => {
+                    setFixing(f.id);
+                    try {
+                      const r = await api(`/projects/${project.id}/audit-findings/${f.id}/fix-meta`, { method: 'POST' });
+                      if (r.error) throw new Error(r.error);
+                      const detail = (r.results || []).filter(x => x.changed).map(x => `${x.url.replace(/^https?:\/\/[^/]+/, '') || '/'} → "${x.new_title || x.new_desc}"`).join(' · ');
+                      setFixResult({ id: f.id, ok: r.ok, msg: `${r.message}${detail ? ' — ' + detail : ''}` });
+                      if (r.finding_fixed) {
+                        setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+                        setReviewFinding({ ...f, status: 'fixed' });
+                      }
+                    } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
+                    setFixing(null);
+                  }} disabled={fixing === f.id}
                     style={{ fontSize: 16, padding: '12px 28px' }}>
-                    <i className="fas fa-magic" style={{ marginRight: 8 }} />Fix in On-Page Audit
+                    {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 8 }} />Fixing meta...</> : <><i className="fas fa-magic" style={{ marginRight: 8 }} />Fix Now (AI)</>}
                   </button>
                 ) : isCopywriterFinding(f) ? (
                   <button className="btn" onClick={async () => {
@@ -7842,9 +7855,19 @@
                               </button>
                             </div>
                           ) : isMetaFinding(f) ? (
-                            <button className="btn btn-small btn-primary" onClick={(e) => { e.stopPropagation(); if (setActiveTab) setActiveTab('onpage-audit'); }}
+                            <button className="btn btn-small btn-primary" onClick={async (e) => {
+                              e.stopPropagation();
+                              setFixing(f.id);
+                              try {
+                                const r = await api(`/projects/${project.id}/audit-findings/${f.id}/fix-meta`, { method: 'POST' });
+                                if (r.error) throw new Error(r.error);
+                                setFixResult({ id: f.id, ok: r.ok, msg: r.message });
+                                if (r.finding_fixed) setFindings(prev => prev.map(x => x.id === f.id ? { ...x, status: 'fixed' } : x));
+                              } catch (err) { setFixResult({ id: f.id, ok: false, msg: err.message }); }
+                              setFixing(null);
+                            }} disabled={fixing === f.id}
                               style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
-                              <i className="fas fa-magic" style={{ marginRight: 4 }} />Fix in On-Page Audit
+                              {fixing === f.id ? <><i className="fas fa-spinner fa-spin" style={{ marginRight: 4 }} />Fixing...</> : <><i className="fas fa-magic" style={{ marginRight: 4 }} />Fix Now (AI)</>}
                             </button>
                           ) : isCopywriterFinding(f) ? (
                             <button className="btn btn-small" onClick={async (e) => {
@@ -37385,7 +37408,9 @@
                               const others = (c.pages || []).filter(p => !isPrim(p));
                               const dupeReason = (c.reasons || []).some(r => /duplicate/i.test(r.type || ''));
                               const noTraffic = others.length > 0 && others.every(p => (p.impressions || 0) === 0 && (p.clicks || 0) === 0);
-                              const action = dupeReason && noTraffic ? 'remove' : 'retarget';
+                              // Homepage sharing a title = RETITLE, never trash/redirect the homepage
+                              const retitlePage = (c.pages || []).find(p => p.fix_type === 'retitle' || (() => { try { return new URL(p.url).pathname.replace(/\/+$/, '') === '' && !p.is_primary; } catch { return false; } })());
+                              const action = retitlePage ? 'retitle' : (dupeReason && noTraffic ? 'remove' : 'retarget');
                               const primPath = path(c.primary_page || ((c.pages || []).find(p => isPrim(p)) || {}).url || '');
                               const loserList = others.map((p, i) => <React.Fragment key={i}>{i > 0 ? ' and ' : ''}<b>{path(p.url)}</b></React.Fragment>);
                               const secBox = (color) => ({ margin: '10px 0', padding: '11px 14px', borderRadius: 8, background: color + '12', border: '1px solid ' + color + '40', fontSize: 13.5, lineHeight: 1.65 });
@@ -37402,14 +37427,35 @@
                                   {/* 2. THE FIX — one action, chosen by data */}
                                   <div style={secBox('#22c55e')}>
                                     <b style={{ color: '#22c55e' }}>THE FIX (one action): </b>
-                                    {action === 'remove'
+                                    {action === 'retitle'
+                                      ? <>Do NOT delete or redirect anything. Give the <b>homepage</b> a brand-first title so <b>{primPath}</b> keeps the keyword-led title to itself. One click below does it.</>
+                                      : action === 'remove'
                                       ? <>Delete {loserList} and redirect its address to <b>{primPath}</b>. It's a copy with no visitors — nothing needs rewriting.</>
                                       : <>Keep <b>{primPath}</b> as THE page for this keyword. Give {loserList} a different topic — a new title, H1 and focus keyword. The plan below writes them for you.</>}
                                   </div>
                                   {/* 3. HOW — steps for that one action only */}
                                   <div style={secBox('#3b82f6')}>
                                     <b style={{ color: '#3b82f6' }}>HOW:</b>
-                                    {action === 'remove' ? (
+                                    {action === 'retitle' ? (
+                                      <div>
+                                        {(() => {
+                                          const fx = cpFix[c.keyword];
+                                          if (fx && fx.result) return <div style={{ margin: '8px 0', fontSize: 13, fontWeight: 600, color: fx.result.ok ? '#22c55e' : '#ef4444' }}><i className={`fas fa-${fx.result.ok ? 'circle-check' : 'circle-xmark'}`} style={{ marginRight: 6 }}></i>{fx.result.message || fx.result.error}{fx.result.ok && (fx.result.results || []).filter(x => x.changed && x.new_title).map((x, xi) => <div key={xi} style={{ fontWeight: 400, marginTop: 3 }}>New title: "{x.new_title}"</div>)}</div>;
+                                          return (
+                                            <button disabled={fx && fx.loading} onClick={async () => {
+                                              setCpFix(p => ({ ...p, [c.keyword]: { loading: true } }));
+                                              try {
+                                                const r = await api(`/projects/${pid}/fix-meta-inplace`, { method: 'POST', body: { page_urls: [retitlePage.url], context: `The homepage shares its meta title with ${primPath}. Give the HOMEPAGE a brand-first title (business name first, then what the business does + city). Do not touch ${primPath}.` } });
+                                                setCpFix(p => ({ ...p, [c.keyword]: { result: r } }));
+                                              } catch (e) { setCpFix(p => ({ ...p, [c.keyword]: { result: { ok: false, error: e.message } } })); }
+                                            }} style={{ margin: '8px 0', background: '#22c55e', color: '#fff', border: 'none', padding: '9px 16px', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: fx && fx.loading ? 0.7 : 1 }}>
+                                              {fx && fx.loading ? <><span className="spinner" style={{ marginRight: 6 }}></span>Retitling...</> : <><i className="fas fa-wand-magic-sparkles" style={{ marginRight: 6 }}></i>Fix it for me — retitle the homepage (AI)</>}
+                                            </button>
+                                          );
+                                        })()}
+                                        <div style={{ fontSize: 12, color: 'var(--text3)' }}>Applied with rollback history. Hit Re-scan afterwards — this issue closes once the titles differ.</div>
+                                      </div>
+                                    ) : action === 'remove' ? (
                                       <div>
                                         {(() => {
                                           const fx = cpFix[c.keyword];

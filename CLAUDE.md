@@ -572,3 +572,15 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 - Fixes executed via WordPress REST API (no custom plugins needed beyond seoroom-schema)
 - Schema generated deterministically from RC profile data (not AI-generated)
 - Speed handled by BerqWP (automatic, no API)
+
+## Standing Design Rule: Fix at the Point of Discovery (2026-07-04)
+
+Every issue the dashboard finds must be fixable at the closest place it is shown — no "send to X",
+no transfers, no navigating to another page to fix it. Applies to all projects, current and future.
+- Meta issues → in-place AI fix (`aiFixMetaForPages` / `POST /projects/:id/fix-meta-inplace`, findings
+  variant `POST /projects/:id/audit-findings/:fid/fix-meta`). Copywriter queue is ONLY for real
+  content rewrites (thin content), never meta.
+- Write-verification pattern: verify from the WP write RESPONSE body (immune to stale page caches),
+  fall back to read-back with one 2s retry. Never report failure when the write applied.
+- Never mark a finding/ticket fixed when nothing changed.
+- Homepage guards: never trash/redirect/slug-change the homepage; duplicate title with homepage = retitle homepage brand-first.
