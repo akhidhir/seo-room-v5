@@ -1351,7 +1351,8 @@
 
         const data = await res.json();
         if (!res.ok) {
-          const err = new Error(data.error || 'Request failed');
+          // Always say WHAT failed — a bare "Request failed" banner tells the user nothing.
+          const err = new Error(data.error || `Request failed (${res.status}) on ${String(path).split('?')[0]} — try again; if it repeats, the server may have restarted mid-request.`);
           err.canForce = data.canForce || false;
           err.status = res.status;
           throw err;
