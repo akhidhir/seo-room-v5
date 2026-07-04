@@ -19338,7 +19338,53 @@ app.post('/api/projects/:projectId/onpage-audit/fix', async (req, res) => {
           } catch (h1Err) { console.warn(`[onpage-fix] H1 fix error:`, h1Err.message); }
         }
 
-        results.push({ id: fix.id, success: true, changes: changes.length, h1Fixed });
+        // Handle SLUG change — the riskiest field: changes the page URL. Guarded:
+        // never the homepage, sanitised, applied slug verified, old URL must 301-redirect.
+        let slugResult = null;
+        if (fix.new_slug) {
+          try {
+            const wanted = String(fix.new_slug).toLowerCase().trim()
+              .replace(/^\/+|\/+$/g, '').split('/').pop()
+              .replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '');
+            const pageResp = await wpFetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, { headers: authHeaders });
+            const pageData = pageResp.ok ? await pageResp.json() : null;
+            const oldLink = pageData ? pageData.link : '';
+            const oldSlug = pageData ? pageData.slug : '';
+            const isHome = oldLink && (() => { try { return new URL(oldLink).pathname.replace(/\/+$/, '') === ''; } catch { return false; } })();
+            if (!wanted) slugResult = { changed: false, error: 'Invalid slug' };
+            else if (isHome) slugResult = { changed: false, error: 'Refusing to change the homepage URL' };
+            else if (!oldSlug || wanted === oldSlug) slugResult = { changed: false, skipped: true };
+            else {
+              const sw = await wpFetch(`${wpBase}/wp-json/wp/v2/${current.type}/${current.wpId}`, {
+                method: 'POST', headers: authHeaders, body: JSON.stringify({ slug: wanted })
+              });
+              if (!sw.ok) slugResult = { changed: false, error: `WP slug write failed (${sw.status})` };
+              else {
+                const updated = await sw.json();
+                const applied = updated.slug, newLink = updated.link;
+                // Verify the OLD URL now redirects (WP old-slug redirect) — critical for SEO safety
+                let redirectOk = false;
+                try {
+                  const chk = await fetch(oldLink, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
+                  const loc = chk.headers.get('location') || '';
+                  redirectOk = [301, 302, 308].includes(chk.status) && loc.includes(applied);
+                } catch (e) {}
+                await pool.query(
+                  `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+                   VALUES ($1, $2, $3, $4, 'slug_change', 'slug', $5, $6)`,
+                  [projectId, current.wpId, oldLink, fix.title || '', oldSlug, applied]
+                );
+                slugResult = { changed: true, old_slug: oldSlug, slug: applied, new_url: newLink, redirect_verified: redirectOk,
+                  warning: [applied !== wanted ? `WordPress adjusted the slug to "${applied}" (requested one was taken)` : null,
+                            !redirectOk ? 'Could not confirm the old URL redirects — check it manually and add a 301 if needed' : null].filter(Boolean).join('. ') || undefined };
+                try { await purgeCloudflareCache(project); } catch (e) {}
+                console.log(`[onpage-fix] Slug changed for page ${current.wpId}: ${oldSlug} → ${applied} (redirect ${redirectOk ? 'verified' : 'NOT verified'})`);
+              }
+            }
+          } catch (slugErr) { slugResult = { changed: false, error: slugErr.message }; }
+        }
+
+        results.push({ id: fix.id, success: true, changes: changes.length, h1Fixed, ...(slugResult ? { slug: slugResult } : {}) });
         console.log(`[onpage-fix] Fixed page ${fix.id} (${changes.length} fields) — verified ✓`);
       } catch (e) {
         results.push({ id: fix.id, success: false, error: e.message });

@@ -15346,7 +15346,8 @@
               id: s.id, url: pg?.url || '', title: pg?.title || '',
               new_meta_title: s.suggested_title,
               new_meta_desc: s.suggested_desc,
-              new_focus_keyword: s.suggested_keyword
+              new_focus_keyword: s.suggested_keyword,
+              ...(s.suggested_slug && s.suggested_slug.trim() ? { new_slug: s.suggested_slug.trim() } : {})
             };
           });
           const data = await api(`/projects/${project.id}/onpage-audit/fix`, {
@@ -15357,10 +15358,13 @@
             const successCount = data.results.filter(r => r.success).length;
             const failCount = data.results.filter(r => !r.success).length;
             const failErrors = data.results.filter(r => !r.success).map(r => r.error || 'Unknown error');
+            const slugNotes = data.results.filter(r => r.slug && (r.slug.changed || r.slug.error)).map(r => r.slug.changed
+              ? `URL changed → ${r.slug.new_url} (old address ${r.slug.redirect_verified ? '301-redirects ✓' : 'redirect NOT verified — check manually'})${r.slug.warning ? '\n⚠ ' + r.slug.warning : ''}`
+              : `Slug not changed: ${r.slug.error}`);
             if (failCount > 0) {
-              alert(`Applied fixes: ${successCount} succeeded, ${failCount} failed\n\nErrors:\n${failErrors.join('\n')}`);
+              alert(`Applied fixes: ${successCount} succeeded, ${failCount} failed\n\nErrors:\n${failErrors.join('\n')}${slugNotes.length ? '\n\n' + slugNotes.join('\n') : ''}`);
             } else {
-              alert(`Applied fixes: ${successCount} succeeded`);
+              alert(`Applied fixes: ${successCount} succeeded${slugNotes.length ? '\n\n' + slugNotes.join('\n') : ''}`);
             }
             if (successCount > 0) {
               setFixModal(null);
@@ -16137,13 +16141,34 @@
                       </div>
 
                       {/* Focus Keyword */}
-                      <div>
+                      <div style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 4 }}>Focus Keyword</div>
                         {pg.focusKeyword && <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 4, textDecoration: 'line-through' }}>{pg.focusKeyword}</div>}
                         {!pg.focusKeyword && <div style={{ fontSize: 11, color: '#ef4444', marginBottom: 4 }}>(not set)</div>}
                         <input type="text" value={s.suggested_keyword || ''} onChange={e => updateSuggestion(s.id, 'suggested_keyword', e.target.value)}
                           style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--card)', color: '#22c55e', fontSize: 13, boxSizing: 'border-box' }} />
                       </div>
+
+                      {/* URL Slug — optional, changes the page address */}
+                      {(() => {
+                        const curSlug = (() => { try { return new URL(pg.url).pathname.replace(/\/+$/, '').split('/').pop() || ''; } catch { return ''; } })();
+                        const isHome = (() => { try { return new URL(pg.url).pathname.replace(/\/+$/, '') === ''; } catch { return false; } })();
+                        if (isHome) return null; // homepage URL is never changeable
+                        return (
+                          <div>
+                            <div style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: 600, color: 'var(--text3)', marginBottom: 4 }}>URL Slug <span style={{ fontWeight: 400, textTransform: 'none' }}>(optional — leave empty to keep the current URL)</span></div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>current: /{curSlug}/</div>
+                            <input type="text" value={s.suggested_slug || ''} placeholder="new-url-slug" onChange={e => updateSuggestion(s.id, 'suggested_slug', e.target.value)}
+                              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid ' + (s.suggested_slug ? '#f59e0b' : 'var(--border)'), background: 'var(--card)', color: s.suggested_slug ? '#f59e0b' : 'var(--text1)', fontSize: 13, boxSizing: 'border-box' }} />
+                            {s.suggested_slug && s.suggested_slug.trim() && s.suggested_slug.trim() !== curSlug && (
+                              <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 4 }}>
+                                <i className="fas fa-triangle-exclamation" style={{ marginRight: 5 }} />
+                                The page URL will change to /{s.suggested_slug.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-')}/. The old address will 301-redirect automatically (verified on apply). Only do this if the new slug clearly better matches the focus keyword.
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
