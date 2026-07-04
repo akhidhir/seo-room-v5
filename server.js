@@ -21031,9 +21031,7 @@ app.post('/api/projects/:projectId/onpage-audit/fix-content', async (req, res) =
         messages: [{ role: 'user', content: `Rewrite this page heading so it naturally covers the keyword "${focusKw}". You may inflect or reorder the keyword's words for grammar — never paste it as an ungrammatical chunk. Concise (max ~10 words), natural. If it cannot be done naturally, return exactly NONE. Current heading: "${h1Text}". Return ONLY the new heading text — no quotes, no explanation.` }] });
       const newH1 = String(resp.content[0].text || '').trim().replace(/^["']|["']$/g, '');
       if (newH1 && newH1 !== 'NONE' && newH1 !== h1Text && kwOk(newH1)) {
-        await pool.query(`INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,'keyword-h1',$5,$6,$7)`,
-          [projectId, page_id, pageUrl, pageTitle, h1Text, newH1, `Add focus keyword "${focusKw}" to the H1`]);
-        queued.push({ kind: 'H1', find: h1Text, replace: newH1 });
+        queued.push({ kind: 'H1', find: h1Text, replace: newH1, _type: 'keyword-h1', _reason: `Add focus keyword "${focusKw}" to the H1` });
       }
     }
 
@@ -21043,14 +21041,19 @@ app.post('/api/projects/:projectId/onpage-audit/fix-content', async (req, res) =
         messages: [{ role: 'user', content: `Work the keyword "${focusKw}" naturally into ONE existing sentence from the first half of this page. You may inflect the words, reorder them, or add small connecting words (in/for/a/the) between them — Google matches close variants. NEVER paste the keyword as an ungrammatical chunk.\nGOOD (keyword "slow Mac fix Perth"): "...we fix slow Macs across Perth quickly."\nBAD: "...the frustration of a slow Mac fix Perth specialists recommend."\nIf it cannot be done so a human would never notice, return {"find":"","replace":""}.\nReturn ONLY JSON: {"find":"the exact original sentence copied character-for-character","replace":"the natural rewrite"}\n\nPAGE TEXT:\n${contentPlain.substring(0, 2000)}` }] });
       let patch = null; try { patch = JSON.parse(resp.content[0].text.match(/\{[\s\S]*\}/)[0]); } catch {}
       if (patch && patch.find && patch.replace && kwOk(patch.replace)) {
-        await pool.query(`INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,'keyword-content',$5,$6,$7)`,
-          [projectId, page_id, pageUrl, pageTitle, patch.find, patch.replace, `Weave focus keyword "${focusKw}" into content`]);
-        queued.push({ kind: 'Content', find: patch.find, replace: patch.replace });
+        queued.push({ kind: 'Content', find: patch.find, replace: patch.replace, _type: 'keyword-content', _reason: `Weave focus keyword "${focusKw}" into content` });
       }
     }
 
-    res.json({ ok: true, queued: queued.length, changes: queued, source: sourceMode,
-      message: queued.length ? `${queued.length} change(s) queued — open "Review AI Changes" to approve` : 'Focus keyword already in the H1 and content — nothing to fix.' });
+    // SECOND-OPINION QA: an independent AI copy-editor reviews every candidate; only passes reach the queue
+    const qa = await aiReviewTextChanges(project, queued, pageTitle);
+    for (const c of qa.passed) {
+      await pool.query(`INSERT INTO pending_changes (project_id, page_id, page_url, page_title, change_type, find_text, replace_text, reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [projectId, page_id, pageUrl, pageTitle, c._type, c.find, c.replace, c._reason]);
+    }
+
+    res.json({ ok: true, queued: qa.passed.length, changes: qa.passed, quality_rejected: qa.rejected.length, source: sourceMode,
+      message: qa.passed.length ? `${qa.passed.length} change(s) queued — open "Review AI Changes" to approve${qa.rejected.length ? ` (${qa.rejected.length} draft(s) binned by the quality checker)` : ''}` : (qa.rejected.length ? `The quality checker binned all ${qa.rejected.length} draft(s) — no change was good enough to show you. Try again or adjust the focus keyword.` : 'Focus keyword already in the H1 and content — nothing to fix.') });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -21188,6 +21191,16 @@ Return ONLY JSON: {"title":"...","metadesc":"...","focuskw":"..."}` }] });
           const p = JSON.parse(cr.content[0].text.match(/\{[\s\S]*\}/)[0]);
           if (p && p.find && p.replace && kwOkA(p.replace)) sentencePatch = p;
         } catch (e) {}
+      }
+
+      // SECOND-OPINION QA — fix-all applies directly, so nothing unreviewed may pass
+      if (newH1 || sentencePatch) {
+        const cand = [];
+        if (newH1) cand.push({ kind: 'H1', find: h1Text, replace: newH1 });
+        if (sentencePatch) cand.push({ kind: 'Content', find: sentencePatch.find, replace: sentencePatch.replace });
+        const qa = await aiReviewTextChanges(project, cand, pageTitle);
+        if (!qa.passed.some(c => c.kind === 'H1')) newH1 = null;
+        if (!qa.passed.some(c => c.kind === 'Content')) sentencePatch = null;
       }
 
       if (sourceMode === 'elementor' && (newH1 || sentencePatch)) {
@@ -21347,6 +21360,38 @@ app.get('/api/system/health', async (req, res) => {
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// SECOND-OPINION QA — a separate AI reviews every generated text change BEFORE it is queued or
+// applied: natural grammar, no keyword stuffing, meaning preserved, better than the original.
+// FAIL CLOSED: if the reviewer itself errors, nothing ships — on a live client site, no change
+// is always better than a bad change.
+async function aiReviewTextChanges(project, changes, pageTitle) {
+  if (!changes || !changes.length) return { passed: [], rejected: [] };
+  try {
+    const resp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
+      messages: [{ role: 'user', content: `You are a strict copy editor for a professional business website ("${project.business_name || project.name || ''}", ${project.industry || 'local business'}). Review each proposed text change below. REJECT any change where the NEW text: has a grammar error, reads like keyword stuffing, sounds unnatural read aloud, changes the meaning, or is not clearly better than the OLD text. Judge harshly — a bad change on a live client site is worse than no change.
+
+Page: "${pageTitle}"
+
+${changes.map((c, i) => `#${i} [${c.kind || 'text'}]\nOLD: ${String(c.find).slice(0, 300)}\nNEW: ${String(c.replace).slice(0, 300)}`).join('\n\n')}
+
+Return ONLY JSON: [{"i": 0, "verdict": "pass" | "reject", "reason": "short reason if rejected"}]` }]
+    });
+    const verdicts = JSON.parse(resp.content[0].text.match(/\[[\s\S]*\]/)[0]);
+    const passed = [], rejected = [];
+    changes.forEach((c, i) => {
+      const v = (verdicts || []).find(x => x && x.i === i);
+      if (v && v.verdict === 'pass') passed.push(c);
+      else rejected.push({ ...c, reject_reason: (v && v.reason) || 'no verdict returned' });
+    });
+    if (rejected.length) console.log(`[qa-review] rejected ${rejected.length}/${changes.length} on "${pageTitle}": ${rejected.map(r => r.reject_reason).join('; ')}`);
+    return { passed, rejected };
+  } catch (e) {
+    console.warn('[qa-review] reviewer unavailable — failing closed:', e.message);
+    return { passed: [], rejected: (changes || []).map(c => ({ ...c, reject_reason: 'quality check unavailable: ' + e.message })) };
+  }
+}
 
 // ===== QA GATE — pending AI content changes =====
 async function applyPendingChange(project, ch) {
@@ -22028,6 +22073,21 @@ ${plain}` }]
     }
   };
   await Promise.all([kwWorker(), kwWorker(), kwWorker(), kwWorker(), kwWorker()]);
+
+  // SECOND-OPINION QA: an independent AI copy-editor reviews every draft (batches of 10);
+  // only passes reach the human review queue.
+  job.phase = 'Quality-checking drafts';
+  const reviewItems = [];
+  for (let i = 0; i < missingKwContent.length; i++) {
+    const r = kwPatches[i];
+    if (r && r.find && r.replace) reviewItems.push({ idx: i, kind: (missingKwContent[i].p.title || 'page'), find: r.find, replace: r.replace });
+  }
+  const qaPassIdx = new Set();
+  for (let i = 0; i < reviewItems.length; i += 10) {
+    const qa = await aiReviewTextChanges(project, reviewItems.slice(i, i + 10), 'multiple pages');
+    for (const p of qa.passed) qaPassIdx.add(p.idx);
+  }
+
   // QA GATE: content changes are NOT written directly — they queue for human review
   job.phase = 'Queueing content changes for review';
   job.total = missingKwContent.length; job.done = 0;
@@ -22035,6 +22095,8 @@ ${plain}` }]
     const m = missingKwContent[i];
     const r = kwPatches[i];
     if (!r || !r.find || !r.replace) { job.errors++; job.done++; continue; }
+    // Binned by the second-opinion quality checker
+    if (!qaPassIdx.has(i)) { job.errors++; job.done++; continue; }
     // The rewrite must actually cover the keyword (all significant words) — drop lost-keyword patches
     {
       const rl = String(r.replace).toLowerCase();
