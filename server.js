@@ -50770,7 +50770,19 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
     for (const r of rows) { if (!byKw.has(r.keyword)) byKw.set(r.keyword, []); byKw.get(r.keyword).push(r); }
 
     // On-page fields (title, H1, meta, focus keyword) from the On-Page Audit cache, plugin-pushed titles as fallback.
-    const normU = (u) => (u || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '').toLowerCase();
+    // Normalise to a PATH so absolute (https://domain/x/) and relative (/x/) forms of the same page
+    // collapse to one key — the on-page cache stores relative URLs while GSC/crawl use absolute ones,
+    // and without this the same page looks like two "duplicate" pages competing with each other.
+    const normU = (u) => {
+      let s = String(u || '').trim().toLowerCase();
+      if (!s) return '';
+      s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
+      const dl = domain.toLowerCase().replace(/^www\./, '');
+      if (s === dl) s = '/';
+      else if (s.startsWith(dl + '/')) s = s.slice(dl.length);
+      s = s.split('#')[0].replace(/\/+$/, '');
+      return s || '/';
+    };
     const slugOf = (u) => { try { return new URL(u).pathname.toLowerCase(); } catch { return (u || '').toLowerCase(); } };
     const onpage = new Map();
     try {
@@ -50994,13 +51006,28 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
     // ── Duplicate-page detection (does NOT need GSC) — catches near-duplicate pages such as /home and
     //    /home-new-copy that have little/no search traffic, which the query-based pass above can't see. ──
     try {
-      const urlSet = new Map(); // normU -> { url, title }
-      for (const [u, op] of onpage) urlSet.set(u, { url: op.url || `https://${u}`, title: op.metaTitle || op.title || '' });
-      for (const [u, pp] of pushed) if (!urlSet.has(u)) urlSet.set(u, { url: pp.url || `https://${u}`, title: pp.title || '' });
+      const urlSet = new Map(); // normU(path) -> { url (always absolute), title }
+      // Absolutise: the on-page cache stores relative paths; keep every stored URL absolute so
+      // links render correctly and the same page never appears in two forms.
+      const absU = (u) => {
+        const s = String(u || '').trim();
+        if (!s) return '';
+        if (/^https?:\/\//i.test(s)) return s;
+        return `https://${domain}${s.startsWith('/') ? s : '/' + s}`;
+      };
+      const addU = (rawUrl, title) => {
+        const a = absU(rawUrl);
+        if (!a) return;
+        const k = normU(a);
+        if (!k || urlSet.has(k)) return;
+        urlSet.set(k, { url: a, title: title || '' });
+      };
+      for (const [, op] of onpage) addU(op.url, op.metaTitle || op.title);
+      for (const [, pp] of pushed) addU(pp.url, pp.title);
       try {
         const authHeaders = getWpAuthHeaders(project);
         const discovered = await discoverPages(`https://${domain}`, project.wordpress_url, authHeaders);
-        for (const d of (discovered || [])) { const u = normU(d.url); if (u && !urlSet.has(u)) urlSet.set(u, { url: d.url, title: d.title || '' }); }
+        for (const d of (discovered || [])) addU(d.url, d.title);
       } catch (e) {}
 
       const COPY_SUFFIX = /[-_](new[-_]copy|copy|new|old|draft|test|temp|backup|clone|duplicate|v\d+)$/i;
@@ -51015,7 +51042,8 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
 
       const seen = new Set();
       const addDup = (members, label) => {
-        const urls = [...new Set(members.map(m => m.url))];
+        // Dedupe by normalised path — two URL forms of the SAME page are never a duplicate pair.
+        const urls = [...new Map(members.map(m => [normU(m.url), m.url])).values()];
         if (urls.length < 2) return;
         const key = urls.map(normU).sort().join('|'); if (seen.has(key)) return; seen.add(key);
         const primary = urls.slice().sort((a, b) => (COPY_SUFFIX.test(pathOf(a)) ? 1 : 0) - (COPY_SUFFIX.test(pathOf(b)) ? 1 : 0) || pathOf(a).length - pathOf(b).length)[0];
