@@ -51041,8 +51041,53 @@ app.post('/api/projects/:projectId/competing-pages/scan', async (req, res) => {
       medium: competing.filter(c => c.severity === 'medium').length,
       impressions_at_stake: competing.filter(c => c.is_real_issue).reduce((s, c) => s + c.total_impressions, 0),
     };
+    // ── WRONG PAGE RANKING — Google ranks a blog post where the service (money) page should. ──
+    // Evidence-based: BOTH a post and a page rank in GSC for the same commercial query, and the
+    // post clearly outranks the page. Informational queries are skipped — a blog ranking for
+    // "how to fix X" is correct behaviour, not a problem.
+    const wrongPage = [];
+    try {
+      const INFO_RE = /^(how|what|why|when|where|which|who|can|do|does|is|are|should|guide|tips?|vs|versus|difference|meaning|signs?)\b|\?$/i;
+      const homeNorm = normU(`https://${domain}`);
+      const typeOf = (u) => {
+        const op = onpage.get(normU(u));
+        if (op && op.wpType) return op.wpType; // authoritative: 'page' | 'post' from the on-page audit
+        const p = pathOf(u).toLowerCase();
+        if (/\/(blog|news|articles?|category|tag|author)\//.test(p) || /\/\d{4}\/\d{2}\//.test(p)) return 'post';
+        return null; // unknown — never guess
+      };
+      for (const [kw, allP] of byKw) {
+        const kwl = kw.toLowerCase();
+        if (isBranded(kwl) || INFO_RE.test(kwl)) continue;
+        const merged = new Map();
+        for (const p of allP) {
+          const u = normU(p.page);
+          const cur = merged.get(u);
+          if (!cur) merged.set(u, { url: p.page, clicks: p.clicks, impressions: p.impressions, position: p.position });
+          else { cur.clicks += p.clicks; cur.impressions += p.impressions; cur.position = Math.min(cur.position, p.position); }
+        }
+        const rws = [...merged.values()];
+        const totImpr = rws.reduce((s, r) => s + r.impressions, 0);
+        if (totImpr < 20) continue;
+        const posts = rws.filter(r => typeOf(r.url) === 'post');
+        const moneyPages = rws.filter(r => typeOf(r.url) === 'page' && normU(r.url) !== homeNorm);
+        if (!posts.length || !moneyPages.length) continue;
+        const bestPost = [...posts].sort((a, b) => a.position - b.position)[0];
+        const bestMoney = [...moneyPages].sort((a, b) => a.position - b.position)[0];
+        if (bestPost.position + 3 >= bestMoney.position) continue; // post must CLEARLY outrank
+        wrongPage.push({
+          keyword: kw, impressions: totImpr, clicks: rws.reduce((s, r) => s + r.clicks, 0),
+          blog: { url: bestPost.url, position: Math.round(bestPost.position * 10) / 10, clicks: bestPost.clicks, impressions: bestPost.impressions },
+          money: { url: bestMoney.url, position: Math.round(bestMoney.position * 10) / 10, clicks: bestMoney.clicks, impressions: bestMoney.impressions },
+          fix: `Google ranks the blog post (#${Math.round(bestPost.position)}) instead of the service page (#${Math.round(bestMoney.position)}) for "${kw}". Link the blog to the service page with the exact anchor "${kw}" and sharpen the service page's title/H1 for it.`,
+        });
+      }
+      wrongPage.sort((a, b) => b.impressions - a.impressions);
+    } catch (e) { console.log('[competing-pages] wrong-page pass skipped:', e.message); }
+    summary.wrong_page = wrongPage.length;
+
     const analyzed = { queries: byKw.size, pages: new Set(rows.map(r => normU(r.page))).size, gsc_rows: rows.length };
-    const payload = { competing, summary, analyzed, site: matchedSite, range: { startDate, endDate }, scanned_at: new Date().toISOString() };
+    const payload = { competing, wrong_page: wrongPage, summary, analyzed, site: matchedSite, range: { startDate, endDate }, scanned_at: new Date().toISOString() };
     await pool.query(`INSERT INTO project_integrations (project_id, kind, config) VALUES ($1,'competing_pages_cache',$2) ON CONFLICT (project_id, kind) DO UPDATE SET config=$2`, [projectId, JSON.stringify(payload)]).catch(() => {});
     res.json(payload);
   } catch (e) { console.error('[competing-pages]', e.message); res.status(500).json({ error: e.message }); }
@@ -51059,6 +51104,52 @@ app.get('/api/projects/:projectId/competing-pages', async (req, res) => {
 
 // Beginner-friendly, step-by-step fix plan for one competing-pages keyword: exact replacement titles/H1/
 // focus keywords and the precise internal links to add. Cached per keyword.
+// POST /api/projects/:projectId/competing-pages/fix-wrong-page — one click: add an exact-anchor
+// internal link from the outranking blog post to the service (money) page, so Google switches to
+// ranking the right page. Inline anchor first; guaranteed Related-reading fallback if no anchor fits.
+app.post('/api/projects/:projectId/competing-pages/fix-wrong-page', async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { keyword, blog_url, money_url } = req.body || {};
+  try {
+    if (!keyword || !blog_url || !money_url) return res.status(400).json({ error: 'keyword, blog_url and money_url required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!getWpAuthHeaders(project)) return res.status(400).json({ error: 'WordPress credentials not configured (Project Settings).' });
+
+    // 1. Try to wrap the exact keyword anchor inside the blog post's existing text
+    let placed = false, method = null;
+    try {
+      const r = await callPluginApi(project, '/insert-links', 'POST', { url: blog_url, links: [{ anchor: keyword, target: money_url }] });
+      placed = !!(r && (r.inserted || []).map(a => (a || '').toLowerCase().trim()).includes(keyword.toLowerCase().trim()));
+      if (placed) method = 'inline';
+    } catch (e) {}
+    // 2. Guaranteed fallback — append one tidy Related-reading line
+    if (!placed) {
+      const html = `<div class="seoroom-related"><p><strong>Related service:</strong> <a href="${money_url}">${keyword.replace(/\b\w/g, c => c.toUpperCase())}</a>.</p></div>`;
+      const marker = 'seoroom-wp-' + Date.now().toString(36);
+      const fb = await callPluginApi(project, '/insert-content-block', 'POST', { url: blog_url, html, marker });
+      placed = !!(fb && fb.ok && (fb.inserted || fb.already));
+      if (placed) method = 'block';
+    }
+    if (!placed) return res.status(502).json({ error: 'Could not write the link into the blog post — check the SEO Room plugin is active on the site.' });
+
+    // Rollback history + cache purge
+    try {
+      await pool.query(
+        `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+         VALUES ($1, 0, $2, '', 'wrong_page_fix', 'post_content', '[no link]', $3)`,
+        [projectId, blog_url, `<a href="${money_url}">${keyword}</a> (${method})`]
+      );
+    } catch (e) {}
+    try { await purgeCloudflareCache(project, [blog_url]); } catch (e) {}
+    console.log(`[fix-wrong-page] project ${projectId}: "${keyword}" — linked ${blog_url} → ${money_url} (${method})`);
+    res.json({ ok: true, method, message: method === 'inline'
+      ? `Linked the blog to the service page with the exact anchor "${keyword}" inside the text.`
+      : `No natural sentence contained "${keyword}" — added a tidy "Related service" line linking to the service page instead.`
+      + ' Next: sharpen the service page\'s title/H1 for this keyword in On-Page Audit & Fix. Google usually switches pages within a few weeks.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/projects/:projectId/competing-pages/fix-duplicate — one click: trash the duplicate page + 301 it to the primary
 app.post('/api/projects/:projectId/competing-pages/fix-duplicate', async (req, res) => {
   const projectId = parseInt(req.params.projectId);

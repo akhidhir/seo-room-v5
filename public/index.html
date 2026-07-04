@@ -12689,28 +12689,25 @@
             })()
           ),
           e('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-            // 410 All Junk — one-click server-side sweep of spam/bot/malformed (never touches real pages)
+            // ONE 410 button, context-aware: rows ticked → 410 exactly those; nothing ticked → clear the junk.
             (() => {
+              const hasSelection = selected404s.size > 0;
               const junkCount = fourOhFours.filter(x => ['spam','bot','malformed'].includes(x._category)).length;
-              return junkCount > 0 && e('button', {
-                style: { ...btnStyle('#d946ef'), padding: '5px 12px', fontSize: 12, background: 'rgba(217,70,239,0.15)', color: '#d946ef', border: '1px solid rgba(217,70,239,0.3)' },
-                onClick: autoFix410Junk,
-                disabled: auto410ing,
-                title: 'Auto-410 every spam, bot-probe and malformed 404. Real pages are left for redirect decisions. Also runs automatically each day.'
+              if (!hasSelection && junkCount === 0 && !filtered404s.length) return null;
+              const busy410 = auto410ing || bulk410ing;
+              return e('button', {
+                style: { ...btnStyle(hasSelection ? '#ef4444' : '#d946ef'), padding: '5px 12px', fontSize: 12, background: hasSelection ? 'rgba(239,68,68,0.15)' : 'rgba(217,70,239,0.15)', color: hasSelection ? '#ef4444' : '#d946ef', border: '1px solid ' + (hasSelection ? 'rgba(239,68,68,0.3)' : 'rgba(217,70,239,0.3)') },
+                onClick: hasSelection ? bulk410Selected : autoFix410Junk,
+                disabled: busy410 || (!hasSelection && junkCount === 0),
+                title: hasSelection
+                  ? `Marks the ${selected404s.size} ticked URL(s) as 410 Gone — your call, includes real pages. Reversible from Redirects.`
+                  : (junkCount ? 'Auto-410 every spam, bot-probe and malformed 404. Real pages are never touched — tick rows to 410 them deliberately.' : 'No junk to clear. Tick specific rows to 410 them.')
               },
-                auto410ing ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin' }), ' Clearing junk…') :
-                e('span', null, e('i', { className: 'fas fa-skull-crossbones' }), ` 410 All Junk (${junkCount})`)
+                busy410 ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin' }), bulk410ing ? ` ${bulk410Progress?.done || 0}/${bulk410Progress?.total || 0}` : ' Clearing junk…') :
+                hasSelection ? e('span', null, e('i', { className: 'fas fa-ban' }), ` 410 Selected (${selected404s.size})`) :
+                e('span', null, e('i', { className: 'fas fa-skull-crossbones' }), ` Clear Junk (${junkCount})`)
               );
             })(),
-            // Bulk 410 — always available, works on selected or all filtered
-            filtered404s.length > 0 && e('button', {
-              style: { ...btnStyle('#ef4444'), padding: '5px 12px', fontSize: 12, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' },
-              onClick: bulk410Selected,
-              disabled: bulk410ing
-            },
-              bulk410ing ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin' }), ` ${bulk410Progress?.done || 0}/${bulk410Progress?.total || 0}`) :
-              e('span', null, e('i', { className: 'fas fa-ban' }), selected404s.size > 0 ? ` 410 Selected (${selected404s.size})` : ` 410 Junk (${filtered404s.filter(x => ['spam','bot','malformed','noise','preview'].includes(x._category)).length})`)
-            ),
             e('button', { style: btnStyle('#ef4444'), onClick: handleClearAll404s, disabled: clearingAll },
               clearingAll ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('i', { className: 'fas fa-trash' }),
               clearingAll ? ' Clearing...' : ' Clear All'
@@ -37174,6 +37171,7 @@
       const [cpPlan, setCpPlan] = useState({}); // keyword -> {loading, data, error}
       const [showDetail, setShowDetail] = useState({}); // keyword -> bool (technical details collapsed by default)
       const [cpFix, setCpFix] = useState({}); // keyword -> {loading, result} for one-click duplicate fix
+      const [wpFix, setWpFix] = useState({}); // keyword -> {loading, done, msg, error} for wrong-page fix
       const getPlan = async (c) => {
         setCpPlan(p => ({ ...p, [c.keyword]: { loading: true } }));
         try {
@@ -37268,6 +37266,42 @@
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>{rows.length > 0 ? `${rows.length} real cannibalization issue${rows.length > 1 ? 's' : ''} to fix` : 'Showing genuine SEO issues only'}</span>
                 <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>Last scan: {data.scanned_at ? new Date(data.scanned_at).toLocaleString() : '-'}</span>
               </div>
+
+              {/* WRONG PAGE RANKING — Google ranks a blog post where the service page should rank */}
+              {(data.wrong_page || []).length > 0 && (
+                <div style={{ background: 'var(--card)', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-shuffle" style={{ marginRight: 8, color: '#a78bfa' }} />Wrong page ranking ({data.wrong_page.length})</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 8 }}>Google ranks a <b>blog post</b> for these commercial keywords while your <b>service page</b> sits lower — the money page loses the click. One click links the blog to the service page with the exact keyword anchor; then sharpen the service page's title/H1 in On-Page Audit & Fix.</div>
+                  {data.wrong_page.map((w, wi) => {
+                    const st = wpFix[w.keyword] || {};
+                    const pth = (u) => { try { return new URL(u).pathname; } catch { return u; } };
+                    return (
+                      <div key={wi} style={{ padding: '10px 0', borderTop: wi ? '1px solid var(--border)' : 'none' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                          <b style={{ fontSize: 14 }}>{w.keyword}</b>
+                          <span style={{ fontSize: 12, color: 'var(--text3)' }}>{w.impressions} impressions · {w.clicks} clicks</span>
+                          <button disabled={st.loading || st.done} onClick={async () => {
+                            setWpFix(p => ({ ...p, [w.keyword]: { loading: true } }));
+                            try {
+                              const r = await api(`/projects/${pid}/competing-pages/fix-wrong-page`, { method: 'POST', body: { keyword: w.keyword, blog_url: w.blog.url, money_url: w.money.url } });
+                              setWpFix(p => ({ ...p, [w.keyword]: r && r.ok ? { done: true, msg: r.message } : { error: (r && r.error) || 'Fix failed' } }));
+                            } catch (e) { setWpFix(p => ({ ...p, [w.keyword]: { error: e.message } })); }
+                          }} style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, border: 'none', cursor: st.done ? 'default' : 'pointer', background: st.done ? 'rgba(34,197,94,0.2)' : '#8b5cf6', color: st.done ? '#22c55e' : '#fff' }}>
+                            {st.loading ? 'Fixing…' : st.done ? '✓ Linked' : 'Fix — link blog → service page'}
+                          </button>
+                        </div>
+                        <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 4 }}>
+                          Blog <b>#{w.blog.position}</b>: <a href={w.blog.url} target="_blank" rel="noopener" style={{ color: '#a78bfa' }}>{pth(w.blog.url)}</a>
+                          <span style={{ margin: '0 8px', color: 'var(--text3)' }}>outranks</span>
+                          Service page <b>#{w.money.position}</b>: <a href={w.money.url} target="_blank" rel="noopener" style={{ color: '#22c55e' }}>{pth(w.money.url)}</a>
+                        </div>
+                        {st.done && st.msg && <div style={{ fontSize: 12, color: '#22c55e', marginTop: 4 }}><i className="fas fa-circle-check" style={{ marginRight: 5 }} />{st.msg}</div>}
+                        {st.error && <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>{st.error}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
                 <div style={{ maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
