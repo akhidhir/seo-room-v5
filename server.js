@@ -19868,7 +19868,8 @@ Return JSON: {"modified_content": "<full HTML with links>", "links_added": [{"an
 
 Page: ${pageData.title?.rendered || pageData.title?.raw || ''}
 
-Available link targets (use the FOCUS KEYWORD as anchor text):
+Available link targets (use the FOCUS KEYWORD as anchor text).
+CRITICAL: href URLs must be copied EXACTLY from this list — do NOT invent, shorten or guess URLs; any other URL will be rejected:
 ${linkTargets.map(t => `- "${t.title}" | focus keyword: "${t.focus_keyword || 'none'}" → ${t.url}`).join('\n')}
 
 Current content:
@@ -19886,6 +19887,37 @@ ${contentForAI.slice(0, 12000)}` }],
 
     if (!parsed.links_added?.length) {
       return res.json({ success: false, message: 'AI could not find suitable places to add links', links_added: [] });
+    }
+
+    // ---- VALIDATE AI LINKS (never trust invented URLs) ----
+    // Every NEW link must point to a REAL page from linkTargets, and never to the page itself.
+    // Invalid/self links are UNWRAPPED (text kept, <a> removed) — no 404s can ever be inserted.
+    {
+      const siteBase = `https://${(project.domain || '').replace(/^www\./, '')}`;
+      const normP = (u) => { try { return new URL(u, siteBase).pathname.replace(/\/+$/, '').toLowerCase() || '/'; } catch { return String(u || '').toLowerCase().replace(/\/+$/, '') || '/'; } };
+      const validByPath = new Map(linkTargets.map(t => [normP(t.url), t.url]));
+      const selfPath = normP(pageData.link || '');
+      const originalContent = elementorData ? JSON.stringify(elementorData) : (pageData.content?.raw || pageData.content?.rendered || '');
+      const dropped = [];
+      const sanitizeHtml = (html) => String(html).replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (m, href, inner) => {
+        if (originalContent.includes(`"${href}"`) || originalContent.includes(`'${href}'`) || originalContent.includes(href.replace(/\//g, '\\/'))) return m; // pre-existing link — keep
+        const p = normP(href);
+        if (p === selfPath) { dropped.push({ href, why: 'self-link' }); return inner; }
+        const real = validByPath.get(p);
+        if (!real) { dropped.push({ href, why: 'not a real page' }); return inner; }
+        if (href !== real) return m.replace(href, real); // normalise relative → the exact live URL
+        return m;
+      });
+      if (parsed.modified_content) parsed.modified_content = sanitizeHtml(parsed.modified_content);
+      if (Array.isArray(parsed.widgets)) for (const w of parsed.widgets) if (w.modified_content) w.modified_content = sanitizeHtml(w.modified_content);
+      parsed.links_added = (parsed.links_added || []).filter(l => {
+        const p = normP(l.url);
+        if (p === selfPath || !validByPath.has(p)) return false;
+        l.url = validByPath.get(p);
+        return true;
+      });
+      if (dropped.length) console.log(`[add-links] Rejected ${dropped.length} invented/self link(s): ${dropped.map(d => `${d.href} (${d.why})`).join(', ')}`);
+      if (!parsed.links_added.length) return res.json({ success: false, message: 'AI only suggested invalid link targets (rejected to protect the site) — try again', links_added: [] });
     }
 
     // Preview mode — return suggestions without applying
