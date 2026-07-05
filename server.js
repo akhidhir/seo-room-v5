@@ -41244,12 +41244,32 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
         return res.json({ maps_status: 'idle', maps_keywords: row.maps_keywords || [], maps_count: row.maps_count || 0, maps_cost: row.maps_cost || 0 });
       }
     }
+    // No saved scan point (older scans) → compute the proven-ranking suburb so "view on
+    // Google Maps" links always carry real coordinates instead of falling back to the user's IP.
+    let mapsCenter = row.maps_center || null;
+    if (!mapsCenter) {
+      try {
+        const best = await pool.query(
+          `SELECT LOWER(location) AS loc, COUNT(*) AS n FROM rank_tracking
+           WHERE project_id=$1 AND maps_position IS NOT NULL AND maps_position <= 10 AND COALESCE(location,'') != ''
+           GROUP BY 1 ORDER BY n DESC LIMIT 1`, [req.params.projectId]);
+        const loc = best.rows[0]?.loc?.split(',')[0].trim();
+        if (loc && SUBURB_GPS[loc]) mapsCenter = { ...SUBURB_GPS[loc], label: `${loc} (proven ranking suburb)` };
+      } catch (e) {}
+      if (!mapsCenter) {
+        try {
+          const proj = (await pool.query('SELECT location FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+          const city = (proj?.location || '').toLowerCase().split(',')[0].trim();
+          if (city && SUBURB_GPS[city]) mapsCenter = { ...SUBURB_GPS[city], label: city };
+        } catch (e) {}
+      }
+    }
     res.json({
       maps_status: row.maps_status || 'idle',
       maps_keywords: row.maps_keywords || [],
       maps_count: row.maps_count || 0,
       maps_cost: row.maps_cost || 0,
-      maps_center: row.maps_center || null,
+      maps_center: mapsCenter,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
