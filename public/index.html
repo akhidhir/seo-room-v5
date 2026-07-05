@@ -31561,6 +31561,13 @@
               New scan running — showing the previous results until fresh data arrives.
             </div>
           )}
+          {/* Honesty note: pin-standpoint positions are the ceiling, not the market ranking */}
+          {tab === 'maps' && !activeLoading && sorted.length > 0 && (
+            <div style={{ padding: '10px 16px', margin: '0 0 12px', borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', fontSize: 12.5, color: 'var(--text2)' }}>
+              <i className="fas fa-circle-info" style={{ marginRight: 6, color: '#f59e0b' }} />
+              <b>Read these as best-case, not market rankings.</b> Positions are measured standing at the business, where Google's proximity bias flatters everyone; volumes are national, not local. Use this list to find keywords worth pursuing — then add them to tracking and run a <b>grid scan</b> for the true position at real customer distances.
+            </div>
+          )}
 
           {/* Results */}
           {activeHasRun && !activeLoading && sorted.length === 0 && activeData.length === 0 && (
@@ -31629,7 +31636,7 @@
                       </th>
                       <th onClick={() => toggleSort('keyword')} style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 700, color: '#14b8a6', cursor: 'pointer', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5 }}>Keyword{sortIcon('keyword')}</th>
                       {tab === 'maps' ? (
-                        <th onClick={() => toggleSort('maps')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#22c55e', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>Maps{sortIcon('maps')}</th>
+                        <th onClick={() => toggleSort('maps')} title="Measured standing AT the business — Google's proximity bias makes this the BEST-CASE position, not the market ranking. Run a grid scan (Smart Map Ranking) for the true position at real customer distances." style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#22c55e', width: 110, cursor: 'pointer', fontSize: 13, textTransform: 'uppercase' }}>Best case ⓘ{sortIcon('maps')}</th>
                       ) : (
                         <th onClick={() => toggleSort('position')} style={{ padding: '12px 14px', textAlign: 'center', fontWeight: 700, color: '#14b8a6', width: 80, cursor: 'pointer', fontSize: 14, textTransform: 'uppercase' }}>SERP{sortIcon('position')}</th>
                       )}
