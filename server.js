@@ -11702,7 +11702,13 @@ async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
     throw new Error(`DataForSEO Maps error ${resp.status}: ${text.substring(0, 200)}`);
   }
   const data = await resp.json();
-  const items = data.tasks?.[0]?.result?.[0]?.items || [];
+  // Task-level errors (e.g. unrecognised location_name) come back with HTTP 200 and empty
+  // results — swallowing them once made a 163-keyword scan silently find nothing for $0.
+  const dfsTask = data.tasks?.[0];
+  if (dfsTask && dfsTask.status_code && dfsTask.status_code !== 20000) {
+    throw new Error(`DataForSEO task ${dfsTask.status_code}: ${dfsTask.status_message} (location: ${task.location_name || task.location_coordinate})`);
+  }
+  const items = dfsTask?.result?.[0]?.items || [];
   // Normalize to SerpAPI-like shape for compatibility
   const local_results = items.map((item, idx) => ({
     position: item.rank_group || (idx + 1),
@@ -41415,9 +41421,12 @@ app.get('/api/projects/:projectId/discovery/maps/test', async (req, res) => {
     const kw = String(req.query.kw || 'computer repairs');
     const businessName = (project.business_name || project.name || '').toLowerCase();
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
-    // Stand at the business's own suburb — same rule as the real scan (centroids abandoned)
+    // Stand at the business's own suburb — same rule as the real scan (centroids abandoned).
+    // ?loc=Name,State,Australia tests location_name mode (what the scan actually uses).
     const locGps = SUBURB_GPS[(project.location || '').toLowerCase().split(',')[0].trim()] || SUBURB_GPS['perth'];
-    const data = await dataForSeoMaps({ keyword: kw, lat: locGps.lat, lng: locGps.lng });
+    const data = req.query.loc
+      ? await dataForSeoMaps({ keyword: kw, location: String(req.query.loc) })
+      : await dataForSeoMaps({ keyword: kw, lat: locGps.lat, lng: locGps.lng });
     res.json({
       keyword: kw, center: locGps, business_name_matched_against: businessName, domain_matched_against: domain,
       results_count: (data.local_results || []).length,
