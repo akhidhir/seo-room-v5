@@ -41590,7 +41590,11 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
             }));
             return { local_results: results, cost: 0 };
           } else {
-            return dataForSeoMaps({ keyword, lat: locGps.lat, lng: locGps.lng });
+            // Search by CITY location_name, not pin coordinates. Standing exactly on the business's
+            // pin made it #1 for every single keyword (proximity ceiling) — positions meant nothing.
+            // resolveDataForSeoLocation gives the same canonical location rank tracking uses, so
+            // discovery positions mean the same thing as the Maps Rankings page: the market view.
+            return dataForSeoMaps({ keyword, location });
           }
         }
 
