@@ -41599,24 +41599,20 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           let areas = (Array.isArray(project.service_areas) ? project.service_areas : [])
             .map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim())
             .filter(n => n.length > 2);
-          // ALWAYS read the client's website for the suburbs and services it mentions — discovery
-          // means finding what we DON'T already know, so this can't be just a fallback. New finds
-          // are saved into the project so every other feature benefits too.
+          // Core trade from the business name/domain — FIRST, so "plumber <suburb>" combos always
+          // beat obscure site terms in the capped list. (Projection had no industry set → 0 combos.)
+          {
+            const TRADES = ['plumbing', 'plumber', 'electrical', 'electrician', 'locksmith', 'roofing', 'landscaping', 'painting', 'cleaning', 'pest control', 'air conditioning', 'computer repairs', 'mechanic', 'dentist', 'physio'];
+            const hay = `${businessName} ${domainBase}`;
+            for (const t of TRADES) if (hay.includes(t.split(' ')[0])) { coreServices.add(t); if (t.endsWith('ing')) coreServices.add(t.replace(/ing$/, 'er')); }
+          }
+          // Read the client's website for suburbs/services it mentions — USED for this scan only,
+          // NEVER saved into project settings (auto-saving once polluted a client's suburb list
+          // with wrong-state names and lowercase duplicates — settings are the user's to change).
           {
             const intel = await extractSiteIntel(project);
-            if (intel.suburbs.length) {
-              const merged = [...new Set([...areas, ...intel.suburbs])];
-              areas = merged;
-              try {
-                const existing = Array.isArray(project.service_areas) ? project.service_areas : [];
-                const have = new Set(existing.map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase()));
-                const additions = intel.suburbs.filter(s => !have.has(s)).map(s => ({ name: s, distance_km: 0, source: 'website' }));
-                if (additions.length) {
-                  await pool.query('UPDATE projects SET service_areas=$2 WHERE id=$1', [projectId, JSON.stringify([...existing, ...additions])]);
-                  console.log(`[maps-discovery] Saved ${additions.length} website-found suburbs into project service areas`);
-                }
-              } catch (e) {}
-            }
+            const have = new Set(areas);
+            for (const s of intel.suburbs) if (!have.has(s)) areas.push(s);
             for (const svc of intel.services) if (svc.split(' ').length <= 3) coreServices.add(svc);
           }
           let comboCount = 0;
