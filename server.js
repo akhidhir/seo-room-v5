@@ -53099,11 +53099,14 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
       try {
         const loginResp = await quickFetch(`${siteUrl}/wp-login.php`, { method: 'HEAD' });
         const loginExposed = loginResp.status === 200 || loginResp.status === 302;
+        // Downgraded to 'info': every WordPress site has an accessible login page — hiding it is
+        // hygiene, not a vulnerability. Flagging it as a warning inflated the fail count and alarmed
+        // clients for a non-issue.
         addCheck('wp_login', 'Login Page Accessible', 'access',
-          loginExposed ? 'warning' : 'pass',
-          loginExposed ? 'medium' : 'none',
-          loginExposed ? '/wp-login.php is publicly accessible' : 'Login page is hidden or protected',
-          loginExposed ? 'Consider hiding the login page with a plugin like WPS Hide Login, or restrict access by IP using .htaccess.' : null
+          loginExposed ? 'info' : 'pass',
+          'none',
+          loginExposed ? '/wp-login.php is publicly accessible (normal for WordPress). Hiding it reduces brute-force noise but is optional.' : 'Login page is hidden or protected',
+          loginExposed ? 'Optional hardening: hide the login page with WPS Hide Login, or add rate-limiting / 2FA with Wordfence.' : null
         );
       } catch (e) {
         addCheck('wp_login', 'Login Page Accessible', 'access', 'pass', 'none', 'Login page not accessible', null);
@@ -53269,6 +53272,7 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
       }
 
       // ── 8. WordPress Plugins Check ──
+      let detectedPluginSlugs = []; // fed to the WPScan CVE lookup below
       try {
         const authHeaders = project.wp_username && project.wp_app_password ? {
           'Authorization': 'Basic ' + Buffer.from(project.wp_username + ':' + project.wp_app_password).toString('base64')
@@ -53276,6 +53280,7 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
         const pluginsResp = await quickFetch(`${wpUrl}/wp-json/wp/v2/plugins`, { headers: authHeaders });
         if (pluginsResp.ok) {
           const plugins = await pluginsResp.json();
+          detectedPluginSlugs = plugins.map(p => (p.plugin || p.textdomain || '').split('/')[0]).filter(Boolean);
           const inactive = plugins.filter(p => p.status === 'inactive');
           const total = plugins.length;
 
@@ -53465,7 +53470,108 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
         addCheck('wp_config', 'wp-config.php Protected', 'config', 'pass', 'none', 'wp-config.php not accessible', null);
       }
 
-      // Calculate summary
+      // ── WordPress CORE version + known-vulnerability age ──
+      // An outdated core is a bigger risk than most header/config items. Detect the version and
+      // flag if it's behind the current stable branch.
+      let wpVersion = null;
+      try {
+        // Prefer the REST root, fall back to the generator meta / readme
+        try {
+          const rootResp = await quickFetch(`${wpUrl}/wp-json/`);
+          if (rootResp.ok) { const j = await rootResp.json(); if (j && /wordpress/i.test(j.name || j.description || '')) {} }
+        } catch (e) {}
+        for (const src of [`${siteUrl}/`, `${siteUrl}/feed/`]) {
+          try {
+            const r = await quickFetch(src);
+            const html = await r.text();
+            const m = html.match(/<meta name=["']generator["'] content=["']WordPress ([0-9.]+)/i) || html.match(/WordPress ([0-9]+\.[0-9]+(?:\.[0-9]+)?)/);
+            if (m) { wpVersion = m[1]; break; }
+          } catch (e) {}
+        }
+        if (wpVersion) {
+          const [maj, min] = wpVersion.split('.').map(Number);
+          // WP 6.x is current; anything below 6.4 is materially behind on security releases.
+          const outdated = maj < 6 || (maj === 6 && min < 4);
+          addCheck('wp_core_version', 'WordPress Core Version', 'config',
+            outdated ? 'fail' : 'pass', outdated ? 'high' : 'none',
+            outdated ? `Running WordPress ${wpVersion} — behind current security releases. Outdated core is a top attack vector.` : `WordPress ${wpVersion} (current branch)`,
+            outdated ? 'Update WordPress core to the latest version (Dashboard → Updates). Take a backup first.' : null,
+            { version: wpVersion });
+        } else {
+          addCheck('wp_core_version', 'WordPress Core Version', 'config', 'pass', 'none',
+            'WordPress version is not publicly disclosed (good — hides it from attackers)', null);
+        }
+      } catch (e) {
+        addCheck('wp_core_version', 'WordPress Core Version', 'config', 'error', 'low', 'Could not check: ' + e.message, null);
+      }
+
+      // ── SSL CERTIFICATE EXPIRY ── an expired cert takes the whole site down; a common silent miss.
+      try {
+        const tls = require('tls');
+        const certInfo = await new Promise((resolve, reject) => {
+          const socket = tls.connect({ host: domain, port: 443, servername: domain, timeout: 12000 }, () => {
+            const cert = socket.getPeerCertificate();
+            socket.end();
+            resolve(cert && cert.valid_to ? { valid_to: cert.valid_to, issuer: (cert.issuer && cert.issuer.O) || '' } : null);
+          });
+          socket.on('error', reject);
+          socket.on('timeout', () => { socket.destroy(); reject(new Error('TLS timeout')); });
+        });
+        if (certInfo && certInfo.valid_to) {
+          const daysLeft = Math.round((new Date(certInfo.valid_to).getTime() - Date.now()) / 86400000);
+          const st = daysLeft < 0 ? 'fail' : daysLeft <= 14 ? 'fail' : daysLeft <= 30 ? 'warning' : 'pass';
+          const sev = daysLeft < 0 ? 'critical' : daysLeft <= 14 ? 'high' : daysLeft <= 30 ? 'medium' : 'none';
+          addCheck('ssl_expiry', 'SSL Certificate Expiry', 'ssl', st, sev,
+            daysLeft < 0 ? `SSL certificate EXPIRED ${-daysLeft} day(s) ago — visitors see a security warning and the site is effectively down.`
+              : `SSL certificate valid for ${daysLeft} more day(s)${certInfo.issuer ? ' (issuer: ' + certInfo.issuer + ')' : ''}.`,
+            daysLeft <= 30 ? 'Renew the SSL certificate now. If using Let’s Encrypt, check auto-renewal is running; on cPanel, renew via SSL/TLS Status.' : null,
+            { days_left: daysLeft, valid_to: certInfo.valid_to });
+        }
+      } catch (e) {
+        addCheck('ssl_expiry', 'SSL Certificate Expiry', 'ssl', 'error', 'low', 'Could not read certificate: ' + e.message, null);
+      }
+
+      // ── KNOWN VULNERABILITIES (CVE) via WPScan — the jump from hygiene to real security.
+      // Key-gated: only runs if WPSCAN_API_KEY is set. Matches detected plugins/core against the
+      // WPScan vulnerability database and flags versions with published exploits.
+      if (process.env.WPSCAN_API_KEY && (detectedPluginSlugs?.length || wpVersion)) {
+        try {
+          const wpscanFetch = (path) => quickFetch(`https://wpscan.com/api/v3/${path}`, { headers: { Authorization: `Token token=${process.env.WPSCAN_API_KEY}` } });
+          let vulnFindings = [];
+          // Core
+          if (wpVersion) {
+            try {
+              const r = await wpscanFetch(`wordpresses/${wpVersion.replace(/\./g, '')}`);
+              if (r.ok) { const j = await r.json(); const v = j[wpVersion]?.vulnerabilities || []; if (v.length) vulnFindings.push({ what: `WordPress core ${wpVersion}`, count: v.length, worst: v[0]?.title }); }
+            } catch (e) {}
+          }
+          // Plugins (cap 15 to control API usage)
+          for (const slug of (detectedPluginSlugs || []).slice(0, 15)) {
+            try {
+              const r = await wpscanFetch(`plugins/${slug}`);
+              if (r.ok) { const j = await r.json(); const v = j[slug]?.vulnerabilities || []; if (v.length) vulnFindings.push({ what: `Plugin: ${slug}`, count: v.length, worst: v[0]?.title }); }
+            } catch (e) {}
+          }
+          if (vulnFindings.length) {
+            addCheck('known_vulnerabilities', 'Known Vulnerabilities (CVE)', 'malware', 'fail', 'critical',
+              `${vulnFindings.length} component(s) with published vulnerabilities: ${vulnFindings.map(v => `${v.what} — ${v.count} known (${v.worst || 'see WPScan'})`).join('; ')}`,
+              'Update or remove the affected plugins/core immediately — these have public exploits. Check each in WordPress → Updates.',
+              { vulnerabilities: vulnFindings });
+          } else {
+            addCheck('known_vulnerabilities', 'Known Vulnerabilities (CVE)', 'malware', 'pass', 'none',
+              'No published vulnerabilities found for the detected plugins/core (WPScan)', null);
+          }
+        } catch (e) {
+          addCheck('known_vulnerabilities', 'Known Vulnerabilities (CVE)', 'malware', 'error', 'low', 'WPScan lookup failed: ' + e.message, null);
+        }
+      } else if (!process.env.WPSCAN_API_KEY) {
+        addCheck('known_vulnerabilities', 'Known Vulnerabilities (CVE)', 'malware', 'info', 'none',
+          'CVE scanning not enabled — add a free WPScan API key (WPSCAN_API_KEY) to match plugins against known exploits. This is the single biggest upgrade to the audit.', null);
+      }
+
+      // Calculate summary — score is pass ÷ SCORABLE checks (info/error are neither good nor bad,
+      // so they must not drag the score down; before this, adding info checks lowered every score).
+      const scorable = checks.filter(c => c.status === 'pass' || c.status === 'fail' || c.status === 'warning');
       const summary = {
         total: checks.length,
         pass: checks.filter(c => c.status === 'pass').length,
@@ -53473,7 +53579,8 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
         warning: checks.filter(c => c.status === 'warning').length,
         critical: checks.filter(c => c.severity === 'critical').length,
         high: checks.filter(c => c.severity === 'high').length,
-        score: Math.round((checks.filter(c => c.status === 'pass').length / Math.max(checks.length, 1)) * 100),
+        // A warning is worth half a pass — a site with mostly warnings shouldn't read as 0%.
+        score: Math.round(((checks.filter(c => c.status === 'pass').length + checks.filter(c => c.status === 'warning').length * 0.5) / Math.max(scorable.length, 1)) * 100),
       };
 
       // Save to DB
