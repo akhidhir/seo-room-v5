@@ -40943,8 +40943,26 @@ app.get('/api/projects/:projectId/discovery', async (req, res) => {
     // Mark keywords already in rank tracking — computed fresh at read time so it's always current
     try {
       const tracked = new Set((await pool.query('SELECT LOWER(keyword) AS k FROM rank_keywords WHERE project_id=$1', [req.params.projectId])).rows.map(r => r.k));
-      const kws = typeof row.keywords === 'string' ? JSON.parse(row.keywords) : (row.keywords || []);
-      row.keywords = kws.map(k => ({ ...k, tracked: tracked.has((k.keyword || '').toLowerCase().trim()) }));
+      let kws = (typeof row.keywords === 'string' ? JSON.parse(row.keywords) : (row.keywords || []))
+        .map(k => ({ ...k, tracked: tracked.has((k.keyword || '').toLowerCase().trim()) }));
+      // COLLAPSE VARIANTS — "pc repair perth" / "perth pc repairs" are the same search cluster
+      // (Google reports them with identical volume). Same words in any order, plurals ignored
+      // → keep the strongest variant, list the rest behind a "+N variants" chip.
+      const vkey = (s) => String(s || '').toLowerCase().trim().split(/\s+/).map(w => w.replace(/s$/, '')).sort().join(' ');
+      const groups = new Map();
+      for (const k of kws) {
+        const key = vkey(k.keyword);
+        const g = groups.get(key);
+        if (!g) { groups.set(key, k); continue; }
+        // keep the variant with more volume/impressions as the face of the group
+        const score = (x) => (x.volume || 0) + (x.gsc_impressions || 0);
+        const [prim, sec] = score(k) > score(g) ? [k, g] : [g, k];
+        prim.variants = [...(prim.variants || []), ...(sec.variants || []), sec.keyword];
+        prim.tracked = prim.tracked || sec.tracked;
+        if (!prim.url && sec.url) prim.url = sec.url;
+        groups.set(key, prim);
+      }
+      row.keywords = [...groups.values()];
     } catch (e) {}
     res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
