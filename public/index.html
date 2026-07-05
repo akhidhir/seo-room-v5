@@ -31389,7 +31389,8 @@
       };
 
       const addToSerp = async () => {
-        const kws = keywords.filter(k => selected.has(k.keyword));
+        // Use the ACTIVE tab's list — selections on the Maps tab used to match nothing here
+        const kws = (tab === 'maps' ? mapsKeywords : keywords).filter(k => selected.has(k.keyword));
         if (kws.length === 0) return;
         try {
           await api(`/projects/${project.id}/rank-tracking/import-discovered`, {
@@ -31402,7 +31403,8 @@
       };
 
       const addToMaps = async () => {
-        const kws = keywords.filter(k => selected.has(k.keyword));
+        // Use the ACTIVE tab's list — selections on the Maps tab used to match nothing here
+        const kws = (tab === 'maps' ? mapsKeywords : keywords).filter(k => selected.has(k.keyword));
         if (kws.length === 0) return;
         const allSuburbNames = Object.keys(window.__suburbGps || {});
         if (allSuburbNames.length === 0) {
