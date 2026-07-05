@@ -41561,7 +41561,8 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
               for (const sub of allSubs) {
                 svc = svc.replace(new RegExp('\\b' + sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g'), '').trim();
               }
-              svc = svc.replace(/\s+/g, ' ').trim();
+              // Stripping suburbs from slugs leaves dangling connector words ("key replacements in")
+              svc = svc.replace(/\s+/g, ' ').replace(/\b(in|for|near|at|the|a|an)\s*$/i, '').trim();
               if (svc.length > 3) serviceSet.add(svc);
             }
           }
