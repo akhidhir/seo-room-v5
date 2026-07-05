@@ -31405,7 +31405,7 @@
           if (service) {
             await api(`/projects/${project.id}/rank-tracking/keywords`, {
               method: 'POST',
-              body: { keywords: [service], location }
+              body: { keywords: [service], location, origin: 'discovered' }
             });
             added++;
           }
@@ -31674,6 +31674,109 @@
     }
 
     // ============ SMART MAP RANKING — radius suburb survey + prioritized rollout plan ============
+    // RANKING ORBITS — the client-facing "space" visual: business at the centre, dotted green
+    // orbits at 5/10/15/20 km, every tracked Maps keyword floating at its PROVEN reach (from grid
+    // scans). Colour = search volume, dot size = best position, pulsing = discovered quick-win.
+    // Keywords without a grid scan yet drift dim in the outer discovery belt. Real data only.
+    function RankingOrbitsPage({ project, setPage }) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [sel, setSel] = useState(null);
+      useEffect(() => {
+        if (!project?.id) return;
+        setLoading(true);
+        api(`/projects/${project.id}/maps-orbits`).then(d => { if (!d.error) setData(d); }).catch(() => {}).finally(() => setLoading(false));
+      }, [project?.id]);
+
+      const SIZE = 820, C = SIZE / 2, MAXKM = 23;
+      const ringR = (km) => (km / MAXKM) * (C - 30);
+      const RINGS = [5, 10, 15, 20];
+      const volColor = (v) => v == null ? '#94a3b8' : v >= 500 ? '#4ade80' : v >= 150 ? '#2dd4bf' : '#60a5fa';
+      const orbs = (data?.orbits || []).map((o, i) => {
+        const km = o.reach_km != null ? Math.max(1.6, Math.min(21, o.reach_km)) : 21.8;
+        return { ...o, orbitR: ringR(km), angle0: Math.round((i * 137.5) % 360), dur: 70 + (i % 9) * 16, dim: o.reach_km == null };
+      });
+
+      return (
+        <div>
+          <style>{`
+            @keyframes orbitSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            @keyframes orbitPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+          `}</style>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-satellite" style={{ marginRight: 10, color: '#4ade80' }} />Ranking Orbits</h2>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 14 }}>
+            How far each Maps keyword's ranking reaches from the business — measured by grid scans, not estimated. Solid dot = agreed with client · pulsing dot = discovered quick-win · colour = search volume (green high, teal mid, blue low, grey unknown) · dot size = best position. Keywords in the outer belt haven't been grid-scanned yet.
+          </div>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Loading orbits...</div>
+          ) : !orbs.length ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              No Maps keywords tracked yet — add some from Discover Local Keywords or SERP Rankings, then run grid scans in Smart Map Ranking.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ background: '#04070d', borderRadius: 14, border: '1px solid rgba(74,222,128,0.25)', padding: 8, flex: '1 1 640px', maxWidth: 900 }}>
+                <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', display: 'block' }}>
+                  {RINGS.map(km => (
+                    <g key={km}>
+                      <circle cx={C} cy={C} r={ringR(km)} fill="none" stroke="#22c55e" strokeOpacity="0.45" strokeWidth="1" strokeDasharray="3 7" />
+                      <text x={C + ringR(km) - 4} y={C - 6} fill="#22c55e" fillOpacity="0.6" fontSize="12" textAnchor="end">{km} km</text>
+                    </g>
+                  ))}
+                  <circle cx={C} cy={C} r={ringR(21.8) + 9} fill="none" stroke="#64748b" strokeOpacity="0.25" strokeWidth="10" />
+                  <circle cx={C} cy={C} r="7" fill="#facc15" />
+                  <text x={C} y={C + 22} fill="#facc15" fontSize="13" fontWeight="700" textAnchor="middle">{data?.business || 'Business'}</text>
+                  {orbs.map((o, i) => {
+                    const dotR = o.best_position ? Math.max(4, 11 - o.best_position) : 4;
+                    return (
+                      <g key={i} style={{ transformOrigin: `${C}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite`, transform: `rotate(${o.angle0}deg)` }}>
+                        <g style={{ transformOrigin: `${C + o.orbitR}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite reverse` }}>
+                          <circle cx={C + o.orbitR} cy={C} r={dotR}
+                            fill={volColor(o.volume)} fillOpacity={o.dim ? 0.45 : 1}
+                            style={{ cursor: 'pointer', ...(o.origin === 'discovered' ? { animation: 'orbitPulse 2.2s ease-in-out infinite' } : {}) }}
+                            onClick={() => setSel(o)} />
+                          <text x={C + o.orbitR} y={C - dotR - 5} fill={volColor(o.volume)} fillOpacity={o.dim ? 0.5 : 0.95} fontSize="11.5" fontWeight="600" textAnchor="middle"
+                            style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSel(o)}>
+                            {o.keyword.length > 26 ? o.keyword.slice(0, 24) + '…' : o.keyword}
+                          </text>
+                        </g>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+              <div style={{ flex: '0 1 300px', minWidth: 260 }}>
+                {sel ? (
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+                    <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>{sel.keyword}</div>
+                    <div style={{ fontSize: 13, lineHeight: 2 }}>
+                      <div><span style={{ color: 'var(--text3)' }}>Origin: </span>{sel.origin === 'discovered' ? '✨ Discovered quick-win' : '🤝 Agreed with client'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>Proven reach: </span>{sel.reach_km != null ? `${sel.reach_km} km` : 'not grid-scanned yet'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>Best grid position: </span>{sel.best_position ? `#${sel.best_position}` : '—'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>Tracked position: </span>{sel.maps_position ? `#${sel.maps_position} (${sel.location})` : '—'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>Search volume: </span>{sel.volume ? sel.volume.toLocaleString() + '/mo' : 'unknown'}</div>
+                    </div>
+                    <button className="btn btn-primary" onClick={() => setPage && setPage('smart-map')} style={{ marginTop: 12, width: '100%', fontSize: 12 }}>
+                      <i className="fas fa-map" style={{ marginRight: 6 }} />{sel.has_grid ? 'View grid map' : 'Run a grid scan'}
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, fontSize: 13, color: 'var(--text3)' }}>
+                    Click any keyword in the orbit to see its details.
+                    <div style={{ marginTop: 10, fontSize: 12 }}>
+                      {data?.summary && <>Tracking {data.summary.total} Maps keywords · {data.summary.with_grid} grid-scanned · {data.summary.discovered} discovered quick-wins</>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function SmartMapRankingPage({ project }) {
       const [center, setCenter] = useState(project.smart_center || project.location || project.business_name || '');
       const [centerSaved, setCenterSaved] = useState(false);
@@ -40070,6 +40173,8 @@
             return <OnPageAuditPage project={project} />;
           case 'indexing':
             return <IndexingPage project={project} setActiveTab={setActiveTab} />;
+          case 'ranking-orbits':
+            return <RankingOrbitsPage project={project} setPage={setActiveTab} />;
           case 'gsc-indexed':
             return <GSCIndexedPage project={project} filter="indexed" setActiveTab={setActiveTab} />;
           case 'gsc-not-indexed':
@@ -40219,6 +40324,7 @@
         { section: 'RANKINGS', items: [
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
           { id: 'smart-map', label: 'Smart Map Ranking', icon: 'fas fa-wand-magic-sparkles', localOnly: true },
+          { id: 'ranking-orbits', label: 'Ranking Orbits', icon: 'fas fa-satellite', localOnly: true },
           { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
           { id: 'ai-search', label: 'AI Search', icon: 'fas fa-robot' },
           { id: 'discover-local', label: 'Discover Local Keywords', icon: 'fas fa-magnifying-glass-chart' },

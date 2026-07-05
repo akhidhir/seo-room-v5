@@ -649,6 +649,8 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_hours NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS monthly_fee NUMERIC DEFAULT 0`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
+    // Keyword origin: 'agreed' = contracted with the client, 'discovered' = quick-win found by discovery
+    await client.query(`ALTER TABLE rank_keywords ADD COLUMN IF NOT EXISTS origin TEXT DEFAULT 'agreed'`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 50`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_service TEXT`).catch(() => {});
@@ -41249,6 +41251,78 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// RANKING ORBITS — data for the client-facing orbit visual. Every Maps keyword's PROVEN reach:
+// the farthest grid-scan point (km from the business) where it still ranks top-10. Real data only:
+// keywords without a grid scan yet go to the outer "discovery belt" until scanned.
+app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.projectId);
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const havKm = (a, b) => {
+      const R = 6371, dLat = (b.lat - a.lat) * Math.PI / 180, dLng = (b.lng - a.lng) * Math.PI / 180;
+      const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+    };
+
+    // Latest grid scan per keyword → proven reach
+    const grids = (await pool.query(
+      `SELECT DISTINCT ON (LOWER(keyword)) keyword, center_lat, center_lng, grid_points, arp, scanned_at
+       FROM grid_scans WHERE project_id=$1 ORDER BY LOWER(keyword), scanned_at DESC`, [projectId])).rows;
+    const reachByKw = new Map();
+    for (const g of grids) {
+      if (g.center_lat == null) continue;
+      const center = { lat: g.center_lat, lng: g.center_lng };
+      const pts = typeof g.grid_points === 'string' ? JSON.parse(g.grid_points) : (g.grid_points || []);
+      let reach = null, bestPos = null;
+      for (const p of pts) {
+        if (!p || p.lat == null) continue;
+        const pos = p.position || p.pos;
+        if (p.found && pos && pos <= 10) {
+          const d = havKm(center, { lat: p.lat, lng: p.lng });
+          if (reach === null || d > reach) reach = d;
+        }
+        if (p.found && pos && (bestPos === null || pos < bestPos)) bestPos = pos;
+      }
+      reachByKw.set(g.keyword.toLowerCase().trim(), { reach_km: reach, best_position: bestPos, arp: g.arp, scanned_at: g.scanned_at });
+    }
+
+    // Volume map from discovery cache (SERP + Maps lists)
+    const volByKw = new Map();
+    try {
+      const dc = (await pool.query('SELECT keywords, maps_keywords FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+      for (const src of [dc?.keywords, dc?.maps_keywords]) {
+        const arr = typeof src === 'string' ? JSON.parse(src) : (src || []);
+        for (const k of arr) if (k.keyword && k.volume) volByKw.set(k.keyword.toLowerCase().trim(), k.volume);
+      }
+    } catch (e) {}
+
+    // All tracked Maps keywords (with origin) + their latest tracked position
+    const tracked = (await pool.query(
+      `SELECT rk.id, rk.keyword, rk.location, COALESCE(rk.origin,'agreed') AS origin,
+              (SELECT rt.maps_position FROM rank_tracking rt WHERE rt.project_id=rk.project_id
+                AND LOWER(rt.keyword)=LOWER(rk.keyword) AND rt.maps_position IS NOT NULL
+                ORDER BY rt.checked_at DESC NULLS LAST LIMIT 1) AS maps_position
+       FROM rank_keywords rk WHERE rk.project_id=$1 AND COALESCE(rk.location,'') != ''`, [projectId])).rows;
+
+    const orbits = tracked.map(t => {
+      const kwl = t.keyword.toLowerCase().trim();
+      const g = reachByKw.get(kwl);
+      return {
+        keyword: t.keyword, location: t.location, origin: t.origin,
+        maps_position: t.maps_position,
+        volume: volByKw.get(kwl) || null,
+        reach_km: g?.reach_km != null ? Math.round(g.reach_km * 10) / 10 : null,
+        best_position: g?.best_position || null,
+        has_grid: !!g, scanned_at: g?.scanned_at || null,
+      };
+    });
+    res.json({ ok: true, business: project.business_name || project.name, orbits,
+      summary: { total: orbits.length, with_grid: orbits.filter(o => o.has_grid).length, discovered: orbits.filter(o => o.origin === 'discovered').length } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // DIAGNOSTIC: one Maps lookup showing exactly what the API returns (~$0.002) — used to debug
 // why a discovery scan matched nothing. Returns the raw top listings + the match verdicts.
 app.get('/api/projects/:projectId/discovery/maps/test', async (req, res) => {
@@ -41328,18 +41402,32 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         // areas when available (a local pack only shows the business near its real service core —
         // checking at the city CBD finds nothing for a suburban business).
         let locGps = null; let centerLabel = locLower;
-        const areaPts = [];
-        for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) {
-          const nm = (typeof a === 'string' ? a : (a.name || a.placeName || '')).toLowerCase().split(',')[0]
-            .replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
-          if (SUBURB_GPS[nm]) areaPts.push(SUBURB_GPS[nm]);
-        }
-        if (areaPts.length >= 2) {
-          locGps = {
-            lat: areaPts.reduce((s, p) => s + p.lat, 0) / areaPts.length,
-            lng: areaPts.reduce((s, p) => s + p.lng, 0) / areaPts.length,
-          };
-          centerLabel = `service-area centroid of ${areaPts.length} suburbs`;
+        // BEST center = where the business is PROVEN to rank: the suburb where tracked Maps
+        // keywords are most often found. (The old service-area centroid averaged 28 suburbs and
+        // landed 6km from the workshop, where the business isn't in any local pack → 0 results.)
+        try {
+          const best = await pool.query(
+            `SELECT LOWER(location) AS loc, COUNT(*) AS n FROM rank_tracking
+             WHERE project_id=$1 AND maps_position IS NOT NULL AND maps_position <= 10 AND COALESCE(location,'') != ''
+             GROUP BY 1 ORDER BY n DESC LIMIT 1`, [projectId]);
+          const loc = best.rows[0]?.loc?.split(',')[0].trim();
+          if (loc && SUBURB_GPS[loc]) { locGps = SUBURB_GPS[loc]; centerLabel = `${loc} (proven ranking suburb)`; }
+        } catch (e) {}
+        // Fallback: service-area centroid, then project city
+        if (!locGps) {
+          const areaPts = [];
+          for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) {
+            const nm = (typeof a === 'string' ? a : (a.name || a.placeName || '')).toLowerCase().split(',')[0]
+              .replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
+            if (SUBURB_GPS[nm]) areaPts.push(SUBURB_GPS[nm]);
+          }
+          if (areaPts.length >= 2) {
+            locGps = {
+              lat: areaPts.reduce((s, p) => s + p.lat, 0) / areaPts.length,
+              lng: areaPts.reduce((s, p) => s + p.lng, 0) / areaPts.length,
+            };
+            centerLabel = `service-area centroid of ${areaPts.length} suburbs`;
+          }
         }
         if (!locGps) locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
 
@@ -41529,7 +41617,17 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         await logApiCost(parseInt(projectId), 'discover_maps', mapsProvider, services.length, discMapsCost, { found: foundKeywords.length });
         console.log(`[maps-discovery] Done. Found ${foundKeywords.length} keywords where business ranks on Maps. Cost: $${discMapsCost.toFixed(4)}`);
 
-        // Save to DB
+        // Save to DB — but NEVER silently replace good previous results with an empty scan
+        // (a mis-centred scan once wiped 59 keywords with 0). Zero found + previous data = keep previous.
+        if (foundKeywords.length === 0) {
+          const prev = (await pool.query('SELECT maps_keywords FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+          const prevKws = prev ? (typeof prev.maps_keywords === 'string' ? JSON.parse(prev.maps_keywords) : (prev.maps_keywords || [])) : [];
+          if (prevKws.length > 0) {
+            console.warn(`[maps-discovery] Scan found 0 but ${prevKws.length} previous results exist — keeping previous (scan centre may be wrong)`);
+            await pool.query(`UPDATE discovery_cache SET maps_status='done', maps_count=$2, updated_at=NOW() WHERE project_id=$1`, [projectId, prevKws.length]);
+            return;
+          }
+        }
         await pool.query(
           `UPDATE discovery_cache SET maps_status='done', maps_keywords=$2, maps_count=$3, maps_cost=$4, updated_at=NOW() WHERE project_id=$1`,
           [projectId, JSON.stringify(foundKeywords), foundKeywords.length, totalCost]
@@ -41573,7 +41671,7 @@ app.post('/api/projects/:projectId/rank-tracking/import-discovered', async (req,
       const kw = k.keyword.trim();
       // Insert into rank_keywords with volume
       await pool.query(
-        `INSERT INTO rank_keywords (project_id, keyword, search_volume, competition) VALUES ($1, $2, $3, $4)
+        `INSERT INTO rank_keywords (project_id, keyword, search_volume, competition, origin) VALUES ($1, $2, $3, $4, 'discovered')
          ON CONFLICT (project_id, keyword, location) DO UPDATE SET search_volume=COALESCE(EXCLUDED.search_volume, rank_keywords.search_volume), competition=COALESCE(EXCLUDED.competition, rank_keywords.competition)`,
         [projectId, kw, k.volume || null, k.competition || null]
       );
@@ -41877,8 +41975,8 @@ app.post('/api/projects/:projectId/rank-tracking/keywords', async (req, res) => 
       );
       if (exists.rows.length) { skipped++; continue; }
       const ins = await pool.query(
-        `INSERT INTO rank_keywords (project_id, keyword, location, location_code) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
-        [projectId, k, location || '', location_code || 2036]
+        `INSERT INTO rank_keywords (project_id, keyword, location, location_code, origin) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (project_id, keyword, location) DO NOTHING`,
+        [projectId, k, location || '', location_code || 2036, (req.body.origin === 'discovered' ? 'discovered' : 'agreed')]
       );
       if (ins.rowCount > 0) added++; else skipped++;
     }
