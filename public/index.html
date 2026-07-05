@@ -31355,7 +31355,13 @@
       const checkOnGoogleHref = (k) => {
         if (tab === 'maps') {
           const c = mapsCenter || (window.__suburbGps && window.__suburbGps[(project.location || '').toLowerCase().split(',')[0].trim()]);
-          return c && c.lat ? `https://www.google.com/maps/search/${encodeURIComponent(k.keyword)}/@${c.lat},${c.lng},14z` : `https://www.google.com/maps/search/${encodeURIComponent(k.keyword)}`;
+          // Anchor the PLACE into the query text too — signed-in users on a far-away connection
+          // get their coordinates overridden by Google (a Perth user opening a Brisbane link was
+          // re-localised to Perth). Query text holds even when coordinates are ignored.
+          const locParts = (project.location || '').split(',').map(s => s.trim()).filter(Boolean);
+          const anchor = locParts.length ? ` ${locParts.join(' ')}` : '';
+          const q = k.keyword.toLowerCase().includes((locParts[1] || 'zz').toLowerCase()) ? k.keyword : k.keyword + anchor;
+          return c && c.lat ? `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${c.lat},${c.lng},13z` : `https://www.google.com/maps/search/${encodeURIComponent(q)}`;
         }
         return `https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30&uact=5${uuleFor()}`;
       };
