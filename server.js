@@ -41382,9 +41382,15 @@ app.get('/api/projects/:projectId/discovery/maps/test', async (req, res) => {
       const nm = (typeof a === 'string' ? a : (a.name || '')).toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
       if (SUBURB_GPS[nm]) areaPts.push(SUBURB_GPS[nm]);
     }
-    const locGps = areaPts.length >= 2
+    let locGps = areaPts.length >= 2
       ? { lat: areaPts.reduce((s, p) => s + p.lat, 0) / areaPts.length, lng: areaPts.reduce((s, p) => s + p.lng, 0) / areaPts.length }
       : (SUBURB_GPS[(project.location || '').toLowerCase().split(',')[0].trim()] || SUBURB_GPS['perth']);
+    // Same cross-state sanity check as the real scan
+    const cityG = SUBURB_GPS[(project.location || '').toLowerCase().split(',')[0].trim()];
+    if (cityG) {
+      const dK = (a, b) => { const R = 6371, dLa = (b.lat - a.lat) * Math.PI / 180, dLo = (b.lng - a.lng) * Math.PI / 180; const s = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLo / 2) ** 2; return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)); };
+      if (dK(locGps, cityG) > 120) locGps = cityG;
+    }
     const data = await dataForSeoMaps({ keyword: kw, lat: locGps.lat, lng: locGps.lng });
     res.json({
       keyword: kw, center: locGps, business_name_matched_against: businessName, domain_matched_against: domain,
@@ -41475,6 +41481,18 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         }
         if (!locGps) locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
 
+        // SANITY CHECK — suburb names repeat across states (a QLD business once got centred in
+        // WA bush and matched nothing). If the computed centre is >120km from the project's own
+        // city, it's wrong: use the city instead.
+        const cityGps = SUBURB_GPS[locLower];
+        if (cityGps && locGps !== cityGps) {
+          const dKm = (a, b) => { const R = 6371, dLa = (b.lat - a.lat) * Math.PI / 180, dLo = (b.lng - a.lng) * Math.PI / 180; const s = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLo / 2) ** 2; return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)); };
+          if (dKm(locGps, cityGps) > 120) {
+            console.warn(`[maps-discovery] Computed centre is ${dKm(locGps, cityGps).toFixed(0)}km from ${locLower} — cross-state suburb collision, using the city instead`);
+            locGps = cityGps; centerLabel = locLower + ' (centre sanity fallback)';
+          }
+        }
+
         console.log(`[maps-discovery] Starting for "${businessName}" (${domain}), center=${centerLabel} (${locGps.lat.toFixed(4)},${locGps.lng.toFixed(4)})`);
 
         // Step 1: Build service keywords to scan
@@ -41558,8 +41576,15 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           console.log(`[maps-discovery] Added organic keywords, total now: ${serviceSet.size}`);
         } catch (e) { console.log('[maps-discovery] Organic keywords skipped:', e.message); }
 
-        const services = [...serviceSet].filter(s => s.length > 2);
-        console.log(`[maps-discovery] ${services.length} service keywords to scan (provider=${mapsProvider}): ${services.slice(0, 15).join(', ')}`);
+        // QUALITY FILTER — no brand terms (ranking #1 for your own name is not a discovery) and
+        // no blog-title "keywords" (whole post titles are unique phrases that match anywhere).
+        const brandBits = businessName.split(/\s+/).filter(w => w.length > 3 && !['plumbing', 'plumber', 'electrical', 'services', 'service', 'repairs', 'repair', 'computer', 'computers'].includes(w));
+        const services = [...serviceSet].filter(s =>
+          s.length > 2 &&
+          s.split(/\s+/).length <= 5 &&
+          !brandBits.some(b => s.includes(b))
+        );
+        console.log(`[maps-discovery] ${services.length} service keywords to scan after quality filter (provider=${mapsProvider}): ${services.slice(0, 15).join(', ')}`);
 
         // Step 2: Check each service on Maps from business location
         const foundKeywords = [];
