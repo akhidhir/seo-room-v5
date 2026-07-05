@@ -41249,6 +41249,33 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// DIAGNOSTIC: one Maps lookup showing exactly what the API returns (~$0.002) — used to debug
+// why a discovery scan matched nothing. Returns the raw top listings + the match verdicts.
+app.get('/api/projects/:projectId/discovery/maps/test', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const kw = String(req.query.kw || 'computer repairs');
+    const businessName = (project.business_name || project.name || '').toLowerCase();
+    const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
+    // Same centering logic as the discovery scan
+    const areaPts = [];
+    for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) {
+      const nm = (typeof a === 'string' ? a : (a.name || '')).toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
+      if (SUBURB_GPS[nm]) areaPts.push(SUBURB_GPS[nm]);
+    }
+    const locGps = areaPts.length >= 2
+      ? { lat: areaPts.reduce((s, p) => s + p.lat, 0) / areaPts.length, lng: areaPts.reduce((s, p) => s + p.lng, 0) / areaPts.length }
+      : (SUBURB_GPS[(project.location || '').toLowerCase().split(',')[0].trim()] || SUBURB_GPS['perth']);
+    const data = await dataForSeoMaps({ keyword: kw, lat: locGps.lat, lng: locGps.lng });
+    res.json({
+      keyword: kw, center: locGps, business_name_matched_against: businessName, domain_matched_against: domain,
+      results_count: (data.local_results || []).length,
+      top10: (data.local_results || []).slice(0, 10).map(r => ({ pos: r.position, title: r.title, domain: r.domain, website: (r.website || '').slice(0, 60) })),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST: start background Maps discovery
 app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
   const mapsProvider = (req.body?.provider || 'dataforseo').toLowerCase();

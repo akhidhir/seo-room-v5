@@ -31287,11 +31287,14 @@
               setHasMapsRun(true);
               setMapsLoading(false);
             } else if (r.maps_status === 'running') {
-              // Only show spinner if user explicitly triggered it this session
+              // Keep showing the PREVIOUS results while the new scan runs — they only get
+              // replaced when the fresh data lands. (Was: list vanished during every re-scan.)
+              if (r.maps_keywords?.length) setMapsKeywords(r.maps_keywords);
               if (mapsUserTriggered.current) setMapsLoading(true);
               setHasMapsRun(true);
               pollTimer = setTimeout(load, 3000);
             } else if (r.maps_status === 'error' || r.maps_status === 'idle') {
+              if (r.maps_keywords?.length) setMapsKeywords(r.maps_keywords);
               setMapsLoading(false);
               setHasMapsRun(r.maps_status === 'error' ? false : (r.maps_keywords?.length > 0));
             }
@@ -31524,6 +31527,13 @@
               <div style={{ fontSize: 14, color: 'var(--text3)', marginTop: 8 }}>
                 {tab === 'serp' ? 'Finding organic keywords with local intent' : 'Checking service keywords for your business in the local pack'}
               </div>
+            </div>
+          )}
+          {/* Scan in progress but old results still visible — slim banner instead of hiding the list */}
+          {activeLoading && sorted.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', margin: '0 0 12px', borderRadius: 8, background: 'rgba(20,184,166,0.1)', border: '1px solid rgba(20,184,166,0.3)', fontSize: 13, color: '#2dd4bf' }}>
+              <i className="fa-solid fa-spinner fa-spin" />
+              New scan running — showing the previous results until fresh data arrives.
             </div>
           )}
 
