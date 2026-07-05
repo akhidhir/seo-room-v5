@@ -40940,6 +40940,12 @@ app.get('/api/projects/:projectId/discovery', async (req, res) => {
         row.status = 'idle';
       }
     }
+    // Mark keywords already in rank tracking — computed fresh at read time so it's always current
+    try {
+      const tracked = new Set((await pool.query('SELECT LOWER(keyword) AS k FROM rank_keywords WHERE project_id=$1', [req.params.projectId])).rows.map(r => r.k));
+      const kws = typeof row.keywords === 'string' ? JSON.parse(row.keywords) : (row.keywords || []);
+      row.keywords = kws.map(k => ({ ...k, tracked: tracked.has((k.keyword || '').toLowerCase().trim()) }));
+    } catch (e) {}
     res.json(row);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -41018,15 +41024,50 @@ app.post('/api/projects/:projectId/discovery/run', async (req, res) => {
         let localKeywords = result.keywords.filter(kw => {
           const kwLower = (kw.keyword || '').toLowerCase();
           return localSignals.some(sig => kwLower.includes(sig));
-        }).map(kw => ({ ...kw, local_intent: true }));
+        }).map(kw => ({ ...kw, local_intent: true, source: 'dataforseo' }));
 
         console.log(`[discovery] Local filter: ${localKeywords.length} of ${result.keywords.length} (signals: ${localSignals.slice(0, 20).join(', ')})`);
 
         // Fallback: if local filter yields 0 but we have keywords, return ALL keywords
         if (localKeywords.length === 0 && result.keywords.length > 0) {
           console.log(`[discovery] Local filter yielded 0 — falling back to all ${result.keywords.length} keywords`);
-          localKeywords = result.keywords.map(kw => ({ ...kw, local_intent: false }));
+          localKeywords = result.keywords.map(kw => ({ ...kw, local_intent: false, source: 'dataforseo' }));
         }
+
+        // MERGE LIVE GSC — real queries with real impressions (last 90 days). DataForSEO shows
+        // Google's index; GSC shows what actual searchers saw. Together = the full picture.
+        try {
+          if (project.gsc_property) {
+            const gscToken = await getGscAccessToken(project.user_id || 1);
+            if (gscToken) {
+              const endD = new Date().toISOString().split('T')[0];
+              const startD = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+              const gscResp = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(project.gsc_property)}/searchAnalytics/query`, {
+                method: 'POST', headers: { Authorization: `Bearer ${gscToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ startDate: startD, endDate: endD, dimensions: ['query'], rowLimit: 2500 }),
+                signal: AbortSignal.timeout(45000)
+              });
+              if (gscResp.ok) {
+                const gscRows = (await gscResp.json()).rows || [];
+                const have = new Map(localKeywords.map(k => [(k.keyword || '').toLowerCase().trim(), k]));
+                let merged = 0, added = 0;
+                for (const r of gscRows) {
+                  const q = (r.keys && r.keys[0] || '').toLowerCase().trim();
+                  if (!q || q.length < 4 || (r.impressions || 0) < 10) continue;
+                  const pos = Math.round((r.position || 0) * 10) / 10;
+                  const ex = have.get(q);
+                  if (ex) { ex.gsc_impressions = r.impressions; ex.gsc_clicks = r.clicks; ex.gsc_position = pos; ex.source = 'both'; merged++; }
+                  else {
+                    have.set(q, { keyword: q, volume: null, position: pos, url: null, local_intent: localSignals.some(sig => q.includes(sig)), source: 'gsc', gsc_impressions: r.impressions, gsc_clicks: r.clicks, gsc_position: pos });
+                    added++;
+                  }
+                }
+                localKeywords = [...have.values()];
+                console.log(`[discovery] GSC merge: ${merged} enriched, ${added} new queries DataForSEO missed`);
+              }
+            }
+          }
+        } catch (gscErr) { console.log('[discovery] GSC merge skipped:', gscErr.message); }
 
         // Smart Maps check: pull positions from existing grid_scans + rank_tracking data (free, instant)
         // Then only call API for keywords not already in DB
