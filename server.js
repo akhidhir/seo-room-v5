@@ -41716,6 +41716,7 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           }
         } catch (e) { console.log('[maps-discovery] suburb location probe failed, using city:', e.message); }
 
+        let providerBlocked = null;
         for (let i = 0; i < services.length; i += 5) {
           const batch = services.slice(i, i + 5);
           const promises = batch.map(async (keyword) => {
@@ -41736,10 +41737,19 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
                 }
               }
             } catch (e) {
+              // Account-level refusals (daily money limit, auth) hit EVERY call — abort the scan
+              // instead of asking 163 times and reporting a misleading "found 0".
+              if (/money limit|payment|40203|401/i.test(e.message)) providerBlocked = e.message;
               console.error(`[maps-discovery] Error checking "${keyword}":`, e.message);
             }
           });
           await Promise.all(promises);
+          if (providerBlocked) break;
+        }
+        if (providerBlocked) {
+          console.error(`[maps-discovery] ABORTED — provider refusing all calls: ${providerBlocked}`);
+          await pool.query(`UPDATE discovery_cache SET maps_status='error', updated_at=NOW() WHERE project_id=$1`, [projectId]);
+          return;
         }
 
         // Step 3: Get search volume for found keywords
