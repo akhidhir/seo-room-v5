@@ -45137,28 +45137,88 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
 
     if (!domain) return res.status(400).json({ error: 'Project has no website/domain configured' });
 
-    console.log(`[discover] Fetching ranked keywords for ${domain} via SerpAPI (limit: ${limit})`);
+    console.log(`[discover] Fetching ranked keywords for ${domain} (limit: ${limit})`);
 
-    // Use Google organic search with site: to find pages that rank, then extract keywords
-    // Also check GSC data first as a primary keyword source
     const keywords = [];
     const seen = new Set();
 
-    // 1. Pull from GSC if available
+    // Never re-discover what we already track, and never surface the client's own brand name.
+    // (Without these filters this feature kept showing keywords we already knew about.)
     try {
+      const trackedRows = await pool.query('SELECT LOWER(keyword) AS k FROM rank_keywords WHERE project_id=$1', [projectId]);
+      for (const r of trackedRows.rows) seen.add(r.k);
+    } catch (e) {}
+    const GENERIC_BR = new Set(['the', 'and', 'pty', 'ltd', 'services', 'service', 'group', 'co', 'perth', 'wa']);
+    const brandTokens = String(project.business_name || project.name || '').toLowerCase().split(/\s+/).filter(w => w.length > 2 && !GENERIC_BR.has(w));
+    const domainBase = domain.split('.')[0].toLowerCase();
+    const isBrandKw = (q) => brandTokens.some(t => q.includes(t)) || (domainBase.length > 5 && q.replace(/\s+/g, '').includes(domainBase));
+
+    // 1. LIVE GSC — the ground truth: every real Google query with impressions, last 90 days.
+    // (Was: a stale gsc_keywords DB table, which is why unknown rankings were being missed.)
+    let liveGscOk = false;
+    try {
+      if (project.gsc_property) {
+        const token = await getGscAccessToken(project.user_id || 1);
+        if (token) {
+          const end = new Date().toISOString().split('T')[0];
+          const start = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+          const gscResp = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(project.gsc_property)}/searchAnalytics/query`, {
+            method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ startDate: start, endDate: end, dimensions: ['query'], rowLimit: 2500 }),
+            signal: AbortSignal.timeout(45000)
+          });
+          if (gscResp.ok) {
+            const liveRows = (await gscResp.json()).rows || [];
+            for (const r of liveRows) {
+              const kw = (r.keys && r.keys[0] || '').toLowerCase().trim();
+              if (!kw || kw.length < 4 || seen.has(kw) || isBrandKw(kw)) continue;
+              if ((r.impressions || 0) < 10) continue; // noise floor
+              seen.add(kw);
+              const pos = Math.round((r.position || 0) * 10) / 10;
+              keywords.push({ keyword: kw, volume: r.impressions || null, position: pos || null, url: null, competition: null, source: 'gsc', clicks: r.clicks || 0, impressions: r.impressions || 0, page1: pos > 0 && pos <= 10, quick_win: pos > 3 && pos <= 20 });
+            }
+            liveGscOk = true;
+            console.log(`[discover] LIVE GSC: ${keywords.length} untracked non-brand keywords from ${liveRows.length} queries`);
+          }
+        }
+      }
+    } catch (e) { console.log('[discover] live GSC failed, will fall back to cache:', e.message); }
+
+    // Fallback: cached gsc_keywords table (only if live GSC unavailable)
+    if (!liveGscOk) try {
       const gscRes = await pool.query(
         `SELECT keyword, position, clicks, impressions FROM gsc_keywords WHERE project_id=$1 AND keyword IS NOT NULL ORDER BY impressions DESC LIMIT $2`,
         [projectId, limit * 4]
       );
       for (const r of gscRes.rows) {
         const kw = r.keyword.toLowerCase().trim();
-        if (kw && !seen.has(kw)) {
+        if (kw && !seen.has(kw) && !isBrandKw(kw)) {
           seen.add(kw);
           keywords.push({ keyword: r.keyword, volume: r.impressions || null, position: Math.round(r.position) || null, url: null, competition: null, source: 'gsc', clicks: r.clicks, impressions: r.impressions });
         }
       }
-      console.log(`[discover] Found ${keywords.length} keywords from GSC`);
+      console.log(`[discover] Found ${keywords.length} keywords from GSC cache (live unavailable)`);
     } catch (e) { console.log('[discover] GSC lookup skipped:', e.message); }
+
+    // 1b. DataForSEO ranked_keywords — Google's index of EVERYTHING this domain ranks for,
+    // including deep positions (50+) that get zero impressions and never show in GSC.
+    // Adds real monthly search volume, which GSC doesn't have.
+    try {
+      if (DATAFORSEO_AUTH) {
+        const orgResult = await dataForSeoRankedKeywords({ domain, locationCode: 2036, limit: 300, offset: 0 });
+        let dfsAdded = 0;
+        for (const kw of (orgResult.keywords || [])) {
+          const k = (kw.keyword || '').toLowerCase().trim();
+          if (!k || k.length < 4 || seen.has(k) || isBrandKw(k)) continue;
+          seen.add(k);
+          const pos = kw.position || kw.rank_absolute || null;
+          keywords.push({ keyword: k, volume: kw.search_volume || kw.volume || null, position: pos, url: kw.url || null, competition: kw.competition || null, source: 'dataforseo', page1: pos != null && pos <= 10, quick_win: pos != null && pos > 3 && pos <= 20 });
+          dfsAdded++;
+        }
+        console.log(`[discover] DataForSEO ranked_keywords: +${dfsAdded} untracked keywords GSC didn't surface`);
+        try { await logApiCost(parseInt(projectId), 'discover_ranked', 'dataforseo', 1, API_COST_RATES.dataforseo.ranked_keywords, { domain }); } catch (e) {}
+      }
+    } catch (e) { console.log('[discover] DataForSEO ranked_keywords skipped:', e.message); }
 
     // 2. Use DataForSEO to search for the domain and extract related keywords from SERP features
     const searchQueries = [`site:${domain}`, domain];
@@ -45169,7 +45229,7 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
         // Extract related searches as keyword suggestions
         for (const rs of (data.related_searches || [])) {
           const kw = (rs.query || '').toLowerCase().trim();
-          if (kw && !seen.has(kw)) {
+          if (kw && !seen.has(kw) && !isBrandKw(kw)) {
             seen.add(kw);
             keywords.push({ keyword: rs.query, volume: null, position: null, url: null, competition: null, source: 'related' });
           }
@@ -45178,7 +45238,7 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
         // Extract "people also ask" as keyword ideas
         for (const paa of (data.related_questions || [])) {
           const kw = (paa.question || '').toLowerCase().trim();
-          if (kw && !seen.has(kw)) {
+          if (kw && !seen.has(kw) && !isBrandKw(kw)) {
             seen.add(kw);
             keywords.push({ keyword: paa.question, volume: null, position: null, url: null, competition: null, source: 'paa' });
           }
@@ -45190,7 +45250,7 @@ app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => 
           if (itemDomain.includes(domain.toLowerCase())) {
             // The title often contains the primary keyword for this page
             const title = (item.title || '').toLowerCase().replace(/\s*[-|–—].*$/, '').trim();
-            if (title && title.length > 3 && title.length < 80 && !seen.has(title)) {
+            if (title && title.length > 3 && title.length < 80 && !seen.has(title) && !isBrandKw(title)) {
               seen.add(title);
               keywords.push({ keyword: item.title.replace(/\s*[-|–—].*$/, '').trim(), volume: null, position: item.position, url: item.link, competition: null, source: 'serp' });
             }

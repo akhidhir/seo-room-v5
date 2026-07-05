@@ -29944,6 +29944,8 @@
       };
 
       const discoverKeywords = async () => {
+        // Cost transparency: show the estimated spend + budget position BEFORE calling the APIs
+        if (!await confirmCost(project.id, 'discover_serp', { keywords: discoverLimit })) return;
         setDiscovering(true);
         const r = await api(`/projects/${project.id}/rank-tracking/discover`, { method: 'POST', body: { limit: discoverLimit } });
         if (r.ok && r.keywords) {
