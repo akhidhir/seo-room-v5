@@ -31360,7 +31360,12 @@
           // re-localised to Perth). Query text holds even when coordinates are ignored.
           const locParts = (project.location || '').split(',').map(s => s.trim()).filter(Boolean);
           const anchor = locParts.length ? ` ${locParts.join(' ')}` : '';
-          const q = k.keyword.toLowerCase().includes((locParts[1] || 'zz').toLowerCase()) ? k.keyword : k.keyword + anchor;
+          // Only anchor keywords that DON'T already name a place — "water leak detection warner"
+          // + "Strathpine QLD" is two suburbs in one query, which garbles the results.
+          const kwLow = ' ' + k.keyword.toLowerCase() + ' ';
+          const areaNames = (Array.isArray(project.service_areas) ? project.service_areas : []).map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase().split(',')[0].replace(/\bqld\b|\bwa\b|\bnsw\b|\bvic\b|[0-9]/g, '').trim()).filter(n => n.length > 2);
+          const hasPlace = areaNames.some(n => kwLow.includes(' ' + n + ' ') || kwLow.includes(' ' + n)) || /\b(qld|wa|nsw|vic|perth|brisbane|sydney|melbourne)\b/i.test(k.keyword);
+          const q = hasPlace ? k.keyword : k.keyword + anchor;
           return c && c.lat ? `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${c.lat},${c.lng},13z` : `https://www.google.com/maps/search/${encodeURIComponent(q)}`;
         }
         return `https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30&uact=5${uuleFor()}`;
