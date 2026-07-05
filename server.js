@@ -41439,12 +41439,15 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         // checking at the city CBD finds nothing for a suburban business).
         let locGps = null; let centerLabel = locLower;
         // STANDPOINT PRIORITY (learned the hard way):
-        // 1. The business's OWN suburb from Project Settings — where the GBP pin physically is.
-        //    (Verified live: Houseworks is #1 for "plumber" from Leeming; from Shelley 2 suburbs
-        //    over, 305 keyword checks matched NOTHING.)
-        // 2. The suburb where tracked Maps keywords rank (only if the project location is unknown).
+        // 1. The business's OWN suburb from the RAW project location ("Leeming, Perth WA" → leeming).
+        //    NOT the DataForSEO-normalised city — that resolves to "Perth" CBD, where a suburban
+        //    business isn't in any pack (verified: 305 checks from Perth CBD matched nothing,
+        //    while from Leeming the business is #1 for "plumber").
+        // 2. The suburb where tracked Maps keywords rank (only if the raw suburb is unknown).
         // Centroid averaging was tried and permanently abandoned — it once landed 70km away.
-        if (SUBURB_GPS[locLower]) { locGps = SUBURB_GPS[locLower]; centerLabel = locLower + ' (business suburb)'; }
+        const rawSuburb = (project.location || '').toLowerCase().split(',')[0].trim().replace(/[^a-z\s]/g, '').trim();
+        if (SUBURB_GPS[rawSuburb]) { locGps = SUBURB_GPS[rawSuburb]; centerLabel = rawSuburb + ' (business suburb)'; }
+        else if (SUBURB_GPS[locLower]) { locGps = SUBURB_GPS[locLower]; centerLabel = locLower + ' (city)'; }
         if (!locGps) try {
           const best = await pool.query(
             `SELECT LOWER(location) AS loc, COUNT(*) AS n FROM rank_tracking
@@ -41655,7 +41658,9 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           const prevKws = prev ? (typeof prev.maps_keywords === 'string' ? JSON.parse(prev.maps_keywords) : (prev.maps_keywords || [])) : [];
           if (prevKws.length > 0) {
             console.warn(`[maps-discovery] Scan found 0 but ${prevKws.length} previous results exist — keeping previous (scan centre may be wrong)`);
-            await pool.query(`UPDATE discovery_cache SET maps_status='done', maps_count=$2, updated_at=NOW() WHERE project_id=$1`, [projectId, prevKws.length]);
+            // Save WHERE this scan stood even though results were kept — stale centre labels misled debugging twice
+            await pool.query(`UPDATE discovery_cache SET maps_status='done', maps_count=$2, maps_center=$3, updated_at=NOW() WHERE project_id=$1`,
+              [projectId, prevKws.length, JSON.stringify({ lat: locGps.lat, lng: locGps.lng, label: centerLabel + ' — scan found 0, previous results kept' })]);
             return;
           }
         }
