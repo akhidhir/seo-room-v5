@@ -41632,7 +41632,12 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
 
         // QUALITY FILTER — no brand terms (ranking #1 for your own name is not a discovery) and
         // no blog-title "keywords" (whole post titles are unique phrases that match anywhere).
-        const brandBits = businessName.split(/\s+/).filter(w => w.length > 3 && !['plumbing', 'plumber', 'electrical', 'services', 'service', 'repairs', 'repair', 'computer', 'computers'].includes(w));
+        // CITY/STATE words are NEVER brand words: "Car Key Rescue Perth" once made "perth" a brand
+        // term, which filtered out every single candidate — the scan checked nothing ($0, 0 found).
+        const cityWords = new Set((project.location || '').toLowerCase().split(/[^a-z]+/).filter(w => w.length > 1));
+        ['perth', 'brisbane', 'sydney', 'melbourne', 'adelaide', 'hobart', 'darwin', 'wa', 'qld', 'nsw', 'vic', 'sa', 'tas', 'nt', 'act', 'australia'].forEach(w => cityWords.add(w));
+        const GENERIC_BRAND_BITS = new Set(['plumbing', 'plumber', 'electrical', 'services', 'service', 'repairs', 'repair', 'computer', 'computers', 'locksmith', 'auto', 'automotive']);
+        const brandBits = businessName.split(/\s+/).filter(w => w.length > 3 && !GENERIC_BRAND_BITS.has(w) && !cityWords.has(w));
         const services = [...serviceSet].filter(s =>
           s.length > 2 &&
           s.split(/\s+/).length <= 5 &&
