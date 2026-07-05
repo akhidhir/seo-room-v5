@@ -31284,11 +31284,13 @@
           if (r && !r.error) {
             if (r.maps_status === 'done') {
               setMapsKeywords(r.maps_keywords || []);
+              if (r.maps_center) setMapsCenter(r.maps_center);
               setHasMapsRun(true);
               setMapsLoading(false);
             } else if (r.maps_status === 'running') {
               // Keep showing the PREVIOUS results while the new scan runs — they only get
               // replaced when the fresh data lands. (Was: list vanished during every re-scan.)
+              if (r.maps_center) setMapsCenter(r.maps_center);
               if (r.maps_keywords?.length) setMapsKeywords(r.maps_keywords);
               if (mapsUserTriggered.current) setMapsLoading(true);
               setHasMapsRun(true);
@@ -31333,6 +31335,29 @@
           }
           alert('Discovery failed: ' + e.message); setLoading(false);
         }
+      };
+
+      const [mapsCenter, setMapsCenter] = useState(null); // where the maps scan stood — for "view on Google Maps" links
+      // Simulate searching from the project's city on SERP links (Google's uule parameter)
+      const uuleFor = () => {
+        try {
+          const STATES = { wa: 'Western Australia', nsw: 'New South Wales', vic: 'Victoria', qld: 'Queensland', sa: 'South Australia', tas: 'Tasmania', nt: 'Northern Territory', act: 'Australian Capital Territory' };
+          const parts = (project.location || '').split(',').map(s => s.trim()).filter(Boolean);
+          if (!parts.length) return '';
+          const city = parts[0].replace(/\b\w/g, c => c.toUpperCase());
+          const st = STATES[(parts[1] || 'wa').toLowerCase().replace(/[^a-z]/g, '')] || 'Western Australia';
+          const canonical = `${city},${st},Australia`;
+          const key = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+          if (canonical.length >= key.length) return '';
+          return '&uule=' + encodeURIComponent('w+CAIQICI' + key[canonical.length] + btoa(canonical));
+        } catch (e) { return ''; }
+      };
+      const checkOnGoogleHref = (k) => {
+        if (tab === 'maps') {
+          const c = mapsCenter || (window.__suburbGps && window.__suburbGps[(project.location || '').toLowerCase().split(',')[0].trim()]);
+          return c && c.lat ? `https://www.google.com/maps/search/${encodeURIComponent(k.keyword)}/@${c.lat},${c.lng},14z` : `https://www.google.com/maps/search/${encodeURIComponent(k.keyword)}`;
+        }
+        return `https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30&uact=5${uuleFor()}`;
       };
 
       const discoverMaps = async (force = false) => {
@@ -31649,8 +31674,8 @@
                         <td style={{ padding: '10px 14px', textAlign: 'center', fontSize: 14, color: '#94a3b8' }}>{k.cpc ? `$${k.cpc.toFixed(2)}` : '—'}</td>
                         {tab === 'serp' && <td style={{ padding: '10px 14px', fontSize: 13, color: '#94a3b8', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url || '—'}</td>}
                         <td style={{ padding: '10px 14px', textAlign: 'center', display: 'flex', gap: 8, justifyContent: 'center' }}>
-                          <a href={`https://www.google.com.au/search?q=${encodeURIComponent(k.keyword)}&gl=au&hl=en&pws=0&num=30&uact=5`} target="_blank" rel="noopener noreferrer"
-                            title="Check on Google"
+                          <a href={checkOnGoogleHref(k)} target="_blank" rel="noopener noreferrer"
+                            title={tab === 'maps' ? 'Open Google Maps at the exact scan point — same viewpoint the scan measured' : 'Check on Google (simulates searching from the project city)'}
                             style={{ color: '#14b8a6', fontSize: 14, textDecoration: 'none' }}
                             onClick={e => e.stopPropagation()}>
                             <i className="fa-solid fa-arrow-up-right-from-square" />

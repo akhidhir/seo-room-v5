@@ -651,6 +651,8 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
     // Keyword origin: 'agreed' = contracted with the client, 'discovered' = quick-win found by discovery
     await client.query(`ALTER TABLE rank_keywords ADD COLUMN IF NOT EXISTS origin TEXT DEFAULT 'agreed'`).catch(() => {});
+    // Where the maps discovery scan stood — lets the UI link to Google Maps at the exact scan point
+    await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_center JSONB`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_scan_limit INTEGER DEFAULT 50`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_service TEXT`).catch(() => {});
@@ -41247,6 +41249,7 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
       maps_keywords: row.maps_keywords || [],
       maps_count: row.maps_count || 0,
       maps_cost: row.maps_cost || 0,
+      maps_center: row.maps_center || null,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -41629,8 +41632,8 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           }
         }
         await pool.query(
-          `UPDATE discovery_cache SET maps_status='done', maps_keywords=$2, maps_count=$3, maps_cost=$4, updated_at=NOW() WHERE project_id=$1`,
-          [projectId, JSON.stringify(foundKeywords), foundKeywords.length, totalCost]
+          `UPDATE discovery_cache SET maps_status='done', maps_keywords=$2, maps_count=$3, maps_cost=$4, maps_center=$5, updated_at=NOW() WHERE project_id=$1`,
+          [projectId, JSON.stringify(foundKeywords), foundKeywords.length, totalCost, JSON.stringify({ lat: locGps.lat, lng: locGps.lng, label: centerLabel })]
         );
       } catch (e) {
         console.error(`[maps-discovery] Background error:`, e.message);
