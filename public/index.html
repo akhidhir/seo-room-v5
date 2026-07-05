@@ -1369,11 +1369,12 @@
         if (est.budget?.warnings?.length > 0) {
           msg += '\n\n⚠️ ' + est.budget.warnings.join('\n⚠️ ');
         }
-        if (est.budget?.projectBudget > 0) {
-          msg += `\n\nProject spend: $${est.budget.projectSpend.toFixed(2)} / $${est.budget.projectBudget.toFixed(2)}`;
-        }
-        if (est.budget?.agencyBudget > 0) {
-          msg += `\nAgency spend: $${est.budget.agencySpend.toFixed(2)} / $${est.budget.agencyBudget.toFixed(2)}`;
+        // ALWAYS show this month's running totals — cost control needs the full picture every time
+        if (est.budget) {
+          const pb = est.budget.projectBudget > 0 ? ` of $${est.budget.projectBudget.toFixed(2)} budget` : ' (no budget set)';
+          const ab = est.budget.agencyBudget > 0 ? ` of $${est.budget.agencyBudget.toFixed(2)} budget` : '';
+          msg += `\n\nThis project this month: $${(est.budget.projectSpend || 0).toFixed(2)}${pb}`;
+          msg += `\nAll projects this month: $${(est.budget.agencySpend || 0).toFixed(2)}${ab}`;
         }
         return confirm(msg + '\n\nProceed?');
       } catch (e) {
