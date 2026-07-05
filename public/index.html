@@ -31718,7 +31718,9 @@
       const RINGS = [5, 10, 15, 20];
       const volColor = (v) => v == null ? '#94a3b8' : v >= 500 ? '#4ade80' : v >= 150 ? '#2dd4bf' : '#60a5fa';
       const orbs = (data?.orbits || []).map((o, i) => {
-        const km = o.reach_km != null ? Math.max(1.6, Math.min(21, o.reach_km)) : 21.8;
+        // Grid-scanned → its proven-reach orbit. Un-scanned → the outer belt, spread across a
+        // band (20.3–22.6 km) so dozens of keywords don't collide on one ring.
+        const km = o.reach_km != null ? Math.max(1.6, Math.min(19.5, o.reach_km)) : 20.3 + (i % 6) * 0.46;
         return { ...o, orbitR: ringR(km), angle0: Math.round((i * 137.5) % 360), dur: 70 + (i % 9) * 16, dim: o.reach_km == null };
       });
 
@@ -31778,20 +31780,27 @@
                     <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>{sel.keyword}</div>
                     <div style={{ fontSize: 13, lineHeight: 2 }}>
                       <div><span style={{ color: 'var(--text3)' }}>Origin: </span>{sel.origin === 'discovered' ? '✨ Discovered quick-win' : '🤝 Agreed with client'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>Status: </span>{sel.tracked === false ? 'not tracked yet' : 'tracked'}</div>
                       <div><span style={{ color: 'var(--text3)' }}>Proven reach: </span>{sel.reach_km != null ? `${sel.reach_km} km` : 'not grid-scanned yet'}</div>
-                      <div><span style={{ color: 'var(--text3)' }}>Best grid position: </span>{sel.best_position ? `#${sel.best_position}` : '—'}</div>
-                      <div><span style={{ color: 'var(--text3)' }}>Tracked position: </span>{sel.maps_position ? `#${sel.maps_position} (${sel.location})` : '—'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>{sel.tracked === false ? 'Found at scan point: ' : 'Best grid position: '}</span>{sel.best_position ? `#${sel.best_position}` : '—'}</div>
+                      {sel.tracked !== false && <div><span style={{ color: 'var(--text3)' }}>Tracked position: </span>{sel.maps_position ? `#${sel.maps_position} (${sel.location})` : '—'}</div>}
                       <div><span style={{ color: 'var(--text3)' }}>Search volume: </span>{sel.volume ? sel.volume.toLocaleString() + '/mo' : 'unknown'}</div>
                     </div>
-                    <button className="btn btn-primary" onClick={() => setPage && setPage('smart-map')} style={{ marginTop: 12, width: '100%', fontSize: 12 }}>
-                      <i className="fas fa-map" style={{ marginRight: 6 }} />{sel.has_grid ? 'View grid map' : 'Run a grid scan'}
-                    </button>
+                    {sel.tracked === false ? (
+                      <button className="btn btn-primary" onClick={() => setPage && setPage('discover-local')} style={{ marginTop: 12, width: '100%', fontSize: 12 }}>
+                        <i className="fas fa-plus" style={{ marginRight: 6 }} />Track it — Discover Local Keywords
+                      </button>
+                    ) : (
+                      <button className="btn btn-primary" onClick={() => setPage && setPage('smart-map')} style={{ marginTop: 12, width: '100%', fontSize: 12 }}>
+                        <i className="fas fa-map" style={{ marginRight: 6 }} />{sel.has_grid ? 'View grid map' : 'Run a grid scan'}
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, fontSize: 13, color: 'var(--text3)' }}>
                     Click any keyword in the orbit to see its details.
                     <div style={{ marginTop: 10, fontSize: 12 }}>
-                      {data?.summary && <>Tracking {data.summary.total} Maps keywords · {data.summary.with_grid} grid-scanned · {data.summary.discovered} discovered quick-wins</>}
+                      {data?.summary && <>{data.summary.total} keywords in the sky · {data.summary.with_grid} grid-scanned (inner orbits) · {data.summary.untracked || 0} discovered, awaiting tracking (outer belt)</>}
                     </div>
                   </div>
                 )}

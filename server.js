@@ -41333,7 +41333,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       const kwl = t.keyword.toLowerCase().trim();
       const g = reachByKw.get(kwl);
       return {
-        keyword: t.keyword, location: t.location, origin: t.origin,
+        keyword: t.keyword, location: t.location, origin: t.origin, tracked: true,
         maps_position: t.maps_position,
         volume: volByKw.get(kwl) || null,
         reach_km: g?.reach_km != null ? Math.round(g.reach_km * 10) / 10 : null,
@@ -41341,8 +41341,29 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         has_grid: !!g, scanned_at: g?.scanned_at || null,
       };
     });
+
+    // DISCOVERY BELT — Maps-discovery keywords not yet tracked. Real found positions from the
+    // scan point; they graduate inward once tracked + grid-scanned. Capped to the top 80 by
+    // volume/position so the sky stays readable.
+    try {
+      const dc = (await pool.query('SELECT maps_keywords FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+      const mk = typeof dc?.maps_keywords === 'string' ? JSON.parse(dc.maps_keywords) : (dc?.maps_keywords || []);
+      const trackedSet = new Set(orbits.map(o => o.keyword.toLowerCase().trim()));
+      const belt = mk
+        .filter(k => k.keyword && !trackedSet.has(k.keyword.toLowerCase().trim()))
+        .map(k => ({
+          keyword: k.keyword, location: null, origin: 'discovered', tracked: false,
+          maps_position: k.maps_position || null,
+          volume: k.volume || volByKw.get(k.keyword.toLowerCase().trim()) || null,
+          reach_km: null, best_position: k.maps_position || null, has_grid: false, scanned_at: null,
+        }))
+        .sort((a, b) => (b.volume || 0) - (a.volume || 0) || (a.maps_position || 99) - (b.maps_position || 99))
+        .slice(0, 80);
+      orbits.push(...belt);
+    } catch (e) {}
+
     res.json({ ok: true, business: project.business_name || project.name, orbits,
-      summary: { total: orbits.length, with_grid: orbits.filter(o => o.has_grid).length, discovered: orbits.filter(o => o.origin === 'discovered').length } });
+      summary: { total: orbits.length, with_grid: orbits.filter(o => o.has_grid).length, discovered: orbits.filter(o => o.origin === 'discovered').length, untracked: orbits.filter(o => !o.tracked).length } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
