@@ -41273,6 +41273,46 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// SITE INTEL — read the client's WEBSITE for the suburbs and services it actually mentions,
+// instead of relying on hand-filled settings. Crawls the homepage + up to 8 service/area pages,
+// matches text against the known-suburb list, and extracts short service terms from page slugs.
+async function extractSiteIntel(project) {
+  const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+  if (!domain) return { suburbs: [], services: [] };
+  const base = `https://${domain}`;
+  const UA = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' };
+  const texts = [];
+  const slugs = [];
+  try {
+    const pages = await discoverPages(base, project.wordpress_url, getWpAuthHeaders(project));
+    const interesting = (pages || []).filter(p => /service|area|suburb|location|about|contact|home/i.test((p.slug || '') + ' ' + (p.title || ''))).slice(0, 8);
+    for (const p of (pages || [])) { const s = (p.slug || '').toLowerCase().replace(/-/g, ' ').trim(); if (s) slugs.push(s); }
+    const toFetch = [base, ...interesting.map(p => p.url)].filter(Boolean).slice(0, 9);
+    for (const u of toFetch) {
+      try {
+        const r = await fetch(u, { headers: UA, signal: AbortSignal.timeout(12000) });
+        if (r.ok) texts.push((await r.text()).replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').toLowerCase());
+      } catch (e) {}
+    }
+  } catch (e) { console.log('[site-intel] crawl failed:', e.message); }
+  const all = texts.join(' ').replace(/\s+/g, ' ');
+  // Suburbs: known suburb names appearing as whole words on the site
+  const suburbs = [];
+  for (const sub of Object.keys(SUBURB_GPS)) {
+    if (sub.length < 4) continue; // avoid false hits on tiny names
+    if (new RegExp(`\\b${sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(all)) suburbs.push(sub);
+  }
+  // Services: short slug phrases stripped of suburbs, deduped
+  const services = new Set();
+  for (let s of slugs) {
+    for (const sub of suburbs) s = s.replace(new RegExp(`\\b${sub}\\b`, 'g'), ' ');
+    s = s.replace(/\b(and|the|for|your|our|in|of|wa|qld|nsw)\b/g, ' ').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
+    if (s.length > 4 && s.split(' ').length <= 4) services.add(s);
+  }
+  console.log(`[site-intel] ${domain}: ${suburbs.length} suburbs, ${services.size} service terms found on the site`);
+  return { suburbs, services: [...services].slice(0, 40) };
+}
+
 // RANKING ORBITS — data for the client-facing orbit visual. Every Maps keyword's PROVEN reach:
 // the farthest grid-scan point (km from the business) where it still ranks top-10. Real data only:
 // keywords without a grid scan yet go to the outer "discovery belt" until scanned.
@@ -41556,9 +41596,29 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
             const n = (typeof s === 'string' ? s : s.name || '').toLowerCase().trim();
             if (n && n.length > 3 && n.split(/\s+/).length <= 3) coreServices.add(n);
           }
-          const areas = (Array.isArray(project.service_areas) ? project.service_areas : [])
+          let areas = (Array.isArray(project.service_areas) ? project.service_areas : [])
             .map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim())
             .filter(n => n.length > 2);
+          // ALWAYS read the client's website for the suburbs and services it mentions — discovery
+          // means finding what we DON'T already know, so this can't be just a fallback. New finds
+          // are saved into the project so every other feature benefits too.
+          {
+            const intel = await extractSiteIntel(project);
+            if (intel.suburbs.length) {
+              const merged = [...new Set([...areas, ...intel.suburbs])];
+              areas = merged;
+              try {
+                const existing = Array.isArray(project.service_areas) ? project.service_areas : [];
+                const have = new Set(existing.map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase()));
+                const additions = intel.suburbs.filter(s => !have.has(s)).map(s => ({ name: s, distance_km: 0, source: 'website' }));
+                if (additions.length) {
+                  await pool.query('UPDATE projects SET service_areas=$2 WHERE id=$1', [projectId, JSON.stringify([...existing, ...additions])]);
+                  console.log(`[maps-discovery] Saved ${additions.length} website-found suburbs into project service areas`);
+                }
+              } catch (e) {}
+            }
+            for (const svc of intel.services) if (svc.split(' ').length <= 3) coreServices.add(svc);
+          }
           let comboCount = 0;
           outer: for (const svc of [...coreServices].slice(0, 3)) {
             for (const sub of areas.slice(0, 25)) {
