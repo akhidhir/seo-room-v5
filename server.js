@@ -41376,21 +41376,8 @@ app.get('/api/projects/:projectId/discovery/maps/test', async (req, res) => {
     const kw = String(req.query.kw || 'computer repairs');
     const businessName = (project.business_name || project.name || '').toLowerCase();
     const domain = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '').toLowerCase();
-    // Same centering logic as the discovery scan
-    const areaPts = [];
-    for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) {
-      const nm = (typeof a === 'string' ? a : (a.name || '')).toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
-      if (SUBURB_GPS[nm]) areaPts.push(SUBURB_GPS[nm]);
-    }
-    let locGps = areaPts.length >= 2
-      ? { lat: areaPts.reduce((s, p) => s + p.lat, 0) / areaPts.length, lng: areaPts.reduce((s, p) => s + p.lng, 0) / areaPts.length }
-      : (SUBURB_GPS[(project.location || '').toLowerCase().split(',')[0].trim()] || SUBURB_GPS['perth']);
-    // Same cross-state sanity check as the real scan
-    const cityG = SUBURB_GPS[(project.location || '').toLowerCase().split(',')[0].trim()];
-    if (cityG) {
-      const dK = (a, b) => { const R = 6371, dLa = (b.lat - a.lat) * Math.PI / 180, dLo = (b.lng - a.lng) * Math.PI / 180; const s = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLo / 2) ** 2; return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)); };
-      if (dK(locGps, cityG) > 120) locGps = cityG;
-    }
+    // Stand at the business's own suburb — same rule as the real scan (centroids abandoned)
+    const locGps = SUBURB_GPS[(project.location || '').toLowerCase().split(',')[0].trim()] || SUBURB_GPS['perth'];
     const data = await dataForSeoMaps({ keyword: kw, lat: locGps.lat, lng: locGps.lng });
     res.json({
       keyword: kw, center: locGps, business_name_matched_against: businessName, domain_matched_against: domain,
@@ -41463,35 +41450,11 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           const loc = best.rows[0]?.loc?.split(',')[0].trim();
           if (loc && SUBURB_GPS[loc]) { locGps = SUBURB_GPS[loc]; centerLabel = `${loc} (proven ranking suburb)`; }
         } catch (e) {}
-        // Fallback: service-area centroid, then project city
-        if (!locGps) {
-          const areaPts = [];
-          for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) {
-            const nm = (typeof a === 'string' ? a : (a.name || a.placeName || '')).toLowerCase().split(',')[0]
-              .replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
-            if (SUBURB_GPS[nm]) areaPts.push(SUBURB_GPS[nm]);
-          }
-          if (areaPts.length >= 2) {
-            locGps = {
-              lat: areaPts.reduce((s, p) => s + p.lat, 0) / areaPts.length,
-              lng: areaPts.reduce((s, p) => s + p.lng, 0) / areaPts.length,
-            };
-            centerLabel = `service-area centroid of ${areaPts.length} suburbs`;
-          }
-        }
-        if (!locGps) locGps = SUBURB_GPS[locLower] || SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
-
-        // SANITY CHECK — suburb names repeat across states (a QLD business once got centred in
-        // WA bush and matched nothing). If the computed centre is >120km from the project's own
-        // city, it's wrong: use the city instead.
-        const cityGps = SUBURB_GPS[locLower];
-        if (cityGps && locGps !== cityGps) {
-          const dKm = (a, b) => { const R = 6371, dLa = (b.lat - a.lat) * Math.PI / 180, dLo = (b.lng - a.lng) * Math.PI / 180; const s = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLo / 2) ** 2; return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)); };
-          if (dKm(locGps, cityGps) > 120) {
-            console.warn(`[maps-discovery] Computed centre is ${dKm(locGps, cityGps).toFixed(0)}km from ${locLower} — cross-state suburb collision, using the city instead`);
-            locGps = cityGps; centerLabel = locLower + ' (centre sanity fallback)';
-          }
-        }
+        // Fallback 2: the BUSINESS'S OWN SUBURB from the project location — where it stands is
+        // where it ranks. (A service-area centroid was tried and abandoned: averaging coordinates
+        // dragged one Perth business 70km into the hills where it matched nothing.)
+        if (!locGps && SUBURB_GPS[locLower]) { locGps = SUBURB_GPS[locLower]; centerLabel = locLower + ' (business suburb)'; }
+        if (!locGps) locGps = SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
 
         console.log(`[maps-discovery] Starting for "${businessName}" (${domain}), center=${centerLabel} (${locGps.lat.toFixed(4)},${locGps.lng.toFixed(4)})`);
 
