@@ -41541,6 +41541,35 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           console.log(`[maps-discovery] Added organic keywords, total now: ${serviceSet.size}`);
         } catch (e) { console.log('[maps-discovery] Organic keywords skipped:', e.message); }
 
+        // SERVICE × SUBURB COMBOS — the site-derived list only contains what the site already
+        // ranks for. A business WITHOUT suburb pages gets zero "plumber <suburb>" candidates, so
+        // generate them from the industry/services × the project's own service areas (capped ~60,
+        // ≈ $0.12). This is how a blog-heavy site still gets suburb-level discovery.
+        try {
+          const coreServices = new Set();
+          const ind = (project.industry || '').toLowerCase().split(/[,&/]+/)[0].trim();
+          if (ind && ind.length > 3) {
+            coreServices.add(ind);
+            if (ind.endsWith('ing')) coreServices.add(ind.replace(/ing$/, 'er')); // plumbing → plumber
+          }
+          for (const s of (Array.isArray(project.defined_services) ? project.defined_services : [])) {
+            const n = (typeof s === 'string' ? s : s.name || '').toLowerCase().trim();
+            if (n && n.length > 3 && n.split(/\s+/).length <= 3) coreServices.add(n);
+          }
+          const areas = (Array.isArray(project.service_areas) ? project.service_areas : [])
+            .map(a => (typeof a === 'string' ? a : a.name || '').toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim())
+            .filter(n => n.length > 2);
+          let comboCount = 0;
+          outer: for (const svc of [...coreServices].slice(0, 3)) {
+            for (const sub of areas.slice(0, 25)) {
+              if (comboCount >= 60) break outer;
+              const combo = `${svc} ${sub}`;
+              if (!serviceSet.has(combo)) { serviceSet.add(combo); comboCount++; }
+            }
+          }
+          console.log(`[maps-discovery] Added ${comboCount} service×suburb combos (${[...coreServices].slice(0, 3).join(', ')} × ${Math.min(areas.length, 25)} areas)`);
+        } catch (e) { console.log('[maps-discovery] combos skipped:', e.message); }
+
         // QUALITY FILTER — no brand terms (ranking #1 for your own name is not a discovery) and
         // no blog-title "keywords" (whole post titles are unique phrases that match anywhere).
         const brandBits = businessName.split(/\s+/).filter(w => w.length > 3 && !['plumbing', 'plumber', 'electrical', 'services', 'service', 'repairs', 'repair', 'computer', 'computers'].includes(w));
