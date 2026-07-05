@@ -41679,13 +41679,32 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
             }));
             return { local_results: results, cost: 0 };
           } else {
-            // Search by CITY location_name, not pin coordinates. Standing exactly on the business's
-            // pin made it #1 for every single keyword (proximity ceiling) — positions meant nothing.
-            // resolveDataForSeoLocation gives the same canonical location rank tracking uses, so
-            // discovery positions mean the same thing as the Maps Rankings page: the market view.
-            return dataForSeoMaps({ keyword, location });
+            // Search by location_name, not pin coordinates (pin standpoint made everything #1).
+            // scanLocation is chosen once before the loop: the business's own suburb if Google's
+            // location database recognises it (validated with one cheap test call), else the city —
+            // metro-level markets are too coarse for suburban businesses (Brisbane found 0).
+            return dataForSeoMaps({ keyword, location: scanLocation });
           }
         }
+
+        // Choose + VALIDATE the scan location once: suburb-level first, city fallback.
+        let scanLocation = location;
+        try {
+          const rawSub = (project.location || '').split(',')[0].trim();
+          const stateMap = { wa: 'Western Australia', qld: 'Queensland', nsw: 'New South Wales', vic: 'Victoria', sa: 'South Australia', tas: 'Tasmania', nt: 'Northern Territory', act: 'Australian Capital Territory' };
+          const stRaw = ((project.location || '').split(',')[1] || '').toLowerCase().replace(/[^a-z]/g, '');
+          const state = stateMap[stRaw] || (location.split(',')[1] || 'Western Australia');
+          if (rawSub && rawSub.toLowerCase() !== location.split(',')[0].toLowerCase()) {
+            const suburbCanonical = `${rawSub.replace(/\b\w/g, c => c.toUpperCase())},${state},Australia`;
+            const probe = await dataForSeoMaps({ keyword: (project.industry || 'plumber').split(/[,&/]+/)[0].trim() || 'plumber', location: suburbCanonical, depth: 20 });
+            if ((probe.local_results || []).length > 0) {
+              scanLocation = suburbCanonical;
+              console.log(`[maps-discovery] Suburb-level location validated: ${suburbCanonical} (${probe.local_results.length} results)`);
+            } else {
+              console.log(`[maps-discovery] Suburb location "${suburbCanonical}" not recognised — using ${location}`);
+            }
+          }
+        } catch (e) { console.log('[maps-discovery] suburb location probe failed, using city:', e.message); }
 
         for (let i = 0; i < services.length; i += 5) {
           const batch = services.slice(i, i + 5);
