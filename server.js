@@ -41248,7 +41248,13 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
     // Google Maps" links always carry real coordinates instead of falling back to the user's IP.
     let mapsCenter = row.maps_center || null;
     if (!mapsCenter) {
+      // Business's own suburb first — same standpoint rule as the scan itself
       try {
+        const proj = (await pool.query('SELECT location FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+        const city = (proj?.location || '').toLowerCase().split(',')[0].trim();
+        if (city && SUBURB_GPS[city]) mapsCenter = { ...SUBURB_GPS[city], label: city + ' (business suburb)' };
+      } catch (e) {}
+      if (!mapsCenter) try {
         const best = await pool.query(
           `SELECT LOWER(location) AS loc, COUNT(*) AS n FROM rank_tracking
            WHERE project_id=$1 AND maps_position IS NOT NULL AND maps_position <= 10 AND COALESCE(location,'') != ''
@@ -41256,13 +41262,6 @@ app.get('/api/projects/:projectId/discovery/maps', async (req, res) => {
         const loc = best.rows[0]?.loc?.split(',')[0].trim();
         if (loc && SUBURB_GPS[loc]) mapsCenter = { ...SUBURB_GPS[loc], label: `${loc} (proven ranking suburb)` };
       } catch (e) {}
-      if (!mapsCenter) {
-        try {
-          const proj = (await pool.query('SELECT location FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
-          const city = (proj?.location || '').toLowerCase().split(',')[0].trim();
-          if (city && SUBURB_GPS[city]) mapsCenter = { ...SUBURB_GPS[city], label: city };
-        } catch (e) {}
-      }
     }
     res.json({
       maps_status: row.maps_status || 'idle',
@@ -41439,10 +41438,14 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         // areas when available (a local pack only shows the business near its real service core —
         // checking at the city CBD finds nothing for a suburban business).
         let locGps = null; let centerLabel = locLower;
-        // BEST center = where the business is PROVEN to rank: the suburb where tracked Maps
-        // keywords are most often found. (The old service-area centroid averaged 28 suburbs and
-        // landed 6km from the workshop, where the business isn't in any local pack → 0 results.)
-        try {
+        // STANDPOINT PRIORITY (learned the hard way):
+        // 1. The business's OWN suburb from Project Settings — where the GBP pin physically is.
+        //    (Verified live: Houseworks is #1 for "plumber" from Leeming; from Shelley 2 suburbs
+        //    over, 305 keyword checks matched NOTHING.)
+        // 2. The suburb where tracked Maps keywords rank (only if the project location is unknown).
+        // Centroid averaging was tried and permanently abandoned — it once landed 70km away.
+        if (SUBURB_GPS[locLower]) { locGps = SUBURB_GPS[locLower]; centerLabel = locLower + ' (business suburb)'; }
+        if (!locGps) try {
           const best = await pool.query(
             `SELECT LOWER(location) AS loc, COUNT(*) AS n FROM rank_tracking
              WHERE project_id=$1 AND maps_position IS NOT NULL AND maps_position <= 10 AND COALESCE(location,'') != ''
@@ -41450,10 +41453,6 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
           const loc = best.rows[0]?.loc?.split(',')[0].trim();
           if (loc && SUBURB_GPS[loc]) { locGps = SUBURB_GPS[loc]; centerLabel = `${loc} (proven ranking suburb)`; }
         } catch (e) {}
-        // Fallback 2: the BUSINESS'S OWN SUBURB from the project location — where it stands is
-        // where it ranks. (A service-area centroid was tried and abandoned: averaging coordinates
-        // dragged one Perth business 70km into the hills where it matched nothing.)
-        if (!locGps && SUBURB_GPS[locLower]) { locGps = SUBURB_GPS[locLower]; centerLabel = locLower + ' (business suburb)'; }
         if (!locGps) locGps = SUBURB_GPS['perth'] || { lat: -31.9505, lng: 115.8605 };
 
         console.log(`[maps-discovery] Starting for "${businessName}" (${domain}), center=${centerLabel} (${locGps.lat.toFixed(4)},${locGps.lng.toFixed(4)})`);
