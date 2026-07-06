@@ -15132,6 +15132,23 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     const project = proj.rows[0];
     const businessName = project.business_name || project.name || '';
 
+    // ── IDENTITY GUARD (100% accuracy) ── Never write a GBP profile onto a project unless the profile's
+    // business name matches the project. This stops cross-contamination (e.g. Gold PC's "Computer repair
+    // service" data landing on Houseworks Plumbing) that would otherwise generate false findings.
+    if (profile && profile.title && businessName) {
+      const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const GEN = new Set(['the', 'and', 'pty', 'ltd', 'co', 'group', 'services', 'service', 'plumbing', 'plumber', 'gas', 'perth', 'wa', 'nsw', 'qld', 'vic', 'sa', 'au', 'australia', 'company', 'the']);
+      const tokens = s => norm(s).split(' ').filter(w => w.length >= 4 && !GEN.has(w));
+      const projT = tokens(businessName);
+      const profT = new Set(tokens(profile.title));
+      const nb = norm(businessName), np = norm(profile.title);
+      const matches = projT.length === 0 || projT.some(w => profT.has(w)) || nb.includes(np) || np.includes(nb);
+      if (!matches) {
+        console.warn(`[rc-sync] REJECTED: profile "${profile.title}" does not match project "${businessName}" (project ${projectId}) — refusing to prevent cross-contamination.`);
+        return res.status(409).json({ error: `The GBP profile "${profile.title}" doesn't match this project ("${businessName}"). Sync refused to avoid mixing businesses — check the GBP location / Place ID in Project Settings.`, mismatch: true, profile_title: profile.title, project_name: businessName });
+      }
+    }
+
     console.log(`[rc-sync] Syncing Rating Captain data for project ${projectId} (${businessName})`);
 
     // 1. Store RC profile data in project_integrations (both rc_profile and rc_sync)
