@@ -31940,55 +31940,87 @@
       const cats = (data?.categories || []);
       return (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 6 }}>
-            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-bullseye" style={{ marginRight: 10, color: '#6366f1' }} />Ranking Audit</h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-              {data?.overall != null && <div style={{ textAlign: 'right' }}><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>Overall</div><div style={{ fontSize: 22, fontWeight: 800, color: data.overall >= 75 ? '#22c55e' : data.overall >= 50 ? '#f59e0b' : '#ef4444' }}>{data.overall}<span style={{ fontSize: 12, color: 'var(--text3)' }}>/100</span></div></div>}
-              <button className="btn btn-primary" onClick={run} disabled={loading} style={{ fontSize: 13, padding: '9px 18px' }}>{loading ? <><span className="spinner" style={{ marginRight: 6 }} />Running…</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run audit</>}</button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 6 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 30, fontWeight: 800 }}><i className="fas fa-bullseye" style={{ marginRight: 12, color: '#6366f1' }} />Ranking Audit</h2>
+              <div style={{ fontSize: 15, color: 'var(--text3)', marginTop: 6 }}>Where you stand on Google — <b style={{ color: '#a78bfa' }}>Search</b>, <b style={{ color: '#60a5fa' }}>Maps</b> and the <b style={{ color: '#4ade80' }}>Local pack</b>. Every finding links to the proof.</div>
             </div>
+            <button className="btn btn-primary" onClick={run} disabled={loading} style={{ fontSize: 15, fontWeight: 700, padding: '13px 26px', borderRadius: 10 }}>{loading ? <><span className="spinner" style={{ marginRight: 8 }} />Running…</> : <><i className="fas fa-play" style={{ marginRight: 8 }} />Run audit</>}</button>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 16 }}>Six categories, ordered by impact on <b style={{ color: '#a78bfa' }}>SERP</b> · <b style={{ color: '#60a5fa' }}>Map</b> · <b style={{ color: '#4ade80' }}>Local pack</b>. Click a row to drill in; every finding links to the real thing.</div>
-          {err && <div className="alert alert-error"><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{err}</div>}
-          {!data && !loading && <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)', border: '1px dashed var(--border)', borderRadius: 12 }}><i className="fas fa-bullseye" style={{ fontSize: 32, marginBottom: 12, display: 'block', opacity: 0.4 }} />Click <b>Run audit</b> to score this site across the six ranking categories.</div>}
-          {loading && !data && <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}><span className="spinner-large" style={{ margin: '0 auto 12px' }} />Crawling pages and scoring…</div>}
-          {data && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {err && <div className="alert alert-error" style={{ marginTop: 14 }}><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{err}</div>}
+          {!data && !loading && <div style={{ textAlign: 'center', padding: 70, color: 'var(--text3)', border: '1px dashed var(--border)', borderRadius: 16, marginTop: 20 }}><i className="fas fa-bullseye" style={{ fontSize: 44, marginBottom: 16, display: 'block', opacity: 0.35 }} /><div style={{ fontSize: 17 }}>Click <b style={{ color: '#818cf8' }}>Run audit</b> to score this site across the six ranking categories.</div></div>}
+          {loading && !data && <div style={{ textAlign: 'center', padding: 70, color: 'var(--text3)' }}><span className="spinner-large" style={{ margin: '0 auto 16px' }} /><div style={{ fontSize: 16 }}>Crawling pages and scoring…</div></div>}
+          {/* Executive overview band */}
+          {data && (() => {
+            const oc = data.overall == null ? '#64748b' : data.overall >= 75 ? '#22c55e' : data.overall >= 50 ? '#f59e0b' : '#ef4444';
+            const scored = cats.filter(c => c.status !== 'pending' && c.status !== 'soon');
+            const totalFix = scored.reduce((a, c) => a + (c.subs || []).flatMap(s => s.checks).filter(k => k.status === 'warn' || k.status === 'fail').length, 0);
+            return (
+            <div style={{ display: 'flex', gap: 16, margin: '22px 0 24px', flexWrap: 'wrap', alignItems: 'stretch' }}>
+              <div style={{ background: 'var(--card)', border: `2px solid ${oc}55`, borderRadius: 16, padding: '20px 30px', display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 170 }}>
+                <div style={{ fontSize: 12, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 700 }}>Overall score</div>
+                <div style={{ fontSize: 52, fontWeight: 800, color: oc, lineHeight: 1.05 }}>{data.overall ?? '—'}<span style={{ fontSize: 20, color: 'var(--text3)', fontWeight: 600 }}>/100</span></div>
+                <div style={{ fontSize: 13, color: 'var(--text3)' }}>{totalFix} things to fix · {scored.length}/6 measured</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 300, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+                {cats.filter(c => c.key !== 'leads').map((c, ci) => {
+                  const measured = c.status !== 'pending' && c.status !== 'soon';
+                  return (
+                    <div key={c.key} onClick={() => measured && setOpen(o => ({ ...o, [c.key]: true }))} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', cursor: measured ? 'pointer' : 'default', opacity: measured ? 1 : 0.55, borderLeft: `4px solid ${stColor(c.status)}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <i className={`fas ${c.icon}`} style={{ fontSize: 14, color: 'var(--text3)' }} />
+                        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text2)', lineHeight: 1.2 }}>{c.name}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                        <span style={{ fontSize: 24, fontWeight: 800, color: stColor(c.status) }}>{c.score != null ? c.score : '—'}</span>
+                        <span style={{ fontSize: 11, color: stColor(c.status), fontWeight: 700 }}>{stLabel(c.status)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            );
+          })()}
+          {data && <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {cats.map((c, ci) => {
               const co = open[c.key];
               const nFix = (c.subs || []).flatMap(s => s.checks).filter(k => k.status === 'warn' || k.status === 'fail').length;
               return (
-                <div key={c.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-                  <div onClick={() => c.status !== 'pending' && c.status !== 'soon' && setOpen(o => ({ ...o, [c.key]: !o[c.key] }))} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', cursor: (c.status === 'pending' || c.status === 'soon') ? 'default' : 'pointer', opacity: (c.status === 'pending' || c.status === 'soon') ? 0.6 : 1 }}>
-                    <i className={`fas fa-chevron-${co ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--text3)', visibility: (c.status === 'pending' || c.status === 'soon') ? 'hidden' : 'visible' }} />
-                    <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>{ci + 1}. {c.name}</span>
-                    <span style={{ display: 'flex', gap: 5 }}>{(c.surfaces || []).map(surfTag)}</span>
-                    {c.status !== 'pending' && c.status !== 'soon' && <span style={{ fontSize: 12, color: 'var(--text3)', minWidth: 56, textAlign: 'right' }}>{nFix} to fix</span>}
-                    {c.score != null && <span style={{ fontSize: 15, fontWeight: 800, color: stColor(c.status), minWidth: 28, textAlign: 'right' }}>{c.score}</span>}
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 20, background: stColor(c.status) + '22', color: stColor(c.status), whiteSpace: 'nowrap' }}>{stLabel(c.status)}</span>
+                <div key={c.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, overflow: 'hidden' }}>
+                  <div onClick={() => c.status !== 'pending' && c.status !== 'soon' && setOpen(o => ({ ...o, [c.key]: !o[c.key] }))} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '18px 22px', cursor: (c.status === 'pending' || c.status === 'soon') ? 'default' : 'pointer', opacity: (c.status === 'pending' || c.status === 'soon') ? 0.55 : 1 }}>
+                    <i className={`fas fa-chevron-${co ? 'down' : 'right'}`} style={{ fontSize: 14, color: 'var(--text3)', width: 14, visibility: (c.status === 'pending' || c.status === 'soon') ? 'hidden' : 'visible' }} />
+                    <span style={{ width: 40, height: 40, borderRadius: 10, background: stColor(c.status) + '1e', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><i className={`fas ${c.icon}`} style={{ fontSize: 18, color: stColor(c.status) }} /></span>
+                    <span style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{c.name}</span>
+                    <span style={{ display: 'flex', gap: 6 }}>{(c.surfaces || []).map(surfTag)}</span>
+                    {c.status !== 'pending' && c.status !== 'soon' && <span style={{ fontSize: 13, color: 'var(--text3)', minWidth: 64, textAlign: 'right' }}>{nFix} to fix</span>}
+                    {c.score != null && <span style={{ fontSize: 26, fontWeight: 800, color: stColor(c.status), minWidth: 40, textAlign: 'right' }}>{c.score}</span>}
+                    <span style={{ fontSize: 12, fontWeight: 700, padding: '5px 13px', borderRadius: 20, background: stColor(c.status) + '22', color: stColor(c.status), whiteSpace: 'nowrap' }}>{stLabel(c.status)}</span>
                   </div>
-                  {(c.status === 'pending' || c.status === 'soon') && c.note && <div style={{ fontSize: 11.5, color: 'var(--text3)', padding: '0 16px 12px 40px' }}>{c.note}</div>}
-                  {co && <div style={{ padding: '0 16px 8px 40px' }}>
+                  {(c.status === 'pending' || c.status === 'soon') && c.note && <div style={{ fontSize: 13, color: 'var(--text3)', padding: '0 22px 16px 76px' }}>{c.note}</div>}
+                  {co && <div style={{ padding: '0 22px 10px 76px' }}>
                     {(c.subs || []).map((s, si) => {
                       const sk = c.key + '-' + si; const so = open[sk];
                       const sst = s.checks.some(k => k.status === 'fail') ? 'fail' : s.checks.some(k => k.status === 'warn') ? 'warn' : s.checks.every(k => k.status === 'pass') ? 'pass' : 'pending';
                       return (
                         <div key={si} style={{ borderTop: '1px solid var(--border)' }}>
-                          <div onClick={() => setOpen(o => ({ ...o, [sk]: !o[sk] }))} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 4px', cursor: 'pointer' }}>
-                            <i className={`fas fa-chevron-${so ? 'down' : 'right'}`} style={{ fontSize: 11, color: 'var(--text3)' }} />
-                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: stColor(sst) }} />
-                            <span style={{ fontSize: 13.5, flex: 1 }}>{s.name}</span>
-                            <span style={{ fontSize: 11, color: 'var(--text3)' }}>{s.checks.filter(k => k.status === 'warn' || k.status === 'fail').length} of {s.checks.length}</span>
+                          <div onClick={() => setOpen(o => ({ ...o, [sk]: !o[sk] }))} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 4px', cursor: 'pointer' }}>
+                            <i className={`fas fa-chevron-${so ? 'down' : 'right'}`} style={{ fontSize: 13, color: 'var(--text3)', width: 13 }} />
+                            <span style={{ width: 10, height: 10, borderRadius: '50%', background: stColor(sst) }} />
+                            <span style={{ fontSize: 15.5, fontWeight: 600, flex: 1 }}>{s.name}</span>
+                            <span style={{ fontSize: 12.5, color: 'var(--text3)' }}>{s.checks.filter(k => k.status === 'warn' || k.status === 'fail').length} of {s.checks.length}</span>
                           </div>
-                          {so && <div style={{ padding: '2px 0 8px 22px' }}>
+                          {so && <div style={{ padding: '2px 0 10px 25px' }}>
                             {s.checks.map((k, ki) => (
-                              <div key={ki} style={{ display: 'flex', gap: 9, padding: '7px 0', alignItems: 'flex-start' }}>
-                                <i className={`fas ${k.status === 'pass' ? 'fa-check' : k.status === 'warn' ? 'fa-triangle-exclamation' : k.status === 'fail' ? 'fa-xmark' : 'fa-circle-question'}`} style={{ fontSize: 13, color: stColor(k.status), marginTop: 2 }} />
+                              <div key={ki} style={{ display: 'flex', gap: 12, padding: '10px 0', alignItems: 'flex-start', borderTop: ki > 0 ? '1px solid var(--border)' : 'none' }}>
+                                <i className={`fas ${k.status === 'pass' ? 'fa-circle-check' : k.status === 'warn' ? 'fa-triangle-exclamation' : k.status === 'fail' ? 'fa-circle-xmark' : 'fa-circle-question'}`} style={{ fontSize: 16, color: stColor(k.status), marginTop: 2 }} />
                                 <div style={{ flex: 1 }}>
-                                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: 12.5, color: 'var(--text1)', lineHeight: 1.5, flex: 1 }}>{k.finding}</span>
-                                    {k.evidence && k.evidence.type === 'compare' && <span onClick={() => setProof(k.evidence)} style={{ fontSize: 11, color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap' }}>{k.evidence.label} <i className="fas fa-up-right-and-down-left-from-center" style={{ fontSize: 10 }} /></span>}
-                                    {k.evidence && k.evidence.type !== 'compare' && <a href={k.evidence.url} target="_blank" rel="noopener" style={{ fontSize: 11, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>{k.evidence.label} <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} /></a>}
+                                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: 14.5, color: 'var(--text1)', lineHeight: 1.55, flex: 1, minWidth: 200 }}>{k.finding}</span>
+                                    {k.evidence && k.evidence.type === 'compare' && <span onClick={() => setProof(k.evidence)} style={{ fontSize: 13, fontWeight: 600, color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap' }}>{k.evidence.label} <i className="fas fa-up-right-and-down-left-from-center" style={{ fontSize: 11 }} /></span>}
+                                    {k.evidence && k.evidence.type !== 'compare' && <a href={k.evidence.url} target="_blank" rel="noopener" style={{ fontSize: 13, fontWeight: 600, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>{k.evidence.label} <i className="fas fa-external-link-alt" style={{ fontSize: 11 }} /></a>}
                                   </div>
-                                  {k.fix && k.fix !== '—' && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 1 }}><i className="fas fa-arrow-right" style={{ fontSize: 10, marginRight: 4 }} />{k.fix}</div>}
+                                  {k.fix && k.fix !== '—' && <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 4, lineHeight: 1.5 }}><i className="fas fa-arrow-right" style={{ fontSize: 11, marginRight: 6, color: '#818cf8' }} />{k.fix}</div>}
                                 </div>
                               </div>
                             ))}
@@ -32000,27 +32032,27 @@
                 </div>
               );
             })}
-            {data.stats && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Scanned {data.stats.pages_found} pages · {data.stats.location_pages} location pages · {data.stats.sampled} sampled for duplication.</div>}
+            {data.stats && <div style={{ fontSize: 12.5, color: 'var(--text3)', marginTop: 8, textAlign: 'center' }}>Scanned {data.stats.pages_found} pages · {data.stats.location_pages} location pages · {data.stats.sampled} sampled for duplication.</div>}
           </div>}
 
           {/* DUPLICATE COMPARISON MODAL */}
           {proof && (
             <div onClick={e => { if (e.target === e.currentTarget) setProof(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
               <div style={{ width: 680, maxWidth: '96vw', maxHeight: '84vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <i className="fas fa-clone" style={{ color: '#ef4444' }} />
-                  <div style={{ fontWeight: 800, fontSize: 15, flex: 1 }}>Content overlap — {proof.similarity}% identical</div>
-                  <button onClick={() => setProof(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', fontSize: 18, cursor: 'pointer' }}>×</button>
+                <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <i className="fas fa-clone" style={{ color: '#ef4444', fontSize: 18 }} />
+                  <div style={{ fontWeight: 800, fontSize: 18, flex: 1 }}>Content overlap — {proof.similarity}% identical</div>
+                  <button onClick={() => setProof(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', fontSize: 24, cursor: 'pointer', lineHeight: 1 }}>×</button>
                 </div>
-                <div style={{ padding: '12px 18px', overflowY: 'auto' }}>
-                  <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 12 }}>Two of your location pages, compared (header/footer removed):
-                    <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>{(proof.urls || []).map((u, i) => <a key={i} href={u} target="_blank" rel="noopener" style={{ color: '#60a5fa', textDecoration: 'none', fontSize: 12 }}>{(u || '').replace(/^https?:\/\/[^/]+/, '')} <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} /></a>)}</div>
+                <div style={{ padding: '16px 22px', overflowY: 'auto' }}>
+                  <div style={{ fontSize: 14, color: 'var(--text3)', marginBottom: 16 }}>Two of your location pages, compared (header/footer removed):
+                    <div style={{ marginTop: 8, display: 'flex', gap: 14, flexWrap: 'wrap' }}>{(proof.urls || []).map((u, i) => <a key={i} href={u} target="_blank" rel="noopener" style={{ color: '#60a5fa', textDecoration: 'none', fontSize: 14, fontWeight: 600 }}>{(u || '').replace(/^https?:\/\/[^/]+/, '')} <i className="fas fa-external-link-alt" style={{ fontSize: 11 }} /></a>)}</div>
                   </div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>Passages that appear word-for-word on both</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 10 }}>Passages that appear word-for-word on both</div>
                   {(proof.shared || []).length ? (proof.shared || []).map((s, i) => (
-                    <div key={i} style={{ borderLeft: '3px solid #ef4444', background: 'rgba(239,68,68,0.08)', padding: '8px 12px', marginBottom: 8, fontSize: 12, color: 'var(--text1)', lineHeight: 1.55 }}>“…{s}…”</div>
-                  )) : <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>High overall similarity, but no single long passage matched exactly — the pages are heavily reworded (spun) versions of the same content.</div>}
-                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>These pages should each read differently for their suburb. Because they don't, Google treats most as duplicates and won't rank them.</div>
+                    <div key={i} style={{ borderLeft: '3px solid #ef4444', background: 'rgba(239,68,68,0.08)', padding: '11px 15px', marginBottom: 10, fontSize: 14, color: 'var(--text1)', lineHeight: 1.6 }}>“…{s}…”</div>
+                  )) : <div style={{ fontSize: 14, color: 'var(--text3)' }}>High overall similarity, but no single long passage matched exactly — the pages are heavily reworded (spun) versions of the same content.</div>}
+                  <div style={{ fontSize: 13.5, color: 'var(--text3)', marginTop: 14, lineHeight: 1.6 }}>These pages should each read differently for their suburb. Because they don't, Google treats most as duplicates and won't rank them.</div>
                 </div>
               </div>
             </div>

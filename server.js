@@ -41790,13 +41790,13 @@ app.post('/api/projects/:projectId/ranking-audit', async (req, res) => {
     const catScore = (subs) => { const c = subs.flatMap(s => s.checks).filter(x => x.status !== 'pending'); if (!c.length) return null; const pts = c.reduce((a, x) => a + (x.status === 'pass' ? 100 : x.status === 'warn' ? 55 : 15), 0); return Math.round(pts / c.length); };
 
     const categories = [
-      { key: 'onpage', name: 'On-page & content', icon: 'ti-file-text', surfaces: ['SERP', 'Local'], subs: onpageSubs, status: catStatus(onpageSubs), score: catScore(onpageSubs) },
-      { key: 'gbp', name: 'Google Business Profile', icon: 'ti-brand-google', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to RatingCaptain next.' },
-      { key: 'reviews', name: 'Reviews & reputation', icon: 'ti-star', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to review data next.' },
-      { key: 'proximity', name: 'Proximity & coverage', icon: 'ti-map-pin', surfaces: ['Map'], subs: [], status: 'pending', score: null, note: 'Wiring to grid scans next.' },
-      { key: 'offpage', name: 'Off-page (citations & links)', icon: 'ti-link', surfaces: ['Local'], subs: [], status: 'pending', score: null, note: 'Wiring to citations/backlinks next.' },
-      { key: 'technical', name: 'Technical foundation', icon: 'ti-settings', surfaces: ['SERP'], subs: [], status: 'pending', score: null, note: 'Wiring to speed/indexation next.' },
-      { key: 'leads', name: 'Lead & conversion', icon: 'ti-phone', surfaces: ['—'], subs: [], status: 'soon', score: null, note: 'Coming soon — needs call-tracking / CRM.' },
+      { key: 'onpage', name: 'On-page & content', icon: 'fa-file-lines', surfaces: ['SERP', 'Local'], subs: onpageSubs, status: catStatus(onpageSubs), score: catScore(onpageSubs) },
+      { key: 'gbp', name: 'Google Business Profile', icon: 'fa-location-dot', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to RatingCaptain next.' },
+      { key: 'reviews', name: 'Reviews & reputation', icon: 'fa-star', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to review data next.' },
+      { key: 'proximity', name: 'Proximity & coverage', icon: 'fa-map-pin', surfaces: ['Map'], subs: [], status: 'pending', score: null, note: 'Wiring to grid scans next.' },
+      { key: 'offpage', name: 'Off-page (citations & links)', icon: 'fa-link', surfaces: ['Local'], subs: [], status: 'pending', score: null, note: 'Wiring to citations/backlinks next.' },
+      { key: 'technical', name: 'Technical foundation', icon: 'fa-gears', surfaces: ['SERP'], subs: [], status: 'pending', score: null, note: 'Wiring to speed/indexation next.' },
+      { key: 'leads', name: 'Lead & conversion', icon: 'fa-phone', surfaces: ['—'], subs: [], status: 'soon', score: null, note: 'Coming soon — needs call-tracking / CRM.' },
     ];
     const scored = categories.filter(c => c.score != null);
     const overall = scored.length ? Math.round(scored.reduce((a, c) => a + c.score, 0) / scored.length) : null;
