@@ -43149,25 +43149,38 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     }
     if (hasCompetitors) rankByOpportunity(ranked, radius);
 
-    // GROWTH OPPORTUNITIES — the answer to "where do I grow?": a real market where you are NOT winning.
-    // Flag = decent population, AND (measured not-ranking OR rank worse than 5 OR no page yet), weighted
-    // by low competition where we know it. Give each a one-line reason so it's actionable.
+    // GROWTH OPPORTUNITY SCORE (0-100) — "where should I grow next?": a big, reachable market × how much
+    // ROOM you have to climb × how clear the lever is. Striking-distance (#4-10) and not-ranking score
+    // highest because that's where effort pays. Already-winning suburbs score ~0. Then we flag only the
+    // genuine top targets (top ~20 by score) so the shortlist is actionable, not the whole map.
+    const maxPopO = Math.max(1, ...ranked.map(s => s.population || 0));
     for (const s of ranked) {
-      if (s.isHome) { s.opportunityFlag = false; continue; }
-      const bigEnough = (s.population || 0) >= 800;
-      const weakRank = s.mapsNotRanking || (s.mapsRank != null && s.mapsRank > 5) || (!s.mapsScanned);
+      if (s.isHome) { s.opportunityScore = 0; s.opportunityFlag = false; continue; }
+      const popN = Math.min(1, (s.population || 0) / Math.max(3000, maxPopO * 0.5)); // market size (saturates)
+      const prox = Math.max(0, 1 - (s.distance || 0) / radius);                       // reachable to serve/rank
+      const compEase = (typeof s.competitors === 'number') ? Math.max(0, 1 - s.competitors / 25) : 0.5; // fewer rivals = easier
+      let headroom, headNote;
+      if (s.mapsRank != null && s.mapsRank <= 3) { headroom = 0.05; headNote = null; }               // already winning
+      else if (s.mapsRank != null && s.mapsRank <= 5) { headroom = 0.30; headNote = `Maps #${s.mapsRank} — nearly top 3`; }
+      else if (s.mapsRank != null && s.mapsRank <= 10) { headroom = 0.75; headNote = `Maps #${s.mapsRank} — striking distance of page 1`; } // best ROI
+      else if (s.mapsRank != null) { headroom = 0.85; headNote = `Maps #${s.mapsRank} — ranked but low`; }
+      else if (s.mapsNotRanking) { headroom = 0.90; headNote = `not ranking on Maps here`; }           // measured, absent
+      else { headroom = 0.45; headNote = `never grid-scanned here`; }
       const noPage = !(s.tasks && s.tasks[0] && s.tasks[0].done);
-      s.opportunityFlag = bigEnough && (weakRank || noPage);
-      if (s.opportunityFlag) {
-        const bits = [];
-        if (s.mapsNotRanking) bits.push('not ranking on Maps here');
-        else if (s.mapsRank != null && s.mapsRank > 5) bits.push(`Maps #${s.mapsRank} — page 1 within reach`);
-        else if (!s.mapsScanned) bits.push('never grid-scanned here');
-        if (noPage) bits.push('no landing page');
-        if (typeof s.competitors === 'number' && s.competitors <= 5) bits.push(`only ${s.competitors} competitor${s.competitors === 1 ? '' : 's'}`);
-        s.opportunityReason = `${(s.population || 0).toLocaleString()} residents, ${s.distance}km — ${bits.join(', ')}.`;
-      }
+      const lever = noPage ? 1 : 0.65; // no landing page = a clear, ownable action
+      const market = 0.4 * popN + 0.3 * prox + 0.3 * compEase;
+      s.opportunityScore = Math.round(market * headroom * lever * 100);
+      // Reason bits
+      const bits = [];
+      if (headNote) bits.push(headNote);
+      if (noPage) bits.push('no landing page');
+      if (typeof s.competitors === 'number' && s.competitors <= 5) bits.push(`only ${s.competitors} competitor${s.competitors === 1 ? '' : 's'}`);
+      s.opportunityReason = `${(s.population || 0).toLocaleString()} residents, ${s.distance}km${bits.length ? ' — ' + bits.join(', ') : ''}.`;
     }
+    // Flag the genuine top targets: top 20 by score (with a minimum quality bar), never the whole list.
+    const oppSorted = ranked.filter(s => !s.isHome && s.opportunityScore >= 12).sort((a, b) => b.opportunityScore - a.opportunityScore);
+    const flagSet = new Set(oppSorted.slice(0, 20).map(s => s.suburb));
+    for (const s of ranked) s.opportunityFlag = flagSet.has(s.suburb);
     const opportunityCount = ranked.filter(s => s.opportunityFlag).length;
 
     const plan = buildSmartPlan(ranked);

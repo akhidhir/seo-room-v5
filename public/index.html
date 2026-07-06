@@ -32467,7 +32467,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {sortSuburbs(result.suburbs).filter(s => !oppOnly || s.opportunityFlag).map((s) => (
+                      {(() => { let _rows = sortSuburbs(result.suburbs).filter(s => !oppOnly || s.opportunityFlag); if (oppOnly) _rows = [..._rows].sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0)); return _rows; })().map((s) => (
                         <React.Fragment key={s.rank}>
                         <tr onClick={() => setExpandedRank(expandedRank === s.rank ? null : s.rank)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: expandedRank === s.rank ? 'rgba(99,102,241,0.05)' : s.opportunityFlag ? 'rgba(245,158,11,0.05)' : 'transparent' }}>
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}><i className={`fas fa-chevron-${expandedRank === s.rank ? 'down' : 'right'}`} style={{ fontSize: 9, marginRight: 6, color: 'var(--text3)' }}></i>{s.rank}</td>
@@ -32525,8 +32525,10 @@
                                         : 'not measured here yet — run a grid scan (Maps Rankings) that covers this suburb'}
                                   </div>
                                   {s.opportunityFlag && s.opportunityReason && (
-                                    <div style={{ marginTop: 8, fontSize: 12.5, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      <i className="fas fa-bullseye"></i><b>Growth opportunity:</b> <span style={{ color: 'var(--text2)' }}>{s.opportunityReason}</span>
+                                    <div style={{ marginTop: 8, fontSize: 12.5, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                      <i className="fas fa-bullseye"></i><b>Growth opportunity</b>
+                                      {s.opportunityScore != null && <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: '#f59e0b22', color: '#f59e0b' }}>score {s.opportunityScore}</span>}
+                                      <span style={{ color: 'var(--text2)' }}>{s.opportunityReason}</span>
                                     </div>
                                   )}
                                 </>
