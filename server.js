@@ -17968,6 +17968,22 @@ async function accumulateClarity(projectId, clarity_api_token, opts = {}) {
   const todayStr = new Date().toISOString().slice(0, 10);
   const coveredThroughStr = coveredThrough ? new Date(coveredThrough).toISOString().slice(0, 10) : null;
 
+  // Preserve any pre-existing aggregate: if the daily table is empty but clarity_metrics has data,
+  // migrate it into a dated seed row FIRST so a fresh/empty API pull can never erase history.
+  if (!coveredThroughStr) {
+    const existing = (await pool.query('SELECT * FROM clarity_metrics WHERE project_id=$1', [projectId])).rows;
+    if (existing.length) {
+      const seedDate = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10); // day -3, before the fresh 3-day window
+      for (const p of existing) {
+        await pool.query(
+          `INSERT INTO clarity_daily (project_id, metric_date, page_url, page_title, sessions, dead_clicks, rage_clicks, excessive_scrolls, quick_backs, scroll_depth, engagement_time, error_clicks, script_errors, span_days, fetched_at)
+           VALUES ($1,$2::date,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,1,NOW()) ON CONFLICT (project_id, metric_date, page_url) DO NOTHING`,
+          [projectId, seedDate, p.page_url, p.page_title || null, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0]
+        );
+      }
+    }
+  }
+
   let span, snapshotDate, dayPages;
   if (!coveredThroughStr) {
     // Bootstrap: pull the max 3-day window and store it dated at its START (today-2), spanning 3 days.
@@ -18015,6 +18031,16 @@ async function rebuildClarityAggregate(projectId) {
     a.score = scoreClarityPage(a);
     return a;
   });
+  // SAFETY: never wipe a good aggregate with an empty rebuild. If the daily table has no rows
+  // (fresh install, or an empty/failed API pull), keep whatever clarity_metrics already holds.
+  if (pages.length === 0) {
+    const existing = (await pool.query('SELECT * FROM clarity_metrics WHERE project_id=$1 ORDER BY sessions DESC', [projectId])).rows;
+    const w0 = (await pool.query(
+      `SELECT LEAST(30, COALESCE(SUM(span),0))::int AS days, MIN(d) AS start, MAX(d + (span-1)) AS "end"
+         FROM (SELECT metric_date d, MAX(COALESCE(span_days,1)) span FROM clarity_daily
+               WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY metric_date) t`, [projectId])).rows[0];
+    return { pages: existing, window: w0, empty: true };
+  }
   // Replace the aggregate for this project
   await pool.query('DELETE FROM clarity_metrics WHERE project_id=$1', [projectId]);
   for (const p of pages) {
@@ -18084,6 +18110,7 @@ app.post('/api/projects/:projectId/clarity-metrics/fetch', async (req, res) => {
     res.json({
       ok: true, pages_count: pages.length, metrics: pages,
       overall_score: clarityOverall(pages), window: w, insights: buildClarityInsights(pages),
+      note: pages.length === 0 ? 'Clarity returned no page data for the last 3 days. This usually means no sessions were recorded yet, or the daily API limit (10/day) was hit — it will fill in automatically.' : undefined,
     });
   } catch (e) {
     console.error('[clarity] Fetch error:', e.message);
