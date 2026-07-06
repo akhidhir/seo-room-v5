@@ -43025,6 +43025,27 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     // A suburb also counts as "in GBP areas / reviews / posts" using variant-aware matching.
     const anyVariant = (blob, suburbName) => suburbVariants(suburbName).some(v => hasWord(blob, v));
 
+    // Per-suburb Maps rank — real, from rank_tracking. Match a tracked keyword to the suburb by name
+    // (keyword text or its location contains a suburb variant); use the latest, best maps_position.
+    const rankEntries = [];
+    try {
+      const rt = (await pool.query(
+        `SELECT DISTINCT ON (keyword, location) keyword, location, maps_position
+           FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL
+          ORDER BY keyword, location, checked_at DESC`, [req.params.projectId])).rows;
+      for (const r of rt) rankEntries.push({ text: ' ' + normSuburbKey(`${r.keyword || ''} ${r.location || ''}`) + ' ', pos: r.maps_position });
+    } catch (e) {}
+    const findSuburbRank = (suburbName) => {
+      const variants = suburbVariants(suburbName);
+      let best = null;
+      for (const e of rankEntries) {
+        if (variants.some(v => v.length > 1 && e.text.includes(' ' + v + ' '))) {
+          if (best == null || e.pos < best) best = e.pos;
+        }
+      }
+      return best;
+    };
+
     const ranked = within.map((s, i) => {
       const sk = normSuburbKey(s.suburb);
       const matchedPage = findSuburbPage(s.suburb);
@@ -43041,6 +43062,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         isHome: normSuburbKey(s.suburb) === centerKey,
         tasks, completion: Math.round((doneCount / tasks.length) * 100),
         pageUrl: matchedPage ? matchedPage.url : null, // the page that matched — lets you verify the ✓
+        mapsRank: findSuburbRank(s.suburb), // real Maps position from tracked keywords (null if untracked)
       };
     });
 

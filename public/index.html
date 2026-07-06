@@ -32258,6 +32258,7 @@
             case 'distance': return s.distance || 0;
             case 'competitors': return s.competitors == null ? Infinity : s.competitors;
             case 'per_capita': return s.per_capita == null ? Infinity : s.per_capita;
+            case 'mapsRank': return s.mapsRank == null ? Infinity : s.mapsRank;
             case 'opportunity': return hasComp ? (s.opportunity ?? s.score) : s.score;
             case 'completion': return s.completion || 0;
             default: return s.rank;
@@ -32446,6 +32447,7 @@
                         {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('competitors')}>Competitors{sortArrow('competitors')}</th>}
                         {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('per_capita')} title="Competitors per 10,000 residents — lower = less saturated">Per 10k{sortArrow('per_capita')}</th>}
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('opportunity')}>{result.hasCompetitors ? 'Opportunity' : 'Score'}{sortArrow('opportunity')}</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('mapsRank')} title="Your current Google Maps position for a tracked keyword in this suburb (— = no keyword tracked here yet)">Maps Rank{sortArrow('mapsRank')}</th>
                         <th style={{ padding: '6px 8px' }}>Tier</th>
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('completion')} title="How much of the suburb checklist is already done">Done{sortArrow('completion')}</th>
                       </tr>
@@ -32462,6 +32464,7 @@
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : s.competitors}</td>}
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>{s.per_capita == null ? '—' : s.per_capita}</td>}
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: s.mapsRank == null ? 'var(--text3)' : s.mapsRank <= 3 ? '#22c55e' : s.mapsRank <= 10 ? '#f59e0b' : '#ef4444' }}>{s.mapsRank == null ? '—' : '#' + s.mapsRank}</td>
                           <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
                           <td style={{ padding: '6px 8px' }}>
                             {s.completion != null ? (
