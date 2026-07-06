@@ -31804,7 +31804,9 @@
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [sel, setSel] = useState(null);
-      const [zoom, setZoom] = useState(1); // 1 = full view, up to 4x into the centre
+      const [zoom, setZoom] = useState(1); // 1 = full view, up to 4x
+      const [pan, setPan] = useState({ x: 0, y: 0 }); // drag offset in viewBox units
+      const dragRef = React.useRef(null);
       useEffect(() => {
         if (!project?.id) return;
         setLoading(true);
@@ -31857,16 +31859,24 @@
               No Maps keywords tracked yet — add some from Discover Local Keywords or SERP Rankings, then run grid scans in Smart Map Ranking.
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <div style={{ background: '#04070d', borderRadius: 14, border: '1px solid rgba(74,222,128,0.25)', padding: 8, flex: '1 1 640px', maxWidth: 900, position: 'relative' }}>
+            <div style={{ position: 'relative' }}>
+              <div style={{ background: '#04070d', borderRadius: 14, border: '1px solid rgba(74,222,128,0.25)', padding: 8, position: 'relative', width: '100%' }}>
                 {/* Zoom controls */}
                 <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 5, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {[['+', () => setZoom(z => Math.min(4, +(z + 0.5).toFixed(1)))], ['−', () => setZoom(z => Math.max(1, +(z - 0.5).toFixed(1)))], ['⟳', () => setZoom(1)]].map(([lbl, fn], i) => (
-                    <button key={i} onClick={fn} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: lbl === '⟳' ? 14 : 20, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{lbl}</button>
+                  {[['+', () => setZoom(z => Math.min(5, +(z + 0.5).toFixed(1)))], ['−', () => setZoom(z => Math.max(1, +(z - 0.5).toFixed(1)))], ['⟳', () => { setZoom(1); setPan({ x: 0, y: 0 }); }]].map(([lbl, fn], i) => (
+                    <button key={i} onClick={fn} style={{ width: 34, height: 34, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: lbl === '⟳' ? 15 : 21, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{lbl}</button>
                   ))}
                   {zoom > 1 && <div style={{ fontSize: 10, color: '#4ade80', textAlign: 'center', fontWeight: 700 }}>{zoom}×</div>}
                 </div>
-                <svg viewBox={`${C - C / zoom} ${C - C / zoom} ${SIZE / zoom} ${SIZE / zoom}`} style={{ width: '100%', display: 'block' }}>
+                {zoom > 1 && <div style={{ position: 'absolute', top: 16, left: 16, zIndex: 5, fontSize: 11, color: 'rgba(255,255,255,0.5)', pointerEvents: 'none' }}>Drag to move around</div>}
+                <svg
+                  viewBox={`${C - C / zoom - pan.x} ${C - C / zoom - pan.y} ${SIZE / zoom} ${SIZE / zoom}`}
+                  style={{ width: '100%', height: '72vh', display: 'block', cursor: zoom > 1 ? (dragRef.current ? 'grabbing' : 'grab') : 'default' }}
+                  onMouseDown={(ev) => { if (zoom <= 1) return; dragRef.current = { sx: ev.clientX, sy: ev.clientY, px: pan.x, py: pan.y, w: ev.currentTarget.clientWidth }; }}
+                  onMouseMove={(ev) => { const d = dragRef.current; if (!d) return; const scale = (SIZE / zoom) / d.w; setPan({ x: d.px + (ev.clientX - d.sx) * scale, y: d.py + (ev.clientY - d.sy) * scale }); }}
+                  onMouseUp={() => { dragRef.current = null; }}
+                  onMouseLeave={() => { dragRef.current = null; }}
+                >
                   {RINGS.map(km => (
                     <g key={km}>
                       <circle cx={C} cy={C} r={ringR(km)} fill="none" stroke="#22c55e" strokeOpacity="0.45" strokeWidth="1" strokeDasharray="3 7" />
@@ -31874,12 +31884,15 @@
                     </g>
                   ))}
                   <circle cx={C} cy={C} r={ringR(21.8) + 9} fill="none" stroke="#64748b" strokeOpacity="0.25" strokeWidth="10" />
-                  <circle cx={C} cy={C} r="7" fill="#facc15" />
-                  <text x={C} y={C + 22} fill="#facc15" fontSize="13" fontWeight="700" textAnchor="middle">{data?.business || 'Business'}</text>
+                  <circle cx={C} cy={C} r={7 / zoom} fill="#facc15" />
+                  <text x={C} y={C + 22 / zoom} fill="#facc15" fontSize={13 / zoom} fontWeight="700" textAnchor="middle">{data?.business || 'Business'}</text>
                   {orbs.map((o, i) => {
-                    const dotR = o.maps_position ? Math.max(4.5, 12 - o.maps_position) : (o.best_position ? Math.max(4.5, 12 - o.best_position) : 5);
+                    // Divide by zoom so dots + labels stay the same SCREEN size as you zoom in —
+                    // zooming spreads them apart without turning text into giant blobs.
+                    const baseR = o.maps_position ? Math.max(4.5, 12 - o.maps_position) : (o.best_position ? Math.max(4.5, 12 - o.best_position) : 5);
+                    const dotR = baseR / zoom;
                     const isSel = sel && sel.keyword === o.keyword;
-                    const showLabel = isSel || shouldLabel(o);
+                    const showLabel = isSel || zoom >= 2 || shouldLabel(o);
                     return (
                       <g key={i} style={{ transformOrigin: `${C}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite`, transform: `rotate(${o.angle0}deg)` }}>
                         <g style={{ transformOrigin: `${C + o.orbitR}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite reverse` }}>
@@ -31888,7 +31901,7 @@
                             fill={volColor(o.volume)} fillOpacity={o.dim ? 0.5 : 1}
                             style={{ cursor: 'pointer', ...(o.origin === 'discovered' ? { animation: 'orbitPulse 2.4s ease-in-out infinite' } : {}) }}
                             onClick={() => setSel(o)} />
-                          {showLabel && <text x={C + o.orbitR} y={C - dotR - 5} fill={isSel ? '#fff' : volColor(o.volume)} fillOpacity={o.dim && !isSel ? 0.55 : 0.95} fontSize={isSel ? 13 : 11.5} fontWeight={isSel ? 800 : 600} textAnchor="middle"
+                          {showLabel && <text x={C + o.orbitR} y={C - dotR - 5 / zoom} fill={isSel ? '#fff' : volColor(o.volume)} fillOpacity={o.dim && !isSel ? 0.55 : 0.95} fontSize={(isSel ? 13 : 11) / zoom} fontWeight={isSel ? 800 : 600} textAnchor="middle"
                             style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSel(o)}>
                             {o.keyword.length > 26 ? o.keyword.slice(0, 24) + '…' : o.keyword}
                           </text>}
@@ -31898,9 +31911,10 @@
                   })}
                 </svg>
               </div>
-              <div style={{ flex: '0 1 300px', minWidth: 260 }}>
+              {/* Detail — floating overlay so the chart can be full-width */}
+              <div style={{ position: 'absolute', top: 16, right: 60, width: 280, pointerEvents: 'none' }}>
                 {sel ? (
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }}>
+                  <div style={{ background: 'rgba(20,22,34,0.95)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, pointerEvents: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
                     <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>{sel.keyword}</div>
                     <div style={{ fontSize: 13, lineHeight: 2 }}>
                       <div><span style={{ color: 'var(--text3)' }}>Origin: </span>{sel.origin === 'discovered' ? '✨ Discovered quick-win' : '🤝 Agreed with client'}</div>
@@ -31921,10 +31935,10 @@
                     )}
                   </div>
                 ) : (
-                  <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, fontSize: 13, color: 'var(--text3)' }}>
-                    Click any keyword in the orbit to see its details.
+                  <div style={{ background: 'rgba(20,22,34,0.92)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, fontSize: 13, color: 'var(--text3)', pointerEvents: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+                    Click any keyword to see its details. Zoom with + / − and <b>drag to move around</b>.
                     <div style={{ marginTop: 10, fontSize: 12 }}>
-                      {data?.summary && <>{data.summary.total} keywords in the sky · {data.summary.with_grid} grid-scanned (inner orbits) · {data.summary.untracked || 0} discovered, awaiting tracking (outer belt)</>}
+                      {data?.summary && <>{data.summary.total} keywords · {data.summary.with_grid} grid-scanned · {data.summary.untracked || 0} awaiting tracking</>}
                     </div>
                   </div>
                 )}
