@@ -31999,9 +31999,11 @@
                   <circle cx={C} cy={C} r={9 / zoom} fill="#facc15" stroke="#fff" strokeWidth={1.5 / zoom} />
                   <text x={C} y={C + 24 / zoom} fill="#facc15" fontSize={14 / zoom} fontWeight="800" textAnchor="middle">{data?.business || 'Business'}</text>
                   {project?.location && <text x={C} y={C + 38 / zoom} fill="#fbbf24" fillOpacity="0.75" fontSize={11 / zoom} textAnchor="middle">📍 {project.location}</text>}
+                  {/* The WHOLE constellation rotates as one rigid group at a single gentle speed, so the
+                      collision-free layout is preserved (no more dots drifting over each other). Rotation
+                      pauses while zoomed in so you can inspect/drag. Labels counter-rotate to stay upright. */}
+                  <g style={{ transformOrigin: `${C}px ${C}px`, animation: `orbitSpin 200s linear infinite`, animationPlayState: zoom > 1 ? 'paused' : 'running' }}>
                   {orbs.map((o, i) => {
-                    // Static positions (no spin) so dots never sweep over each other. Divide sizes by zoom
-                    // so dots + labels stay constant SCREEN size while zooming spreads them apart.
                     const baseR = o.maps_position ? Math.max(4.5, 12 - o.maps_position) : (o.best_position ? Math.max(4.5, 12 - o.best_position) : 5);
                     const dotR = baseR / zoom;
                     const isSel = sel && sel.keyword === o.keyword;
@@ -32014,12 +32016,13 @@
                           style={{ cursor: 'pointer', ...(o.origin === 'discovered' ? { animation: 'orbitPulse 2.4s ease-in-out infinite' } : {}) }}
                           onClick={() => setSel(o)} />
                         {showLabel && <text x={o.x} y={o.y - dotR - 5 / zoom} fill={isSel ? '#fff' : volColor(o.volume)} fillOpacity={o.dim && !isSel ? 0.55 : 0.95} fontSize={(isSel ? 13 : 11) / zoom} fontWeight={isSel ? 800 : 600} textAnchor="middle"
-                          style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSel(o)}>
+                          style={{ cursor: 'pointer', userSelect: 'none', transformOrigin: `${o.x}px ${o.y}px`, animation: `orbitSpin 200s linear infinite reverse`, animationPlayState: zoom > 1 ? 'paused' : 'running' }} onClick={() => setSel(o)}>
                           {o.keyword.length > 26 ? o.keyword.slice(0, 24) + '…' : o.keyword}
                         </text>}
                       </g>
                     );
                   })}
+                  </g>
                 </svg>
               </div>
               {/* Detail — floating overlay so the chart can be full-width */}
