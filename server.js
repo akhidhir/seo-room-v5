@@ -43025,30 +43025,43 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     // A suburb also counts as "in GBP areas / reviews / posts" using variant-aware matching.
     const anyVariant = (blob, suburbName) => suburbVariants(suburbName).some(v => hasWord(blob, v));
 
-    // Per-suburb Maps rank — real, from rank_tracking. Match a tracked keyword to the suburb by name
-    // (keyword text or its location contains a suburb variant); use the latest, best maps_position.
+    // Per-suburb Maps rank — real, from rank_tracking. Match ONLY on the keyword TEXT (a keyword that
+    // literally names the suburb), NOT the location field — many keywords share one tracking location, so
+    // matching location falsely gives every suburb a rank. Brand keywords are excluded (they rank #1 for
+    // the brand, not a suburb signal). The exact keyword is returned so the number is verifiable.
+    const brandKey = normSuburbKey(project.business_name || project.name || '');
+    const GENERIC_KW = new Set(['plumber', 'plumbing', 'plumbers', 'the', 'and', 'group', 'services', 'service', 'co', 'pty', 'ltd', 'au', 'near', 'me', 'best', 'local', 'emergency', 'hot', 'water', 'gas', 'drain', 'blocked']);
+    const brandWords = new Set(brandKey.split(' ').filter(w => w.length > 2 && !GENERIC_KW.has(w)));
     const rankEntries = [];
     try {
       const rt = (await pool.query(
-        `SELECT DISTINCT ON (keyword, location) keyword, location, maps_position
+        `SELECT DISTINCT ON (keyword) keyword, maps_position
            FROM rank_tracking WHERE project_id=$1 AND maps_position IS NOT NULL
-          ORDER BY keyword, location, checked_at DESC`, [req.params.projectId])).rows;
-      for (const r of rt) rankEntries.push({ text: ' ' + normSuburbKey(`${r.keyword || ''} ${r.location || ''}`) + ' ', pos: r.maps_position });
+          ORDER BY keyword, checked_at DESC`, [req.params.projectId])).rows;
+      for (const r of rt) {
+        const kw = normSuburbKey(r.keyword || '');
+        if (!kw) continue;
+        const words = kw.split(' ');
+        if (brandWords.size && words.some(w => brandWords.has(w))) continue; // skip brand keywords
+        rankEntries.push({ kw: ' ' + kw + ' ', keyword: r.keyword, pos: r.maps_position });
+      }
     } catch (e) {}
     const findSuburbRank = (suburbName) => {
-      const variants = suburbVariants(suburbName);
-      let best = null;
+      // Only multi-word or ≥4-char suburb variants, matched as a whole token in the keyword text.
+      const variants = suburbVariants(suburbName).filter(v => v.includes(' ') || v.length >= 4);
+      let best = null, bestKw = null;
       for (const e of rankEntries) {
-        if (variants.some(v => v.length > 1 && e.text.includes(' ' + v + ' '))) {
-          if (best == null || e.pos < best) best = e.pos;
+        if (variants.some(v => e.kw.includes(' ' + v + ' '))) {
+          if (best == null || e.pos < best) { best = e.pos; bestKw = e.keyword; }
         }
       }
-      return best;
+      return best == null ? null : { pos: best, keyword: bestKw };
     };
 
     const ranked = within.map((s, i) => {
       const sk = normSuburbKey(s.suburb);
       const matchedPage = findSuburbPage(s.suburb);
+      const mr = findSuburbRank(s.suburb);
       const tasks = [
         { label: 'Suburb landing page', done: !!matchedPage },
         { label: 'In GBP service areas', done: anyVariant(serviceAreaBlob, s.suburb) },
@@ -43062,7 +43075,8 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         isHome: normSuburbKey(s.suburb) === centerKey,
         tasks, completion: Math.round((doneCount / tasks.length) * 100),
         pageUrl: matchedPage ? matchedPage.url : null, // the page that matched — lets you verify the ✓
-        mapsRank: findSuburbRank(s.suburb), // real Maps position from tracked keywords (null if untracked)
+        mapsRank: mr ? mr.pos : null, // real Maps position from a suburb-naming tracked keyword (null if none)
+        mapsRankKeyword: mr ? mr.keyword : null, // the keyword behind the rank — shown so it's verifiable
       };
     });
 

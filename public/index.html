@@ -32464,7 +32464,7 @@
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : s.competitors}</td>}
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>{s.per_capita == null ? '—' : s.per_capita}</td>}
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
-                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: s.mapsRank == null ? 'var(--text3)' : s.mapsRank <= 3 ? '#22c55e' : s.mapsRank <= 10 ? '#f59e0b' : '#ef4444' }}>{s.mapsRank == null ? '—' : '#' + s.mapsRank}</td>
+                          <td title={s.mapsRankKeyword ? `From tracked keyword: "${s.mapsRankKeyword}"` : 'No suburb-specific keyword tracked here yet'} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: s.mapsRank == null ? 'var(--text3)' : s.mapsRank <= 3 ? '#22c55e' : s.mapsRank <= 10 ? '#f59e0b' : '#ef4444' }}>{s.mapsRank == null ? '—' : '#' + s.mapsRank}</td>
                           <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
                           <td style={{ padding: '6px 8px' }}>
                             {s.completion != null ? (
@@ -32501,6 +32501,12 @@
                                         )}
                                       </div>
                                     ))}
+                                  </div>
+                                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text3)' }}>
+                                    <i className="fas fa-map-marker-alt" style={{ marginRight: 6, color: '#60a5fa' }}></i>
+                                    Maps rank: {s.mapsRank == null
+                                      ? 'no suburb-specific keyword tracked here yet — add one in Maps Rankings to measure it'
+                                      : <span><b style={{ color: 'var(--text2)' }}>#{s.mapsRank}</b> from tracked keyword <b style={{ color: 'var(--text2)' }}>"{s.mapsRankKeyword}"</b></span>}
                                   </div>
                                 </>
                               ) : (
