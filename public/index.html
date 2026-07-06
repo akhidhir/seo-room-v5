@@ -21660,7 +21660,7 @@
           {data && data.measuredTactics != null && data.measuredTactics < data.totalTactics && (
             <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>
               <i className="fas fa-circle-info" style={{ color: '#f59e0b', marginRight: 6 }} />
-              <b>Only {data.measuredTactics} of {data.totalTactics} tactics are truly measured.</b> The rest are ranked on overall site movement, which can't prove one tactic caused it (many changes ran at once). To turn hints into proof: <b>record the target page URL on each action</b> and track that page's rank — then the engine measures it directly.
+              <b>{data.measuredTactics} of {data.totalTactics} tactics are measured on a specific page's rank</b> (from the exact page each fix touched). The rest are ranked on overall site movement, which can't prove one tactic caused it (many changes ran at once). To turn a hint into proof: <b>add rank-tracking for the pages those fixes touched</b> — the fix already records the page, so once it's tracked the engine measures it directly.
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>

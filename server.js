@@ -46433,6 +46433,22 @@ function actionChannel(item) {
   return 'serp';
 }
 function _pathOf(u) { try { return (new URL(u).pathname || '/').replace(/\/+$/, '').toLowerCase() || '/'; } catch (e) { return ''; } }
+// Map a wp_change_history row (an APPLIED fix, with a guaranteed page_url + date) to the same
+// tactic labels normActionType() produces — so change history becomes a MEASURED learnings source.
+function changeTactic(changeType, fieldName) {
+  const ct = (changeType || '').toLowerCase(), fn = (fieldName || '').toLowerCase();
+  if (/metadesc|meta_desc|description|_yoast_wpseo_metadesc/.test(fn)) return 'Optimise meta descriptions';
+  if (/meta|title|_yoast_wpseo_title/.test(ct) || /title|_yoast_wpseo_title/.test(fn)) return 'Optimise meta titles';
+  if (/h1/.test(ct)) return 'Add focus keyword to H1';
+  if (/schema/.test(ct)) return 'Add schema markup';
+  if (/broken_link|broken-link|redirect|404/.test(ct)) return 'Fix broken links';
+  if (/inbound|orphan|internal.?link|link/.test(ct)) return 'Add inbound links (fix orphans)';
+  if (/keyword.?content|content|thin|copywrit/.test(ct)) return 'Expand thin / improve content';
+  if (/cwv|speed|hero|image|webp|bg-image/.test(ct)) return 'Improve page speed';
+  if (/alt/.test(ct) || /alt/.test(fn)) return 'Fix image alt text';
+  if (/canonical/.test(ct)) return 'Fix canonicals';
+  return null; // unknown change types stay out of learnings rather than mislabel
+}
 
 async function computeLearnings(onlyProjectId) {
   const projRows = (await pool.query(
@@ -46488,44 +46504,70 @@ async function computeLearnings(onlyProjectId) {
     if (!before.length || !after.length) return null;
     return Math.max(-CAP, Math.min(CAP, mean(before) - mean(after))); // +ve = improved (smaller position)
   }
-  // Measure an action. SERP is credited ONLY when the action names a page we actually track (true isolation).
-  // Maps is business-level (shared by every local action that month) so it's context, never proof of one tactic.
-  function measureAction(a) {
-    const t = a.acted_at ? new Date(a.acted_at).getTime() : null;
+  // Measure a fix at a known target page + date. SERP is credited ONLY when the target names a page
+  // we actually track (true isolation). Maps is business-level context, never proof of one tactic.
+  function measureTarget(pid, targetPath, t) {
     if (!t) return null;
-    const ph = hist[a.project_id]; if (!ph) return null;
+    const ph = hist[pid]; if (!ph) return null;
     const all = Object.values(ph);
-    const target = actionTargetPath(a);
     let serp = null; // page-level only — NO whole-site fallback
-    if (target) {
+    if (targetPath) {
       const matched = all.filter(arr => {
         const lastUrl = arr.map(x => x.url).filter(Boolean).slice(-1)[0] || '';
         const p = _pathOf(lastUrl);
-        return p && (p === target || p.endsWith(target) || target.endsWith(p));
+        return p && (p === targetPath || p.endsWith(targetPath) || targetPath.endsWith(p));
       });
       if (matched.length) serp = surfaceDelta(matched, x => x.serp, t);
     }
-    // siteSerp/maps = business-level (all keywords) — context, shared by every action that month.
     return { serp, siteSerp: surfaceDelta(all, x => x.serp, t), maps: surfaceDelta(all, x => x.maps, t) };
+  }
+  function measureAction(a) {
+    const t = a.acted_at ? new Date(a.acted_at).getTime() : null;
+    return measureTarget(a.project_id, actionTargetPath(a), t);
   }
 
   // 4) Group by tactic. Two tiers: page-level SERP = real measurement; everything else = site-wide correlation.
+  // Two sources feed this: action_items (may lack a target page) and wp_change_history (ALWAYS has the
+  // exact page_url + date of an applied fix — so it converts many tactics from "hint" to "measured").
   const projName = {}; projRows.forEach(p => projName[p.id] = p.business_name || p.name);
   const byType = {};
-  for (const a of acts) {
-    const type = normActionType(a);
-    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), pageSerp: [], siteSerp: [], maps: [], projSet: new Set(), byProject: {} };
+  const DAYK = 86400000;
+  // Add one fix event. Dedupes on project|page|day so the same fix logged in both sources — or repeated
+  // on the same page/day — is counted once (prevents sample inflation).
+  function addEvent(type, pid, targetPath, t) {
+    if (!type) return;
+    if (!byType[type]) byType[type] = { type, timesDone: 0, projects: new Set(), pageSerp: [], siteSerp: [], maps: [], projSet: new Set(), byProject: {}, seen: new Set() };
     const b = byType[type];
-    b.timesDone++; b.projects.add(a.project_id); b.projSet.add(a.project_id);
-    if (!b.byProject[a.project_id]) b.byProject[a.project_id] = { id: a.project_id, name: projName[a.project_id] || ('Project ' + a.project_id), times: 0, pageSerp: [], siteSerp: [], maps: [] };
-    const bp = b.byProject[a.project_id]; bp.times++;
-    const m = measureAction(a);
+    const key = (targetPath && t) ? (pid + '|' + targetPath + '|' + Math.floor(t / DAYK)) : null;
+    if (key) { if (b.seen.has(key)) return; b.seen.add(key); }
+    b.timesDone++; b.projects.add(pid); b.projSet.add(pid);
+    if (!b.byProject[pid]) b.byProject[pid] = { id: pid, name: projName[pid] || ('Project ' + pid), times: 0, pageSerp: [], siteSerp: [], maps: [] };
+    const bp = b.byProject[pid]; bp.times++;
+    const m = measureTarget(pid, targetPath, t);
     if (m) {
       if (m.serp != null) { b.pageSerp.push(m.serp); bp.pageSerp.push(m.serp); }       // real per-page signal
       if (m.siteSerp != null) { b.siteSerp.push(m.siteSerp); bp.siteSerp.push(m.siteSerp); } // site-wide SERP context
       if (m.maps != null) { b.maps.push(m.maps); bp.maps.push(m.maps); }                // site-wide Maps context
     }
   }
+  // Source A: completed action items
+  for (const a of acts) {
+    const t = a.acted_at ? new Date(a.acted_at).getTime() : null;
+    addEvent(normActionType(a), a.project_id, actionTargetPath(a), t);
+  }
+  // Source B: applied WordPress changes (guaranteed page_url + applied_at) — the measured backbone
+  try {
+    const chRows = (await pool.query(
+      `SELECT project_id, page_url, change_type, field_name, applied_at
+         FROM wp_change_history
+        WHERE project_id = ANY($1::int[]) AND rolled_back_at IS NULL AND applied_at IS NOT NULL`, [ids])).rows;
+    for (const c of chRows) {
+      const type = changeTactic(c.change_type, c.field_name);
+      const targetPath = _pathOf(c.page_url || '');
+      if (!type || !targetPath) continue; // need a page to measure against
+      addEvent(type, c.project_id, targetPath, new Date(c.applied_at).getTime());
+    }
+  } catch (e) { console.log('[learnings] change-history source skipped:', e.message); }
 
   const mean2 = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
   const r1 = v => v == null ? null : parseFloat(v.toFixed(1));
@@ -46584,7 +46626,7 @@ async function computeLearnings(onlyProjectId) {
       const notApplied = projRows.filter(p => !doneIds.has(p.id)).map(p => projName[p.id]);
       let nextAction;
       const good = verdict === 'Working' || verdict === 'Promising';
-      if (!measured && verdict !== 'No data') nextAction = 'To trust this, attach the target page URL to these actions so rank movement can be measured per page.';
+      if (!measured && verdict !== 'No data') nextAction = 'To trust this, add rank-tracking for the pages these fixes touched — the fix already records the page, so once its rank is tracked the movement is measured directly.';
       else if (good && notApplied.length) nextAction = `Roll out to ${notApplied.length} project${notApplied.length !== 1 ? 's' : ''} that haven't had it: ${notApplied.slice(0, 6).join(', ')}${notApplied.length > 6 ? ` +${notApplied.length - 6} more` : ''}.`;
       else if (good) nextAction = 'Already applied across all projects — keep maintaining it.';
       else if (verdict === 'No data') nextAction = 'Record the target page on the action, or add rank-tracking for those pages.';
