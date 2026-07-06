@@ -41671,6 +41671,141 @@ app.get('/api/portfolio/summary', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ==================== RANKING AUDIT ====================
+// A six-category audit built around what actually moves LOCAL / MAP / SERP rankings. Each category has
+// sub-categories and individual checks; every check carries an evidence link so the finding is verifiable.
+// Phase 1: On-Page & Content is fully computed (real duplicate-content detection). The other five are
+// scaffolded as "not yet measured" so nothing is faked.
+function _stripHtml(html) {
+  return (html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ').replace(/<header[\s\S]*?<\/header>/gi, ' ').replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+function _words(t) { return (t || '').split(/[^a-z0-9]+/).filter(w => w.length > 1); }
+function _shingles(words, k = 5) { const s = new Set(); for (let i = 0; i + k <= words.length; i++) s.add(words.slice(i, i + k).join(' ')); return s; }
+function _jaccard(a, b) { if (!a.size || !b.size) return 0; let inter = 0; for (const x of a) if (b.has(x)) inter++; return inter / (a.size + b.size - inter); }
+
+app.post('/api/projects/:projectId/ranking-audit', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const projUrl = (project.domain || '').startsWith('http') ? project.domain.replace(/\/+$/, '') : 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const svc = (project.smart_service || project.industry || 'plumber').toString().toLowerCase().trim();
+
+    // ---- Gather the page list (sitemap + WP REST) ----
+    let pagePaths = [];
+    try {
+      const sm = await collectSitemapPaths(projUrl);
+      pagePaths = [...new Set(sm.map(p => p.replace(/^\/|\/$/g, '')).filter(Boolean))];
+    } catch (e) {}
+    try {
+      const dp = await discoverPages(projUrl, project.wordpress_url || projUrl, getWpAuthHeaders(project));
+      for (const p of (dp || [])) if (p.slug) pagePaths.push(p.slug.replace(/^\/|\/$/g, ''));
+    } catch (e) {}
+    pagePaths = [...new Set(pagePaths.filter(Boolean))];
+
+    // ---- Identify location (suburb) pages ----
+    const suburbVocab = new Set();
+    for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) { const k = normSuburbKey(typeof a === 'string' ? a : (a.name || a.suburb || '')).split(',')[0].trim(); if (k) suburbVocab.add(k); }
+    try { for (const s of Object.keys(SUBURB_GPS)) suburbVocab.add(s); } catch (e) {}
+    const isLocationPage = (path) => {
+      const t = ' ' + normSuburbKey(path) + ' ';
+      for (const s of suburbVocab) { if (s.length > 3 && (t.includes(' ' + s + ' ') || t.replace(/\s+/g, '').includes(s.replace(/\s+/g, '')))) return s; }
+      return null;
+    };
+    const locationPages = pagePaths.map(p => ({ path: p, suburb: isLocationPage(p) })).filter(p => p.suburb);
+
+    // ---- Duplicate-content detection: sample location pages, strip chrome, measure similarity ----
+    const sample = locationPages.slice(0, 6);
+    const fetched = [];
+    for (const lp of sample) {
+      try {
+        const r = await fetch(`${projUrl}/${lp.path}`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) });
+        if (r.ok) { const html = await r.text(); fetched.push({ ...lp, url: `${projUrl}/${lp.path}`, words: _words(_stripHtml(html)) }); }
+      } catch (e) {}
+    }
+    // Strip the shared nav/footer by removing the common leading + trailing token runs across all samples.
+    let bodySim = null, sharedSentences = [], comparePair = null;
+    if (fetched.length >= 2) {
+      const minLen = Math.min(...fetched.map(f => f.words.length));
+      let pre = 0; while (pre < minLen && fetched.every(f => f.words[pre] === fetched[0].words[pre])) pre++;
+      let suf = 0; while (suf < minLen - pre && fetched.every(f => f.words[f.words.length - 1 - suf] === fetched[0].words[fetched[0].words.length - 1 - suf])) suf++;
+      const bodies = fetched.map(f => ({ ...f, body: f.words.slice(pre, f.words.length - suf) }));
+      const shs = bodies.map(b => _shingles(b.body, 6));
+      let sum = 0, n = 0;
+      for (let i = 0; i < shs.length; i++) for (let j = i + 1; j < shs.length; j++) { sum += _jaccard(shs[i], shs[j]); n++; }
+      bodySim = n ? Math.round((sum / n) * 100) : null;
+      // shared 8-grams across the two most similar pages → human-readable proof
+      if (bodies.length >= 2) {
+        comparePair = [bodies[0].url, bodies[1].url];
+        const g0 = _shingles(bodies[0].body, 10), g1 = _shingles(bodies[1].body, 10);
+        for (const g of g0) { if (g1.has(g)) { sharedSentences.push(g); if (sharedSentences.length >= 4) break; } }
+      }
+    }
+
+    // ---- On-page checks (real) ----
+    const onpageSubs = [];
+    // Content uniqueness
+    const uniqChecks = [];
+    if (bodySim != null) {
+      const st = bodySim >= 70 ? 'fail' : bodySim >= 45 ? 'warn' : 'pass';
+      uniqChecks.push({ status: st, finding: `Location pages are ${bodySim}% identical to each other (${locationPages.length} location pages found, ${fetched.length} sampled)`,
+        fix: st === 'pass' ? 'Content looks unique — keep it' : 'Rewrite the priority pages with genuinely local content, not a name swap',
+        evidence: comparePair ? { type: 'compare', urls: comparePair, shared: sharedSentences, similarity: bodySim, label: 'See the two side by side' } : null,
+        surfaces: ['SERP', 'Local'] });
+    } else {
+      uniqChecks.push({ status: 'pending', finding: `Found ${locationPages.length} location pages but couldn't sample enough to compare`, fix: 'Check the site is reachable and re-run', evidence: null, surfaces: ['SERP'] });
+    }
+    onpageSubs.push({ name: 'Content uniqueness', checks: uniqChecks });
+
+    // Titles & meta (from on-page cache if present)
+    try {
+      const oc = (await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId])).rows[0];
+      const rows = oc ? (typeof oc.results === 'string' ? JSON.parse(oc.results) : oc.results) : [];
+      if (Array.isArray(rows) && rows.length) {
+        const descs = rows.map(r => (r.metaDesc || r.meta_description || '').trim().toLowerCase()).filter(Boolean);
+        const dupDesc = descs.length - new Set(descs).size;
+        const noDesc = rows.filter(r => !(r.metaDesc || r.meta_description)).length;
+        onpageSubs.push({ name: 'Titles & meta', checks: [
+          { status: dupDesc > 5 ? 'warn' : 'pass', finding: dupDesc > 0 ? `${dupDesc} pages share a duplicate meta description` : 'Meta descriptions look unique', fix: dupDesc > 0 ? 'Write a unique description per page' : '—', evidence: null, surfaces: ['SERP'] },
+          { status: noDesc > 0 ? 'warn' : 'pass', finding: noDesc > 0 ? `${noDesc} pages have no meta description` : 'All pages have a meta description', fix: noDesc > 0 ? 'Add descriptions to those pages' : '—', evidence: null, surfaces: ['SERP'] },
+        ] });
+      }
+    } catch (e) {}
+
+    // Broken/empty links on the homepage (quick check)
+    try {
+      const r = await fetch(projUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) });
+      if (r.ok) { const html = await r.text();
+        const empties = (html.match(/href=(["'])\s*\1/g) || []).length + (html.match(/href=(["'])#\1/g) || []).length;
+        onpageSubs.push({ name: 'Links', checks: [
+          { status: empties > 0 ? 'warn' : 'pass', finding: empties > 0 ? `${empties} link(s) on the homepage point nowhere (empty href)` : 'No empty links on the homepage', fix: empties > 0 ? 'Point them at the right page or remove them' : '—', evidence: empties > 0 ? { type: 'link', url: projUrl, label: 'Open homepage' } : null, surfaces: ['SERP'] },
+        ] });
+      }
+    } catch (e) {}
+
+    const catStatus = (subs) => { const checks = subs.flatMap(s => s.checks); if (checks.some(c => c.status === 'fail')) return 'fail'; if (checks.some(c => c.status === 'warn')) return 'warn'; if (checks.length && checks.every(c => c.status === 'pass')) return 'pass'; return 'pending'; };
+    const catScore = (subs) => { const c = subs.flatMap(s => s.checks).filter(x => x.status !== 'pending'); if (!c.length) return null; const pts = c.reduce((a, x) => a + (x.status === 'pass' ? 100 : x.status === 'warn' ? 55 : 15), 0); return Math.round(pts / c.length); };
+
+    const categories = [
+      { key: 'onpage', name: 'On-page & content', icon: 'ti-file-text', surfaces: ['SERP', 'Local'], subs: onpageSubs, status: catStatus(onpageSubs), score: catScore(onpageSubs) },
+      { key: 'gbp', name: 'Google Business Profile', icon: 'ti-brand-google', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to RatingCaptain next.' },
+      { key: 'reviews', name: 'Reviews & reputation', icon: 'ti-star', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to review data next.' },
+      { key: 'proximity', name: 'Proximity & coverage', icon: 'ti-map-pin', surfaces: ['Map'], subs: [], status: 'pending', score: null, note: 'Wiring to grid scans next.' },
+      { key: 'offpage', name: 'Off-page (citations & links)', icon: 'ti-link', surfaces: ['Local'], subs: [], status: 'pending', score: null, note: 'Wiring to citations/backlinks next.' },
+      { key: 'technical', name: 'Technical foundation', icon: 'ti-settings', surfaces: ['SERP'], subs: [], status: 'pending', score: null, note: 'Wiring to speed/indexation next.' },
+      { key: 'leads', name: 'Lead & conversion', icon: 'ti-phone', surfaces: ['—'], subs: [], status: 'soon', score: null, note: 'Coming soon — needs call-tracking / CRM.' },
+    ];
+    const scored = categories.filter(c => c.score != null);
+    const overall = scored.length ? Math.round(scored.reduce((a, c) => a + c.score, 0) / scored.length) : null;
+
+    res.json({ ok: true, business: project.business_name || project.name, domain: project.domain, overall, categories, generated_at: new Date().toISOString(),
+      stats: { pages_found: pagePaths.length, location_pages: locationPages.length, sampled: fetched.length } });
+  } catch (e) { console.error('[ranking-audit]', e.message); res.status(500).json({ error: e.message }); }
+});
+
 // DEEP per-project detail for the Executive Summary drill-down — the actual keywords, issues, and a
 // concrete step-by-step "how to improve" plan, so the manager never has to leave the page to know what to do.
 app.get('/api/portfolio/project/:projectId/detail', async (req, res) => {

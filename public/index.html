@@ -31921,6 +31921,114 @@
 
     // ============ SMART MAP RANKING — radius suburb survey + prioritized rollout plan ============
     // RANKING ORBITS — the client-facing "space" visual: business at the centre, dotted green
+    // ============ RANKING AUDIT ============ six-category, collapsible, evidence-backed audit for local ranking.
+    function RankingAuditPage({ project, setPage }) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [err, setErr] = useState('');
+      const [open, setOpen] = useState({}); // key -> bool (categories + subs)
+      const [proof, setProof] = useState(null); // evidence.compare payload for the modal
+      const run = async () => {
+        setLoading(true); setErr('');
+        try { const d = await api(`/projects/${project.id}/ranking-audit`, { method: 'POST' }); if (d.error) setErr(d.error); else { setData(d); setOpen({ onpage: true }); } }
+        catch (e) { setErr(e.message); }
+        setLoading(false);
+      };
+      const stColor = s => ({ pass: '#22c55e', warn: '#f59e0b', fail: '#ef4444', pending: '#64748b', soon: '#a855f7' }[s] || '#64748b');
+      const stLabel = s => ({ pass: 'Good', warn: 'Improve', fail: 'Needs work', pending: 'Not measured', soon: 'Coming soon' }[s] || s);
+      const surfTag = t => { const m = { Map: ['rgba(59,130,246,0.15)', '#60a5fa'], Local: ['rgba(34,197,94,0.15)', '#4ade80'], SERP: ['rgba(139,92,246,0.15)', '#a78bfa'] }[t]; if (!m) return null; return <span key={t} style={{ fontSize: 9, background: m[0], color: m[1], padding: '1px 7px', borderRadius: 20 }}>{t}</span>; };
+      const cats = (data?.categories || []);
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 6 }}>
+            <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-bullseye" style={{ marginRight: 10, color: '#6366f1' }} />Ranking Audit</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              {data?.overall != null && <div style={{ textAlign: 'right' }}><div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase' }}>Overall</div><div style={{ fontSize: 22, fontWeight: 800, color: data.overall >= 75 ? '#22c55e' : data.overall >= 50 ? '#f59e0b' : '#ef4444' }}>{data.overall}<span style={{ fontSize: 12, color: 'var(--text3)' }}>/100</span></div></div>}
+              <button className="btn btn-primary" onClick={run} disabled={loading} style={{ fontSize: 13, padding: '9px 18px' }}>{loading ? <><span className="spinner" style={{ marginRight: 6 }} />Running…</> : <><i className="fas fa-play" style={{ marginRight: 6 }} />Run audit</>}</button>
+            </div>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 16 }}>Six categories, ordered by impact on <b style={{ color: '#a78bfa' }}>SERP</b> · <b style={{ color: '#60a5fa' }}>Map</b> · <b style={{ color: '#4ade80' }}>Local pack</b>. Click a row to drill in; every finding links to the real thing.</div>
+          {err && <div className="alert alert-error"><i className="fas fa-exclamation-circle" style={{ marginRight: 6 }} />{err}</div>}
+          {!data && !loading && <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)', border: '1px dashed var(--border)', borderRadius: 12 }}><i className="fas fa-bullseye" style={{ fontSize: 32, marginBottom: 12, display: 'block', opacity: 0.4 }} />Click <b>Run audit</b> to score this site across the six ranking categories.</div>}
+          {loading && !data && <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}><span className="spinner-large" style={{ margin: '0 auto 12px' }} />Crawling pages and scoring…</div>}
+          {data && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {cats.map((c, ci) => {
+              const co = open[c.key];
+              const nFix = (c.subs || []).flatMap(s => s.checks).filter(k => k.status === 'warn' || k.status === 'fail').length;
+              return (
+                <div key={c.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+                  <div onClick={() => c.status !== 'pending' && c.status !== 'soon' && setOpen(o => ({ ...o, [c.key]: !o[c.key] }))} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', cursor: (c.status === 'pending' || c.status === 'soon') ? 'default' : 'pointer', opacity: (c.status === 'pending' || c.status === 'soon') ? 0.6 : 1 }}>
+                    <i className={`fas fa-chevron-${co ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--text3)', visibility: (c.status === 'pending' || c.status === 'soon') ? 'hidden' : 'visible' }} />
+                    <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>{ci + 1}. {c.name}</span>
+                    <span style={{ display: 'flex', gap: 5 }}>{(c.surfaces || []).map(surfTag)}</span>
+                    {c.status !== 'pending' && c.status !== 'soon' && <span style={{ fontSize: 12, color: 'var(--text3)', minWidth: 56, textAlign: 'right' }}>{nFix} to fix</span>}
+                    {c.score != null && <span style={{ fontSize: 15, fontWeight: 800, color: stColor(c.status), minWidth: 28, textAlign: 'right' }}>{c.score}</span>}
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 9px', borderRadius: 20, background: stColor(c.status) + '22', color: stColor(c.status), whiteSpace: 'nowrap' }}>{stLabel(c.status)}</span>
+                  </div>
+                  {(c.status === 'pending' || c.status === 'soon') && c.note && <div style={{ fontSize: 11.5, color: 'var(--text3)', padding: '0 16px 12px 40px' }}>{c.note}</div>}
+                  {co && <div style={{ padding: '0 16px 8px 40px' }}>
+                    {(c.subs || []).map((s, si) => {
+                      const sk = c.key + '-' + si; const so = open[sk];
+                      const sst = s.checks.some(k => k.status === 'fail') ? 'fail' : s.checks.some(k => k.status === 'warn') ? 'warn' : s.checks.every(k => k.status === 'pass') ? 'pass' : 'pending';
+                      return (
+                        <div key={si} style={{ borderTop: '1px solid var(--border)' }}>
+                          <div onClick={() => setOpen(o => ({ ...o, [sk]: !o[sk] }))} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 4px', cursor: 'pointer' }}>
+                            <i className={`fas fa-chevron-${so ? 'down' : 'right'}`} style={{ fontSize: 11, color: 'var(--text3)' }} />
+                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: stColor(sst) }} />
+                            <span style={{ fontSize: 13.5, flex: 1 }}>{s.name}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text3)' }}>{s.checks.filter(k => k.status === 'warn' || k.status === 'fail').length} of {s.checks.length}</span>
+                          </div>
+                          {so && <div style={{ padding: '2px 0 8px 22px' }}>
+                            {s.checks.map((k, ki) => (
+                              <div key={ki} style={{ display: 'flex', gap: 9, padding: '7px 0', alignItems: 'flex-start' }}>
+                                <i className={`fas ${k.status === 'pass' ? 'fa-check' : k.status === 'warn' ? 'fa-triangle-exclamation' : k.status === 'fail' ? 'fa-xmark' : 'fa-circle-question'}`} style={{ fontSize: 13, color: stColor(k.status), marginTop: 2 }} />
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: 12.5, color: 'var(--text1)', lineHeight: 1.5, flex: 1 }}>{k.finding}</span>
+                                    {k.evidence && k.evidence.type === 'compare' && <span onClick={() => setProof(k.evidence)} style={{ fontSize: 11, color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap' }}>{k.evidence.label} <i className="fas fa-up-right-and-down-left-from-center" style={{ fontSize: 10 }} /></span>}
+                                    {k.evidence && k.evidence.type !== 'compare' && <a href={k.evidence.url} target="_blank" rel="noopener" style={{ fontSize: 11, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>{k.evidence.label} <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} /></a>}
+                                  </div>
+                                  {k.fix && k.fix !== '—' && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 1 }}><i className="fas fa-arrow-right" style={{ fontSize: 10, marginRight: 4 }} />{k.fix}</div>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>}
+                        </div>
+                      );
+                    })}
+                  </div>}
+                </div>
+              );
+            })}
+            {data.stats && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>Scanned {data.stats.pages_found} pages · {data.stats.location_pages} location pages · {data.stats.sampled} sampled for duplication.</div>}
+          </div>}
+
+          {/* DUPLICATE COMPARISON MODAL */}
+          {proof && (
+            <div onClick={e => { if (e.target === e.currentTarget) setProof(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+              <div style={{ width: 680, maxWidth: '96vw', maxHeight: '84vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <i className="fas fa-clone" style={{ color: '#ef4444' }} />
+                  <div style={{ fontWeight: 800, fontSize: 15, flex: 1 }}>Content overlap — {proof.similarity}% identical</div>
+                  <button onClick={() => setProof(null)} style={{ background: 'none', border: 'none', color: 'var(--text3)', fontSize: 18, cursor: 'pointer' }}>×</button>
+                </div>
+                <div style={{ padding: '12px 18px', overflowY: 'auto' }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 12 }}>Two of your location pages, compared (header/footer removed):
+                    <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>{(proof.urls || []).map((u, i) => <a key={i} href={u} target="_blank" rel="noopener" style={{ color: '#60a5fa', textDecoration: 'none', fontSize: 12 }}>{(u || '').replace(/^https?:\/\/[^/]+/, '')} <i className="fas fa-external-link-alt" style={{ fontSize: 10 }} /></a>)}</div>
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>Passages that appear word-for-word on both</div>
+                  {(proof.shared || []).length ? (proof.shared || []).map((s, i) => (
+                    <div key={i} style={{ borderLeft: '3px solid #ef4444', background: 'rgba(239,68,68,0.08)', padding: '8px 12px', marginBottom: 8, fontSize: 12, color: 'var(--text1)', lineHeight: 1.55 }}>“…{s}…”</div>
+                  )) : <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>High overall similarity, but no single long passage matched exactly — the pages are heavily reworded (spun) versions of the same content.</div>}
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>These pages should each read differently for their suburb. Because they don't, Google treats most as duplicates and won't rank them.</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // orbits at 5/10/15/20 km, every tracked Maps keyword floating at its PROVEN reach (from grid
     // scans). Colour = search volume, dot size = best position, pulsing = discovered quick-win.
     // Keywords without a grid scan yet drift dim in the outer discovery belt. Real data only.
@@ -41091,6 +41199,8 @@
             return <OnPageAuditPage project={project} />;
           case 'indexing':
             return <IndexingPage project={project} setActiveTab={setActiveTab} />;
+          case 'ranking-audit':
+            return <RankingAuditPage project={project} setPage={setActiveTab} />;
           case 'ranking-orbits':
             return <RankingOrbitsPage project={project} setPage={setActiveTab} />;
           case 'gsc-indexed':
@@ -41213,6 +41323,9 @@
       const isLocal = project?.is_local_business !== false;
 
       const allNavItems = [
+        { section: 'RANKING AUDIT', items: [
+          { id: 'ranking-audit', label: 'Ranking Audit', icon: 'fas fa-bullseye' },
+        ]},
         { section: 'AUDIT', items: [
           { id: 'local-intel', label: 'Local Intel', icon: 'fas fa-brain', localOnly: true, expandable: true, children: [
             { id: 'gbp-optimise', label: 'GBP Optimise', icon: 'fas fa-map-marker-alt' },
@@ -41453,8 +41566,8 @@
                 )
               ) : navItems.map((group) => (
                 <div key={group.section} className="sidebar-section">
-                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'AUDIT': '#f97316', 'STRATEGY': '#14b8a6', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
-                  {(() => { const sColor = { 'AUDIT': '#f97316', 'STRATEGY': '#14b8a6', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
+                  <div className="sidebar-section-title" style={{ fontSize: 13, fontWeight: 900, letterSpacing: 2.5, color: { 'RANKING AUDIT': '#6366f1', 'AUDIT': '#f97316', 'STRATEGY': '#14b8a6', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)' }}>{group.section}</div>
+                  {(() => { const sColor = { 'RANKING AUDIT': '#6366f1', 'AUDIT': '#f97316', 'STRATEGY': '#14b8a6', 'RANKINGS': '#3b82f6', 'GBP': '#4ade80', 'ACTION PLAN': '#22c55e', 'BLOG': '#ec4899', 'COPYWRITER': '#eab308', 'REPORTS': '#f59e0b', 'SETTINGS': '#a855f7' }[group.section] || 'var(--text3)'; return group.items.map((item) => {
                     const isExpanded = expandedNav[item.id];
                     const secPrefix = item.id === 'gsc-audit' ? 'gsc-sec-' : item.id === 'website-audit' ? 'web-sec-' : '';
                     const isActive = activeTab === item.id
