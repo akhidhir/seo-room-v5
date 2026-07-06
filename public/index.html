@@ -14533,6 +14533,9 @@
       const [configured, setConfigured] = useState(false);
       const [fetchedAt, setFetchedAt] = useState(null);
       const [findings, setFindings] = useState(null);
+      const [overall, setOverall] = useState(null);
+      const [window30, setWindow30] = useState(null);
+      const [insights, setInsights] = useState([]);
       const [sortCol, setSortCol] = useState('sessions');
       const [sortDir, setSortDir] = useState('desc');
       const pid = project?.id;
@@ -14545,6 +14548,9 @@
           setMetrics(data.metrics || []);
           setConfigured(data.configured);
           setFetchedAt(data.fetched_at);
+          setOverall(data.overall_score ?? null);
+          setWindow30(data.window || null);
+          setInsights(data.insights || []);
         } catch (e) { console.error('clarity load:', e); }
         setLoading(false);
       };
@@ -14592,7 +14598,17 @@
       const totalSessions = metrics.reduce((s, m) => s + (m.sessions || 0), 0);
       const totalDeadClicks = metrics.reduce((s, m) => s + (m.dead_clicks || 0), 0);
       const totalRageClicks = metrics.reduce((s, m) => s + (m.rage_clicks || 0), 0);
-      const avgScore = metrics.length ? Math.round(metrics.reduce((s, m) => s + (m.score || 0), 0) / metrics.length) : 0;
+      // Session-weighted overall from the server (falls back to a weighted client calc if absent).
+      const avgScore = overall != null ? overall : (() => {
+        const sc = metrics.filter(m => m.score != null && (m.sessions || 0) > 0);
+        const ts = sc.reduce((s, m) => s + m.sessions, 0);
+        return ts ? Math.round(sc.reduce((s, m) => s + m.score * m.sessions, 0) / ts) : null;
+      })();
+      // Staleness: days since last fetch (data window is 3 days, so >2 days stale = worth flagging).
+      const daysSinceFetch = fetchedAt ? Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 86400000) : null;
+      const isStale = daysSinceFetch != null && daysSinceFetch >= 2;
+      const daysCollected = window30?.days || 0;
+      const sevColorUB = (s) => s === 'critical' ? '#ef4444' : s === 'high' ? '#f97316' : s === 'medium' ? '#f59e0b' : '#6366f1';
 
       const clarityUrl = project?.clarity_project_id ? `https://clarity.microsoft.com/projects/view/${project.clarity_project_id}/dashboard` : 'https://clarity.microsoft.com';
 
@@ -14631,10 +14647,15 @@
             React.createElement('div', { style: { marginBottom: 8 } }, '3. Go to Settings → Data Export → Generate API Token'),
             React.createElement('div', null, '4. Enter the Project ID and Token in Project Settings'))),
 
+        // Staleness banner — flags when the data is old (nothing fetched in 2+ days)
+        configured && isStale && React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 14, borderRadius: 10, background: '#f59e0b12', border: '1px solid #f59e0b33', fontSize: 13, color: 'var(--text2)' } },
+          React.createElement('i', { className: 'fas fa-clock', style: { color: '#f59e0b' } }),
+          React.createElement('span', null, `This data is ${daysSinceFetch} days old. Click "Fetch Metrics" to update — it also auto-refreshes daily.`)),
+
         // Stats cards
-        configured && metrics.length > 0 && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 } },
+        configured && metrics.length > 0 && React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 } },
           React.createElement('div', { className: 'stat-card' },
-            React.createElement('div', { className: 'stat-label' }, 'SESSIONS (3 DAYS)'),
+            React.createElement('div', { className: 'stat-label' }, 'SESSIONS (30 DAYS)'),
             React.createElement('div', { className: 'stat-value', style: { color: '#6366f1' } }, totalSessions.toLocaleString())),
           React.createElement('div', { className: 'stat-card' },
             React.createElement('div', { className: 'stat-label' }, 'DEAD CLICKS'),
@@ -14643,12 +14664,31 @@
             React.createElement('div', { className: 'stat-label' }, 'RAGE CLICKS'),
             React.createElement('div', { className: 'stat-value', style: { color: '#D85A30' } }, totalRageClicks.toLocaleString())),
           React.createElement('div', { className: 'stat-card' },
-            React.createElement('div', { className: 'stat-label' }, 'AVG UX SCORE'),
-            React.createElement('div', { className: 'stat-value', style: { color: scoreColor(avgScore) } }, avgScore))),
+            React.createElement('div', { className: 'stat-label', title: 'Session-weighted across pages with enough traffic to score. Low-traffic pages are excluded so the number reflects the pages people actually use.' }, 'UX SCORE (WEIGHTED)'),
+            React.createElement('div', { className: 'stat-value', style: { color: avgScore == null ? 'var(--text3)' : scoreColor(avgScore) } }, avgScore == null ? '—' : avgScore))),
 
-        // Fetched at + page count
-        configured && fetchedAt && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 12 } },
-          'Last fetched: ', new Date(fetchedAt).toLocaleString(), ' — ', metrics.length, ' pages tracked'),
+        // Window + fetched info
+        configured && fetchedAt && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 16 } },
+          React.createElement('i', { className: 'fas fa-calendar-alt', style: { marginRight: 6 } }),
+          '30-day rolling window · ', daysCollected, daysCollected === 1 ? ' day' : ' days', ' collected so far',
+          daysCollected < 30 ? ' (fills to 30 automatically)' : '',
+          ' · updated ', new Date(fetchedAt).toLocaleString(), ' · ', metrics.length, ' pages'),
+
+        // ===== PRIORITY INSIGHTS (deterministic, always-on: what to fix and why) =====
+        configured && insights && insights.length > 0 && React.createElement('div', { className: 'card', style: { padding: 18, marginBottom: 16, borderLeft: '3px solid #6366f1' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 } },
+            React.createElement('i', { className: 'fas fa-bolt', style: { color: '#6366f1' } }),
+            React.createElement('span', { style: { fontSize: 15, fontWeight: 700 } }, 'Priority Insights'),
+            React.createElement('span', { style: { fontSize: 12, color: 'var(--text3)' } }, '— ranked by traffic × severity')),
+          React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 12 } }, 'The highest-impact behaviour problems on the pages that get real traffic.'),
+          insights.map((f, i) => React.createElement('div', { key: i, style: { padding: '12px 0', borderTop: i === 0 ? 'none' : '1px solid var(--border)' } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' } },
+              React.createElement('span', { style: { fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase', background: sevColorUB(f.severity) + '22', color: sevColorUB(f.severity) } }, f.severity),
+              React.createElement('span', { style: { fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: 'var(--bg2)', color: 'var(--text3)' } }, f.category),
+              React.createElement('span', { style: { fontWeight: 700, fontSize: 14 } }, f.title)),
+            React.createElement('div', { style: { fontSize: 13, color: 'var(--text2)', marginBottom: 6, lineHeight: 1.5 } }, f.description),
+            React.createElement('div', { style: { fontSize: 13, padding: '8px 12px', background: '#22c55e10', borderRadius: 6, border: '1px solid #22c55e20', lineHeight: 1.5 } },
+              React.createElement('i', { className: 'fas fa-arrow-right', style: { color: '#22c55e', marginRight: 6 } }), f.recommendation)))),
 
         // Metrics table
         configured && metrics.length > 0 && React.createElement('div', { className: 'card', style: { padding: 0, overflow: 'hidden' } },
@@ -14683,7 +14723,9 @@
                   React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px' } },
                     React.createElement('span', { style: { background: qb.bg, color: qb.color, padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600 } }, m.quick_backs || 0)),
                   React.createElement('td', { style: { textAlign: 'center', padding: '10px 8px' } },
-                    React.createElement('div', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: '50%', border: `3px solid ${scoreColor(m.score)}`, fontSize: 13, fontWeight: 700, color: scoreColor(m.score) } }, m.score || 0)));
+                    m.score == null
+                      ? React.createElement('span', { title: 'Too few sessions to score fairly (under 5). Shown as unscored rather than a misleading 100.', style: { fontSize: 12, color: 'var(--text3)' } }, 'low traffic')
+                      : React.createElement('div', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: '50%', border: `3px solid ${scoreColor(m.score)}`, fontSize: 13, fontWeight: 700, color: scoreColor(m.score) } }, m.score)));
               })))),
 
         // No data state
@@ -14694,9 +14736,10 @@
 
         // AI Findings
         findings && findings.length > 0 && React.createElement('div', { style: { marginTop: 24 } },
-          React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('h3', { style: { fontSize: 16, fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('i', { className: 'fas fa-brain', style: { color: '#6366f1' } }),
-            'AI Conversion Insights', React.createElement('span', { style: { fontSize: 12, fontWeight: 400, color: 'var(--text3)' } }, `(${findings.length} findings)`)),
+            'AI Deep-Dive', React.createElement('span', { style: { fontSize: 12, fontWeight: 400, color: 'var(--text3)' } }, `(${findings.length} findings)`)),
+          React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 12 } }, 'Saved for review — approve the ones you want in the Action Plan (they are not auto-actioned).'),
           findings.map((f, i) => React.createElement('div', { key: i, className: 'card', style: { marginBottom: 8, borderLeft: `3px solid ${f.severity === 'critical' ? '#ef4444' : f.severity === 'high' ? '#f59e0b' : '#6366f1'}`, borderRadius: 0 } },
             React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 } },
               React.createElement('div', { style: { fontWeight: 700, fontSize: 14 } }, f.title),

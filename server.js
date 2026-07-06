@@ -410,6 +410,30 @@ async function initDb() {
       )
     `);
 
+    // Clarity DAILY snapshots — Clarity's export API only returns a 3-day window per call, so we store
+    // one dated snapshot per day (numOfDays=1) and aggregate the trailing 30 days for a true monthly view.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS clarity_daily (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        metric_date DATE NOT NULL,
+        page_url TEXT NOT NULL,
+        page_title TEXT,
+        sessions INTEGER DEFAULT 0,
+        dead_clicks INTEGER DEFAULT 0,
+        rage_clicks INTEGER DEFAULT 0,
+        excessive_scrolls INTEGER DEFAULT 0,
+        quick_backs INTEGER DEFAULT 0,
+        scroll_depth DOUBLE PRECISION DEFAULT 0,
+        engagement_time DOUBLE PRECISION DEFAULT 0,
+        error_clicks INTEGER DEFAULT 0,
+        script_errors INTEGER DEFAULT 0,
+        fetched_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, metric_date, page_url)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_clarity_daily_pd ON clarity_daily(project_id, metric_date)`).catch(() => {});
+
     // GSC keywords (position data from Google Search Console)
     await client.query(`
       CREATE TABLE IF NOT EXISTS gsc_keywords (
@@ -17844,6 +17868,144 @@ app.get('/api/projects/:projectId/rc/profile', async (req, res) => {
 
 // ==================== MICROSOFT CLARITY (User Behaviour Metrics) ====================
 
+// ==================== CLARITY (USER BEHAVIOUR) HELPERS ====================
+const CLARITY_MIN_SESSIONS = 5; // below this, a page has too little data to score fairly
+// Per-page UX score from per-SESSION rates (not raw counts) so low-traffic pages aren't judged like
+// high-traffic ones. Returns null when the sample is too small — muted, never a fake "100".
+function scoreClarityPage(p) {
+  const s = p.sessions || 0;
+  if (s < CLARITY_MIN_SESSIONS) return null;
+  let score = 100;
+  const dead = (p.dead_clicks || 0) / s, rage = (p.rage_clicks || 0) / s, qb = (p.quick_backs || 0) / s, exc = (p.excessive_scrolls || 0) / s;
+  score -= Math.min(35, dead * 100 * 0.7);   // dead clicks (missing/false CTAs)
+  score -= Math.min(30, rage * 100 * 1.5);   // rage clicks weigh most (active frustration)
+  score -= Math.min(20, qb * 100 * 0.5);     // quick backs (intent mismatch)
+  score -= Math.min(10, exc * 100 * 0.4);    // excessive scrolling (can't find things)
+  if (p.scroll_depth && p.scroll_depth < 50) score -= Math.min(15, (50 - p.scroll_depth) * 0.3);
+  return Math.max(0, Math.round(score));
+}
+// Session-weighted overall score across scored pages (a 200-session page counts far more than a 6-session one).
+function clarityOverall(pages) {
+  const scored = pages.filter(p => p.score != null && (p.sessions || 0) > 0);
+  const totS = scored.reduce((s, p) => s + p.sessions, 0);
+  if (!totS) return null;
+  return Math.round(scored.reduce((s, p) => s + p.score * p.sessions, 0) / totS);
+}
+// Deterministic, always-on Priority Insights — informative + actionable, ranked by real impact
+// (traffic × severity). No AI needed; this is the day-to-day "what to fix and why".
+function buildClarityInsights(pages) {
+  const scored = pages.filter(p => (p.sessions || 0) >= CLARITY_MIN_SESSIONS);
+  const out = [];
+  for (const p of scored) {
+    const s = p.sessions, path = _pathOf(p.page_url) || (p.page_url || '/');
+    const dead = p.dead_clicks || 0, rage = p.rage_clicks || 0, qb = p.quick_backs || 0, scroll = Math.round(p.scroll_depth || 0);
+    const deadR = Math.round(dead / s * 100), rageR = Math.round(rage / s * 100), qbR = Math.round(qb / s * 100);
+    if (rage >= 2 && rageR >= 8) out.push({ severity: rageR >= 20 ? 'critical' : 'high', impact: s * rageR, category: 'Rage Clicks', page_url: p.page_url,
+      title: `Visitors are rage-clicking on ${path}`,
+      description: `${rage} rage clicks across ${s} sessions (${rageR}%). Rage clicks mean people repeatedly click something that doesn't respond — usually a broken button/link or an element that's slow to load.`,
+      recommendation: `Open this page's Clarity recordings, test every button and link, and fix or replace whatever isn't responding. Rage clicks are the #1 signal of a broken conversion path.` });
+    if (dead >= 3 && deadR >= 15) out.push({ severity: deadR >= 30 ? 'high' : 'medium', impact: s * deadR, category: 'Dead Clicks', page_url: p.page_url,
+      title: `Clicks landing on nothing on ${path}`,
+      description: `${deadR}% of interactions (${dead}/${s}) hit non-clickable elements. Something looks clickable but isn't — an image, icon, or bold text that reads like a button.`,
+      recommendation: `Make that element a real link/CTA, or restyle it so it no longer looks clickable. Dead clicks are missed conversions where the user WANTED to act.` });
+    if (qb >= 3 && qbR >= 20) out.push({ severity: qbR >= 40 ? 'high' : 'medium', impact: s * qbR, category: 'Quick Backs', page_url: p.page_url,
+      title: `Fast bounces back from ${path}`,
+      description: `${qbR}% of visitors (${qb}/${s}) landed and immediately went back — the page isn't matching what they expected from the search result or ad.`,
+      recommendation: `Align the H1 and first screen with the search intent, and put the core offer plus a clear call-to-action above the fold so the value is obvious in 2 seconds.` });
+    if (scroll && scroll < 40 && s >= 8) out.push({ severity: 'medium', impact: s * (50 - scroll), category: 'Scroll Depth', page_url: p.page_url,
+      title: `Content below the fold is unseen on ${path}`,
+      description: `The average visitor sees only ${scroll}% of this page. Anything lower — proof, services, pricing, your CTA — is effectively invisible to most people.`,
+      recommendation: `Move your strongest proof and primary CTA into the first screen, and tighten the top of the page so key content appears sooner.` });
+  }
+  out.sort((a, b) => (b.impact || 0) - (a.impact || 0));
+  return out.slice(0, 6);
+}
+// Call Clarity's export API for ONE day and parse into per-page rows. Throws {status, message} on API errors.
+async function fetchClarityDay(clarity_api_token) {
+  const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?numOfDays=1&dimension1=URL`;
+  const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${clarity_api_token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(20000) });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    const e = new Error(resp.status === 401 ? 'Clarity API token is invalid or expired. Generate a new one in Clarity → Settings → Data Export.'
+      : resp.status === 429 ? 'Clarity API daily limit reached (10 calls/day). It will fill in automatically tomorrow.'
+      : `Clarity API error: ${resp.status} — ${errText.substring(0, 200)}`);
+    e.httpStatus = resp.status; throw e;
+  }
+  const data = await resp.json();
+  const metricMap = {};
+  for (const group of (Array.isArray(data) ? data : [])) {
+    const metricName = group.metricName;
+    for (const row of (group.information || [])) {
+      const u = row.Url || row.URL || row.url; if (!u) continue;
+      if (!metricMap[u]) metricMap[u] = { page_url: u };
+      if (!metricMap[u].sessions && row.sessionsCount) metricMap[u].sessions = parseInt(row.sessionsCount || 0);
+      switch (metricName) {
+        case 'Traffic': metricMap[u].sessions = parseInt(row.totalSessionCount || row.sessionsCount || 0); metricMap[u].page_title = row.PageTitle || row.pageTitle || null; break;
+        case 'DeadClickCount': metricMap[u].dead_clicks = parseInt(row.subTotal || row.Count || row.count || 0); break;
+        case 'RageClickCount': metricMap[u].rage_clicks = parseInt(row.subTotal || row.Count || row.count || 0); break;
+        case 'ExcessiveScroll': metricMap[u].excessive_scrolls = parseInt(row.subTotal || row.Count || row.count || 0); break;
+        case 'QuickbackClick': metricMap[u].quick_backs = parseInt(row.subTotal || row.Count || row.count || 0); break;
+        case 'ScrollDepth': metricMap[u].scroll_depth = parseFloat(row.averageScrollDepth || row.Percentage || row.avgScrollDepth || 0); break;
+        case 'EngagementTime': metricMap[u].engagement_time = parseFloat(row.activeTime || row.totalTime || row.AvgTime || 0); break;
+        case 'ErrorClickCount': metricMap[u].error_clicks = parseInt(row.subTotal || row.Count || row.count || 0); break;
+        case 'ScriptErrorCount': metricMap[u].script_errors = parseInt(row.subTotal || row.Count || row.count || 0); break;
+      }
+    }
+  }
+  return Object.values(metricMap);
+}
+// Store today's snapshot, then rebuild the trailing-30-day aggregate + scores. Returns { pages, window }.
+async function accumulateClarity(projectId, clarity_api_token) {
+  const dayPages = await fetchClarityDay(clarity_api_token);
+  for (const p of dayPages) {
+    await pool.query(
+      `INSERT INTO clarity_daily (project_id, metric_date, page_url, page_title, sessions, dead_clicks, rage_clicks, excessive_scrolls, quick_backs, scroll_depth, engagement_time, error_clicks, script_errors, fetched_at)
+       VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+       ON CONFLICT (project_id, metric_date, page_url)
+       DO UPDATE SET page_title=COALESCE($3, clarity_daily.page_title), sessions=$4, dead_clicks=$5, rage_clicks=$6, excessive_scrolls=$7, quick_backs=$8, scroll_depth=$9, engagement_time=$10, error_clicks=$11, script_errors=$12, fetched_at=NOW()`,
+      [projectId, p.page_url, p.page_title || null, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0]
+    );
+  }
+  return rebuildClarityAggregate(projectId);
+}
+// Aggregate clarity_daily over the trailing 30 days into clarity_metrics (session-weighted averages, rate-based score).
+async function rebuildClarityAggregate(projectId) {
+  const rows = (await pool.query(
+    `SELECT * FROM clarity_daily WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days'`, [projectId])).rows;
+  const byUrl = {};
+  for (const r of rows) {
+    const k = r.page_url;
+    if (!byUrl[k]) byUrl[k] = { page_url: k, page_title: r.page_title, sessions: 0, dead_clicks: 0, rage_clicks: 0, excessive_scrolls: 0, quick_backs: 0, error_clicks: 0, script_errors: 0, _scrollW: 0, _engW: 0 };
+    const a = byUrl[k];
+    if (r.page_title) a.page_title = r.page_title;
+    const s = r.sessions || 0;
+    a.sessions += s; a.dead_clicks += r.dead_clicks || 0; a.rage_clicks += r.rage_clicks || 0;
+    a.excessive_scrolls += r.excessive_scrolls || 0; a.quick_backs += r.quick_backs || 0;
+    a.error_clicks += r.error_clicks || 0; a.script_errors += r.script_errors || 0;
+    a._scrollW += (r.scroll_depth || 0) * s; a._engW += (r.engagement_time || 0) * s;
+  }
+  const pages = Object.values(byUrl).map(a => {
+    a.scroll_depth = a.sessions > 0 ? a._scrollW / a.sessions : 0;
+    a.engagement_time = a.sessions > 0 ? a._engW / a.sessions : 0;
+    delete a._scrollW; delete a._engW;
+    a.score = scoreClarityPage(a);
+    return a;
+  });
+  // Replace the aggregate for this project
+  await pool.query('DELETE FROM clarity_metrics WHERE project_id=$1', [projectId]);
+  for (const p of pages) {
+    await pool.query(
+      `INSERT INTO clarity_metrics (project_id, page_url, page_title, sessions, dead_clicks, rage_clicks, excessive_scrolls, quick_backs, scroll_depth, engagement_time, error_clicks, script_errors, score, fetched_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())`,
+      [projectId, p.page_url, p.page_title || null, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0, p.score]
+    );
+  }
+  const w = (await pool.query(
+    `SELECT COUNT(DISTINCT metric_date)::int AS days, MIN(metric_date) AS start, MAX(metric_date) AS "end"
+       FROM clarity_daily WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days'`, [projectId])).rows[0];
+  return { pages, window: w };
+}
+
 // GET cached clarity metrics
 app.get('/api/projects/:projectId/clarity-metrics', async (req, res) => {
   const { projectId } = req.params;
@@ -17858,7 +18020,15 @@ app.get('/api/projects/:projectId/clarity-metrics', async (req, res) => {
       [projectId]
     );
     const fetchedAt = metrics.rows.length ? metrics.rows[0].fetched_at : null;
-    res.json({ configured, metrics: metrics.rows, fetched_at: fetchedAt });
+    const w = (await pool.query(
+      `SELECT COUNT(DISTINCT metric_date)::int AS days, MIN(metric_date) AS start, MAX(metric_date) AS "end"
+         FROM clarity_daily WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days'`, [projectId])).rows[0];
+    res.json({
+      configured, metrics: metrics.rows, fetched_at: fetchedAt,
+      overall_score: clarityOverall(metrics.rows),
+      window: w || { days: 0, start: null, end: null },
+      insights: buildClarityInsights(metrics.rows),
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -17873,113 +18043,22 @@ app.post('/api/projects/:projectId/clarity-metrics/fetch', async (req, res) => {
       return res.status(400).json({ error: 'Microsoft Clarity not configured. Go to Settings → Project Settings and enter your Clarity Project ID and API Token.' });
     }
 
-    console.log(`[clarity] Fetching metrics for project ${projectId}, Clarity ID: ${clarity_project_id}`);
+    console.log(`[clarity] Fetching daily snapshot for project ${projectId}, Clarity ID: ${clarity_project_id}`);
 
-    // Call Clarity Data Export API — get URL-level breakdown
-    const clarityUrl = `https://www.clarity.ms/export-data/api/v1/project-live-insights?numOfDays=3&dimension1=URL`;
-    const clarityResp = await fetch(clarityUrl, {
-      headers: {
-        'Authorization': `Bearer ${clarity_api_token}`,
-        'Content-Type': 'application/json',
-      },
+    // Store today's 1-day snapshot, then rebuild the trailing-30-day aggregate.
+    let result;
+    try {
+      result = await accumulateClarity(projectId, clarity_api_token);
+    } catch (apiErr) {
+      const code = apiErr.httpStatus === 401 || apiErr.httpStatus === 429 ? 400 : 400;
+      return res.status(code).json({ error: apiErr.message });
+    }
+    const { pages, window: w } = result;
+    console.log(`[clarity] Project ${projectId}: ${pages.length} pages over ${w?.days || 0} day(s) collected`);
+    res.json({
+      ok: true, pages_count: pages.length, metrics: pages,
+      overall_score: clarityOverall(pages), window: w, insights: buildClarityInsights(pages),
     });
-
-    if (!clarityResp.ok) {
-      const errText = await clarityResp.text();
-      console.log(`[clarity] API error ${clarityResp.status}:`, errText);
-      if (clarityResp.status === 401) return res.status(400).json({ error: 'Clarity API token is invalid or expired. Generate a new one in Clarity Settings → Data Export.' });
-      if (clarityResp.status === 429) return res.status(400).json({ error: 'Clarity API daily limit reached (10 calls/day). Try again tomorrow.' });
-      return res.status(400).json({ error: `Clarity API error: ${clarityResp.status} — ${errText.substring(0, 200)}` });
-    }
-
-    const clarityData = await clarityResp.json();
-    console.log(`[clarity] Got ${Array.isArray(clarityData) ? clarityData.length : 0} metric groups`);
-    console.log(`[clarity] Raw response keys:`, Array.isArray(clarityData) ? clarityData.map(g => g.metricName) : Object.keys(clarityData || {}));
-    if (Array.isArray(clarityData) && clarityData.length > 0) {
-      console.log(`[clarity] First group sample:`, JSON.stringify(clarityData[0]).substring(0, 500));
-    } else {
-      console.log(`[clarity] Full response (truncated):`, JSON.stringify(clarityData).substring(0, 1000));
-    }
-
-    // Parse the Clarity response — it returns an array of metric groups
-    // Each group has { metricName, information: [...] }
-    // Actual API field names: Url (title-case), subTotal, sessionsCount, averageScrollDepth, activeTime
-    // Actual metric names: DeadClickCount, RageClickCount, ExcessiveScroll, QuickbackClick, ScriptErrorCount, ErrorClickCount, ScrollDepth, Traffic, EngagementTime
-    const metricMap = {};
-    for (const group of (Array.isArray(clarityData) ? clarityData : [])) {
-      const metricName = group.metricName;
-      for (const row of (group.information || [])) {
-        const url = row.Url || row.URL || row.url;
-        if (!url) continue;
-        if (!metricMap[url]) metricMap[url] = { page_url: url };
-        // Every metric row has sessionsCount — use it as fallback for sessions
-        if (!metricMap[url].sessions && row.sessionsCount) {
-          metricMap[url].sessions = parseInt(row.sessionsCount || 0);
-        }
-        switch (metricName) {
-          case 'Traffic':
-            metricMap[url].sessions = parseInt(row.totalSessionCount || row.sessionsCount || 0);
-            metricMap[url].distinct_users = parseInt(row.distinctUserCount || 0);
-            metricMap[url].page_title = row.PageTitle || row.pageTitle || null;
-            break;
-          case 'DeadClickCount':
-            metricMap[url].dead_clicks = parseInt(row.subTotal || row.Count || row.count || 0);
-            break;
-          case 'RageClickCount':
-            metricMap[url].rage_clicks = parseInt(row.subTotal || row.Count || row.count || 0);
-            break;
-          case 'ExcessiveScroll':
-            metricMap[url].excessive_scrolls = parseInt(row.subTotal || row.Count || row.count || 0);
-            break;
-          case 'QuickbackClick':
-            metricMap[url].quick_backs = parseInt(row.subTotal || row.Count || row.count || 0);
-            break;
-          case 'ScrollDepth':
-            metricMap[url].scroll_depth = parseFloat(row.averageScrollDepth || row.Percentage || row.avgScrollDepth || 0);
-            break;
-          case 'EngagementTime':
-            metricMap[url].engagement_time = parseFloat(row.activeTime || row.totalTime || row.AvgTime || 0);
-            break;
-          case 'ErrorClickCount':
-            metricMap[url].error_clicks = parseInt(row.subTotal || row.Count || row.count || 0);
-            break;
-          case 'ScriptErrorCount':
-            metricMap[url].script_errors = parseInt(row.subTotal || row.Count || row.count || 0);
-            break;
-        }
-      }
-    }
-
-    // Calculate composite score per page (0-100)
-    const pages = Object.values(metricMap);
-    for (const p of pages) {
-      let score = 100;
-      // Penalise for dead clicks (max -30)
-      if (p.dead_clicks > 0) score -= Math.min(30, p.dead_clicks * 2);
-      // Penalise for rage clicks (max -25)
-      if (p.rage_clicks > 0) score -= Math.min(25, p.rage_clicks * 3);
-      // Penalise for quick backs (max -20)
-      if (p.quick_backs > 0) score -= Math.min(20, p.quick_backs * 2);
-      // Penalise for low scroll depth (max -15)
-      if (p.scroll_depth && p.scroll_depth < 50) score -= Math.round((50 - p.scroll_depth) * 0.3);
-      // Penalise for excessive scrolls (max -10)
-      if (p.excessive_scrolls > 0) score -= Math.min(10, p.excessive_scrolls * 2);
-      p.score = Math.max(0, Math.round(score));
-    }
-
-    // Upsert into DB
-    for (const p of pages) {
-      await pool.query(
-        `INSERT INTO clarity_metrics (project_id, page_url, page_title, sessions, dead_clicks, rage_clicks, excessive_scrolls, quick_backs, scroll_depth, engagement_time, error_clicks, script_errors, score, fetched_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
-         ON CONFLICT (project_id, page_url)
-         DO UPDATE SET page_title=COALESCE($3, clarity_metrics.page_title), sessions=$4, dead_clicks=$5, rage_clicks=$6, excessive_scrolls=$7, quick_backs=$8, scroll_depth=$9, engagement_time=$10, error_clicks=$11, script_errors=$12, score=$13, fetched_at=NOW()`,
-        [projectId, p.page_url, p.page_title, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0, p.score || 0]
-      );
-    }
-
-    console.log(`[clarity] Saved ${pages.length} page metrics for project ${projectId}`);
-    res.json({ ok: true, pages_count: pages.length, metrics: pages });
   } catch (e) {
     console.error('[clarity] Fetch error:', e.message);
     res.status(500).json({ error: e.message });
@@ -18015,7 +18094,7 @@ app.post('/api/projects/:projectId/clarity-metrics/analyse', async (req, res) =>
 
     const prompt = `You are a conversion rate optimisation (CRO) expert analysing Microsoft Clarity user behaviour data for "${project.business_name || project.name}" (${project.domain}).
 
-Here is the user behaviour data per page (last 3 days):
+Here is the user behaviour data per page (rolling 30-day window):
 
 ${JSON.stringify(metricsData, null, 2)}
 
@@ -18069,24 +18148,20 @@ Return 5-15 findings, ordered by severity. Focus on pages with the worst metrics
     );
     const auditId = auditRes.rows[0].id;
 
+    // Save findings for review — status 'new' (NOT auto-approved), and NO silent action-item creation.
+    // Findings become tickets only when the user approves them, matching the approve-first workflow.
+    // current_value carries the page URL so a resulting fix can be measured against that page's rank.
     let savedCount = 0;
     for (const f of findings) {
       await pool.query(
         `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, status, current_value, recommended_value)
-         VALUES ($1, $2, 'clarity', $3, $4, $5, $6, $7, 'approved', $8, $9)`,
+         VALUES ($1, $2, 'clarity', $3, $4, $5, $6, $7, 'new', $8, $9)`,
         [projectId, auditId, f.category || 'User Behaviour', f.title, f.description, f.recommendation, f.severity || 'medium', f.page_url || '', 'Improve conversion']
-      );
-
-      // Auto-create action item
-      await pool.query(
-        `INSERT INTO action_items (project_id, title, description, type, severity, status, category, pages_affected)
-         VALUES ($1, $2, $3, 'manual', $4, 'pending', $5, $6)`,
-        [projectId, f.title, f.recommendation, f.severity === 'critical' ? 'high' : f.severity === 'high' ? 'high' : 'medium', f.category || 'User Behaviour', f.page_url || '']
       );
       savedCount++;
     }
 
-    console.log(`[clarity] AI analysis: ${findings.length} findings, ${savedCount} action items for project ${projectId}`);
+    console.log(`[clarity] AI analysis: ${savedCount} findings saved for review (project ${projectId})`);
     res.json({ ok: true, findings, audit_id: auditId });
   } catch (e) {
     console.error('[clarity] Analysis error:', e.message);
@@ -21356,6 +21431,23 @@ async function runDailyAuto410Sweep() {
 }
 setInterval(() => runDailyAuto410Sweep().catch(e => console.error('[auto-410] daily sweep error:', e.message)), 24 * 60 * 60 * 1000);
 setTimeout(() => runDailyAuto410Sweep().catch(() => {}), 90 * 1000); // first sweep ~90s after boot
+
+// Daily Clarity accumulation — stores one dated snapshot per Clarity-configured project so the
+// 30-day rolling window fills automatically (Clarity's API only returns 3 days per call).
+async function runDailyClarityAccumulate() {
+  const projs = (await pool.query(`SELECT id, clarity_api_token FROM projects WHERE clarity_project_id IS NOT NULL AND clarity_api_token IS NOT NULL`)).rows;
+  for (const p of projs) {
+    try {
+      // Skip if today's snapshot already exists (avoids burning the 10-calls/day quota on restarts).
+      const has = (await pool.query(`SELECT 1 FROM clarity_daily WHERE project_id=$1 AND metric_date=CURRENT_DATE LIMIT 1`, [p.id])).rows.length;
+      if (has) { continue; }
+      await accumulateClarity(p.id, p.clarity_api_token);
+      console.log(`[clarity] daily snapshot stored for project ${p.id}`);
+    } catch (e) { console.log(`[clarity] daily snapshot skipped for project ${p.id}: ${e.message}`); }
+  }
+}
+setInterval(() => runDailyClarityAccumulate().catch(e => console.error('[clarity] daily sweep error:', e.message)), 24 * 60 * 60 * 1000);
+setTimeout(() => runDailyClarityAccumulate().catch(() => {}), 120 * 1000); // first run ~2min after boot
 
 app.get('/api/system/health', async (req, res) => {
   try {
