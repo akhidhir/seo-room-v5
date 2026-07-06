@@ -652,6 +652,7 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS wp_app_password TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS clarity_project_id TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS clarity_api_token TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS clarity_last_attempt DATE`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS phone TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_services TEXT`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS map_custom_suburbs TEXT`).catch(() => {});
@@ -17935,10 +17936,12 @@ async function fetchClarityDay(clarity_api_token, numDays = 1) {
     e.httpStatus = resp.status; throw e;
   }
   const data = await resp.json();
+  const diag = { httpStatus: resp.status, numDays: n, groups: Array.isArray(data) ? data.map(g => g.metricName) : [], rawRows: 0, sample: (Array.isArray(data) ? JSON.stringify(data).slice(0, 300) : String(data).slice(0, 300)) };
   const metricMap = {};
   for (const group of (Array.isArray(data) ? data : [])) {
     const metricName = group.metricName;
     for (const row of (group.information || [])) {
+      diag.rawRows++;
       const u = row.Url || row.URL || row.url; if (!u) continue;
       if (!metricMap[u]) metricMap[u] = { page_url: u };
       if (!metricMap[u].sessions && row.sessionsCount) metricMap[u].sessions = parseInt(row.sessionsCount || 0);
@@ -17955,7 +17958,9 @@ async function fetchClarityDay(clarity_api_token, numDays = 1) {
       }
     }
   }
-  return Object.values(metricMap);
+  const pages = Object.values(metricMap);
+  diag.pageCount = pages.length;
+  return { pages, diag };
 }
 // Accumulate Clarity data, then rebuild the trailing-30-day aggregate. Returns { pages, window }.
 // - First time (no history): seed the FULL 3 days Clarity allows, stored as one snapshot spanning 3 days.
@@ -17984,17 +17989,18 @@ async function accumulateClarity(projectId, clarity_api_token, opts = {}) {
     }
   }
 
-  let span, snapshotDate, dayPages;
+  let span, snapshotDate, dayPages, diag;
   if (!coveredThroughStr) {
     // Bootstrap: pull the max 3-day window and store it dated at its START (today-2), spanning 3 days.
     span = 3; snapshotDate = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
-    dayPages = await fetchClarityDay(clarity_api_token, 3);
+    ({ pages: dayPages, diag } = await fetchClarityDay(clarity_api_token, 3));
   } else if (coveredThroughStr >= todayStr && !opts.force) {
     // Already have today — no API call, just recompute the aggregate.
-    return rebuildClarityAggregate(projectId);
+    const rb = await rebuildClarityAggregate(projectId);
+    return { ...rb, diag: { skipped: 'already current (no API call)' } };
   } else {
     span = 1; snapshotDate = todayStr;
-    dayPages = await fetchClarityDay(clarity_api_token, 1);
+    ({ pages: dayPages, diag } = await fetchClarityDay(clarity_api_token, 1));
   }
 
   for (const p of dayPages) {
@@ -18006,7 +18012,8 @@ async function accumulateClarity(projectId, clarity_api_token, opts = {}) {
       [projectId, snapshotDate, p.page_url, p.page_title || null, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0, span]
     );
   }
-  return rebuildClarityAggregate(projectId);
+  const rb = await rebuildClarityAggregate(projectId);
+  return { ...rb, diag: { ...diag, stored: dayPages.length, span } };
 }
 // Aggregate clarity_daily over the trailing 30 days into clarity_metrics (session-weighted averages, rate-based score).
 async function rebuildClarityAggregate(projectId) {
@@ -18105,12 +18112,21 @@ app.post('/api/projects/:projectId/clarity-metrics/fetch', async (req, res) => {
       const code = apiErr.httpStatus === 401 || apiErr.httpStatus === 429 ? 400 : 400;
       return res.status(code).json({ error: apiErr.message });
     }
-    const { pages, window: w } = result;
-    console.log(`[clarity] Project ${projectId}: ${pages.length} pages over ${w?.days || 0} day(s) collected`);
+    const { pages, window: w, diag } = result;
+    console.log(`[clarity] Project ${projectId}: ${pages.length} pages, diag=${JSON.stringify(diag)}`);
+    // Honest, specific message based on what Clarity actually returned.
+    let note;
+    if (pages.length === 0) {
+      if (diag && diag.httpStatus === 200 && (diag.rawRows === 0 || diag.groups?.length === 0)) {
+        note = `Clarity connected OK (HTTP 200) but returned no rows for the last ${diag.numDays || 3} day(s). This means Clarity itself has no session data for that window — check that the Clarity tracking code is live on the site and that the correct Project ID is set.`;
+      } else {
+        note = 'Clarity returned no page data. If you clicked Fetch several times today you may have hit the 10-calls/day limit — it resets daily and the dashboard refills automatically.';
+      }
+    }
     res.json({
       ok: true, pages_count: pages.length, metrics: pages,
       overall_score: clarityOverall(pages), window: w, insights: buildClarityInsights(pages),
-      note: pages.length === 0 ? 'Clarity returned no page data for the last 3 days. This usually means no sessions were recorded yet, or the daily API limit (10/day) was hit — it will fill in automatically.' : undefined,
+      note, diag,
     });
   } catch (e) {
     console.error('[clarity] Fetch error:', e.message);
@@ -21488,13 +21504,17 @@ setTimeout(() => runDailyAuto410Sweep().catch(() => {}), 90 * 1000); // first sw
 // Daily Clarity accumulation — stores one dated snapshot per Clarity-configured project so the
 // 30-day rolling window fills automatically (Clarity's API only returns 3 days per call).
 async function runDailyClarityAccumulate() {
-  const projs = (await pool.query(`SELECT id, clarity_api_token FROM projects WHERE clarity_project_id IS NOT NULL AND clarity_api_token IS NOT NULL`)).rows;
+  // Only projects NOT yet attempted today — Clarity allows 10 calls/day, and the server can restart many
+  // times (each deploy), so we must never re-hit the API for a project we already tried today.
+  const projs = (await pool.query(
+    `SELECT id, clarity_api_token FROM projects
+      WHERE clarity_project_id IS NOT NULL AND clarity_api_token IS NOT NULL
+        AND (clarity_last_attempt IS NULL OR clarity_last_attempt < CURRENT_DATE)`)).rows;
   for (const p of projs) {
     try {
-      // accumulateClarity seeds 3 days on first run, adds 1 day otherwise, and makes NO API call
-      // when the window already covers today — so this is quota-safe on restarts.
       await accumulateClarity(p.id, p.clarity_api_token);
     } catch (e) { console.log(`[clarity] daily snapshot skipped for project ${p.id}: ${e.message}`); }
+    finally { await pool.query(`UPDATE projects SET clarity_last_attempt=CURRENT_DATE WHERE id=$1`, [p.id]).catch(() => {}); }
   }
 }
 setInterval(() => runDailyClarityAccumulate().catch(e => console.error('[clarity] daily sweep error:', e.message)), 24 * 60 * 60 * 1000);
