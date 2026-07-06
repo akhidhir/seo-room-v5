@@ -41412,34 +41412,50 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
     // question: "which suburbs do we rank in, and how far out does our reach extend?"
     let suburbZones = null;
     try {
-      // Business centre: its own suburb from the project location
-      const bizSub = (project.location || '').toLowerCase().split(',')[0].trim();
-      const bizGps = SUBURB_GPS[bizSub] || null;
+      // Business centre: find the FIRST known suburb anywhere in the location string. A full street
+      // address ("8 A King William Street, Bayswater, Perth 6053") has the suburb in the MIDDLE, so
+      // taking split(',')[0] misses it — scan every comma-part, and the whole string as a fallback.
+      const subNames = Object.keys(SUBURB_GPS).filter(s => s.length > 3).sort((a, b) => b.length - a.length);
+      const locLc = (project.location || '').toLowerCase();
+      let bizGps = null;
+      const parts = locLc.split(',').map(p => p.replace(/[0-9]/g, '').trim()).filter(Boolean);
+      for (const p of parts) { if (SUBURB_GPS[p]) { bizGps = SUBURB_GPS[p]; break; } }
+      if (!bizGps) { for (const sub of subNames) { if (new RegExp(`\\b${sub}\\b`).test(locLc)) { bizGps = SUBURB_GPS[sub]; break; } } }
       if (bizGps) {
-        // Longest suburb names first so "north lakes" matches before "lakes"
-        const subNames = Object.keys(SUBURB_GPS).filter(s => s.length > 3).sort((a, b) => b.length - a.length);
-        const bySuburb = new Map(); // suburb -> { km, best position, keywords[] }
+        // Which suburbs do we already RANK in? (extracted from the keywords we appear for)
+        const rankedSub = new Map(); // suburb -> best position
         for (const o of orbits) {
           const kwl = ' ' + (o.keyword || '').toLowerCase() + ' ';
           for (const sub of subNames) {
             if (kwl.includes(' ' + sub + ' ') || kwl.includes(' ' + sub + '?') || (o.keyword || '').toLowerCase().endsWith(sub)) {
-              const km = Math.round(havKm(bizGps, SUBURB_GPS[sub]) * 10) / 10;
-              const ex = bySuburb.get(sub) || { suburb: sub, km, best_position: 99, count: 0 };
-              ex.count++;
-              if ((o.maps_position || 99) < ex.best_position) ex.best_position = o.maps_position || ex.best_position;
-              bySuburb.set(sub, ex);
-              break; // one suburb per keyword (longest match wins)
+              const pos = o.maps_position || 99;
+              if (pos < (rankedSub.get(sub) ?? 99)) rankedSub.set(sub, pos);
+              break;
             }
           }
         }
-        const subs = [...bySuburb.values()];
+        // The FULL universe of suburbs = the project's service areas (from GBP). Every one is either
+        // a suburb we rank in, or an OPPORTUNITY we don't yet — that's the growth map.
+        const allSubs = new Map(); // suburb -> { km, ranked, best_position }
+        const addSub = (name) => {
+          const s = name.toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
+          if (!s || !SUBURB_GPS[s] || allSubs.has(s)) return;
+          const km = Math.round(havKm(bizGps, SUBURB_GPS[s]) * 10) / 10;
+          allSubs.set(s, { suburb: s, km, ranked: rankedSub.has(s), best_position: rankedSub.has(s) ? rankedSub.get(s) : null });
+        };
+        for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) addSub(typeof a === 'string' ? a : (a.name || ''));
+        for (const s of rankedSub.keys()) addSub(s); // include any ranked suburb even if not in service areas
+        const subs = [...allSubs.values()];
         const ZB = [{ lo: 0, hi: 5 }, { lo: 5, hi: 10 }, { lo: 10, hi: 15 }, { lo: 15, hi: 999 }];
-        suburbZones = ZB.map(z => ({
-          lo: z.lo, hi: z.hi,
-          suburbs: subs.filter(s => s.km > z.lo && s.km <= z.hi)
-            .sort((a, b) => a.km - b.km)
-            .map(s => ({ suburb: s.suburb.replace(/\b\w/g, c => c.toUpperCase()), km: s.km, best_position: s.best_position === 99 ? null : s.best_position, keywords: s.count })),
-        }));
+        suburbZones = ZB.map(z => {
+          const inZone = subs.filter(s => s.km > z.lo && s.km <= z.hi).sort((a, b) => a.km - b.km);
+          return {
+            lo: z.lo, hi: z.hi,
+            ranked_count: inZone.filter(s => s.ranked).length,
+            opportunity_count: inZone.filter(s => !s.ranked).length,
+            suburbs: inZone.map(s => ({ suburb: s.suburb.replace(/\b\w/g, c => c.toUpperCase()), km: s.km, ranked: s.ranked, best_position: s.best_position })),
+          };
+        });
       }
     } catch (e) { console.log('[orbits] suburb zones skipped:', e.message); }
 

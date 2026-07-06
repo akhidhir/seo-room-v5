@@ -31981,27 +31981,34 @@
               </div>
             </div>
           )}
-          {/* SUBURB ZONES — real geographic distance: which suburbs you rank in, by distance band */}
+          {/* SUBURB ZONES — every service suburb by distance: ranked vs untapped opportunity */}
           {!loading && (data?.suburb_zones || []).some(z => z.suburbs.length > 0) && (
             <div style={{ marginTop: 20 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-location-dot" style={{ marginRight: 8, color: '#4ade80' }} />Suburbs you rank in — by distance</div>
-              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>Real distance from {data?.business_location || 'the business'}. Each suburb appears in a keyword you rank for.</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-location-dot" style={{ marginRight: 8, color: '#4ade80' }} />Suburb coverage & opportunities — by distance</div>
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
+                Every suburb the business serves, by real distance from {data?.business_location || 'the business'}. <span style={{ color: '#4ade80', fontWeight: 700 }}>Green = ranked</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>Amber = opportunity</span> (served but not ranking yet — where to grow).
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 {(data.suburb_zones || []).map((z, zi) => (
                   <div key={zi} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                       <span style={{ width: 10, height: 10, borderRadius: '50%', background: ['#4ade80', '#2dd4bf', '#60a5fa', '#94a3b8'][zi] }} />
                       <span style={{ fontWeight: 800, fontSize: 14 }}>{z.lo}–{z.hi === 999 ? '15+' : z.hi} km</span>
                       <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{z.suburbs.length} suburb{z.suburbs.length !== 1 ? 's' : ''}</span>
                     </div>
+                    <div style={{ fontSize: 11, marginBottom: 10, color: 'var(--text3)' }}>
+                      <span style={{ color: '#4ade80', fontWeight: 700 }}>{z.ranked_count} ranked</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>{z.opportunity_count} to win</span>
+                    </div>
                     {z.suburbs.length === 0 ? (
-                      <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>None yet</div>
+                      <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>No service suburbs here</div>
                     ) : (
-                      <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
                         {z.suburbs.map((s, si) => (
-                          <div key={si} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 6px', borderRadius: 4 }}>
-                            {s.best_position && <span style={{ fontSize: 10, fontWeight: 700, color: s.best_position <= 3 ? '#4ade80' : s.best_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 24 }}>#{s.best_position}</span>}
-                            <span style={{ fontWeight: 600, color: 'var(--text1)', flex: 1 }}>{s.suburb}</span>
+                          <div key={si} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 6px', borderRadius: 4, opacity: s.ranked ? 1 : 0.85 }}>
+                            {s.ranked
+                              ? <span style={{ fontSize: 10, fontWeight: 700, color: s.best_position <= 3 ? '#4ade80' : s.best_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 28 }}>#{s.best_position}</span>
+                              : <span title="Not ranking here yet — opportunity" style={{ fontSize: 9, fontWeight: 800, color: '#f59e0b', minWidth: 28, textTransform: 'uppercase' }}>NEW</span>}
+                            <span style={{ fontWeight: 600, color: s.ranked ? 'var(--text1)' : 'var(--text2)', flex: 1 }}>{s.suburb}</span>
                             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{s.km} km</span>
                           </div>
                         ))}
