@@ -43058,35 +43058,37 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       return best == null ? null : { pos: best, keyword: bestKw, scanned: true, source: 'tracked' };
     };
 
-    // BEST per-suburb source: GRID SCANS. A grid scan already measured your Maps position at points
-    // across the map, so the point nearest a suburb IS your rank there — no per-suburb keyword needed.
-    // A point where you weren't found = a real "not ranking here" signal (an opportunity), not "unknown".
-    let gridPoints = [];
+    // BEST per-suburb source: GRID SCANS. A grid scan measured your Maps position at points across the map,
+    // so the point nearest a suburb approximates your rank there. TWO accuracy rules:
+    //  1) ONE keyword only. Points from different keywords aren't comparable, so we lock to a single primary
+    //     keyword (the one with the most measured points) and label it — every suburb's rank is for the SAME term.
+    //  2) TIGHT reach. The local pack changes within a km or two, so a point only speaks for a suburb within
+    //     ~3km (never the ~10km a coarse grid's spacing would otherwise allow). Beyond that = "not measured".
+    let gridByKw = {}; // kw -> { points:[{lat,lng,found,position}], reach }
     try {
       const gs = (await pool.query(`SELECT keyword, grid_points, grid_size, radius_km FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC`, [req.params.projectId])).rows;
       for (const row of gs) {
+        const kw = (row.keyword || '').toLowerCase().trim(); if (!kw) continue;
         const pts = typeof row.grid_points === 'string' ? JSON.parse(row.grid_points || '[]') : (row.grid_points || []);
-        const spacing = (row.grid_size > 1 && row.radius_km) ? (row.radius_km * 2 / (row.grid_size - 1)) : 5;
-        const reach = Math.max(2.5, spacing * 0.8); // how far a point speaks for
-        for (const p of pts) {
-          if (p.lat == null || p.lng == null) continue;
-          gridPoints.push({ lat: p.lat, lng: p.lng, found: !!p.found, position: p.position || null, keyword: row.keyword, reach });
-        }
+        const spacing = (row.grid_size > 1 && row.radius_km) ? (row.radius_km * 2 / (row.grid_size - 1)) : 4;
+        const reach = Math.min(3.5, Math.max(1.5, spacing * 0.6)); // capped: a point never speaks past ~3.5km
+        if (!gridByKw[kw]) gridByKw[kw] = { keyword: row.keyword, points: [], reach };
+        for (const p of pts) { if (p.lat != null && p.lng != null) gridByKw[kw].points.push({ lat: p.lat, lng: p.lng, found: !!p.found, position: p.position || null }); }
       }
     } catch (e) {}
+    // Primary keyword = the one with the most measured points (densest, most complete coverage).
+    let primaryGrid = null;
+    for (const g of Object.values(gridByKw)) { if (!primaryGrid || g.points.length > primaryGrid.points.length) primaryGrid = g; }
     const findGridRank = (s) => {
-      if (s.lat == null || s.lng == null || !gridPoints.length) return null;
+      if (!primaryGrid || s.lat == null || s.lng == null) return null;
       let best = null;
-      for (const p of gridPoints) {
+      for (const p of primaryGrid.points) {
         const d = haversineKm(s.lat, s.lng, p.lat, p.lng);
-        if (d > p.reach) continue;
-        // nearest point wins; on a near-tie prefer a "found" point with the better position
-        if (!best || d < best.d - 0.3 || (Math.abs(d - best.d) <= 0.3 && p.found && (!best.found || (p.position || 99) < (best.position || 99)))) {
-          best = { d, found: p.found, position: p.position, keyword: p.keyword };
-        }
+        if (d > primaryGrid.reach) continue;
+        if (!best || d < best.d) best = { d, found: p.found, position: p.position };
       }
       if (!best) return null;
-      return { pos: best.found ? best.position : null, keyword: best.keyword, scanned: true, source: 'grid', notRanking: !best.found };
+      return { pos: best.found ? best.position : null, keyword: primaryGrid.keyword, scanned: true, source: 'grid', notRanking: !best.found, pointKm: Math.round(best.d * 10) / 10 };
     };
 
     const ranked = within.map((s, i) => {
@@ -43113,6 +43115,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         mapsScanned: mr ? !!mr.scanned : false, // was this suburb measured at all (grid point or tracked kw)?
         mapsNotRanking: mr ? !!mr.notRanking : false, // measured but you don't appear = clear opportunity
         mapsRankSource: mr ? mr.source : null, // 'grid' | 'tracked'
+        mapsPointKm: mr && mr.pointKm != null ? mr.pointKm : null, // how far the measuring grid point was (accuracy)
       };
     });
 
@@ -43169,7 +43172,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
 
     const plan = buildSmartPlan(ranked);
 
-    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, pagesScanned, opportunityCount, gridCovered: ranked.filter(s => s.mapsRankSource === 'grid').length, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
+    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, pagesScanned, opportunityCount, gridCovered: ranked.filter(s => s.mapsRankSource === 'grid').length, gridKeyword: primaryGrid ? primaryGrid.keyword : null, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
