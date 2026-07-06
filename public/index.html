@@ -32053,6 +32053,76 @@
       );
     }
 
+    // EXECUTIVE SUMMARY — portfolio view across every project: health, rankings, and next action.
+    function ExecutiveSummaryPage({ allProjects, onSwitchProject, setPage }) {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      useEffect(() => { setLoading(true); api('/portfolio/summary').then(d => { if (!d.error) setData(d); }).catch(() => {}).finally(() => setLoading(false)); }, []);
+      const hColor = (h) => h == null ? '#64748b' : h >= 75 ? '#22c55e' : h >= 50 ? '#f59e0b' : '#ef4444';
+      const goTo = (proj, page) => { const target = (allProjects || []).find(p => Number(p.id) === Number(proj.id)); if (target && onSwitchProject) onSwitchProject(target); if (page && setPage) setTimeout(() => setPage(page), 100); };
+      const projects = data?.projects || [];
+      const avgHealth = projects.filter(p => p.health != null).length ? Math.round(projects.filter(p => p.health != null).reduce((s, p) => s + p.health, 0) / projects.filter(p => p.health != null).length) : null;
+      const totalCritical = projects.reduce((s, p) => s + (p.security?.critical || 0), 0);
+      const totalOpen = projects.reduce((s, p) => s + (p.open_issues || 0), 0);
+      return (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <h2 style={{ margin: 0, fontSize: 24 }}><i className="fas fa-chart-pie" style={{ marginRight: 10, color: '#a78bfa' }} />Executive Summary</h2>
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>{projects.length} projects · sorted by attention needed</span>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 18 }}>Portfolio health across every client, worst first. Each row shows the single next action — click it to jump straight there.</div>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Building portfolio summary...</div>
+          ) : !projects.length ? (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>No projects yet.</div>
+          ) : (<>
+            {/* Portfolio KPI strip */}
+            <div style={{ display: 'flex', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 22px', flex: 1, minWidth: 150 }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: hColor(avgHealth) }}>{avgHealth ?? '—'}{avgHealth != null && <span style={{ fontSize: 16 }}>/100</span>}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Avg portfolio health</div>
+              </div>
+              <div style={{ background: totalCritical ? 'rgba(239,68,68,0.08)' : 'var(--card)', border: '1px solid ' + (totalCritical ? 'rgba(239,68,68,0.3)' : 'var(--border)'), borderRadius: 12, padding: '16px 22px', flex: 1, minWidth: 150 }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: totalCritical ? '#ef4444' : '#22c55e' }}>{totalCritical}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Critical security issues</div>
+              </div>
+              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 22px', flex: 1, minWidth: 150 }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: '#f59e0b' }}>{totalOpen}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Open action items</div>
+              </div>
+            </div>
+            {/* Project rows */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {projects.map((p, i) => (
+                <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* Health ring */}
+                  <div style={{ width: 58, height: 58, borderRadius: '50%', border: `4px solid ${hColor(p.health)}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: hColor(p.health), flexShrink: 0 }}>{p.health ?? '—'}</div>
+                  {/* Name + metrics */}
+                  <div style={{ flex: '1 1 260px', minWidth: 200 }}>
+                    <div style={{ fontWeight: 800, fontSize: 16, cursor: 'pointer' }} onClick={() => goTo(p)}>{p.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>{p.domain}</div>
+                    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12 }}>
+                      {p.seo && <span title="On-page SEO">📄 SEO {p.seo.score}% <span style={{ color: '#ef4444' }}>{p.seo.red}r</span>/<span style={{ color: '#f59e0b' }}>{p.seo.orange}o</span>/<span style={{ color: '#22c55e' }}>{p.seo.green}g</span></span>}
+                      {p.security && <span title="Security score">🔒 Sec {p.security.score}%{p.security.critical > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}> · {p.security.critical} crit</span>}</span>}
+                      {p.rankings && <span title="Keyword rankings">📈 {p.rankings.top3} top-3 · {p.rankings.top10} top-10 · {p.rankings.tracked} tracked</span>}
+                      {p.open_issues > 0 && <span style={{ color: '#f59e0b' }}>⚑ {p.open_issues} open</span>}
+                    </div>
+                  </div>
+                  {/* Next action */}
+                  {p.next_action && (
+                    <div onClick={() => goTo(p, p.next_action.page)} style={{ flex: '1 1 260px', minWidth: 220, background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 8, padding: '10px 14px', cursor: 'pointer' }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 800, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}><i className="fas fa-arrow-right" style={{ marginRight: 5 }} />Next action</div>
+                      <div style={{ fontSize: 13, color: 'var(--text1)', lineHeight: 1.4 }}>{p.next_action.text}</div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>)}
+        </div>
+      );
+    }
+
     function SmartMapRankingPage({ project }) {
       const [center, setCenter] = useState(project.smart_center || project.location || project.business_name || '');
       const [centerSaved, setCenterSaved] = useState(false);
@@ -40471,6 +40541,8 @@
             return <PlayersHandshakePage project={project} />;
           // 'action-plan' case removed 2026-07-04: nothing navigated to it — Control Centre is
           // THE action plan (UnifiedActionPlanPage component kept in code for reference).
+          case 'exec-summary':
+            return <ExecutiveSummaryPage allProjects={allProjects} onSwitchProject={handleProjectSwitch} setPage={setActiveTab} />;
           case 'control-centre':
             return <ControlCentrePage setPage={setActiveTab} allProjects={allProjects} onSwitchProject={handleProjectSwitch} currentProject={project} />;
           case 'nw-project':
@@ -40657,7 +40729,10 @@
                 <i className={'fas fa-chevron-' + (navActionsOpen ? 'up' : 'down')} style={{ fontSize: 10 }}></i>
               </button>
               {navActionsOpen && (<>
-              <button onClick={() => { if (buildMode) exitBuildMode(); else enterBuildMode(); }} style={{ width: '100%', marginTop: 2, padding: '10px 10px', borderRadius: 6, border: activeTab === 'build-list' || buildMode ? '1px solid #22c55e' : '1px dashed var(--border)', background: buildMode ? 'rgba(34,197,94,0.1)' : 'transparent', color: '#22c55e', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+              <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('exec-summary'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 2, padding: '10px 10px', borderRadius: 6, border: activeTab === 'exec-summary' ? '1px solid #a78bfa' : '1px dashed var(--border)', background: activeTab === 'exec-summary' ? 'rgba(167,139,250,0.12)' : 'transparent', color: '#a78bfa', fontSize: 16, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                <i className="fas fa-chart-pie" style={{ fontSize: 13 }}></i> Executive Summary
+              </button>
+              <button onClick={() => { if (buildMode) exitBuildMode(); else enterBuildMode(); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'build-list' || buildMode ? '1px solid #22c55e' : '1px dashed var(--border)', background: buildMode ? 'rgba(34,197,94,0.1)' : 'transparent', color: '#22c55e', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
                 <i className="fas fa-plus" style={{ fontSize: 13 }}></i> New Website
               </button>
               <button onClick={() => { if (buildMode) exitBuildMode(); setActiveTab('nw-migration'); setMobileMenuOpen(false); }} style={{ width: '100%', marginTop: 6, padding: '10px 10px', borderRadius: 6, border: activeTab === 'nw-migration' ? '1px solid #f97316' : '1px dashed var(--border)', background: activeTab === 'nw-migration' ? 'rgba(249,115,22,0.1)' : 'transparent', color: '#f97316', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>

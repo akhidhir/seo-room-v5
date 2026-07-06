@@ -41322,6 +41322,73 @@ async function extractSiteIntel(project) {
 // RANKING ORBITS — data for the client-facing orbit visual. Every Maps keyword's PROVEN reach:
 // the farthest grid-scan point (km from the business) where it still ranks top-10. Real data only:
 // keywords without a grid scan yet go to the outer "discovery belt" until scanned.
+// ── PORTFOLIO EXECUTIVE SUMMARY ── one health snapshot per project + the single next action.
+// Aggregates existing data only (no new scans): SEO on-page scores, security, rankings, open
+// findings. Everything measured, nothing invented — same discipline as the rest of the system.
+app.get('/api/portfolio/summary', async (req, res) => {
+  try {
+    const projects = (await pool.query('SELECT id, name, business_name, domain, location FROM projects ORDER BY id')).rows;
+    const out = [];
+    for (const p of projects) {
+      const snap = { id: p.id, name: p.business_name || p.name, domain: p.domain, location: p.location,
+        seo: null, security: null, rankings: null, open_issues: 0, next_action: null };
+
+      // On-page SEO health (green/orange/red from the cache)
+      try {
+        const oc = (await pool.query('SELECT results, updated_at FROM onpage_audit_cache WHERE project_id=$1', [p.id])).rows[0];
+        const rows = oc ? (typeof oc.results === 'string' ? JSON.parse(oc.results) : oc.results) : [];
+        if (rows && rows.length) {
+          const red = rows.filter(r => r.yoastScore === 'red').length;
+          const orange = rows.filter(r => r.yoastScore === 'orange').length;
+          const green = rows.filter(r => r.yoastScore === 'green').length;
+          snap.seo = { pages: rows.length, green, orange, red, updated_at: oc.updated_at,
+            score: Math.round((green + orange * 0.5) / Math.max(rows.length, 1) * 100) };
+        }
+      } catch (e) {}
+
+      // Security score (latest completed audit)
+      try {
+        const sec = (await pool.query(`SELECT audit_data, completed_at FROM audits WHERE project_id=$1 AND pillar='security' AND status='completed' ORDER BY completed_at DESC LIMIT 1`, [p.id])).rows[0];
+        if (sec) { const d = typeof sec.audit_data === 'string' ? JSON.parse(sec.audit_data) : sec.audit_data; snap.security = { score: d.summary?.score ?? null, critical: d.summary?.critical ?? 0, failed: d.summary?.fail ?? 0, updated_at: sec.completed_at }; }
+      } catch (e) {}
+
+      // Ranking snapshot (tracked keywords + top positions)
+      try {
+        const rk = (await pool.query(`
+          SELECT COUNT(*)::int AS tracked,
+                 COUNT(*) FILTER (WHERE rt.serp_position BETWEEN 1 AND 3)::int AS top3,
+                 COUNT(*) FILTER (WHERE rt.serp_position BETWEEN 1 AND 10)::int AS top10
+          FROM rank_keywords k
+          LEFT JOIN LATERAL (SELECT serp_position FROM rank_tracking WHERE project_id=k.project_id AND LOWER(keyword)=LOWER(k.keyword) ORDER BY checked_at DESC NULLS LAST LIMIT 1) rt ON true
+          WHERE k.project_id=$1`, [p.id])).rows[0];
+        snap.rankings = { tracked: rk.tracked || 0, top3: rk.top3 || 0, top10: rk.top10 || 0 };
+      } catch (e) {}
+
+      // Open findings count
+      try { snap.open_issues = (await pool.query(`SELECT COUNT(*)::int AS n FROM audit_findings WHERE project_id=$1 AND status NOT IN ('fixed','rejected','dismissed')`, [p.id])).rows[0]?.n || 0; } catch (e) {}
+
+      // NEXT ACTION — the single most impactful move, chosen by rule from the snapshot.
+      const a = [];
+      if (snap.security && (snap.security.critical > 0)) a.push({ pri: 0, text: `Fix ${snap.security.critical} critical security issue(s)`, page: 'security-audit' });
+      if (snap.seo && snap.seo.red > 0) a.push({ pri: 1, text: `${snap.seo.red} page(s) failing on-page SEO — fix metas/content`, page: 'onpage-audit' });
+      if (snap.rankings && snap.rankings.tracked === 0) a.push({ pri: 2, text: 'No rankings tracked yet — add keywords & run a sync', page: 'serp-rankings' });
+      if (snap.open_issues > 5) a.push({ pri: 3, text: `${snap.open_issues} open action items in Control Centre`, page: 'control-centre' });
+      if (snap.seo && snap.seo.orange > snap.seo.green) a.push({ pri: 4, text: `${snap.seo.orange} page(s) need on-page improvement`, page: 'onpage-audit' });
+      if (!a.length) a.push({ pri: 9, text: 'Healthy — run a fresh audit to find new opportunities', page: 'website-audit' });
+      a.sort((x, y) => x.pri - y.pri);
+      snap.next_action = a[0];
+
+      // Overall health = blend of SEO + security (whatever exists)
+      const parts = [snap.seo?.score, snap.security?.score].filter(v => v != null);
+      snap.health = parts.length ? Math.round(parts.reduce((s, v) => s + v, 0) / parts.length) : null;
+      out.push(snap);
+    }
+    // Sort worst-health first so the projects needing attention are at the top
+    out.sort((x, y) => (x.health ?? 101) - (y.health ?? 101));
+    res.json({ ok: true, projects: out, generated_at: new Date().toISOString() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
   try {
     const projectId = parseInt(req.params.projectId);
