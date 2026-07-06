@@ -21536,14 +21536,18 @@
         <button onClick={() => setTab(k)} style={{ background: tab === k ? '#8b5cf6' : 'transparent', color: tab === k ? '#fff' : 'var(--text2)', border: '1px solid ' + (tab === k ? '#8b5cf6' : 'var(--border)'), borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
       );
       const confChip = (a) => {
-        const map = { high: ['Measured — high confidence', '#22c55e'], medium: ['Measured', '#22c55e'], low: ['Measured — small sample', '#84cc16'], correlation: ['Site-wide correlation — not isolated', '#f59e0b'], none: ['No tracked page', '#64748b'] };
+        // Short, scannable labels — the full "why" lives in the top banner, not repeated per card.
+        const map = { high: ['✓ Measured', '#22c55e'], medium: ['✓ Measured', '#22c55e'], low: ['✓ Measured (small)', '#84cc16'], correlation: ['~ Hint only', '#f59e0b'], none: ['No page linked', '#64748b'] };
         const [label, color] = map[a.confidence] || map.none;
         const tip = a.confidence === 'correlation'
-          ? "We couldn't tie this tactic to specific tracked pages, so this only reflects overall site movement while many changes ran at once. It is NOT proof this tactic worked."
+          ? "Couldn't tie this to specific tracked pages — reflects overall site movement while many changes ran at once. A hint, not proof."
           : a.confidence === 'none' ? 'No tracked page could be tied to these fixes.'
           : "Measured from the actual page's rank before vs after each fix — the only truly isolated signal.";
         return <span title={tip} style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: color + '22', color, whiteSpace: 'nowrap' }}>{label}</span>;
       };
+      // Trim the repeated "…isn't proof. Test it in isolation." tail — that caveat is now in the top
+      // banner once, so it doesn't need to shout on all 14 cards.
+      const cleanRec = (t) => (t || '').replace(/\s*—?\s*but other changes ran at the same time[^.]*\.\s*Test it in isolation\.?/i, '.').replace(/\s*Correlation only — can't isolate this tactic\.?/i, '.').trim();
       const posColor = v => v == null ? 'var(--text3)' : v > 0 ? '#22c55e' : v < 0 ? '#ef4444' : 'var(--text3)';
       const row = (a) => (
         <div key={a.type} style={{ borderTop: '1px solid var(--border)' }}>
@@ -21555,7 +21559,7 @@
                 <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 12, background: (verdictColor[a.verdict] || '#64748b') + '22', color: verdictColor[a.verdict] || '#94a3b8' }}>{a.verdict}</span>
                 {confChip(a)}
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4, lineHeight: 1.5 }}>{a.recommendation}</div>
+              <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4, lineHeight: 1.5 }}>{cleanRec(a.recommendation)}</div>
               <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.evidence}</div>
             </div>
             <div style={{ textAlign: 'right', minWidth: 120 }}>
@@ -21651,7 +21655,14 @@
       return (
         <div>
           <div className="page-title"><i className="fas fa-brain" style={{ marginRight: 10, color: '#8b5cf6' }} />Learnings</div>
-          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>Two tiers, kept honest: <b style={{ color: '#22c55e' }}>Measured</b> = the fix was tied to a specific tracked page and that page's rank moved before vs after (real proof). <b style={{ color: '#f59e0b' }}>Site-wide correlation</b> = we couldn't tie it to a page, so it only reflects overall movement while many changes ran at once (a hint, not proof). {data ? '(' + data.projectsAnalysed + ' project' + (data.projectsAnalysed !== 1 ? 's' : '') + (data.measuredTactics != null ? ' · only ' + data.measuredTactics + '/' + data.totalTactics + ' tactics truly measured' : '') + '.)' : ''}</div>
+          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 12, lineHeight: 1.5 }}>What's actually moving rankings across your projects — ranked by value. <b style={{ color: '#22c55e' }}>✓ Measured</b> = proven on a specific page's rank. <span style={{ color: '#f59e0b' }}>~ Hint</span> = overall movement, can't isolate.</div>
+          {/* One measurement-gap callout instead of repeating the caveat on every card */}
+          {data && data.measuredTactics != null && data.measuredTactics < data.totalTactics && (
+            <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>
+              <i className="fas fa-circle-info" style={{ color: '#f59e0b', marginRight: 6 }} />
+              <b>Only {data.measuredTactics} of {data.totalTactics} tactics are truly measured.</b> The rest are ranked on overall site movement, which can't prove one tactic caused it (many changes ran at once). To turn hints into proof: <b>record the target page URL on each action</b> and track that page's rank — then the engine measures it directly.
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             {tabBtn('global', 'Global — all projects')}{tabBtn('project', 'This project')}{tabBtn('tables', 'By project (table)')}
             {tab === 'tables' && acts.length > 0 && <button onClick={exportCsv} style={{ background: 'transparent', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}><i className="fas fa-download" style={{ marginRight: 6 }} />Export CSV</button>}
