@@ -41402,8 +41402,8 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
           volume: k.volume || volByKw.get(k.keyword.toLowerCase().trim()) || null,
           reach_km: null, best_position: k.maps_position || null, has_grid: false, scanned_at: null,
         }))
-        .sort((a, b) => (b.volume || 0) - (a.volume || 0) || (a.maps_position || 99) - (b.maps_position || 99))
-        .slice(0, 80);
+        .sort((a, b) => (a.maps_position || 99) - (b.maps_position || 99) || (b.volume || 0) - (a.volume || 0))
+        .slice(0, 150); // was 80 — the orbit view now distributes by position so more dots fit cleanly
       orbits.push(...belt);
     } catch (e) {}
 

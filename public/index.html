@@ -31805,12 +31805,25 @@
       const ringR = (km) => (km / MAXKM) * (C - 30);
       const RINGS = [5, 10, 15, 20];
       const volColor = (v) => v == null ? '#94a3b8' : v >= 500 ? '#4ade80' : v >= 150 ? '#2dd4bf' : '#60a5fa';
-      const orbs = (data?.orbits || []).map((o, i) => {
-        // Grid-scanned → its proven-reach orbit. Un-scanned → the outer belt, spread across a
-        // band (20.3–22.6 km) so dozens of keywords don't collide on one ring.
-        const km = o.reach_km != null ? Math.max(1.6, Math.min(19.5, o.reach_km)) : 20.3 + (i % 6) * 0.46;
-        return { ...o, orbitR: ringR(km), angle0: Math.round((i * 137.5) % 360), dur: 70 + (i % 9) * 16, dim: o.reach_km == null };
+      // Dedupe identical keywords (discovery returns many "car key replacement" variants).
+      const seenKw = new Set();
+      const deduped = (data?.orbits || []).filter(o => { const k = (o.keyword || '').toLowerCase().trim(); if (seenKw.has(k)) return false; seenKw.add(k); return true; });
+      const orbs = deduped.map((o, i) => {
+        // Distance from centre = how strong the keyword is:
+        //   • grid-scanned → its PROVEN reach in km (the real, measured value)
+        //   • not scanned yet → its FOUND POSITION as a proxy (#1 near centre → #20+ at the edge)
+        // This fills the middle, spreads dots across every ring, and tells a story at a glance.
+        let km;
+        if (o.reach_km != null) km = Math.max(1.6, Math.min(19.5, o.reach_km));
+        else { const pos = o.maps_position || o.best_position || 20; km = Math.max(2.5, Math.min(21, 2.5 + (pos - 1) * 1.0)); }
+        // Slight jitter per dot so same-position keywords don't stack exactly.
+        const jitter = ((i * 37) % 11 - 5) * 0.18;
+        return { ...o, orbitR: ringR(Math.max(1.6, km + jitter)), angle0: Math.round((i * 137.5) % 360), dur: 80 + (i % 11) * 14, dim: o.reach_km == null };
       });
+      // Only label the important dots (grid-scanned, tracked, or top-volume) — labelling all 240
+      // is what caused the overlap. The rest show as dots; click any dot to see its label + details.
+      const volRank = [...orbs].filter(o => o.volume).sort((a, b) => b.volume - a.volume).slice(0, 10).map(o => o.keyword);
+      const shouldLabel = (o) => o.has_grid || o.tracked || volRank.includes(o.keyword);
 
       return (
         <div>
@@ -31822,7 +31835,7 @@
             <h2 style={{ margin: 0, fontSize: 22 }}><i className="fas fa-satellite" style={{ marginRight: 10, color: '#4ade80' }} />Ranking Orbits</h2>
           </div>
           <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 14 }}>
-            How far each Maps keyword's ranking reaches from the business — measured by grid scans, not estimated. Solid dot = agreed with client · pulsing dot = discovered quick-win · colour = search volume (green high, teal mid, blue low, grey unknown) · dot size = best position. Keywords in the outer belt haven't been grid-scanned yet.
+            Distance from the centre = how strong the keyword is. Grid-scanned keywords sit at their <b>proven reach</b>; the rest sit at their <b>found position</b> (nearer the centre = higher rank) until you grid-scan them. Colour = search volume · pulsing = discovered quick-win · dimmed = not grid-scanned yet. <b>Click any dot</b> for its name and details.
           </div>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Loading orbits...</div>
@@ -31844,18 +31857,21 @@
                   <circle cx={C} cy={C} r="7" fill="#facc15" />
                   <text x={C} y={C + 22} fill="#facc15" fontSize="13" fontWeight="700" textAnchor="middle">{data?.business || 'Business'}</text>
                   {orbs.map((o, i) => {
-                    const dotR = o.best_position ? Math.max(4, 11 - o.best_position) : 4;
+                    const dotR = o.maps_position ? Math.max(4.5, 12 - o.maps_position) : (o.best_position ? Math.max(4.5, 12 - o.best_position) : 5);
+                    const isSel = sel && sel.keyword === o.keyword;
+                    const showLabel = isSel || shouldLabel(o);
                     return (
                       <g key={i} style={{ transformOrigin: `${C}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite`, transform: `rotate(${o.angle0}deg)` }}>
                         <g style={{ transformOrigin: `${C + o.orbitR}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite reverse` }}>
+                          {isSel && <circle cx={C + o.orbitR} cy={C} r={dotR + 5} fill="none" stroke="#fff" strokeWidth="1.5" strokeOpacity="0.9" />}
                           <circle cx={C + o.orbitR} cy={C} r={dotR}
-                            fill={volColor(o.volume)} fillOpacity={o.dim ? 0.45 : 1}
-                            style={{ cursor: 'pointer', ...(o.origin === 'discovered' ? { animation: 'orbitPulse 2.2s ease-in-out infinite' } : {}) }}
+                            fill={volColor(o.volume)} fillOpacity={o.dim ? 0.5 : 1}
+                            style={{ cursor: 'pointer', ...(o.origin === 'discovered' ? { animation: 'orbitPulse 2.4s ease-in-out infinite' } : {}) }}
                             onClick={() => setSel(o)} />
-                          <text x={C + o.orbitR} y={C - dotR - 5} fill={volColor(o.volume)} fillOpacity={o.dim ? 0.5 : 0.95} fontSize="11.5" fontWeight="600" textAnchor="middle"
+                          {showLabel && <text x={C + o.orbitR} y={C - dotR - 5} fill={isSel ? '#fff' : volColor(o.volume)} fillOpacity={o.dim && !isSel ? 0.55 : 0.95} fontSize={isSel ? 13 : 11.5} fontWeight={isSel ? 800 : 600} textAnchor="middle"
                             style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSel(o)}>
                             {o.keyword.length > 26 ? o.keyword.slice(0, 24) + '…' : o.keyword}
-                          </text>
+                          </text>}
                         </g>
                       </g>
                     );
