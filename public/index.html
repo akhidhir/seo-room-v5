@@ -31905,16 +31905,35 @@
         else km = 3 + Math.sqrt(i / N) * 18;
         const jitter = positionsVary ? ((i * 37) % 11 - 5) * 0.18 : 0;
         const finalKm = Math.max(1.6, km + jitter);
-        return { ...o, km: finalKm, orbitR: ringR(finalKm), angle0: Math.round((i * 137.5) % 360), dur: 80 + (i % 11) * 14, dim: o.reach_km == null };
+        const orbitR = ringR(finalKm);
+        // Static position (golden-angle around the centre) — no spinning, so dots don't sweep over each other.
+        const ang = ((i * 137.508) % 360) * Math.PI / 180;
+        const x = C + orbitR * Math.cos(ang);
+        const y = C + orbitR * Math.sin(ang);
+        return { ...o, km: finalKm, orbitR, x, y, dim: o.reach_km == null };
       });
       // Group keywords into distance zones for the side table. Pull the suburb out of the keyword
       // where possible (the part that isn't a generic service word).
       const ZONES = [{ lo: 0, hi: 5 }, { lo: 5, hi: 10 }, { lo: 10, hi: 15 }, { lo: 15, hi: 23 }];
       const zoneBuckets = ZONES.map(z => ({ ...z, items: orbs.filter(o => o.km > z.lo && o.km <= z.hi).sort((a, b) => (a.maps_position || 99) - (b.maps_position || 99)) }));
-      // Only label the important dots (grid-scanned, tracked, or top-volume) — labelling all 240
+      // Only label the important dots (grid-scanned, tracked, or top-volume) — labelling all of them
       // is what caused the overlap. The rest show as dots; click any dot to see its label + details.
-      const volRank = [...orbs].filter(o => o.volume).sort((a, b) => b.volume - a.volume).slice(0, 10).map(o => o.keyword);
-      const shouldLabel = (o) => o.has_grid || o.tracked || volRank.includes(o.keyword);
+      const volRank = [...orbs].filter(o => o.volume).sort((a, b) => b.volume - a.volume).slice(0, 14).map(o => o.keyword);
+      const shouldLabelBase = (o) => o.has_grid || o.tracked || volRank.includes(o.keyword);
+      // LABEL COLLISION AVOIDANCE — greedily place labels by priority (top-volume first); a label only
+      // renders if its box doesn't overlap one already placed. Everything else stays a clickable dot.
+      const labelKeys = new Set();
+      {
+        const cand = orbs.filter(o => shouldLabelBase(o)).sort((a, b) => (b.volume || 0) - (a.volume || 0));
+        const placed = [];
+        for (const o of cand) {
+          const txt = o.keyword.length > 26 ? o.keyword.slice(0, 24) + '…' : o.keyword;
+          const w = txt.length * 6.2, h = 13;
+          const box = { x: o.x - w / 2, y: (o.y - 11) - h, w, h };
+          if (placed.some(p => !(box.x + box.w < p.x || box.x > p.x + p.w || box.y + box.h < p.y || box.y > p.y + p.h))) continue;
+          placed.push(box); labelKeys.add(o.keyword);
+        }
+      }
 
       return (
         <div>
@@ -31980,25 +31999,23 @@
                   <text x={C} y={C + 24 / zoom} fill="#facc15" fontSize={14 / zoom} fontWeight="800" textAnchor="middle">{data?.business || 'Business'}</text>
                   {project?.location && <text x={C} y={C + 38 / zoom} fill="#fbbf24" fillOpacity="0.75" fontSize={11 / zoom} textAnchor="middle">📍 {project.location}</text>}
                   {orbs.map((o, i) => {
-                    // Divide by zoom so dots + labels stay the same SCREEN size as you zoom in —
-                    // zooming spreads them apart without turning text into giant blobs.
+                    // Static positions (no spin) so dots never sweep over each other. Divide sizes by zoom
+                    // so dots + labels stay constant SCREEN size while zooming spreads them apart.
                     const baseR = o.maps_position ? Math.max(4.5, 12 - o.maps_position) : (o.best_position ? Math.max(4.5, 12 - o.best_position) : 5);
                     const dotR = baseR / zoom;
                     const isSel = sel && sel.keyword === o.keyword;
-                    const showLabel = isSel || zoom >= 2 || shouldLabel(o);
+                    const showLabel = isSel || labelKeys.has(o.keyword) || (zoom >= 2 && shouldLabelBase(o));
                     return (
-                      <g key={i} style={{ transformOrigin: `${C}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite`, transform: `rotate(${o.angle0}deg)` }}>
-                        <g style={{ transformOrigin: `${C + o.orbitR}px ${C}px`, animation: `orbitSpin ${o.dur}s linear infinite reverse` }}>
-                          {isSel && <circle cx={C + o.orbitR} cy={C} r={dotR + 5} fill="none" stroke="#fff" strokeWidth="1.5" strokeOpacity="0.9" />}
-                          <circle cx={C + o.orbitR} cy={C} r={dotR}
-                            fill={volColor(o.volume)} fillOpacity={o.dim ? 0.5 : 1}
-                            style={{ cursor: 'pointer', ...(o.origin === 'discovered' ? { animation: 'orbitPulse 2.4s ease-in-out infinite' } : {}) }}
-                            onClick={() => setSel(o)} />
-                          {showLabel && <text x={C + o.orbitR} y={C - dotR - 5 / zoom} fill={isSel ? '#fff' : volColor(o.volume)} fillOpacity={o.dim && !isSel ? 0.55 : 0.95} fontSize={(isSel ? 13 : 11) / zoom} fontWeight={isSel ? 800 : 600} textAnchor="middle"
-                            style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSel(o)}>
-                            {o.keyword.length > 26 ? o.keyword.slice(0, 24) + '…' : o.keyword}
-                          </text>}
-                        </g>
+                      <g key={i}>
+                        {isSel && <circle cx={o.x} cy={o.y} r={dotR + 5} fill="none" stroke="#fff" strokeWidth="1.5" strokeOpacity="0.9" />}
+                        <circle cx={o.x} cy={o.y} r={dotR}
+                          fill={volColor(o.volume)} fillOpacity={o.dim ? 0.5 : 1}
+                          style={{ cursor: 'pointer', ...(o.origin === 'discovered' ? { animation: 'orbitPulse 2.4s ease-in-out infinite' } : {}) }}
+                          onClick={() => setSel(o)} />
+                        {showLabel && <text x={o.x} y={o.y - dotR - 5 / zoom} fill={isSel ? '#fff' : volColor(o.volume)} fillOpacity={o.dim && !isSel ? 0.55 : 0.95} fontSize={(isSel ? 13 : 11) / zoom} fontWeight={isSel ? 800 : 600} textAnchor="middle"
+                          style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => setSel(o)}>
+                          {o.keyword.length > 26 ? o.keyword.slice(0, 24) + '…' : o.keyword}
+                        </text>}
                       </g>
                     );
                   })}
@@ -32576,11 +32593,14 @@
                                       {!(s.tasks && s.tasks[1] && s.tasks[1].done) && (() => {
                                         const st = subAct[s.suburb + '-area'];
                                         return (
-                                          <button disabled={st === 'saving' || st === 'done'} onClick={() => addServiceArea(s)}
+                                          <>
+                                          <button title="Adds this suburb to the dashboard's service-area / targeting list. This does NOT update your live Google Business Profile — do that in Google directly." disabled={st === 'saving' || st === 'done'} onClick={() => addServiceArea(s)}
                                             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: st === 'done' ? 'default' : 'pointer', border: '1px solid var(--border)', background: st === 'done' ? '#22c55e22' : 'transparent', color: st === 'done' ? '#22c55e' : 'var(--text2)' }}>
                                             <i className={st === 'saving' ? 'fas fa-spinner fa-spin' : st === 'done' ? 'fas fa-check' : 'fas fa-map-pin'}></i>
-                                            {st === 'saving' ? 'Adding…' : st === 'done' ? 'Added to service areas' : st && st.startsWith('err') ? 'Retry' : 'Add to service areas'}
+                                            {st === 'saving' ? 'Adding…' : st === 'done' ? 'Added to targeting list' : st && st.startsWith('err') ? 'Retry' : 'Add to targeting list'}
                                           </button>
+                                          <span style={{ fontSize: 10.5, color: 'var(--text3)', alignSelf: 'center' }}>(dashboard list — not live GBP)</span>
+                                          </>
                                         );
                                       })()}
                                       {Object.entries(subAct).some(([k, v]) => k.startsWith(s.suburb + '-') && typeof v === 'string' && v.startsWith('err')) && (
