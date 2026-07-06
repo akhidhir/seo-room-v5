@@ -8583,6 +8583,25 @@
         setFixingId(null);
       };
 
+      // Per-fix IMPACT NOTE — tells the user what clicking actually does and whether it's reversible,
+      // so nobody applies a change to a live client site blind. Keyed by check id.
+      const impactNote = {
+        header_x_frame_options: { safe: true, text: 'Safe & reversible. Adds a protective response header only — nothing on the site changes for visitors. Applies at Cloudflare if a token is set, else via the plugin.' },
+        header_x_content_type_options: { safe: true, text: 'Safe & reversible. Adds a protective response header only.' },
+        header_referrer_policy: { safe: true, text: 'Safe & reversible. Adds a privacy header only.' },
+        header_permissions_policy: { safe: true, text: 'Safe & reversible. Restricts camera/mic/geolocation APIs the site doesn’t use.' },
+        header_strict_transport_security: { safe: true, text: 'Safe. Starts at a SHORT 300-second max-age deliberately — cannot trap you on HTTPS or break the site. Raise to a year later once HTTPS is confirmed solid.' },
+        header_content_security_policy: { safe: true, text: 'Safe. Applied in REPORT-ONLY mode — it logs but blocks nothing, so it can’t break the site.' },
+        wp_plugins_inactive: { safe: true, text: 'Safe & reversible. Deletes files of ALREADY-DEACTIVATED plugins — nothing running to break. Reinstall anytime.' },
+        wp_plugins_filemanager: { safe: false, text: 'CONFIRM FIRST. Removing it is the right security call, but check no one on the client side uses it to manage files. Reversible (reinstall), but it removes that workflow.' },
+        wp_user_enum: { safe: true, text: 'Safe. This shows manual .htaccess steps — it does NOT touch the site itself. Nothing happens until your tech pastes the snippet.' },
+        wp_login: { safe: true, text: 'Optional hardening. Manual steps only. Hiding the login page reduces brute-force noise; it changes the admin URL, so tell the client the new one.' },
+        wp_debug_log: { safe: true, text: 'Safe. Manual .htaccess step to block a log file from public view. No effect on the site.' },
+        dir_listing: { safe: true, text: 'Safe. Manual .htaccess step to stop folder contents being listed publicly.' },
+        xmlrpc: { safe: true, text: 'Usually safe. Disables XML-RPC — only breaks the Jetpack app or pingbacks, which most sites don’t use. Reversible.' },
+        spam_pages_live: { safe: true, text: 'Safe. Routes to 404s & Redirects to 410 spam URLs — only affects junk URLs, never real pages.' },
+      };
+
       const [secFilter, setSecFilter] = useState(null); // null = all, 'pass', 'fail', 'warning'
 
       const checks = audit?.checks || [];
@@ -8772,6 +8791,18 @@
                   !fr && check.fix && e('div', { style: { fontSize: 12, color: '#22c55e', paddingLeft: 30, marginTop: 2, lineHeight: 1.5, background: 'rgba(34,197,94,0.05)', padding: '8px 12px 8px 30px', borderRadius: 6 } },
                     e('i', { className: 'fas fa-lightbulb', style: { marginRight: 6, color: '#22c55e' } }),
                     check.fix
+                  ),
+                  // IMPACT / SAFETY note — what clicking the fix actually does to the live site
+                  (check.status === 'fail' || check.status === 'warning') && impactNote[check.id] && e('div', {
+                    style: { fontSize: 11.5, paddingLeft: 30, marginTop: 6, lineHeight: 1.5, background: impactNote[check.id].safe ? 'rgba(59,130,246,0.06)' : 'rgba(245,158,11,0.08)', border: '1px solid ' + (impactNote[check.id].safe ? 'rgba(59,130,246,0.25)' : 'rgba(245,158,11,0.35)'), padding: '8px 12px', borderRadius: 6, color: 'var(--text2)' } },
+                    e('i', { className: impactNote[check.id].safe ? 'fas fa-shield-check' : 'fas fa-triangle-exclamation', style: { marginRight: 6, color: impactNote[check.id].safe ? '#3b82f6' : '#f59e0b' } }),
+                    e('b', { style: { color: impactNote[check.id].safe ? '#3b82f6' : '#f59e0b' } }, impactNote[check.id].safe ? 'Safe to apply: ' : 'Confirm before applying: '),
+                    impactNote[check.id].text
+                  ),
+                  // Exposed usernames (user enumeration / wp users checks)
+                  Array.isArray(check.users) && check.users.length > 0 && e('div', { style: { paddingLeft: 30, marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                    check.users.map((u, ui) => e('span', { key: ui, title: `id ${u.id}`, style: { fontSize: 11, padding: '3px 9px', borderRadius: 12, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600, border: '1px solid rgba(239,68,68,0.25)' } },
+                      e('i', { className: 'fas fa-user', style: { marginRight: 5, fontSize: 9 } }), u.slug || u.name))
                   ),
                   // Plugin list table (for wp_plugins_count check)
                   check.plugins && check.plugins.length > 0 && (() => {

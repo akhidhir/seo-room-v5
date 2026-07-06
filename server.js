@@ -53177,14 +53177,18 @@ app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
             );
           } else {
             addCheck('wp_users', 'WordPress Users', 'access', 'pass', 'none',
-              `${users.length} user(s) found, none suspicious`, null);
+              `${users.length} user(s) found, none suspicious: ${users.map(u => u.slug || u.name).join(', ')}`, null,
+              { users: users.map(u => ({ name: u.name, slug: u.slug, id: u.id })) });
           }
-          // Also check: is user enumeration exposed?
+          // Also check: is user enumeration exposed? — LIST THE EXPOSED USERNAMES so the user sees
+          // exactly what an attacker can see (a username is half of a break-in).
+          const exposedNames = users.map(u => u.slug || u.name).filter(Boolean);
           addCheck('wp_user_enum', 'User Enumeration Exposed', 'access',
             users.length > 0 ? 'warning' : 'pass',
             users.length > 0 ? 'medium' : 'none',
-            users.length > 0 ? `WP REST API exposes ${users.length} user account(s) publicly` : 'User enumeration is disabled',
-            users.length > 0 ? 'Install a security plugin (Wordfence, iThemes) to disable user enumeration via REST API, or add a filter to block /wp-json/wp/v2/users for unauthenticated requests.' : null
+            users.length > 0 ? `WP REST API publicly exposes ${users.length} username(s): ${exposedNames.join(', ')}. Anyone can read these at /wp-json/wp/v2/users — that's half of a login attempt handed out.` : 'User enumeration is disabled',
+            users.length > 0 ? 'Install a security plugin (Wordfence, iThemes) to disable user enumeration via REST API, or add a filter to block /wp-json/wp/v2/users for unauthenticated requests.' : null,
+            { users: users.map(u => ({ name: u.name, slug: u.slug, id: u.id })) }
           );
         } else {
           addCheck('wp_users', 'WordPress Users', 'access', 'pass', 'none',
