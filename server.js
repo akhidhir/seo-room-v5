@@ -47226,12 +47226,35 @@ async function buildMonthlyReportFor(projectId, userId) {
       }
     } catch (e) { console.log('[reports] Previous month lookup skipped:', e.message); }
 
+    // 10. DISCOVERED REACH — keywords the site ALREADY ranks for beyond the tracked set
+    // (SERP + Maps discovery). The true footprint + growth headroom, otherwise invisible.
+    let discovered = null;
+    try {
+      const dc = (await pool.query('SELECT keywords, maps_keywords FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+      const serpD = typeof dc?.keywords === 'string' ? JSON.parse(dc.keywords) : (dc?.keywords || []);
+      const mapsD = typeof dc?.maps_keywords === 'string' ? JSON.parse(dc.maps_keywords) : (dc?.maps_keywords || []);
+      const norm = (arr, src) => (Array.isArray(arr) ? arr : []).map(k => ({
+        keyword: k.keyword || k.query || '',
+        position: k.position ?? k.maps_position ?? null,
+        volume: k.volume ?? k.search_volume ?? null,
+        source: src,
+      })).filter(k => k.keyword);
+      const allD = [...norm(serpD, 'serp'), ...norm(mapsD, 'maps')];
+      if (allD.length > 0) {
+        const page1 = allD.filter(k => k.position != null && k.position <= 10).length;
+        const striking = allD.filter(k => k.position != null && k.position > 10 && k.position <= 20).length;
+        const top = [...allD].sort((a, b) => (a.position ?? 999) - (b.position ?? 999)).slice(0, 10);
+        discovered = { total: allD.length, page1, striking, top };
+      }
+    } catch (e) { console.log('[reports] discovered reach skipped:', e.message); }
+
     const reportData = {
       version: 2,
       monthLabel,
       project: { name: project.business_name || project.name, domain: project.domain, industry: project.industry, location: project.location },
       healthScore,
       executiveSummary,
+      discovered,
       mapsRankings,
       serpRankings,
       gscData,

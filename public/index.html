@@ -35150,8 +35150,15 @@
           kwCompetitive: report.mapsRankings?.competitive ?? 0,
           kwNeedsWork: report.mapsRankings?.needsWork ?? 0,
           kwNotVisible: report.mapsRankings?.notVisible ?? 0,
-          mapsRankings: report.mapsRankings?.mapsRankings ?? report.mapsRankings?.totalKeywords ?? 0,
-          serpRankings: report.mapsRankings?.serpRankings ?? report.serpRankings?.keywordsTracked ?? 0,
+          // CORRECT sources (were previously crossed): Maps = grid keyword count; Organic = SERP keywords tracked
+          mapsKwCount: report.mapsRankings?.totalKeywords ?? 0,
+          serpKwCount: report.serpRankings?.keywordsTracked ?? 0,
+          serpTop3: report.serpRankings?.top3 ?? 0,
+          serpTop10: report.serpRankings?.top10 ?? 0,
+          mapsTop3card: report.mapsRankings?.mapsTop3 ?? report.mapsRankings?.dominant ?? 0,
+          discTotal: report.discovered?.total ?? 0,
+          discPage1: report.discovered?.page1 ?? 0,
+          discStriking: report.discovered?.striking ?? 0,
           onPageScore: report.onPageStats?.avgScore ?? 0,
           psPerformance: report.pageSpeedStats?.avgPerformance ?? null,
           psAccessibility: report.pageSpeedStats?.avgAccessibility ?? null,
@@ -35166,12 +35173,12 @@
 
         // Monthly data for ranking chart (use all reports or sample)
         const allSorted = [...reports].sort((a, b) => (a.month || '').localeCompare(b.month || ''));
+        // These bars are Maps visibility (SoLV) buckets — NOT search-result positions.
         const chartCategories = [
-          { key: 'top3', color: '#22c55e', label: '1-3' },
-          { key: 'top10', color: '#84cc16', label: '4-10' },
-          { key: 'top20', color: '#f59e0b', label: '11-20' },
-          { key: 'top50', color: '#f97316', label: '21-50' },
-          { key: 'beyond', color: '#ef4444', label: '51+' },
+          { key: 'top3', color: '#22c55e', label: 'Dominant' },
+          { key: 'top10', color: '#3b82f6', label: 'Competitive' },
+          { key: 'top20', color: '#f59e0b', label: 'Needs Work' },
+          { key: 'top50', color: '#6b7280', label: 'Not Visible' },
         ];
         const monthlyData = allSorted.length > 1 ? allSorted.map(r => ({
           label: (r.monthLabel || r.month || '').replace(/\s*\d{4}$/, '').slice(0, 3),
@@ -35194,18 +35201,114 @@
 
         return (
           <div style={{ padding: '40px 48px', background: 'var(--bg)', minHeight: '100vh' }}>
-            <h1 style={{ fontSize: 38, fontWeight: 700, textAlign: 'center', marginBottom: 40, color: 'var(--text)' }}>SEO Report</h1>
+            <h1 style={{ fontSize: 38, fontWeight: 700, textAlign: 'center', marginBottom: 8, color: 'var(--text)' }}>SEO Report</h1>
+            <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 15, marginBottom: 32 }}>
+              {report.project?.name || ''}{report.project?.name ? ' · ' : ''}{d.month}
+            </div>
+
+            {/* === EXECUTIVE SUMMARY (plain-English what-happened) === */}
+            {report.executiveSummary && (
+              <div style={{ ...wCard, padding: '24px 28px', marginBottom: 24, borderLeft: '3px solid #a78bfa' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <i className="fas fa-file-lines" style={{ fontSize: 14, color: '#a78bfa' }} />
+                  <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Executive Summary</span>
+                </div>
+                <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--text2)' }}>{report.executiveSummary}</div>
+              </div>
+            )}
+
+            {/* === WORK COMPLETED (proof of work this month) === */}
+            {report.workCompleted && report.workCompleted.total_changes > 0 && (() => {
+              const wc = report.workCompleted;
+              return (
+                <div style={{ ...wCard, padding: '24px 28px', marginBottom: 24, borderLeft: '3px solid #22c55e' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                    <i className="fas fa-circle-check" style={{ fontSize: 14, color: '#22c55e' }} />
+                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', flex: 1 }}>Work Completed This Month</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e' }}>{wc.total_changes} change{wc.total_changes === 1 ? '' : 's'}{wc.findings_resolved > 0 ? ` · ${wc.findings_resolved} issue${wc.findings_resolved === 1 ? '' : 's'} resolved` : ''}</span>
+                  </div>
+                  {wc.by_type && wc.by_type.length > 0 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: wc.recent && wc.recent.length ? 18 : 0 }}>
+                      {wc.by_type.map((t, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: 'rgba(34,197,94,0.06)', borderRadius: 8, border: '1px solid rgba(34,197,94,0.15)' }}>
+                          <span style={{ fontSize: 22, fontWeight: 800, color: '#22c55e', minWidth: 28, textAlign: 'center' }}>{t.count}</span>
+                          <span style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.4 }}>{t.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {wc.recent && wc.recent.length > 0 && (
+                    <details>
+                      <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text3)', fontWeight: 600, userSelect: 'none' }}>View recent change log ({wc.recent.length})</summary>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10 }}>
+                        <tbody>
+                          {wc.recent.map((r, i) => (
+                            <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                              <td style={{ padding: '8px 10px', fontSize: 13, color: 'var(--text)' }}>{r.page || '—'}</td>
+                              <td style={{ padding: '8px 10px', fontSize: 13, color: 'var(--text3)' }}>{r.type}</td>
+                              <td style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text3)', textAlign: 'right', whiteSpace: 'nowrap' }}>{r.date ? new Date(r.date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </details>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* === CRITICAL ISSUES (what needs attention) === */}
+            {(() => {
+              const crits = report.criticalFindings || [];
+              const byPillar = report.findingsByPillar || {};
+              const pillarEntries = Object.entries(byPillar).filter(([, v]) => (v.total || 0) > 0);
+              if (crits.length === 0 && pillarEntries.length === 0) return null;
+              const pillarLabel = { gbp: 'Google Business', gbp_external: 'Google Business', gsc: 'Search Console', gsc_agent: 'Search Console', website: 'Website', technical: 'Technical', onpage: 'On-Page', speed: 'Speed', security: 'Security' };
+              return (
+                <div style={{ ...wCard, padding: '24px 28px', marginBottom: 24, borderLeft: '3px solid #ef4444' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                    <i className="fas fa-triangle-exclamation" style={{ fontSize: 14, color: '#ef4444' }} />
+                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', flex: 1 }}>Issues Needing Attention</span>
+                  </div>
+                  {crits.length > 0 && (
+                    <div style={{ marginBottom: pillarEntries.length ? 18 : 0 }}>
+                      {crits.map((c, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: i < crits.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: 'rgba(239,68,68,0.14)', color: '#ef4444', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Critical</span>
+                          <span style={{ fontSize: 14, color: 'var(--text)', flex: 1 }}>{c.title}</span>
+                          <span style={{ fontSize: 11, color: c.status === 'fixed' ? '#22c55e' : 'var(--text3)', fontWeight: 600, textTransform: 'capitalize' }}>{c.status === 'fixed' ? '✓ Fixed' : (c.status || 'open')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {pillarEntries.length > 0 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+                      {pillarEntries.map(([k, v], i) => (
+                        <div key={i} style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                          <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>{pillarLabel[k] || k}</div>
+                          <div style={{ display: 'flex', gap: 10, fontSize: 12 }}>
+                            {v.critical > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}>{v.critical} critical</span>}
+                            {v.high > 0 && <span style={{ color: '#f59e0b', fontWeight: 700 }}>{v.high} high</span>}
+                            <span style={{ color: 'var(--text3)' }}>{v.total} total</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* === ROW 1: Rankings Chart | Change Cards | Stat Cards | Visibility === */}
             <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 1fr 1fr 1.5fr', gap: 16, marginBottom: 24 }}>
-              {/* Left: Google Rankings chart */}
+              {/* Left: Maps Visibility chart (SoLV buckets, not positions) */}
               <div style={{ ...wCard, padding: '20px 24px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 14, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Google Rankings</span>
+                    <i className="fas fa-map-location-dot" style={{ fontSize: 14, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Maps Visibility</span>
                   </div>
-                  <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{d.kwTracked}</span>
+                  <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{d.mapsKwCount}</span>
                 </div>
                 {/* Legend row */}
                 <div style={{ display: 'flex', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -35223,7 +35326,7 @@
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
                     <i className="fas fa-chart-bar" style={{ fontSize: 13, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Google Change</span>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Organic Change</span>
                   </div>
                   <div style={{ fontSize: 36, fontWeight: 800, textAlign: 'center' }}>
                     {d.serpChange == null ? <span style={{ color: 'var(--text3)' }}>—</span>
@@ -35248,21 +35351,23 @@
                 </div>
               </div>
 
-              {/* Middle-right: Rankings stat cards (stacked) */}
+              {/* Middle-right: Keyword-count stat cards (stacked) — CORRECT sources */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 13, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Google Rankings</span>
+                    <i className="fab fa-google" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Organic Keywords</span>
                   </div>
-                  <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.mapsRankings}</div>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.serpKwCount}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center', marginTop: 2 }}>{d.serpTop3} in top 3 · {d.serpTop10} in top 10</div>
                 </div>
                 <div style={{ ...wCard, padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                    <i className="fas fa-chart-bar" style={{ fontSize: 13, color: '#4a7dfc' }} />
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Maps Rankings</span>
+                    <i className="fas fa-map-marker-alt" style={{ fontSize: 13, color: '#4a7dfc' }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text3)' }}>Maps Keywords</span>
                   </div>
-                  <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.serpRankings}</div>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: 'var(--text)', textAlign: 'center' }}>{d.mapsKwCount}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'center', marginTop: 2 }}>{d.mapsTop3card} in Maps top 3</div>
                 </div>
               </div>
 
@@ -35401,6 +35506,54 @@
                 </tbody>
               </table>
             </div>
+
+            {/* === ROW 4.5: Discovered Reach (keywords already ranking beyond the tracked set) === */}
+            {report.discovered && report.discovered.total > 0 && (() => {
+              const disc = report.discovered;
+              return (
+                <div style={{ ...wCard, padding: '24px', marginBottom: 24 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <i className="fas fa-compass" style={{ fontSize: 14, color: '#2dd4bf' }} />
+                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', flex: 1 }}>Discovered Reach</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 16 }}>Keywords this site already ranks for beyond the tracked set — the true footprint and growth headroom.</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: disc.top && disc.top.length ? 18 : 0 }}>
+                    {[
+                      { label: 'Total Discovered', value: disc.total, color: '#2dd4bf' },
+                      { label: 'On Page 1 (top 10)', value: disc.page1, color: '#22c55e' },
+                      { label: 'Striking Distance (11-20)', value: disc.striking, color: '#f59e0b' },
+                    ].map((s, i) => (
+                      <div key={i} style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border)', textAlign: 'center' }}>
+                        <div style={{ fontSize: 34, fontWeight: 800, color: s.color }}>{s.value}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 2 }}>{s.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {disc.top && disc.top.length > 0 && (
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ ...thStyle, textAlign: 'left' }}>Keyword</th>
+                          <th style={{ ...thStyle, textAlign: 'center' }}>Position</th>
+                          <th style={{ ...thStyle, textAlign: 'center' }}>Source</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {disc.top.map((k, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                            <td style={{ padding: '12px 16px', fontSize: 14, color: 'var(--text)' }}>{k.keyword}</td>
+                            <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{k.position != null ? ordinal(k.position) : '—'}</td>
+                            <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: k.source === 'maps' ? 'rgba(74,125,252,0.12)' : 'rgba(45,212,191,0.12)', color: k.source === 'maps' ? '#4a7dfc' : '#2dd4bf' }}>{k.source === 'maps' ? 'Maps' : 'Organic'}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* === ROW 5: Action Plan Progress === */}
             {(() => {
