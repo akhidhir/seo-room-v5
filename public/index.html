@@ -8700,13 +8700,22 @@
               urgent.map((c, i) => {
                 const sc = severityConfig[c.severity] || severityConfig.medium;
                 const fx = fixMap[c.id];
-                return e('div', { key: c.id, style: { padding: '12px 20px', borderBottom: i < urgent.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', alignItems: 'center', gap: 12 } },
-                  e('span', { style: { padding: '2px 9px', borderRadius: 5, fontSize: 10, fontWeight: 800, textTransform: 'uppercase', background: sc.bg, color: sc.fg, whiteSpace: 'nowrap' } }, sc.label || c.status),
+                const note = impactNote[c.id];
+                return e('div', { key: c.id, style: { padding: '12px 20px', borderBottom: i < urgent.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', alignItems: 'flex-start', gap: 12 } },
+                  e('span', { style: { padding: '2px 9px', borderRadius: 5, fontSize: 10, fontWeight: 800, textTransform: 'uppercase', background: sc.bg, color: sc.fg, whiteSpace: 'nowrap', marginTop: 2 } }, sc.label || c.status),
                   e('div', { style: { flex: 1, minWidth: 0 } },
                     e('div', { style: { fontWeight: 600, fontSize: 14 } }, c.name),
-                    e('div', { style: { fontSize: 12.5, color: 'var(--text3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis' } }, c.details)
+                    e('div', { style: { fontSize: 12.5, color: 'var(--text3)', marginTop: 2 } }, c.details),
+                    // Exposed usernames as chips (user enumeration)
+                    Array.isArray(c.users) && c.users.length > 0 && e('div', { style: { marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 5 } },
+                      c.users.map((u, ui) => e('span', { key: ui, title: `id ${u.id}`, style: { fontSize: 10.5, padding: '2px 8px', borderRadius: 10, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600, border: '1px solid rgba(239,68,68,0.25)' } },
+                        e('i', { className: 'fas fa-user', style: { marginRight: 4, fontSize: 8 } }), u.slug || u.name))),
+                    // Safety / impact note
+                    note && e('div', { style: { marginTop: 6, fontSize: 11.5, color: note.safe ? '#93c5fd' : '#fcd34d', lineHeight: 1.45 } },
+                      e('i', { className: note.safe ? 'fas fa-shield-check' : 'fas fa-triangle-exclamation', style: { marginRight: 5 } }),
+                      e('b', null, note.safe ? 'Safe to apply. ' : 'Confirm first. '), note.text)
                   ),
-                  fx && e('button', { className: 'btn', onClick: () => runFix(c.id), disabled: fixingId === c.id, style: { fontSize: 12, padding: '6px 14px', borderColor: '#ef4444', color: '#ef4444', whiteSpace: 'nowrap' } },
+                  fx && e('button', { className: 'btn', onClick: () => runFix(c.id), disabled: fixingId === c.id, style: { fontSize: 12, padding: '6px 14px', borderColor: '#ef4444', color: '#ef4444', whiteSpace: 'nowrap', marginTop: 2 } },
                     fixingId === c.id ? e('i', { className: 'fas fa-spinner fa-spin' }) : e('span', null, e('i', { className: 'fas fa-wrench', style: { marginRight: 5 } }), fx.label || 'Fix'))
                 );
               })
