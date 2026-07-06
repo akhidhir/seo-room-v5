@@ -41407,7 +41407,43 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       orbits.push(...belt);
     } catch (e) {}
 
-    res.json({ ok: true, business: project.business_name || project.name, orbits,
+    // ── SUBURBS BY REAL DISTANCE ── For every keyword that names a known suburb, compute the ACTUAL
+    // km from the business (not the rank proxy) and bucket into distance zones. This answers the real
+    // question: "which suburbs do we rank in, and how far out does our reach extend?"
+    let suburbZones = null;
+    try {
+      // Business centre: its own suburb from the project location
+      const bizSub = (project.location || '').toLowerCase().split(',')[0].trim();
+      const bizGps = SUBURB_GPS[bizSub] || null;
+      if (bizGps) {
+        // Longest suburb names first so "north lakes" matches before "lakes"
+        const subNames = Object.keys(SUBURB_GPS).filter(s => s.length > 3).sort((a, b) => b.length - a.length);
+        const bySuburb = new Map(); // suburb -> { km, best position, keywords[] }
+        for (const o of orbits) {
+          const kwl = ' ' + (o.keyword || '').toLowerCase() + ' ';
+          for (const sub of subNames) {
+            if (kwl.includes(' ' + sub + ' ') || kwl.includes(' ' + sub + '?') || (o.keyword || '').toLowerCase().endsWith(sub)) {
+              const km = Math.round(havKm(bizGps, SUBURB_GPS[sub]) * 10) / 10;
+              const ex = bySuburb.get(sub) || { suburb: sub, km, best_position: 99, count: 0 };
+              ex.count++;
+              if ((o.maps_position || 99) < ex.best_position) ex.best_position = o.maps_position || ex.best_position;
+              bySuburb.set(sub, ex);
+              break; // one suburb per keyword (longest match wins)
+            }
+          }
+        }
+        const subs = [...bySuburb.values()];
+        const ZB = [{ lo: 0, hi: 5 }, { lo: 5, hi: 10 }, { lo: 10, hi: 15 }, { lo: 15, hi: 999 }];
+        suburbZones = ZB.map(z => ({
+          lo: z.lo, hi: z.hi,
+          suburbs: subs.filter(s => s.km > z.lo && s.km <= z.hi)
+            .sort((a, b) => a.km - b.km)
+            .map(s => ({ suburb: s.suburb.replace(/\b\w/g, c => c.toUpperCase()), km: s.km, best_position: s.best_position === 99 ? null : s.best_position, keywords: s.count })),
+        }));
+      }
+    } catch (e) { console.log('[orbits] suburb zones skipped:', e.message); }
+
+    res.json({ ok: true, business: project.business_name || project.name, business_location: project.location || null, orbits, suburb_zones: suburbZones,
       summary: { total: orbits.length, with_grid: orbits.filter(o => o.has_grid).length, discovered: orbits.filter(o => o.origin === 'discovered').length, untracked: orbits.filter(o => !o.tracked).length } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
