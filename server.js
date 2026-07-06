@@ -41899,11 +41899,39 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) addSub(typeof a === 'string' ? a : (a.name || ''));
         for (const s of rankedSub.keys()) addSub(s); // include any ranked suburb even if not in service areas
         const subs = [...allSubs.values()];
+        // Detect EXISTING pages so the plan never tells you to "build" a page that already exists.
+        // Same sources as Smart Map: sitemap crawl + WordPress REST. Variant-aware suburb matching.
+        let pageNorms = [];
+        try {
+          const projUrl = (project.domain || '').startsWith('http') ? project.domain.replace(/\/+$/, '') : 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+          const raw = [];
+          try { const pages = await discoverPages(projUrl, project.wordpress_url || projUrl, getWpAuthHeaders(project)); for (const pg of (pages || [])) raw.push(`${pg.slug || ''} ${pg.title || ''}`); } catch (e) {}
+          try { const sm = await collectSitemapPaths(projUrl); for (const sp of sm) raw.push(sp); } catch (e) {}
+          try {
+            const wpBase = (project.wordpress_url || projUrl).replace(/\/+$/, '');
+            const wpHeaders = getWpAuthHeaders(project) || {};
+            for (const ru of [`${wpBase}/wp-json/wp/v2/pages?per_page=100&_fields=slug,title`, `${wpBase}/wp-json/wp/v2/posts?per_page=100&_fields=slug,title`]) {
+              try { const rr = await fetch(ru, { headers: wpHeaders, signal: AbortSignal.timeout(10000) }); if (rr.ok) { const arr = await rr.json(); if (Array.isArray(arr)) for (const it of arr) raw.push(`${it.slug || ''} ${(it.title && (it.title.rendered || it.title)) || ''}`); } } catch (e) {}
+            }
+          } catch (e) {}
+          pageNorms = raw.map(x => ' ' + normSuburbKey(x) + ' ');
+        } catch (e) {}
+        const hasPageFor = (name) => {
+          const variants = suburbVariants(name).filter(v => v.includes(' ') || v.length >= 4);
+          return pageNorms.some(pn => variants.some(v => pn.includes(' ' + v + ' ') || pn.replace(/\s+/g, '').includes(v.replace(/\s+/g, ''))));
+        };
         // Tailored "how to win it" plan per suburb, based on where you currently stand.
         const svcWord = (project.smart_service || project.industry || 'your service').toString().toLowerCase().trim();
-        const winPlan = (name, pos) => {
+        const winPlan = (name, pos, hasPage) => {
           const S = name.replace(/\b\w/g, c => c.toUpperCase());
           if (pos != null && pos <= 3) return { stage: 'Winning', steps: [`Hold it: keep the ${S} page fresh, keep earning reviews that mention ${S}, and post to GBP monthly so you don't slip.`] };
+          if (pos == null && hasPage) return { stage: 'Page exists — make it rank', steps: [
+            `You already have a ${S} page but it isn't ranking yet — strengthen it, don't rebuild.`,
+            `Target "${svcWord} ${S.toLowerCase()}" in the title, H1 and first paragraph; add genuinely local depth (jobs, landmarks, FAQs) so it isn't thin/templated.`,
+            `Confirm ${S} is in your Google Business Profile service areas.`,
+            `Build 3–5 local citations for ${S} and add internal links to the page from your strongest pages.`,
+            `Earn a review that names ${S}, then re-check the ranking in 2–4 weeks.`,
+          ] };
           if (pos == null) return { stage: 'Build from scratch', steps: [
             `Create a dedicated ${S} landing page — unique local content (not templated): the jobs you do there, local landmarks/roads, an embedded map, and LocalBusiness + Service schema.`,
             `Add ${S} to your Google Business Profile service areas.`,
@@ -41932,7 +41960,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
             lo: z.lo, hi: z.hi,
             ranked_count: inZone.filter(s => s.ranked).length,
             opportunity_count: inZone.filter(s => !s.ranked).length,
-            suburbs: inZone.map(s => { const S = s.suburb.replace(/\b\w/g, c => c.toUpperCase()); const wp = winPlan(s.suburb, s.best_position); return { suburb: S, km: s.km, ranked: s.ranked, best_position: s.best_position, win_stage: wp.stage, win_steps: wp.steps }; }),
+            suburbs: inZone.map(s => { const S = s.suburb.replace(/\b\w/g, c => c.toUpperCase()); const hp = hasPageFor(s.suburb); const wp = winPlan(s.suburb, s.best_position, hp); return { suburb: S, km: s.km, ranked: s.ranked, best_position: s.best_position, has_page: hp, win_stage: wp.stage, win_steps: wp.steps }; }),
           };
         });
       }
