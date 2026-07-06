@@ -35529,9 +35529,20 @@
             {(() => {
               const crits = report.criticalFindings || [];
               const byPillar = report.findingsByPillar || {};
-              const pillarEntries = Object.entries(byPillar).filter(([, v]) => (v.total || 0) > 0);
+              const pillarLabel = { gbp: 'Google Business', gbp_external: 'Google Business', gbp_internal: 'Google Business', gsc: 'Search Console', gsc_agent: 'Search Console', website: 'Website', technical: 'Technical', onpage: 'On-Page', speed: 'Speed', security: 'Security', clarity: 'User Behaviour' };
+              // Merge pillars that share a friendly name (e.g. gsc + gsc_agent → one "Search Console" card),
+              // so the same area never shows twice and raw internal names never leak.
+              const merged = {};
+              for (const [k, v] of Object.entries(byPillar)) {
+                if (!v || !(v.total > 0)) continue;
+                const label = pillarLabel[k] || (k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, ' '));
+                if (!merged[label]) merged[label] = { critical: 0, high: 0, total: 0 };
+                merged[label].critical += v.critical || 0;
+                merged[label].high += v.high || 0;
+                merged[label].total += v.total || 0;
+              }
+              const pillarEntries = Object.entries(merged).sort((a, b) => (b[1].critical - a[1].critical) || (b[1].total - a[1].total));
               if (crits.length === 0 && pillarEntries.length === 0) return null;
-              const pillarLabel = { gbp: 'Google Business', gbp_external: 'Google Business', gsc: 'Search Console', gsc_agent: 'Search Console', website: 'Website', technical: 'Technical', onpage: 'On-Page', speed: 'Speed', security: 'Security' };
               return (
                 <div style={{ ...wCard, padding: '24px 28px', marginBottom: 24, borderLeft: '3px solid #ef4444' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
@@ -35553,7 +35564,7 @@
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
                       {pillarEntries.map(([k, v], i) => (
                         <div key={i} style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                          <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>{pillarLabel[k] || k}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>{k}</div>
                           <div style={{ display: 'flex', gap: 10, fontSize: 12 }}>
                             {v.critical > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}>{v.critical} critical</span>}
                             {v.high > 0 && <span style={{ color: '#f59e0b', fontWeight: 700 }}>{v.high} high</span>}
