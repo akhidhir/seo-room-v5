@@ -41686,11 +41686,8 @@ function _words(t) { return (t || '').split(/[^a-z0-9]+/).filter(w => w.length >
 function _shingles(words, k = 5) { const s = new Set(); for (let i = 0; i + k <= words.length; i++) s.add(words.slice(i, i + k).join(' ')); return s; }
 function _jaccard(a, b) { if (!a.size || !b.size) return 0; let inter = 0; for (const x of a) if (b.has(x)) inter++; return inter / (a.size + b.size - inter); }
 
-app.post('/api/projects/:projectId/ranking-audit', async (req, res) => {
-  const { projectId } = req.params;
-  try {
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
-    if (!project) return res.status(404).json({ error: 'Project not found' });
+async function computeRankingAudit(project) {
+    const projectId = project.id;
     const projUrl = (project.domain || '').startsWith('http') ? project.domain.replace(/\/+$/, '') : 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
     const svc = (project.smart_service || project.industry || 'plumber').toString().toLowerCase().trim();
 
@@ -41789,21 +41786,203 @@ app.post('/api/projects/:projectId/ranking-audit', async (req, res) => {
     const catStatus = (subs) => { const checks = subs.flatMap(s => s.checks); if (checks.some(c => c.status === 'fail')) return 'fail'; if (checks.some(c => c.status === 'warn')) return 'warn'; if (checks.length && checks.every(c => c.status === 'pass')) return 'pass'; return 'pending'; };
     const catScore = (subs) => { const c = subs.flatMap(s => s.checks).filter(x => x.status !== 'pending'); if (!c.length) return null; const pts = c.reduce((a, x) => a + (x.status === 'pass' ? 100 : x.status === 'warn' ? 55 : 15), 0); return Math.round(pts / c.length); };
 
+    // ---- GBP (RatingCaptain / synced profile) ----
+    const gbpSubs = [];
+    try {
+      const rc = (await pool.query(`SELECT profile, review_stats FROM rc_profile_cache WHERE project_id=$1`, [projectId])).rows[0]
+        || { profile: (await pool.query(`SELECT config FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`, [projectId])).rows[0]?.config };
+      const p = rc?.profile || {};
+      const cats = p.categories?.primaryCategory ? [p.categories.primaryCategory.displayName, ...(p.categories.additionalCategories || []).map(c => c.displayName)] : (Array.isArray(p.categories) ? p.categories : []);
+      const desc = p.description || p.profile?.description;
+      const hours = p.regularHours?.periods?.length || (p.hours ? Object.keys(p.hours).length : 0);
+      const services = (p.serviceItems || p.services || []).length;
+      const areas = (p.serviceArea?.places?.placeInfos || p.service_areas || []).length;
+      if (cats.length || desc || hours || services) {
+        gbpSubs.push({ name: 'Profile completeness', checks: [
+          { status: cats.length ? 'pass' : 'warn', finding: cats.length ? `Primary + ${cats.length - 1} categories set (${cats.slice(0, 3).join(', ')}${cats.length > 3 ? '…' : ''})` : 'No categories detected', fix: cats.length ? '—' : 'Set the most specific primary category', evidence: p.metadata?.mapsUri ? { type: 'link', url: p.metadata.mapsUri, label: 'Open profile' } : null, surfaces: ['Map', 'Local'] },
+          { status: desc ? 'pass' : 'warn', finding: desc ? 'Business description is set' : 'No business description', fix: desc ? '—' : 'Add a keyword-rich description', evidence: null, surfaces: ['Local'] },
+          { status: hours ? 'pass' : 'warn', finding: hours ? `Opening hours set (${hours} days)` : 'Opening hours not set', fix: hours ? '—' : 'Add opening hours', evidence: null, surfaces: ['Local'] },
+          { status: services >= 3 ? 'pass' : 'warn', finding: `${services} services listed`, fix: services >= 3 ? '—' : 'List more services with descriptions', evidence: null, surfaces: ['Local'] },
+        ] });
+      }
+    } catch (e) {}
+
+    // ---- Reviews ----
+    const reviewSubs = [];
+    try {
+      const rc = (await pool.query(`SELECT review_stats, reviews FROM rc_profile_cache WHERE project_id=$1`, [projectId])).rows[0];
+      const st = rc?.review_stats || {}; const total = st.total_reviews || rc?.reviews?.total || 0; const avg = st.average_rating || null; const reply = st.reply_rate;
+      let lastDate = null;
+      try { const recent = (rc?.reviews?.recent || []); if (recent.length) lastDate = recent.map(r => new Date(r.date || r.createTime)).sort((a, b) => b - a)[0]; } catch (e) {}
+      const daysSince = lastDate ? Math.floor((Date.now() - lastDate.getTime()) / 86400000) : null;
+      if (total || avg != null) {
+        reviewSubs.push({ name: 'Volume & rating', checks: [
+          { status: total >= 50 ? 'pass' : total >= 20 ? 'warn' : 'fail', finding: `${total} reviews${avg ? `, ${avg.toFixed(1)}★ average` : ''}`, fix: total >= 50 ? 'Keep them coming' : 'Actively request reviews after each job', evidence: null, surfaces: ['Map', 'Local'] },
+        ] });
+        reviewSubs.push({ name: 'Velocity', checks: [
+          { status: daysSince == null ? 'pending' : daysSince <= 30 ? 'pass' : daysSince <= 90 ? 'warn' : 'fail', finding: daysSince == null ? 'Review dates unavailable' : `Last review ${daysSince} days ago`, fix: daysSince != null && daysSince > 30 ? 'Set up an after-job review request' : '—', evidence: null, surfaces: ['Map', 'Local'] },
+        ] });
+        if (reply != null) reviewSubs.push({ name: 'Responses', checks: [{ status: reply >= 80 ? 'pass' : 'warn', finding: `${Math.round(reply)}% of reviews replied to`, fix: reply >= 80 ? '—' : 'Reply to every review', evidence: null, surfaces: ['Local'] }] });
+      }
+    } catch (e) {}
+
+    // ---- Proximity (grid scans) ----
+    const proxSubs = [];
+    try {
+      const g = (await pool.query(`SELECT keyword, arp, solv, found_in, data_points FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC`, [projectId])).rows;
+      const seen = new Set(); const latest = g.filter(r => { if (seen.has(r.keyword)) return false; seen.add(r.keyword); return true; });
+      if (latest.length) {
+        const avgSolv = Math.round(latest.reduce((a, r) => a + (r.solv || 0), 0) / latest.length);
+        const notVis = latest.filter(r => !r.solv || r.solv < 10).length;
+        proxSubs.push({ name: 'Map coverage', checks: [
+          { status: avgSolv >= 40 ? 'pass' : avgSolv >= 20 ? 'warn' : 'fail', finding: `Average map visibility ${avgSolv}% across ${latest.length} grid-scanned keyword(s)`, fix: avgSolv >= 40 ? 'Defend and expand' : 'Build/strengthen pages where you fade out', evidence: null, surfaces: ['Map'] },
+          { status: notVis === 0 ? 'pass' : 'warn', finding: `${notVis} keyword(s) with near-zero map presence`, fix: notVis ? 'Target the weak areas with local content + GBP signals' : '—', evidence: null, surfaces: ['Map'] },
+        ] });
+      }
+    } catch (e) {}
+
+    // ---- Technical (speed audit + broken links already checked above) ----
+    const techSubs = [];
+    try {
+      const ps = (await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status IN ('completed','failed') ORDER BY completed_at DESC NULLS LAST LIMIT 1`, [projectId])).rows[0];
+      const ad = ps?.audit_data ? (typeof ps.audit_data === 'string' ? JSON.parse(ps.audit_data) : ps.audit_data) : null;
+      const results = Array.isArray(ad?.results) ? ad.results.filter(r => r && r.performance_score != null) : [];
+      if (results.length) {
+        const avgPerf = Math.round(results.reduce((a, r) => a + r.performance_score, 0) / results.length);
+        techSubs.push({ name: 'Speed (mobile)', checks: [
+          { status: avgPerf >= 90 ? 'pass' : avgPerf >= 50 ? 'warn' : 'fail', finding: `Average mobile performance ${avgPerf}/100 across ${results.length} page(s)`, fix: avgPerf >= 90 ? '—' : 'Enable caching + defer render-blocking scripts (optimisation plugin)', evidence: { type: 'link', url: `https://pagespeed.web.dev/analysis?url=${encodeURIComponent(projUrl)}`, label: 'Run speed test' }, surfaces: ['SERP'] },
+        ] });
+      }
+    } catch (e) {}
+    // fold the homepage empty-link check (computed in onpageSubs 'Links') is on-page; leave technical to speed + indexation
+    try {
+      const idx = (await pool.query(`SELECT COUNT(*)::int AS n FROM audit_findings WHERE project_id=$1 AND pillar='gsc' AND LOWER(title) LIKE '%index%' AND status NOT IN ('fixed','dismissed','rejected')`, [projectId])).rows[0]?.n || 0;
+      if (idx > 0) techSubs.push({ name: 'Indexation', checks: [{ status: 'warn', finding: `${idx} indexing issue(s) flagged in Search Console`, fix: 'Review the Indexing Status page', evidence: null, surfaces: ['SERP'] }] });
+    } catch (e) {}
+
+    // ---- Off-page (citations) ----
+    const offSubs = [];
+    try {
+      const cit = (await pool.query(`SELECT status, COUNT(*)::int AS n FROM audit_findings WHERE project_id=$1 AND (pillar='citations' OR LOWER(category) LIKE '%citation%' OR LOWER(category) LIKE '%director%') GROUP BY status`, [projectId])).rows;
+      const missing = cit.filter(r => r.status !== 'fixed').reduce((a, r) => a + r.n, 0);
+      if (cit.length) offSubs.push({ name: 'Citations & directories', checks: [{ status: missing > 3 ? 'warn' : 'pass', finding: missing > 0 ? `${missing} directory/citation gap(s) flagged` : 'Citations look consistent', fix: missing > 0 ? 'Add the missing high-authority directories' : '—', evidence: null, surfaces: ['Local'] }] });
+    } catch (e) {}
+
+    const withData = (subs, note, key) => subs.length ? { subs, status: catStatus(subs), score: catScore(subs) } : { subs: [], status: 'pending', score: null, note };
+
     const categories = [
       { key: 'onpage', name: 'On-page & content', icon: 'fa-file-lines', surfaces: ['SERP', 'Local'], subs: onpageSubs, status: catStatus(onpageSubs), score: catScore(onpageSubs) },
-      { key: 'gbp', name: 'Google Business Profile', icon: 'fa-location-dot', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to RatingCaptain next.' },
-      { key: 'reviews', name: 'Reviews & reputation', icon: 'fa-star', surfaces: ['Map', 'Local'], subs: [], status: 'pending', score: null, note: 'Wiring to review data next.' },
-      { key: 'proximity', name: 'Proximity & coverage', icon: 'fa-map-pin', surfaces: ['Map'], subs: [], status: 'pending', score: null, note: 'Wiring to grid scans next.' },
-      { key: 'offpage', name: 'Off-page (citations & links)', icon: 'fa-link', surfaces: ['Local'], subs: [], status: 'pending', score: null, note: 'Wiring to citations/backlinks next.' },
-      { key: 'technical', name: 'Technical foundation', icon: 'fa-gears', surfaces: ['SERP'], subs: [], status: 'pending', score: null, note: 'Wiring to speed/indexation next.' },
+      { key: 'gbp', name: 'Google Business Profile', icon: 'fa-location-dot', surfaces: ['Map', 'Local'], ...withData(gbpSubs, 'No synced GBP profile — connect / sync RatingCaptain.') },
+      { key: 'reviews', name: 'Reviews & reputation', icon: 'fa-star', surfaces: ['Map', 'Local'], ...withData(reviewSubs, 'No review data synced yet.') },
+      { key: 'proximity', name: 'Proximity & coverage', icon: 'fa-map-pin', surfaces: ['Map'], ...withData(proxSubs, 'No grid scans yet — run one in Smart Map Ranking.') },
+      { key: 'offpage', name: 'Off-page (citations & links)', icon: 'fa-link', surfaces: ['Local'], ...withData(offSubs, 'No citation/backlink data yet.') },
+      { key: 'technical', name: 'Technical foundation', icon: 'fa-gears', surfaces: ['SERP'], ...withData(techSubs, 'No speed audit yet — run PageSpeed Scores.') },
       { key: 'leads', name: 'Lead & conversion', icon: 'fa-phone', surfaces: ['—'], subs: [], status: 'soon', score: null, note: 'Coming soon — needs call-tracking / CRM.' },
     ];
     const scored = categories.filter(c => c.score != null);
     const overall = scored.length ? Math.round(scored.reduce((a, c) => a + c.score, 0) / scored.length) : null;
 
-    res.json({ ok: true, business: project.business_name || project.name, domain: project.domain, overall, categories, generated_at: new Date().toISOString(),
-      stats: { pages_found: pagePaths.length, location_pages: locationPages.length, sampled: fetched.length } });
-  } catch (e) { console.error('[ranking-audit]', e.message); res.status(500).json({ error: e.message }); }
+    return { ok: true, business: project.business_name || project.name, domain: project.domain, overall, categories, generated_at: new Date().toISOString(),
+      stats: { pages_found: pagePaths.length, location_pages: locationPages.length, sampled: fetched.length } };
+}
+
+// External Ranking Audit → human-friendly PDF, covering all six categories + Lead & conversion (coming soon).
+// GET so it can be opened in a new tab (window.open); returns a downloadable PDF.
+app.get('/api/projects/:projectId/external-audit/pdf', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const audit = await computeRankingAudit(project);
+    const categories = audit.categories || [];
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${(project.business_name || project.name || 'Site').replace(/[^a-zA-Z0-9 ]/g, '')}-Ranking-Audit.pdf"`);
+    doc.pipe(res);
+
+    const navy = '#14213d', blue = '#3a6ea5', green = '#22c55e', amber = '#f59e0b', red = '#ef4444', gray = '#6b7280', teal = '#14b8a6', light = '#f2f5f9';
+    const pageW = doc.page.width - 100;
+    const statusColor = { pass: green, warn: amber, fail: red, pending: gray, soon: gray };
+    const scoreColor = (s) => s == null ? gray : s >= 80 ? green : s >= 50 ? amber : red;
+    const surfacesLabel = (arr) => (arr || []).filter(x => x && x !== '—').join(' · ');
+
+    // ── Cover ──
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(navy);
+    doc.fillColor('#fff').fontSize(32).font('Helvetica-Bold').text('RANKING AUDIT', 50, 180, { width: pageW, align: 'center' });
+    doc.fillColor('#c9d6e5').fontSize(12).font('Helvetica').text('Local Pack · Google Maps · Search — a plain-English external review', 50, 224, { width: pageW, align: 'center' });
+    doc.fillColor(teal).fontSize(20).font('Helvetica-Bold').text(audit.business || project.name || 'Website', 50, 280, { width: pageW, align: 'center' });
+    doc.fillColor('#9fb2c7').fontSize(12).font('Helvetica').text(project.domain || '', 50, 310, { width: pageW, align: 'center' });
+    if (audit.overall != null) {
+      doc.circle(doc.page.width / 2, 430, 50).lineWidth(4).strokeColor(scoreColor(audit.overall)).stroke();
+      doc.fillColor(scoreColor(audit.overall)).fontSize(32).font('Helvetica-Bold').text(String(audit.overall), doc.page.width / 2 - 32, 411, { width: 64, align: 'center' });
+      doc.fillColor('#9fb2c7').fontSize(10).font('Helvetica').text('OVERALL SCORE', 50, 492, { width: pageW, align: 'center' });
+    }
+    doc.fillColor('#7f93aa').fontSize(10).text(`Reviewed ${audit.stats?.pages_found || 0} pages (${audit.stats?.location_pages || 0} location pages) from the outside, the way Google's crawler sees them.`, 90, 640, { width: pageW - 80, align: 'center' });
+    doc.fillColor('#7f93aa').fontSize(10).text(`Generated ${new Date(audit.generated_at || Date.now()).toLocaleString('en-AU', { dateStyle: 'long', timeStyle: 'short' })}`, 50, 700, { width: pageW, align: 'center' });
+    doc.fillColor('#fff').fontSize(11).text('Prepared by The SEO Room', 50, 720, { width: pageW, align: 'center' });
+
+    // ── Summary table ──
+    doc.addPage();
+    doc.fillColor(navy).fontSize(18).font('Helvetica-Bold').text('At a glance', 50, 50);
+    doc.fillColor(gray).fontSize(10).font('Helvetica').text('Each area scored against what moves you up in the map, the local pack and search results.', 50, 74, { width: pageW });
+    let y = 104;
+    for (const c of categories) {
+      const col = c.score != null ? scoreColor(c.score) : (statusColor[c.status] || gray);
+      doc.roundedRect(50, y, pageW, 30, 4).fill(light);
+      doc.roundedRect(50, y, 5, 30, 2).fill(col);
+      doc.fillColor(navy).fontSize(11.5).font('Helvetica-Bold').text(c.name, 66, y + 5, { width: pageW - 180 });
+      doc.fillColor(gray).fontSize(8).font('Helvetica').text(surfacesLabel(c.surfaces), 66, y + 19, { width: pageW - 180 });
+      const badge = c.status === 'soon' ? 'COMING SOON' : c.status === 'pending' ? 'NO DATA' : (c.score != null ? `${c.score}/100` : c.status.toUpperCase());
+      doc.fillColor(col).fontSize(12).font('Helvetica-Bold').text(badge, 50 + pageW - 120, y + 9, { width: 110, align: 'right' });
+      y += 36;
+    }
+
+    // ── Detail per category ──
+    for (const c of categories) {
+      doc.addPage();
+      const col = c.score != null ? scoreColor(c.score) : (statusColor[c.status] || gray);
+      doc.rect(50, 46, pageW, 4).fill(col);
+      doc.fillColor(navy).fontSize(17).font('Helvetica-Bold').text(c.name, 50, 60, { width: pageW - 120 });
+      doc.fillColor(gray).fontSize(9).font('Helvetica').text('Helps: ' + (surfacesLabel(c.surfaces) || '—'), 50, 84);
+      if (c.score != null) doc.fillColor(col).fontSize(20).font('Helvetica-Bold').text(`${c.score}`, 50 + pageW - 60, 58, { width: 60, align: 'right' });
+      doc.y = 106;
+
+      if (c.status === 'soon') { doc.fillColor(gray).fontSize(11).font('Helvetica-Oblique').text(c.note || 'Coming soon.', 50, doc.y, { width: pageW }); continue; }
+      if (!c.subs || !c.subs.length) { doc.fillColor(gray).fontSize(11).font('Helvetica-Oblique').text(c.note || 'No data available yet for this area.', 50, doc.y, { width: pageW }); continue; }
+
+      for (const sub of c.subs) {
+        if (doc.y > 720) doc.addPage();
+        doc.moveDown(0.5);
+        doc.fillColor(blue).fontSize(12).font('Helvetica-Bold').text(sub.name, 50, doc.y, { width: pageW });
+        doc.moveDown(0.2);
+        for (const ch of (sub.checks || [])) {
+          if (doc.y > 740) doc.addPage();
+          const cc = statusColor[ch.status] || gray;
+          const y0 = doc.y;
+          doc.circle(56, y0 + 6, 3.5).fill(cc);
+          doc.fillColor('#20242b').fontSize(10).font('Helvetica').text(ch.finding || '', 68, y0, { width: pageW - 20 });
+          if (ch.fix && ch.fix !== '—') {
+            doc.fillColor(teal).fontSize(9).font('Helvetica-Bold').text('Fix: ', 68, doc.y, { continued: true });
+            doc.fillColor('#333').font('Helvetica').text(ch.fix, { width: pageW - 30 });
+          }
+          if (ch.evidence && ch.evidence.url) {
+            doc.fillColor(blue).fontSize(8.5).font('Helvetica-Oblique').text(ch.evidence.label || 'View evidence', 68, doc.y, { width: pageW - 30, link: ch.evidence.url, underline: true });
+          }
+          doc.moveDown(0.5);
+        }
+      }
+    }
+
+    // ── Footer ──
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(i);
+      doc.fillColor('#9aa5b1').fontSize(8).font('Helvetica').text(`${project.domain || ''}  ·  Ranking Audit  ·  Prepared by The SEO Room  ·  Page ${i + 1} of ${range.count}`, 50, doc.page.height - 34, { width: pageW, align: 'center' });
+    }
+    doc.end();
+  } catch (e) { console.error('[external-audit-pdf]', e.message); if (!res.headersSent) res.status(500).json({ error: e.message }); }
 });
 
 // DEEP per-project detail for the Executive Summary drill-down — the actual keywords, issues, and a
