@@ -32237,6 +32237,35 @@
       const [sortDir, setSortDir] = useState('asc');
       const [expandedRank, setExpandedRank] = useState(null);
       const [oppOnly, setOppOnly] = useState(false);
+      const [subAct, setSubAct] = useState({}); // suburb -> status message for one-click actions
+      const svcLabel = () => ((result && result.service) || project.industry || 'services').toString().trim();
+      const createLandingBrief = async (s) => {
+        const svc = svcLabel();
+        const title = svc.replace(/\b\w/g, c => c.toUpperCase()) + ' ' + s.suburb;
+        const kw = (svc + ' ' + s.suburb).toLowerCase();
+        const brief = `Create a dedicated suburb landing page for ${s.suburb}, ${s.state}. Target keyword: "${kw}". `
+          + `${(s.population || 0).toLocaleString()} residents, ${s.distance}km from base`
+          + `${s.mapsNotRanking ? ' (currently not ranking on Maps here)' : (s.mapsRank ? ` (currently Maps #${s.mapsRank})` : '')}. `
+          + `Write UNIQUE local content (not templated): local landmarks/roads, typical local jobs, guarantees, embed a map, add LocalBusiness + Service schema, clear CTA. Internally link from nearby suburb pages.`;
+        setSubAct(a => ({ ...a, [s.suburb + '-page']: 'saving' }));
+        try {
+          const r = await api(`/projects/${project.id}/content-queue`, { method: 'POST', body: { page_title: title, content_type: 'new', source: 'smart-map', priority: (s.opportunityScore >= 50 ? 'high' : 'medium'), brief, current_focus_keyword: kw } });
+          setSubAct(a => ({ ...a, [s.suburb + '-page']: r && r.error ? ('err:' + r.error) : 'done' }));
+        } catch (e) { setSubAct(a => ({ ...a, [s.suburb + '-page']: 'err:' + e.message })); }
+      };
+      const addServiceArea = async (s) => {
+        const current = (project.service_areas || []).slice();
+        if (current.some(a => (typeof a === 'string' ? a : (a && (a.name || a.suburb) || '')).toLowerCase().includes(s.suburb.toLowerCase()))) {
+          setSubAct(a => ({ ...a, [s.suburb + '-area']: 'done' })); return;
+        }
+        setSubAct(a => ({ ...a, [s.suburb + '-area']: 'saving' }));
+        try {
+          const next = [...current, `${s.suburb}, ${s.state}, Australia`];
+          const r = await api(`/projects/${project.id}/service-areas`, { method: 'POST', body: { service_areas: next } });
+          if (r && r.service_areas) project.service_areas = r.service_areas;
+          setSubAct(a => ({ ...a, [s.suburb + '-area']: r && r.error ? ('err:' + r.error) : 'done' }));
+        } catch (e) { setSubAct(a => ({ ...a, [s.suburb + '-area']: 'err:' + e.message })); }
+      };
       const phaseStyles = [
         { bg: 'rgba(168,85,247,0.12)', border: '#a855f7' },
         { bg: 'rgba(59,130,246,0.09)', border: '#3b82f6' },
@@ -32529,6 +32558,34 @@
                                       <i className="fas fa-bullseye"></i><b>Growth opportunity</b>
                                       {s.opportunityScore != null && <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: '#f59e0b22', color: '#f59e0b' }}>score {s.opportunityScore}</span>}
                                       <span style={{ color: 'var(--text2)' }}>{s.opportunityReason}</span>
+                                    </div>
+                                  )}
+                                  {/* One-click actions: turn the opportunity into work */}
+                                  {!s.isHome && (
+                                    <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                      {!(s.tasks && s.tasks[0] && s.tasks[0].done) && (() => {
+                                        const st = subAct[s.suburb + '-page'];
+                                        return (
+                                          <button disabled={st === 'saving' || st === 'done'} onClick={() => createLandingBrief(s)}
+                                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: st === 'done' ? 'default' : 'pointer', border: 'none', background: st === 'done' ? '#22c55e22' : '#6366f1', color: st === 'done' ? '#22c55e' : '#fff' }}>
+                                            <i className={st === 'saving' ? 'fas fa-spinner fa-spin' : st === 'done' ? 'fas fa-check' : 'fas fa-file-circle-plus'}></i>
+                                            {st === 'saving' ? 'Adding…' : st === 'done' ? 'Added to Content Queue' : st && st.startsWith('err') ? 'Retry' : 'Create landing page brief'}
+                                          </button>
+                                        );
+                                      })()}
+                                      {!(s.tasks && s.tasks[1] && s.tasks[1].done) && (() => {
+                                        const st = subAct[s.suburb + '-area'];
+                                        return (
+                                          <button disabled={st === 'saving' || st === 'done'} onClick={() => addServiceArea(s)}
+                                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: st === 'done' ? 'default' : 'pointer', border: '1px solid var(--border)', background: st === 'done' ? '#22c55e22' : 'transparent', color: st === 'done' ? '#22c55e' : 'var(--text2)' }}>
+                                            <i className={st === 'saving' ? 'fas fa-spinner fa-spin' : st === 'done' ? 'fas fa-check' : 'fas fa-map-pin'}></i>
+                                            {st === 'saving' ? 'Adding…' : st === 'done' ? 'Added to service areas' : st && st.startsWith('err') ? 'Retry' : 'Add to service areas'}
+                                          </button>
+                                        );
+                                      })()}
+                                      {Object.entries(subAct).some(([k, v]) => k.startsWith(s.suburb + '-') && typeof v === 'string' && v.startsWith('err')) && (
+                                        <span style={{ fontSize: 11, color: '#ef4444', alignSelf: 'center' }}>Something went wrong — try again.</span>
+                                      )}
                                     </div>
                                   )}
                                 </>
