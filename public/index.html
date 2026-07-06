@@ -30781,6 +30781,20 @@
                           </div>
                         </div>
 
+                        {/* START HERE — the single highest-ROI action, so a VA knows what to do first */}
+                        {a.start_here && (
+                          <div style={{ marginBottom: 18, padding: '14px 16px', background: 'linear-gradient(90deg, rgba(139,92,246,0.12), rgba(139,92,246,0.03))', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 10 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                              <i className="fa-solid fa-flag-checkered" style={{ color: '#a78bfa' }} />
+                              <span style={{ fontWeight: 800, fontSize: 14, color: '#a78bfa' }}>Start here</span>
+                              <span style={{ marginLeft: 'auto', fontSize: 11, padding: '2px 8px', borderRadius: 5, background: 'rgba(139,92,246,0.2)', color: '#c4b5fd', fontWeight: 700 }}>{a.start_here.impact} impact · {a.start_here.effort}</span>
+                            </div>
+                            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text1)', marginBottom: 4 }}>{a.start_here.issue}</div>
+                            <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>{a.start_here.fix}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, fontStyle: 'italic' }}>{a.start_here.why}</div>
+                          </div>
+                        )}
+
                         {/* Quick Wins */}
                         {a.quick_wins && a.quick_wins.length > 0 && (
                           <div style={{ marginBottom: 20 }}>

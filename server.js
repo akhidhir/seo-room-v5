@@ -44846,8 +44846,28 @@ Do NOT add information beyond what's listed above. Return ONLY the sentence, not
       verdict = gaps.length > 0 ? gaps[0].issue : 'No issues detected.';
     }
 
+    // ── ROI RANKING — turn the gap LIST into a prioritised PLAN. Each gap gets an effort estimate
+    // by category, then a priority score (impact ÷ effort). The single best-ROI action becomes
+    // "start_here" so a VA knows exactly what to do first, not just what's wrong. ──
+    const effortByCategory = {
+      'On-Page': 1, 'Content': 2, 'Technical': 2, 'Cannibalization': 2,
+      'GBP': 1, 'Reviews': 3, 'Authority': 4, 'Citations': 2, 'Backlinks': 4,
+    };
+    const impactWeight = { high: 3, medium: 2, low: 1 };
+    for (const g of gaps) {
+      g.effort = effortByCategory[g.category] || 2;         // 1 = quick, 4 = long slog
+      g.effort_label = g.effort <= 1 ? 'Quick' : g.effort <= 2 ? 'Moderate' : 'Ongoing';
+      g.priority = +((impactWeight[g.impact] || 1) / g.effort).toFixed(2); // high impact + low effort = top
+    }
+    const ranked = [...gaps].sort((a, b) => b.priority - a.priority);
+    const startHere = ranked[0] ? {
+      issue: ranked[0].issue, fix: ranked[0].fix, category: ranked[0].category,
+      impact: ranked[0].impact, effort: ranked[0].effort_label, fix_action: ranked[0].fix_action,
+      why: `Highest return for the effort — ${ranked[0].impact} impact, ${ranked[0].effort_label.toLowerCase()} to do.`
+    } : null;
+
     // ── Assemble result ──
-    const analysis = { verdict, score, gaps, quick_wins: quickWins, content_recommendations: contentRec };
+    const analysis = { verdict, score, gaps: ranked, quick_wins: quickWins, content_recommendations: contentRec, start_here: startHere };
 
     const result = {
       ok: true,
