@@ -41622,6 +41622,113 @@ app.get('/api/portfolio/summary', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// DEEP per-project detail for the Executive Summary drill-down — the actual keywords, issues, and a
+// concrete step-by-step "how to improve" plan, so the manager never has to leave the page to know what to do.
+app.get('/api/portfolio/project/:projectId/detail', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const svc = (project.smart_service || project.industry || 'your service').toString().toLowerCase().trim();
+
+    // Latest position per tracked keyword
+    const kwRows = (await pool.query(`
+      SELECT k.keyword, rt.serp_position AS pos, rt.serp_url AS url
+      FROM rank_keywords k
+      LEFT JOIN LATERAL (SELECT serp_position, serp_url FROM rank_tracking WHERE project_id=k.project_id AND LOWER(keyword)=LOWER(k.keyword) AND serp_position IS NOT NULL ORDER BY checked_at DESC LIMIT 1) rt ON true
+      WHERE k.project_id=$1 AND rt.serp_position IS NOT NULL`, [projectId])).rows;
+    const striking = kwRows.filter(r => r.pos >= 11 && r.pos <= 20).sort((a, b) => a.pos - b.pos).map(r => ({ keyword: r.keyword, position: r.pos, url: r.url }));
+    const nearTop3 = kwRows.filter(r => r.pos >= 4 && r.pos <= 10).sort((a, b) => a.pos - b.pos).map(r => ({ keyword: r.keyword, position: r.pos, url: r.url }));
+
+    // Discovered keywords at 11–20 not already tracked
+    let discoveredTrack = [];
+    try {
+      const dc = (await pool.query('SELECT keywords, maps_keywords FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+      const serpD = typeof dc?.keywords === 'string' ? JSON.parse(dc.keywords) : (dc?.keywords || []);
+      const mapsD = typeof dc?.maps_keywords === 'string' ? JSON.parse(dc.maps_keywords) : (dc?.maps_keywords || []);
+      const trackedSet = new Set(kwRows.map(r => (r.keyword || '').toLowerCase().trim()));
+      const all = [...serpD, ...mapsD].map(k => ({ keyword: k.keyword || k.query || '', position: k.position ?? k.maps_position ?? null }))
+        .filter(k => k.keyword && k.position != null && k.position > 10 && k.position <= 20 && !trackedSet.has(k.keyword.toLowerCase().trim()));
+      const seen = new Set();
+      discoveredTrack = all.filter(k => { const key = k.keyword.toLowerCase(); if (seen.has(key)) return false; seen.add(key); return true; }).sort((a, b) => a.position - b.position).slice(0, 20);
+    } catch (e) {}
+
+    // Open critical/high findings
+    let criticals = [];
+    try {
+      criticals = (await pool.query(`SELECT title, pillar, severity FROM audit_findings WHERE project_id=$1 AND status NOT IN ('fixed','rejected','dismissed') AND severity IN ('Critical','High') ORDER BY (severity='Critical') DESC, created_at DESC LIMIT 12`, [projectId])).rows;
+    } catch (e) {}
+
+    // On-page failing pages
+    let onpageRed = [];
+    try {
+      const oc = (await pool.query('SELECT results FROM onpage_audit_cache WHERE project_id=$1', [projectId])).rows[0];
+      const rows = oc ? (typeof oc.results === 'string' ? JSON.parse(oc.results) : oc.results) : [];
+      onpageRed = (rows || []).filter(r => r.yoastScore === 'red').slice(0, 12).map(r => ({ title: r.page_name || r.title || r.slug || '', url: r.url || r.link || '' }));
+    } catch (e) {}
+
+    // ── Build the step-by-step improvement plan (deterministic, specific) ──
+    const plan = [];
+    if (striking.length) plan.push({
+      area: 'Push page-two keywords to page one', priority: 1, icon: 'fa-arrow-up', color: '#f59e0b',
+      why: `${striking.length} keyword${striking.length === 1 ? '' : 's'} rank 11–20. They already have authority — small on-page gains cross them onto page one, the fastest visible win.`,
+      steps: [
+        'Open the page that ranks for each keyword below (or the closest one).',
+        `Put the exact keyword in the page title, H1 and first paragraph, plus 2–3 natural variants through the body.`,
+        'Add ~150–300 words of genuinely useful depth (FAQs, specifics, local detail) — thin pages stall at page two.',
+        'Add 3–5 internal links to that page from your strongest existing pages, using the keyword as the anchor text.',
+        'Update the page (change the modified date) so Google re-crawls it sooner.',
+      ],
+      items: striking.slice(0, 15).map(k => `${k.keyword} — #${k.position}`),
+    });
+    if (nearTop3.length) plan.push({
+      area: 'Convert 4–10 into top 3', priority: 2, icon: 'fa-trophy', color: '#3b82f6',
+      why: `${nearTop3.length} keyword${nearTop3.length === 1 ? '' : 's'} rank 4–10 — you're on page one but below the fold. Top 3 gets the clicks.`,
+      steps: [
+        'Rewrite the title tag and meta description to win the click (benefit + location + a number/offer).',
+        'Match search intent better: add the section a searcher expects (pricing, process, comparison, reviews).',
+        'Earn a few relevant links or citations to the page to lift authority past the competitors above you.',
+        'Keep it fresh — refresh content and add recent examples/photos.',
+      ],
+      items: nearTop3.slice(0, 15).map(k => `${k.keyword} — #${k.position}`),
+    });
+    if (discoveredTrack.length) plan.push({
+      area: 'Formalise discovered winners', priority: 3, icon: 'fa-compass', color: '#2dd4bf',
+      why: `The site already ranks 11–20 for these ${discoveredTrack.length} keyword${discoveredTrack.length === 1 ? '' : 's'} you aren't tracking. Track them, then treat them like the striking-distance list above.`,
+      steps: [
+        'Add these keywords to rank tracking so movement is measured.',
+        'For each, check if a relevant page exists — if yes, optimise it for the keyword; if no, brief a new page.',
+        'Then apply the page-two → page-one steps.',
+      ],
+      items: discoveredTrack.slice(0, 15).map(k => `${k.keyword} — #${k.position}`),
+    });
+    if (criticals.length) plan.push({
+      area: 'Close critical issues', priority: 0, icon: 'fa-triangle-exclamation', color: '#ef4444',
+      why: `${criticals.length} critical/high issue${criticals.length === 1 ? '' : 's'} are open. These cap growth and risk the client noticing — clear them first.`,
+      steps: [
+        'Work top-down: critical before high.',
+        'Fix the safe ones from the relevant audit page (meta, links, schema, headers auto-fix).',
+        'Anything touching plugins/server/DNS: hand to the developer with the specifics.',
+      ],
+      items: criticals.map(c => `${c.title}${c.severity ? ` (${c.severity})` : ''}`),
+    });
+    if (onpageRed.length) plan.push({
+      area: 'Fix on-page basics', priority: 4, icon: 'fa-file-lines', color: '#a78bfa',
+      why: `${onpageRed.length} page${onpageRed.length === 1 ? '' : 's'} fail on-page fundamentals (title, meta, focus keyword, headings). Cheap, foundational wins.`,
+      steps: [
+        'For each page: set a unique title with the focus keyword near the front.',
+        'Write a compelling 150–160 char meta description with the keyword and a call-to-action.',
+        'Ensure one H1 with the keyword and logical H2s; add internal links.',
+        'Most of this can be auto-fixed from the On-Page Audit page.',
+      ],
+      items: onpageRed.map(p => p.title || p.url).filter(Boolean),
+    });
+    plan.sort((a, b) => a.priority - b.priority);
+
+    res.json({ ok: true, service: svc, striking, nearTop3, discoveredTrack, criticals, onpageRed, plan });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
   try {
     const projectId = parseInt(req.params.projectId);

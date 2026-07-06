@@ -32209,7 +32209,18 @@
     function ExecutiveSummaryPage({ allProjects, onSwitchProject, setPage }) {
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
+      const [expanded, setExpanded] = useState(null); // project id whose deep plan is open
+      const [detail, setDetail] = useState({}); // id -> detail payload
+      const [detailLoading, setDetailLoading] = useState(null);
       useEffect(() => { setLoading(true); api('/portfolio/summary').then(d => { if (!d.error) setData(d); }).catch(() => {}).finally(() => setLoading(false)); }, []);
+      const toggleDetail = (pid) => {
+        if (expanded === pid) { setExpanded(null); return; }
+        setExpanded(pid);
+        if (!detail[pid]) {
+          setDetailLoading(pid);
+          api(`/portfolio/project/${pid}/detail`).then(d => { if (!d.error) setDetail(prev => ({ ...prev, [pid]: d })); }).catch(() => {}).finally(() => setDetailLoading(null));
+        }
+      };
       const hColor = (h) => h == null ? '#64748b' : h >= 75 ? '#22c55e' : h >= 50 ? '#f59e0b' : '#ef4444';
       const goTo = (proj, page) => { const target = (allProjects || []).find(p => Number(p.id) === Number(proj.id)); if (target && onSwitchProject) onSwitchProject(target); if (page && setPage) setTimeout(() => setPage(page), 100); };
       const projects = data?.projects || [];
@@ -32222,7 +32233,7 @@
             <h2 style={{ margin: 0, fontSize: 24 }}><i className="fas fa-chart-pie" style={{ marginRight: 10, color: '#a78bfa' }} />Executive Summary</h2>
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>{projects.length} projects · sorted by attention needed</span>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 18 }}>Portfolio health across every client, worst first. Each row shows the single next action — click it to jump straight there.</div>
+          <div style={{ fontSize: 13, color: 'var(--text3)', marginBottom: 18 }}>Portfolio health across every client, worst first. Click <b style={{ color: '#a78bfa' }}>"How to do it"</b> on any project to open a step-by-step plan right here — no jumping around.</div>
           {loading ? (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}><span className="spinner" style={{ marginRight: 8 }}></span>Building portfolio summary...</div>
           ) : !projects.length ? (
@@ -32275,12 +32286,56 @@
                       {p.discovered && <div title="Keywords the site already ranks for, found in discovery but not formally tracked"><div style={{ fontSize: 20, fontWeight: 800, color: '#2dd4bf' }}>{p.discovered.total}</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Discovered reach</div></div>}
                       <div><div style={{ fontSize: 20, fontWeight: 800, color: hColor(p.health) }}>{p.health ?? '—'}</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Health score</div></div>
                     </div>
-                    {/* Strategic focus this month */}
+                    {/* Strategic focus this month — click to open the full step-by-step plan IN PLACE */}
                     {p.focus && (
-                      <div onClick={() => goTo(p, p.focus.page)} style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 8, padding: '10px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div onClick={() => toggleDetail(p.id)} style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 8, padding: '10px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
                         <span style={{ fontSize: 10.5, fontWeight: 800, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 0.5, whiteSpace: 'nowrap' }}><i className="fas fa-bullseye" style={{ marginRight: 5 }} />Focus this month</span>
                         <span style={{ fontSize: 13, color: 'var(--text1)', lineHeight: 1.4 }}>{p.focus.text}</span>
-                        <i className="fas fa-arrow-right" style={{ marginLeft: 'auto', color: '#a78bfa', fontSize: 12 }} />
+                        <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#a78bfa', whiteSpace: 'nowrap' }}>{expanded === p.id ? 'Hide plan' : 'How to do it'} <i className={`fas fa-chevron-${expanded === p.id ? 'up' : 'down'}`} style={{ fontSize: 10, marginLeft: 3 }} /></span>
+                      </div>
+                    )}
+                    {/* DEEP PLAN — step-by-step, in place */}
+                    {expanded === p.id && (
+                      <div style={{ marginTop: 12 }}>
+                        {detailLoading === p.id ? (
+                          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}><span className="spinner" style={{ marginRight: 8 }} />Building the plan…</div>
+                        ) : !detail[p.id] || !(detail[p.id].plan || []).length ? (
+                          <div style={{ padding: 16, color: 'var(--text3)', fontSize: 13, background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                            No specific levers found right now. Run a fresh audit + discovery to surface new opportunities.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            {(detail[p.id].plan || []).map((sec, si) => {
+                              return (
+                              <div key={si} style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: sec.color + '12' }}>
+                                  <i className={`fas ${sec.icon}`} style={{ color: sec.color, fontSize: 14 }} />
+                                  <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--text1)' }}>{sec.area}</span>
+                                  <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: sec.color, background: sec.color + '18', padding: '2px 9px', borderRadius: 10 }}>{(sec.items || []).length} item{(sec.items || []).length === 1 ? '' : 's'}</span>
+                                </div>
+                                <div style={{ padding: '12px 16px' }}>
+                                  <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 10 }}>{sec.why}</div>
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Steps</div>
+                                  <ol style={{ margin: '0 0 12px', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                    {(sec.steps || []).map((st, sti) => <li key={sti} style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.5 }}>{st}</li>)}
+                                  </ol>
+                                  {(sec.items || []).length > 0 && (
+                                    <details>
+                                      <summary style={{ cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: sec.color, userSelect: 'none' }}>Show the {(sec.items || []).length} specific item{(sec.items || []).length === 1 ? '' : 's'}</summary>
+                                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                                        {(sec.items || []).map((it, iti) => <span key={iti} style={{ fontSize: 11.5, color: 'var(--text2)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 9px' }}>{it}</span>)}
+                                      </div>
+                                    </details>
+                                  )}
+                                </div>
+                              </div>
+                              );
+                            })}
+                            <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+                              Want the tools? <span onClick={() => goTo(p, p.focus.page)} style={{ color: '#a78bfa', cursor: 'pointer', fontWeight: 700 }}>Open {p.name} →</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
