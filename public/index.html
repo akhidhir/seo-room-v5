@@ -8603,9 +8603,13 @@
             ),
             e('div', { style: { fontSize: 14, color: 'var(--text3)', marginTop: 4 } }, 'Check your WordPress site for vulnerabilities, exposed files, and security misconfigurations')
           ),
-          e('button', { className: 'btn btn-primary', onClick: runAudit, disabled: loading, style: { fontSize: 14, padding: '10px 24px' } },
-            loading ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Scanning...') :
-            e('span', null, e('i', { className: 'fas fa-shield-halved', style: { marginRight: 6 } }), audit ? 'Re-scan' : 'Run Security Audit')
+          e('div', { style: { display: 'flex', gap: 10 } },
+            audit && e('a', { href: `/api/projects/${project.id}/security-audit/pdf?token=${encodeURIComponent(localStorage.getItem('token') || '')}`, target: '_blank', className: 'btn', style: { fontSize: 14, padding: '10px 20px', textDecoration: 'none', borderColor: '#8b5cf6', color: '#8b5cf6' } },
+              e('i', { className: 'fas fa-file-pdf', style: { marginRight: 6 } }), 'Report for Tech (PDF)'),
+            e('button', { className: 'btn btn-primary', onClick: runAudit, disabled: loading, style: { fontSize: 14, padding: '10px 24px' } },
+              loading ? e('span', null, e('i', { className: 'fas fa-spinner fa-spin', style: { marginRight: 6 } }), 'Scanning...') :
+              e('span', null, e('i', { className: 'fas fa-shield-halved', style: { marginRight: 6 } }), audit ? 'Re-scan' : 'Run Security Audit')
+            )
           )
         ),
 

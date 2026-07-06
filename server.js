@@ -52993,6 +52993,107 @@ app.get('/api/projects/:projectId/security-audit/latest', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET: Security audit as a PDF — a technician's work order. Groups by severity, and for every
+// issue prints the finding + the exact fix steps so a dev can act without the dashboard.
+app.get('/api/projects/:projectId/security-audit/pdf', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const row = (await pool.query(`SELECT * FROM audits WHERE project_id=$1 AND pillar='security' AND status='completed' ORDER BY created_at DESC LIMIT 1`, [req.params.projectId])).rows[0];
+    if (!row) return res.status(404).json({ error: 'No completed security audit — run one first.' });
+    const data = typeof row.audit_data === 'string' ? JSON.parse(row.audit_data) : (row.audit_data || {});
+    const checks = data.checks || [];
+    const summary = data.summary || {};
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${(project.name || 'Site').replace(/[^a-zA-Z0-9 ]/g, '')}-Security-Report.pdf"`);
+    doc.pipe(res);
+
+    const dark = '#1a1a2e', red = '#ef4444', orange = '#f97316', amber = '#f59e0b', green = '#22c55e', gray = '#6b7280', teal = '#14b8a6';
+    const pageW = doc.page.width - 100;
+    const sevColor = { critical: red, high: orange, medium: amber, low: gray, none: green };
+    const sevLabel = { critical: 'CRITICAL', high: 'HIGH', medium: 'MEDIUM', low: 'LOW' };
+
+    // ── Cover ──
+    doc.rect(0, 0, doc.page.width, doc.page.height).fill(dark);
+    doc.fillColor('#fff').fontSize(34).font('Helvetica-Bold').text('SECURITY AUDIT', 50, 190, { width: pageW, align: 'center' });
+    doc.fillColor(teal).fontSize(20).font('Helvetica').text(project.name || 'Website', 50, 250, { width: pageW, align: 'center' });
+    doc.fillColor('#999').fontSize(13).text(project.domain || '', 50, 280, { width: pageW, align: 'center' });
+    const scoreColor = (summary.score || 0) >= 80 ? green : (summary.score || 0) >= 50 ? amber : red;
+    doc.circle(doc.page.width / 2, 400, 48).lineWidth(4).strokeColor(scoreColor).stroke();
+    doc.fillColor(scoreColor).fontSize(30).font('Helvetica-Bold').text(String(summary.score || 0), doc.page.width / 2 - 30, 383, { width: 60, align: 'center' });
+    doc.fillColor('#999').fontSize(10).font('Helvetica').text('SECURITY SCORE', 50, 458, { width: pageW, align: 'center' });
+    doc.fillColor('#bbb').fontSize(12).text(`${summary.critical || 0} critical  ·  ${summary.fail || 0} failed  ·  ${summary.warning || 0} warnings`, 50, 490, { width: pageW, align: 'center' });
+    doc.fillColor('#666').fontSize(11).text(`Generated ${new Date(row.completed_at || Date.now()).toLocaleString('en-AU', { dateStyle: 'long', timeStyle: 'short' })}`, 50, 700, { width: pageW, align: 'center' });
+    doc.fillColor('#fff').fontSize(11).text('Prepared by The SEO Room — for the site administrator / developer', 50, 720, { width: pageW, align: 'center' });
+
+    // ── Body: action items grouped by severity ──
+    doc.addPage();
+    const actionable = checks.filter(c => c.status === 'fail' || c.status === 'warning');
+    const order = { critical: 0, high: 1, medium: 2, low: 3, none: 4 };
+    actionable.sort((a, b) => (order[a.severity] ?? 4) - (order[b.severity] ?? 4));
+
+    doc.fillColor(dark).fontSize(18).font('Helvetica-Bold').text('Action Items', 50, 50);
+    doc.fillColor(gray).fontSize(10.5).font('Helvetica').text('Ordered most-urgent first. Each item lists what was found and exactly how to fix it.', 50, 74);
+    doc.moveDown(1.5);
+
+    if (!actionable.length) {
+      doc.fillColor(green).fontSize(14).font('Helvetica-Bold').text('No security issues found — nothing to action.', 50, 110);
+    }
+
+    let n = 0;
+    for (const c of actionable) {
+      if (doc.y > 690) doc.addPage();
+      n++;
+      const col = sevColor[c.severity] || amber;
+      const y0 = doc.y;
+      // severity chip
+      doc.roundedRect(50, y0, 62, 16, 3).fill(col);
+      doc.fillColor('#fff').fontSize(8).font('Helvetica-Bold').text(sevLabel[c.severity] || 'REVIEW', 50, y0 + 4, { width: 62, align: 'center' });
+      // title
+      doc.fillColor(dark).fontSize(12.5).font('Helvetica-Bold').text(`${n}. ${c.name}`, 122, y0 - 1, { width: pageW - 72 });
+      doc.moveDown(0.3);
+      // finding
+      doc.fillColor('#333').fontSize(10).font('Helvetica').text(c.details || '', 122, doc.y, { width: pageW - 72 });
+      // fix
+      if (c.fix) {
+        doc.moveDown(0.2);
+        doc.fillColor(teal).fontSize(9.5).font('Helvetica-Bold').text('FIX: ', 122, doc.y, { continued: true });
+        doc.fillColor('#111').font('Helvetica').text(c.fix, { width: pageW - 72 });
+      }
+      // extra evidence (versions, vuln lists, cert days)
+      const ev = [];
+      if (c.version) ev.push(`Version: ${c.version}`);
+      if (c.days_left != null) ev.push(`Cert days left: ${c.days_left}`);
+      if (Array.isArray(c.vulnerabilities)) for (const v of c.vulnerabilities) ev.push(`${v.what}: ${v.count} known (${v.worst || 'see WPScan'})`);
+      if (ev.length) { doc.moveDown(0.15); doc.fillColor(gray).fontSize(8.5).font('Helvetica-Oblique').text(ev.join('  ·  '), 122, doc.y, { width: pageW - 72 }); }
+      doc.moveTo(50, doc.y + 8).lineTo(50 + pageW, doc.y + 8).lineWidth(0.5).strokeColor('#e5e7eb').stroke();
+      doc.moveDown(1);
+    }
+
+    // ── Passing checks appendix ──
+    const passing = checks.filter(c => c.status === 'pass');
+    if (passing.length) {
+      if (doc.y > 640) doc.addPage();
+      doc.moveDown(0.5);
+      doc.fillColor(green).fontSize(13).font('Helvetica-Bold').text('Passing checks', 50, doc.y);
+      doc.moveDown(0.4);
+      doc.fillColor('#444').fontSize(9.5).font('Helvetica');
+      for (const c of passing) { if (doc.y > 760) doc.addPage(); doc.text(`✓  ${c.name} — ${c.details || 'OK'}`, 55, doc.y, { width: pageW - 10 }); doc.moveDown(0.25); }
+    }
+
+    // Footer page numbers
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(i);
+      doc.fillColor('#999').fontSize(8).font('Helvetica').text(`${project.domain || ''}  ·  Security Report  ·  Page ${i + 1} of ${range.count}`, 50, doc.page.height - 35, { width: pageW, align: 'center' });
+    }
+    doc.end();
+  } catch (e) { console.error('[security-pdf]', e.message); if (!res.headersSent) res.status(500).json({ error: e.message }); }
+});
+
 // POST: run security audit
 app.post('/api/projects/:projectId/security-audit/run', async (req, res) => {
   const { projectId } = req.params;
