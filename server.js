@@ -8761,6 +8761,25 @@ const AU_STATES = { nsw:'NSW', vic:'VIC', qld:'QLD', wa:'WA', sa:'SA', tas:'TAS'
   'south australia':'SA', 'tasmania':'TAS', 'northern territory':'NT', 'australian capital territory':'ACT' };
 
 function normSuburbKey(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+// Name variants so a real page isn't missed over spelling: Mount↔Mt, Saint↔St, apostrophes, and↔&,
+// plus a no-space form to catch slugs like "mountsamson". Returns unique normalized phrases.
+function suburbVariants(sk) {
+  const base = normSuburbKey(sk);
+  if (!base) return [];
+  const set = new Set([base]);
+  const swaps = [
+    [/\bmount\b/g, 'mt'], [/\bmt\b/g, 'mount'],
+    [/\bsaint\b/g, 'st'], [/\bst\b/g, 'saint'],
+    [/\band\b/g, ' '],
+  ];
+  for (const [re, to] of swaps) {
+    const v = base.replace(re, to).replace(/\s+/g, ' ').trim();
+    if (v) set.add(v);
+  }
+  // no-space form (matches "mountsamson", "wightsmountain")
+  for (const v of [...set]) set.add(v.replace(/\s+/g, ''));
+  return [...set].filter(Boolean);
+}
 
 function parseCsvLine(line) {
   const out = []; let cur = ''; let q = false;
@@ -12686,22 +12705,29 @@ async function collectSitemapPaths(baseUrl) {
   const base = (baseUrl || '').replace(/\/+$/, '');
   const grabLocs = (xml) => (xml.match(/<loc>([^<]+)<\/loc>/g) || []).map(m => m.replace(/<\/?loc>/g, ''));
   const addPath = (u) => { try { const p = new URL(u).pathname.replace(/^\/|\/$/g, ''); if (p && !seen.has(p)) { seen.add(p); out.push(p); } } catch {} };
-  const indexes = [`${base}/sitemap_index.xml`, `${base}/sitemap.xml`, `${base}/wp-sitemap.xml`, `${base}/page-sitemap.xml`];
-  for (const idx of indexes) {
+  // BFS across sitemap indexes AND nested indexes. Merge ALL candidate roots (don't stop at the first
+  // that returns anything) and recurse into child sitemaps that are themselves indexes — suburb pages
+  // often live in a deep child (e.g. local-sitemap.xml) that the old single-level, early-break crawl missed.
+  const roots = [`${base}/sitemap_index.xml`, `${base}/sitemap.xml`, `${base}/wp-sitemap.xml`, `${base}/page-sitemap.xml`, `${base}/sitemap-index.xml`, `${base}/local-sitemap.xml`];
+  const visited = new Set();
+  const queue = [...roots];
+  let fetched = 0;
+  const MAX_FETCHES = 120; // safety cap across the whole crawl
+  while (queue.length && fetched < MAX_FETCHES) {
+    const sm = queue.shift();
+    if (!sm || visited.has(sm)) continue;
+    visited.add(sm); fetched++;
     try {
-      const r = await fetch(idx, { headers: ua, signal: AbortSignal.timeout(12000), redirect: 'follow' });
+      const r = await fetch(sm, { headers: ua, signal: AbortSignal.timeout(12000), redirect: 'follow' });
       if (!r.ok) continue;
-      const xml = await r.text();
-      const locs = grabLocs(xml);
-      const subs = locs.filter(u => u.endsWith('.xml') && !/(category|tag|author)/i.test(u));
-      locs.filter(u => !u.endsWith('.xml')).forEach(addPath);
-      for (const sub of subs.slice(0, 15)) {
-        try {
-          const rs = await fetch(sub, { headers: ua, signal: AbortSignal.timeout(12000), redirect: 'follow' });
-          if (rs.ok) grabLocs(await rs.text()).filter(x => !x.endsWith('.xml')).forEach(addPath);
-        } catch {}
+      const locs = grabLocs(await r.text());
+      for (const u of locs) {
+        if (u.endsWith('.xml')) {
+          if (!/(category|tag|author)/i.test(u) && !visited.has(u)) queue.push(u); // child sitemap (may be nested index)
+        } else {
+          addPath(u); // real page
+        }
       }
-      if (out.length) break; // got pages — stop trying other index URLs
     } catch {}
   }
   return out;
@@ -42934,35 +42960,79 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     const serviceAreaBlob = ' ' + serviceAreaItems
       .map(a => normSuburbKey(typeof a === 'string' ? a : (a.name || a.suburb || a.placeName || '')))
       .filter(Boolean).join(' ') + ' ';
-    let pageBlob = '', reviewsBlob = '', postsBlob = '';
+    let reviewsBlob = '', postsBlob = '';
     let pagesScanned = 0;
+    // Keep page ENTRIES (path + normalized text) instead of one flat blob — so we can (a) match name
+    // variants and (b) return the exact URL that matched, making the result verifiable.
+    let pageEntries = []; // [{ path, url, norm }]
     try {
       const projUrl = (project.domain || '').startsWith('http')
         ? project.domain.replace(/\/+$/, '')
         : 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-      const parts = [];
+      const rawEntries = [];
+      // Source 1: sitemap-based discovery (pages + posts)
       try {
         const pages = await discoverPages(projUrl, project.wordpress_url || projUrl, getWpAuthHeaders(project));
-        for (const p of (pages || [])) parts.push(`${p.slug || ''} ${p.title || ''}`);
+        for (const p of (pages || [])) rawEntries.push({ path: p.slug || '', url: p.url || `${projUrl}/${p.slug || ''}`, text: `${p.slug || ''} ${p.title || ''}` });
       } catch (e) {}
-      // Supplement with a direct sitemap crawl (catches suburb pages discoverPages may miss, e.g. plumber-kallangur).
-      try { const smPaths = await collectSitemapPaths(projUrl); for (const sp of smPaths) parts.push(sp); } catch (e) {}
-      const uniq = [...new Set(parts.map(x => normSuburbKey(x)).filter(Boolean))];
-      pagesScanned = uniq.length;
-      pageBlob = ' ' + uniq.join(' ') + ' ';
-      console.log(`[smart-map] Page detection: ${pagesScanned} page strings for project ${req.params.projectId}`);
+      // Source 2: direct + nested sitemap crawl (catches suburb pages in deep child sitemaps)
+      try { const smPaths = await collectSitemapPaths(projUrl); for (const sp of smPaths) rawEntries.push({ path: sp, url: `${projUrl}/${sp}`, text: sp }); } catch (e) {}
+      // Source 3: WordPress REST — pages + any public custom post types (catches pages missing from the
+      // sitemap, e.g. noindexed suburb pages or CPTs Yoast/RankMath excludes).
+      try {
+        const wpBase = (project.wordpress_url || projUrl).replace(/\/+$/, '');
+        const wpHeaders = getWpAuthHeaders(project) || {};
+        const restUrls = [`${wpBase}/wp-json/wp/v2/pages?per_page=100&_fields=slug,link,title`, `${wpBase}/wp-json/wp/v2/posts?per_page=100&_fields=slug,link,title`];
+        for (const ru of restUrls) {
+          try {
+            for (let page = 1; page <= 3; page++) {
+              const rr = await fetch(ru + `&page=${page}`, { headers: wpHeaders, signal: AbortSignal.timeout(12000) });
+              if (!rr.ok) break;
+              const arr = await rr.json();
+              if (!Array.isArray(arr) || arr.length === 0) break;
+              for (const it of arr) rawEntries.push({ path: it.slug || '', url: it.link || `${wpBase}/${it.slug || ''}`, text: `${it.slug || ''} ${(it.title && (it.title.rendered || it.title)) || ''}` });
+              if (arr.length < 100) break;
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+      // Dedupe by URL/path and precompute normalized (spaced) + no-space forms
+      const seenP = new Set();
+      for (const e of rawEntries) {
+        const key = (e.url || e.path || '').replace(/\/+$/, '').toLowerCase();
+        if (!key || seenP.has(key)) continue; seenP.add(key);
+        const norm = normSuburbKey(e.text);
+        pageEntries.push({ path: e.path, url: e.url, norm: ' ' + norm + ' ', nospace: norm.replace(/\s+/g, '') });
+      }
+      pagesScanned = pageEntries.length;
+      console.log(`[smart-map] Page detection: ${pagesScanned} pages for project ${req.params.projectId}`);
     } catch (e) {}
     try { const rc = (await pool.query('SELECT reviews FROM reviews_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (rc) reviewsBlob = ' ' + normSuburbKey(JSON.stringify(rc.reviews || '')) + ' '; } catch (e) {}
     try { const pc = (await pool.query('SELECT posts FROM posts_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (pc) postsBlob = ' ' + normSuburbKey(JSON.stringify(pc.posts || '')) + ' '; } catch (e) {}
     const hasWord = (blob, word) => blob.length > 2 && word.length > 1 && blob.includes(' ' + word + ' ');
+    // Match a suburb (by any spelling variant) against the discovered pages; returns the matching page or null.
+    const findSuburbPage = (suburbName) => {
+      const variants = suburbVariants(suburbName);
+      for (const e of pageEntries) {
+        for (const v of variants) {
+          if (v.length < 2) continue;
+          if (v.includes(' ') || v.length >= 5) { if (e.norm.includes(' ' + v + ' ') || e.nospace.includes(v.replace(/\s+/g, ''))) return e; }
+          else if (e.norm.includes(' ' + v + ' ')) return e; // short single-word suburbs: exact token only (avoid false positives)
+        }
+      }
+      return null;
+    };
+    // A suburb also counts as "in GBP areas / reviews / posts" using variant-aware matching.
+    const anyVariant = (blob, suburbName) => suburbVariants(suburbName).some(v => hasWord(blob, v));
 
     const ranked = within.map((s, i) => {
       const sk = normSuburbKey(s.suburb);
+      const matchedPage = findSuburbPage(s.suburb);
       const tasks = [
-        { label: 'Suburb landing page', done: hasWord(pageBlob, sk) },
-        { label: 'In GBP service areas', done: hasWord(serviceAreaBlob, sk) },
-        { label: 'Review mentions suburb', done: hasWord(reviewsBlob, sk) },
-        { label: 'GBP post mentions suburb', done: hasWord(postsBlob, sk) },
+        { label: 'Suburb landing page', done: !!matchedPage },
+        { label: 'In GBP service areas', done: anyVariant(serviceAreaBlob, s.suburb) },
+        { label: 'Review mentions suburb', done: anyVariant(reviewsBlob, s.suburb) },
+        { label: 'GBP post mentions suburb', done: anyVariant(postsBlob, s.suburb) },
       ];
       const doneCount = tasks.filter(t => t.done).length;
       return {
@@ -42970,6 +43040,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         tier: i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low',
         isHome: normSuburbKey(s.suburb) === centerKey,
         tasks, completion: Math.round((doneCount / tasks.length) * 100),
+        pageUrl: matchedPage ? matchedPage.url : null, // the page that matched — lets you verify the ✓
       };
     });
 

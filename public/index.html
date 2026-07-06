@@ -32488,9 +32488,14 @@
                                   </div>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 28px' }}>
                                     {s.tasks.map((t, ti) => (
-                                      <div key={ti} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: t.done ? '#22c55e' : 'var(--text2)' }}>
+                                      <div key={ti} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: t.done ? '#22c55e' : 'var(--text2)', flexWrap: 'wrap' }}>
                                         <i className={t.done ? 'fas fa-circle-check' : 'far fa-circle'} style={{ color: t.done ? '#22c55e' : 'var(--text3)' }}></i>
-                                        <span style={{ textDecoration: t.done ? 'none' : 'none' }}>{t.label}{t.done ? ' ✓ done' : ' — to do'}</span>
+                                        <span>{t.label}{t.done ? ' ✓ done' : ' — to do'}</span>
+                                        {ti === 0 && t.done && s.pageUrl && (
+                                          <a href={s.pageUrl} target="_blank" rel="noopener" style={{ fontSize: 12, color: '#60a5fa', textDecoration: 'none' }}>
+                                            <i className="fas fa-external-link-alt" style={{ fontSize: 10, marginRight: 3 }}></i>{(s.pageUrl || '').replace(/^https?:\/\/[^/]+/, '') || 'view'}
+                                          </a>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
