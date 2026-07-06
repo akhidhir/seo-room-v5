@@ -32443,6 +32443,12 @@
                     </button>
                   )}
                 </div>
+                {result.gridKeyword && (
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 10, lineHeight: 1.5, background: 'rgba(99,102,241,0.05)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
+                    <i className="fas fa-circle-info" style={{ marginRight: 6, color: '#6366f1' }}></i>
+                    <b>Maps Rank</b> is your local-pack position for <b>"{result.gridKeyword}"</b> measured from a GPS point near each suburb (grid scan) — closer suburbs are proximity-driven and read higher. A normal Google search won't match: it's personalised, uses your own location (not the suburb's), and often a different query. The <b style={{ color: '#ef4444' }}>not-ranking</b> rows are the reliable gaps to target. Expand a row to see the exact keyword and how far the measuring point was.
+                  </div>
+                )}
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
