@@ -32236,6 +32236,7 @@
       const [sortBy, setSortBy] = useState('rank');
       const [sortDir, setSortDir] = useState('asc');
       const [expandedRank, setExpandedRank] = useState(null);
+      const [oppOnly, setOppOnly] = useState(false);
       const phaseStyles = [
         { bg: 'rgba(168,85,247,0.12)', border: '#a855f7' },
         { bg: 'rgba(59,130,246,0.09)', border: '#3b82f6' },
@@ -32432,8 +32433,15 @@
 
               {/* Ranked table */}
               <div className="integration-card">
-                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Ranked suburbs
-                  {result.pagesScanned != null && <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)', marginLeft: 10 }}>· scanned {result.pagesScanned} site pages · {(result.suburbs || []).filter(s => (s.tasks || [])[0] && s.tasks[0].done).length} suburbs have a landing page</span>}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>Ranked suburbs
+                    {result.pagesScanned != null && <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)', marginLeft: 10 }}>· scanned {result.pagesScanned} site pages · {(result.suburbs || []).filter(s => (s.tasks || [])[0] && s.tasks[0].done).length} with a landing page{result.gridCovered ? ` · ${result.gridCovered} grid-measured` : ''}</span>}
+                  </div>
+                  {result.opportunityCount > 0 && (
+                    <button onClick={() => setOppOnly(v => !v)} style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1px solid ' + (oppOnly ? '#f59e0b' : 'var(--border)'), background: oppOnly ? '#f59e0b22' : 'transparent', color: oppOnly ? '#f59e0b' : 'var(--text2)' }}>
+                      <i className="fas fa-bullseye"></i>{oppOnly ? 'Showing' : 'Show'} {result.opportunityCount} growth opportunit{result.opportunityCount === 1 ? 'y' : 'ies'}
+                    </button>
+                  )}
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -32453,18 +32461,18 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {sortSuburbs(result.suburbs).map((s) => (
+                      {sortSuburbs(result.suburbs).filter(s => !oppOnly || s.opportunityFlag).map((s) => (
                         <React.Fragment key={s.rank}>
-                        <tr onClick={() => setExpandedRank(expandedRank === s.rank ? null : s.rank)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: expandedRank === s.rank ? 'rgba(99,102,241,0.05)' : 'transparent' }}>
+                        <tr onClick={() => setExpandedRank(expandedRank === s.rank ? null : s.rank)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: expandedRank === s.rank ? 'rgba(99,102,241,0.05)' : s.opportunityFlag ? 'rgba(245,158,11,0.05)' : 'transparent' }}>
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}><i className={`fas fa-chevron-${expandedRank === s.rank ? 'down' : 'right'}`} style={{ fontSize: 9, marginRight: 6, color: 'var(--text3)' }}></i>{s.rank}</td>
-                          <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.suburb}{s.isHome && <span style={{ marginLeft: 6, fontSize: 10, color: '#a855f7' }}>(HOME)</span>}</td>
+                          <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.opportunityFlag && <i className="fas fa-bullseye" title={s.opportunityReason || 'Growth opportunity'} style={{ color: '#f59e0b', marginRight: 6, fontSize: 11 }}></i>}{s.suburb}{s.isHome && <span style={{ marginLeft: 6, fontSize: 10, color: '#a855f7' }}>(HOME)</span>}</td>
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.state}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.distance} km</td>
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : s.competitors}</td>}
                           {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>{s.per_capita == null ? '—' : s.per_capita}</td>}
                           <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
-                          <td title={s.mapsRankKeyword ? `From tracked keyword: "${s.mapsRankKeyword}"` : 'No suburb-specific keyword tracked here yet'} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: s.mapsRank == null ? 'var(--text3)' : s.mapsRank <= 3 ? '#22c55e' : s.mapsRank <= 10 ? '#f59e0b' : '#ef4444' }}>{s.mapsRank == null ? '—' : '#' + s.mapsRank}</td>
+                          <td title={s.mapsRank != null ? `${s.mapsRankSource === 'grid' ? 'Measured by grid scan' : 'From tracked keyword'}${s.mapsRankKeyword ? ': "' + s.mapsRankKeyword + '"' : ''}` : s.mapsNotRanking ? `Grid scan measured this area${s.mapsRankKeyword ? ' ("' + s.mapsRankKeyword + '")' : ''} — you don't appear in the local pack here` : 'Not measured here yet — run a grid scan that covers this suburb'} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: s.mapsRank == null ? (s.mapsNotRanking ? '#ef4444' : 'var(--text3)') : s.mapsRank <= 3 ? '#22c55e' : s.mapsRank <= 10 ? '#f59e0b' : '#ef4444' }}>{s.mapsRank != null ? '#' + s.mapsRank : s.mapsNotRanking ? <span style={{ fontSize: 11 }}>not ranking</span> : '—'}</td>
                           <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
                           <td style={{ padding: '6px 8px' }}>
                             {s.completion != null ? (
@@ -32504,10 +32512,17 @@
                                   </div>
                                   <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text3)' }}>
                                     <i className="fas fa-map-marker-alt" style={{ marginRight: 6, color: '#60a5fa' }}></i>
-                                    Maps rank: {s.mapsRank == null
-                                      ? 'no suburb-specific keyword tracked here yet — add one in Maps Rankings to measure it'
-                                      : <span><b style={{ color: 'var(--text2)' }}>#{s.mapsRank}</b> from tracked keyword <b style={{ color: 'var(--text2)' }}>"{s.mapsRankKeyword}"</b></span>}
+                                    Maps rank: {s.mapsRank != null
+                                      ? <span><b style={{ color: 'var(--text2)' }}>#{s.mapsRank}</b> {s.mapsRankSource === 'grid' ? 'measured by grid scan' : 'from tracked keyword'}{s.mapsRankKeyword ? <> · <b style={{ color: 'var(--text2)' }}>"{s.mapsRankKeyword}"</b></> : ''}</span>
+                                      : s.mapsNotRanking
+                                        ? <span style={{ color: '#ef4444' }}>grid scan measured this area and you <b>don't appear</b> in the local pack — a clear opening</span>
+                                        : 'not measured here yet — run a grid scan (Maps Rankings) that covers this suburb'}
                                   </div>
+                                  {s.opportunityFlag && s.opportunityReason && (
+                                    <div style={{ marginTop: 8, fontSize: 12.5, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <i className="fas fa-bullseye"></i><b>Growth opportunity:</b> <span style={{ color: 'var(--text2)' }}>{s.opportunityReason}</span>
+                                    </div>
+                                  )}
                                 </>
                               ) : (
                                 <div style={{ fontSize: 13, color: 'var(--text3)' }}>Run a fresh survey to see the per-suburb checklist (page, GBP area, reviews, posts).</div>

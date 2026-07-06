@@ -42928,7 +42928,7 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       if ((s.population || 0) < MIN_POP && normSuburbKey(s.suburb) !== centerKey) continue; // skip non-residential localities
       const d = haversineKm(ctr.lat, ctr.lng, s.lat, s.lng);
       if (d <= radius) {
-        within.push({ suburb: s.suburb, state: s.state, postcode: s.postcode, population: s.population, distance: Math.round(d * 10) / 10 });
+        within.push({ suburb: s.suburb, state: s.state, postcode: s.postcode, population: s.population, distance: Math.round(d * 10) / 10, lat: s.lat, lng: s.lng });
         if (s.population > maxPop) maxPop = s.population;
       }
     }
@@ -43055,13 +43055,45 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
           if (best == null || e.pos < best) { best = e.pos; bestKw = e.keyword; }
         }
       }
-      return best == null ? null : { pos: best, keyword: bestKw };
+      return best == null ? null : { pos: best, keyword: bestKw, scanned: true, source: 'tracked' };
+    };
+
+    // BEST per-suburb source: GRID SCANS. A grid scan already measured your Maps position at points
+    // across the map, so the point nearest a suburb IS your rank there — no per-suburb keyword needed.
+    // A point where you weren't found = a real "not ranking here" signal (an opportunity), not "unknown".
+    let gridPoints = [];
+    try {
+      const gs = (await pool.query(`SELECT keyword, grid_points, grid_size, radius_km FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC`, [req.params.projectId])).rows;
+      for (const row of gs) {
+        const pts = typeof row.grid_points === 'string' ? JSON.parse(row.grid_points || '[]') : (row.grid_points || []);
+        const spacing = (row.grid_size > 1 && row.radius_km) ? (row.radius_km * 2 / (row.grid_size - 1)) : 5;
+        const reach = Math.max(2.5, spacing * 0.8); // how far a point speaks for
+        for (const p of pts) {
+          if (p.lat == null || p.lng == null) continue;
+          gridPoints.push({ lat: p.lat, lng: p.lng, found: !!p.found, position: p.position || null, keyword: row.keyword, reach });
+        }
+      }
+    } catch (e) {}
+    const findGridRank = (s) => {
+      if (s.lat == null || s.lng == null || !gridPoints.length) return null;
+      let best = null;
+      for (const p of gridPoints) {
+        const d = haversineKm(s.lat, s.lng, p.lat, p.lng);
+        if (d > p.reach) continue;
+        // nearest point wins; on a near-tie prefer a "found" point with the better position
+        if (!best || d < best.d - 0.3 || (Math.abs(d - best.d) <= 0.3 && p.found && (!best.found || (p.position || 99) < (best.position || 99)))) {
+          best = { d, found: p.found, position: p.position, keyword: p.keyword };
+        }
+      }
+      if (!best) return null;
+      return { pos: best.found ? best.position : null, keyword: best.keyword, scanned: true, source: 'grid', notRanking: !best.found };
     };
 
     const ranked = within.map((s, i) => {
       const sk = normSuburbKey(s.suburb);
       const matchedPage = findSuburbPage(s.suburb);
-      const mr = findSuburbRank(s.suburb);
+      // Grid scan is the richest source; fall back to a tracked keyword only if the grid didn't cover this suburb.
+      const mr = findGridRank(s) || findSuburbRank(s.suburb);
       const tasks = [
         { label: 'Suburb landing page', done: !!matchedPage },
         { label: 'In GBP service areas', done: anyVariant(serviceAreaBlob, s.suburb) },
@@ -43069,14 +43101,18 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         { label: 'GBP post mentions suburb', done: anyVariant(postsBlob, s.suburb) },
       ];
       const doneCount = tasks.filter(t => t.done).length;
+      const { lat: _la, lng: _ln, ...srest } = s; // don't leak raw coords into the row payload
       return {
-        rank: i + 1, ...s,
+        rank: i + 1, ...srest,
         tier: i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low',
         isHome: normSuburbKey(s.suburb) === centerKey,
         tasks, completion: Math.round((doneCount / tasks.length) * 100),
         pageUrl: matchedPage ? matchedPage.url : null, // the page that matched — lets you verify the ✓
-        mapsRank: mr ? mr.pos : null, // real Maps position from a suburb-naming tracked keyword (null if none)
+        mapsRank: mr ? mr.pos : null, // measured Maps position (null = not covered OR covered-but-not-ranking)
         mapsRankKeyword: mr ? mr.keyword : null, // the keyword behind the rank — shown so it's verifiable
+        mapsScanned: mr ? !!mr.scanned : false, // was this suburb measured at all (grid point or tracked kw)?
+        mapsNotRanking: mr ? !!mr.notRanking : false, // measured but you don't appear = clear opportunity
+        mapsRankSource: mr ? mr.source : null, // 'grid' | 'tracked'
       };
     });
 
@@ -43110,9 +43146,30 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     }
     if (hasCompetitors) rankByOpportunity(ranked, radius);
 
+    // GROWTH OPPORTUNITIES — the answer to "where do I grow?": a real market where you are NOT winning.
+    // Flag = decent population, AND (measured not-ranking OR rank worse than 5 OR no page yet), weighted
+    // by low competition where we know it. Give each a one-line reason so it's actionable.
+    for (const s of ranked) {
+      if (s.isHome) { s.opportunityFlag = false; continue; }
+      const bigEnough = (s.population || 0) >= 800;
+      const weakRank = s.mapsNotRanking || (s.mapsRank != null && s.mapsRank > 5) || (!s.mapsScanned);
+      const noPage = !(s.tasks && s.tasks[0] && s.tasks[0].done);
+      s.opportunityFlag = bigEnough && (weakRank || noPage);
+      if (s.opportunityFlag) {
+        const bits = [];
+        if (s.mapsNotRanking) bits.push('not ranking on Maps here');
+        else if (s.mapsRank != null && s.mapsRank > 5) bits.push(`Maps #${s.mapsRank} — page 1 within reach`);
+        else if (!s.mapsScanned) bits.push('never grid-scanned here');
+        if (noPage) bits.push('no landing page');
+        if (typeof s.competitors === 'number' && s.competitors <= 5) bits.push(`only ${s.competitors} competitor${s.competitors === 1 ? '' : 's'}`);
+        s.opportunityReason = `${(s.population || 0).toLocaleString()} residents, ${s.distance}km — ${bits.join(', ')}.`;
+      }
+    }
+    const opportunityCount = ranked.filter(s => s.opportunityFlag).length;
+
     const plan = buildSmartPlan(ranked);
 
-    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, pagesScanned, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
+    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, pagesScanned, opportunityCount, gridCovered: ranked.filter(s => s.mapsRankSource === 'grid').length, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
