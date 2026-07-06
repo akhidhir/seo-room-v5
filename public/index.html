@@ -32147,7 +32147,7 @@
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-location-dot" style={{ marginRight: 8, color: '#4ade80' }} />Suburb coverage & opportunities — by distance</div>
               <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
-                Every suburb the business serves, by real distance from {data?.business_location || 'the business'}. <span style={{ color: '#4ade80', fontWeight: 700 }}>Green = ranked</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>Amber = opportunity</span> (served but not ranking yet). <b style={{ color: 'var(--text2)' }}>Click any suburb for a plan to win it.</b>
+                Every suburb the business serves, by real distance from {data?.business_location || 'the business'}. <span style={{ color: '#4ade80', fontWeight: 700 }}>#N = ranked</span> · <span style={{ color: '#60a5fa', fontWeight: 700 }}>HAS PAGE = page exists but not ranking</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>NO PAGE = greenfield</span>. <b style={{ color: 'var(--text2)' }}>Click any suburb for a plan to win it.</b>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 {(data.suburb_zones || []).map((z, zi) => (
@@ -32172,8 +32172,10 @@
                           <div key={si}>
                             <div onClick={() => setOpenSub(isOpen ? null : key)} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 6px', borderRadius: 4, opacity: s.ranked ? 1 : 0.85, cursor: 'pointer', background: isOpen ? 'rgba(96,165,250,0.08)' : 'transparent' }}>
                             {s.ranked
-                              ? <span style={{ fontSize: 10, fontWeight: 700, color: s.best_position <= 3 ? '#4ade80' : s.best_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 28 }}>#{s.best_position}</span>
-                              : <span title="Not ranking here yet — opportunity" style={{ fontSize: 9, fontWeight: 800, color: '#f59e0b', minWidth: 28, textTransform: 'uppercase' }}>NEW</span>}
+                              ? <span style={{ fontSize: 10, fontWeight: 700, color: s.best_position <= 3 ? '#4ade80' : s.best_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 42 }}>#{s.best_position}</span>
+                              : s.has_page
+                                ? <span title="Has a landing page but isn't ranking yet — strengthen it" style={{ fontSize: 8.5, fontWeight: 800, color: '#60a5fa', minWidth: 42, textTransform: 'uppercase', letterSpacing: 0.3 }}>HAS PAGE</span>
+                                : <span title="No page yet — a greenfield opportunity" style={{ fontSize: 8.5, fontWeight: 800, color: '#f59e0b', minWidth: 42, textTransform: 'uppercase', letterSpacing: 0.3 }}>NO PAGE</span>}
                             <span style={{ fontWeight: 600, color: s.ranked ? 'var(--text1)' : 'var(--text2)', flex: 1 }}>{s.suburb}</span>
                             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{s.km} km</span>
                             {!winning && <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ fontSize: 9, color: 'var(--text3)' }} />}
