@@ -32280,7 +32280,19 @@
       const [expandedRank, setExpandedRank] = useState(null);
       const [oppOnly, setOppOnly] = useState(false);
       const [subAct, setSubAct] = useState({}); // suburb -> status message for one-click actions
+      const [phaseAct, setPhaseAct] = useState({}); // phase index -> status
       const svcLabel = () => ((result && result.service) || project.industry || 'services').toString().trim();
+      const createPhaseBriefs = async (ph, i) => {
+        const names = (ph.suburbs || []).map(x => x.replace(/\s*\(.*$/, '').trim());
+        const subs = names.map(n => (result.suburbs || []).find(s => s.suburb.toLowerCase() === n.toLowerCase())).filter(Boolean);
+        const todo = subs.filter(s => !(s.tasks && s.tasks[0] && s.tasks[0].done));
+        if (!todo.length) { setPhaseAct(a => ({ ...a, [i]: 'none' })); return; }
+        if (!confirm(`Create ${todo.length} landing-page brief${todo.length === 1 ? '' : 's'} in the Content Queue for ${ph.phase}? (Only suburbs without a page.)`)) return;
+        let done = 0;
+        setPhaseAct(a => ({ ...a, [i]: `saving:0/${todo.length}` }));
+        for (const s of todo) { try { await createLandingBrief(s); } catch (e) {} done++; setPhaseAct(a => ({ ...a, [i]: `saving:${done}/${todo.length}` })); }
+        setPhaseAct(a => ({ ...a, [i]: `done:${done}` }));
+      };
       const createLandingBrief = async (s) => {
         const svc = svcLabel();
         const title = svc.replace(/\b\w/g, c => c.toUpperCase()) + ' ' + s.suburb;
@@ -32491,16 +32503,35 @@
                 </div>
               </div>
 
-              {/* Rollout plan */}
-              {(result.plan || []).map((ph, i) => ph.count > 0 && (
+              {/* Rollout plan — short: goal + suburb names + one clear CTA */}
+              {(result.plan || []).map((ph, i) => {
+                if (!ph.count) return null;
+                const goal = ['Build dedicated landing pages for these suburbs.', 'Expand coverage once Phase 1 is indexed.', 'Reach further out with citations + internal links.'][i] || (ph.actions && ph.actions[0]) || '';
+                const names = (ph.suburbs || []).map(x => x.replace(/\s*\(.*$/, '').trim());
+                const st = phaseAct[i];
+                const buildPhase = i < 2; // phases 1 & 2 build pages; phase 3 is off-page (citations/links)
+                return (
                 <div key={i} className="integration-card" style={{ marginBottom: 12, background: (phaseStyles[i] || {}).bg, borderLeft: '4px solid ' + ((phaseStyles[i] || {}).border || 'var(--border)') }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{ph.phase} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>· {ph.count} suburbs</span></div>
-                  <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>{ph.suburbs.slice(0, 12).join(' · ')}{ph.suburbs.length > 12 ? ` · +${ph.suburbs.length - 12} more` : ''}</div>
-                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: 'var(--text2)' }}>
-                    {ph.actions.map((a, j) => <li key={j} style={{ marginBottom: 2 }}>{a}</li>)}
-                  </ul>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <div style={{ fontWeight: 800, fontSize: 15 }}>{ph.phase} <span style={{ color: 'var(--text3)', fontWeight: 500, fontSize: 13 }}>· {ph.count} suburbs</span></div>
+                    {buildPhase && (
+                      <button onClick={() => createPhaseBriefs(ph, i)} disabled={typeof st === 'string' && st.startsWith('saving')}
+                        style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', border: 'none', background: (st && st.startsWith && st.startsWith('done')) ? '#22c55e22' : '#6366f1', color: (st && st.startsWith && st.startsWith('done')) ? '#22c55e' : '#fff' }}>
+                        <i className={typeof st === 'string' && st.startsWith('saving') ? 'fas fa-spinner fa-spin' : (st && st.startsWith && st.startsWith('done')) ? 'fas fa-check' : 'fas fa-file-circle-plus'}></i>
+                        {typeof st === 'string' && st.startsWith('saving') ? `Creating ${st.split(':')[1]}…`
+                          : (st && st.startsWith && st.startsWith('done')) ? `${st.split(':')[1]} briefs added`
+                          : st === 'none' ? 'All have pages ✓'
+                          : 'Create landing-page briefs'}
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>{goal}</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>
+                    {names.slice(0, 10).join(' · ')}{names.length > 10 ? ` · +${names.length - 10} more` : ''}
+                  </div>
                 </div>
-              ))}
+                );
+              })}
 
               {/* Ranked table */}
               <div className="integration-card">
