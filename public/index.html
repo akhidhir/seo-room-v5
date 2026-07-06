@@ -31875,6 +31875,7 @@
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [sel, setSel] = useState(null);
+      const [openSub, setOpenSub] = useState(null); // "zi-si" of the expanded suburb win-plan
       const [zoom, setZoom] = useState(1); // 1 = full view, up to 4x
       const [pan, setPan] = useState({ x: 0, y: 0 }); // drag offset in viewBox units
       const dragRef = React.useRef(null);
@@ -32060,7 +32061,7 @@
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-location-dot" style={{ marginRight: 8, color: '#4ade80' }} />Suburb coverage & opportunities — by distance</div>
               <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
-                Every suburb the business serves, by real distance from {data?.business_location || 'the business'}. <span style={{ color: '#4ade80', fontWeight: 700 }}>Green = ranked</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>Amber = opportunity</span> (served but not ranking yet — where to grow).
+                Every suburb the business serves, by real distance from {data?.business_location || 'the business'}. <span style={{ color: '#4ade80', fontWeight: 700 }}>Green = ranked</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>Amber = opportunity</span> (served but not ranking yet). <b style={{ color: 'var(--text2)' }}>Click any suburb for a plan to win it.</b>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 {(data.suburb_zones || []).map((z, zi) => (
@@ -32077,15 +32078,36 @@
                       <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>No service suburbs here</div>
                     ) : (
                       <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {z.suburbs.map((s, si) => (
-                          <div key={si} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 6px', borderRadius: 4, opacity: s.ranked ? 1 : 0.85 }}>
+                        {z.suburbs.map((s, si) => {
+                          const key = zi + '-' + si;
+                          const isOpen = openSub === key;
+                          const winning = s.best_position != null && s.best_position <= 3;
+                          return (
+                          <div key={si}>
+                            <div onClick={() => setOpenSub(isOpen ? null : key)} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 6px', borderRadius: 4, opacity: s.ranked ? 1 : 0.85, cursor: 'pointer', background: isOpen ? 'rgba(96,165,250,0.08)' : 'transparent' }}>
                             {s.ranked
                               ? <span style={{ fontSize: 10, fontWeight: 700, color: s.best_position <= 3 ? '#4ade80' : s.best_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 28 }}>#{s.best_position}</span>
                               : <span title="Not ranking here yet — opportunity" style={{ fontSize: 9, fontWeight: 800, color: '#f59e0b', minWidth: 28, textTransform: 'uppercase' }}>NEW</span>}
                             <span style={{ fontWeight: 600, color: s.ranked ? 'var(--text1)' : 'var(--text2)', flex: 1 }}>{s.suburb}</span>
                             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{s.km} km</span>
+                            {!winning && <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ fontSize: 9, color: 'var(--text3)' }} />}
                           </div>
-                        ))}
+                            {isOpen && s.win_steps && (
+                              <div style={{ margin: '4px 0 8px 6px', padding: '10px 12px', background: 'rgba(96,165,250,0.06)', border: '1px solid var(--border)', borderRadius: 8 }}>
+                                <div style={{ fontSize: 11, fontWeight: 800, color: winning ? '#4ade80' : '#60a5fa', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{s.win_stage}</div>
+                                <ol style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                  {s.win_steps.map((st, sti) => <li key={sti} style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.45 }}>{st}</li>)}
+                                </ol>
+                                {!winning && setPage && (
+                                  <button onClick={(e) => { e.stopPropagation(); setPage('smart-map'); }} style={{ marginTop: 10, fontSize: 11, fontWeight: 700, padding: '5px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>
+                                    <i className="fas fa-bolt" style={{ marginRight: 5 }} />Act on it in Smart Map Ranking
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

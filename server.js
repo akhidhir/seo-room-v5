@@ -41746,6 +41746,32 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) addSub(typeof a === 'string' ? a : (a.name || ''));
         for (const s of rankedSub.keys()) addSub(s); // include any ranked suburb even if not in service areas
         const subs = [...allSubs.values()];
+        // Tailored "how to win it" plan per suburb, based on where you currently stand.
+        const svcWord = (project.smart_service || project.industry || 'your service').toString().toLowerCase().trim();
+        const winPlan = (name, pos) => {
+          const S = name.replace(/\b\w/g, c => c.toUpperCase());
+          if (pos != null && pos <= 3) return { stage: 'Winning', steps: [`Hold it: keep the ${S} page fresh, keep earning reviews that mention ${S}, and post to GBP monthly so you don't slip.`] };
+          if (pos == null) return { stage: 'Build from scratch', steps: [
+            `Create a dedicated ${S} landing page — unique local content (not templated): the jobs you do there, local landmarks/roads, an embedded map, and LocalBusiness + Service schema.`,
+            `Add ${S} to your Google Business Profile service areas.`,
+            `Target "${svcWord} ${S.toLowerCase()}" in the page title, H1 and first paragraph.`,
+            `Build 3–5 local citations/directories listing ${S} with identical name, address, phone.`,
+            `Internally link the new page from your homepage and the nearest existing suburb pages.`,
+            `Ask 1–2 recent ${S} customers for a Google review that names the suburb.`,
+          ] };
+          if (pos <= 10) return { stage: `Final push (currently #${pos})`, steps: [
+            `You're #${pos} — small gains win this. Deepen the ${S} page: add FAQs, real job photos, and a stronger call-to-action.`,
+            `Post to GBP about a recent ${S} job with a photo — freshness lifts the local pack.`,
+            `Earn 2–3 new reviews that mention "${S}".`,
+            `Add 2–3 internal links to the ${S} page from your highest-authority pages.`,
+          ] };
+          return { stage: `Strengthen (currently #${pos})`, steps: [
+            `#${pos} means Google knows you but you're off page 1. Expand the ${S} page and target "${svcWord} ${S.toLowerCase()}" in the title, H1 and opening.`,
+            `Build local citations for ${S} and fix any name/address/phone inconsistencies.`,
+            `Publish a GBP post referencing ${S}; add recent photos.`,
+            `Get reviews mentioning ${S}, and link the page internally from related service pages.`,
+          ] };
+        };
         const ZB = [{ lo: 0, hi: 5 }, { lo: 5, hi: 10 }, { lo: 10, hi: 15 }, { lo: 15, hi: 999 }];
         suburbZones = ZB.map(z => {
           const inZone = subs.filter(s => s.km > z.lo && s.km <= z.hi).sort((a, b) => a.km - b.km);
@@ -41753,7 +41779,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
             lo: z.lo, hi: z.hi,
             ranked_count: inZone.filter(s => s.ranked).length,
             opportunity_count: inZone.filter(s => !s.ranked).length,
-            suburbs: inZone.map(s => ({ suburb: s.suburb.replace(/\b\w/g, c => c.toUpperCase()), km: s.km, ranked: s.ranked, best_position: s.best_position })),
+            suburbs: inZone.map(s => { const S = s.suburb.replace(/\b\w/g, c => c.toUpperCase()); const wp = winPlan(s.suburb, s.best_position); return { suburb: S, km: s.km, ranked: s.ranked, best_position: s.best_position, win_stage: wp.stage, win_steps: wp.steps }; }),
           };
         });
       }
