@@ -41352,39 +41352,83 @@ app.get('/api/portfolio/summary', async (req, res) => {
         if (sec) { const d = typeof sec.audit_data === 'string' ? JSON.parse(sec.audit_data) : sec.audit_data; snap.security = { score: d.summary?.score ?? null, critical: d.summary?.critical ?? 0, failed: d.summary?.fail ?? 0, updated_at: sec.completed_at }; }
       } catch (e) {}
 
-      // Ranking snapshot (tracked keywords + top positions)
+      // Ranking snapshot + STRATEGIC signals: visibility, striking-distance opportunities, momentum.
       try {
         const rk = (await pool.query(`
           SELECT COUNT(*)::int AS tracked,
                  COUNT(*) FILTER (WHERE rt.serp_position BETWEEN 1 AND 3)::int AS top3,
-                 COUNT(*) FILTER (WHERE rt.serp_position BETWEEN 1 AND 10)::int AS top10
+                 COUNT(*) FILTER (WHERE rt.serp_position BETWEEN 1 AND 10)::int AS top10,
+                 COUNT(*) FILTER (WHERE rt.serp_position BETWEEN 11 AND 20)::int AS striking
           FROM rank_keywords k
-          LEFT JOIN LATERAL (SELECT serp_position FROM rank_tracking WHERE project_id=k.project_id AND LOWER(keyword)=LOWER(k.keyword) ORDER BY checked_at DESC NULLS LAST LIMIT 1) rt ON true
+          LEFT JOIN LATERAL (SELECT serp_position FROM rank_tracking WHERE project_id=k.project_id AND LOWER(keyword)=LOWER(k.keyword) AND serp_position IS NOT NULL ORDER BY checked_at DESC LIMIT 1) rt ON true
           WHERE k.project_id=$1`, [p.id])).rows[0];
-        snap.rankings = { tracked: rk.tracked || 0, top3: rk.top3 || 0, top10: rk.top10 || 0 };
+        const tracked = rk.tracked || 0;
+        // MOMENTUM: average current position vs ~30 days ago (lower = better, so a NEGATIVE delta = improving)
+        const mom = (await pool.query(`
+          WITH latest AS (SELECT DISTINCT ON (LOWER(keyword)) LOWER(keyword) kw, serp_position pos FROM rank_tracking WHERE project_id=$1 AND serp_position IS NOT NULL ORDER BY LOWER(keyword), checked_at DESC),
+               past AS (SELECT DISTINCT ON (LOWER(keyword)) LOWER(keyword) kw, serp_position pos FROM rank_tracking WHERE project_id=$1 AND serp_position IS NOT NULL AND checked_at <= NOW() - INTERVAL '21 days' ORDER BY LOWER(keyword), checked_at DESC)
+          SELECT ROUND(AVG(latest.pos - past.pos)::numeric, 1) AS delta, COUNT(*)::int AS n
+          FROM latest JOIN past ON latest.kw = past.kw`, [p.id])).rows[0];
+        const momDelta = mom.n >= 3 ? parseFloat(mom.delta) : null; // need ≥3 comparable keywords
+        snap.rankings = {
+          tracked, top3: rk.top3 || 0, top10: rk.top10 || 0, striking: rk.striking || 0,
+          visibility: tracked ? Math.round(((rk.top10 || 0) / tracked) * 100) : null,
+          momentum: momDelta, momentum_n: mom.n || 0, // negative = improving
+        };
       } catch (e) {}
 
       // Open findings count
       try { snap.open_issues = (await pool.query(`SELECT COUNT(*)::int AS n FROM audit_findings WHERE project_id=$1 AND status NOT IN ('fixed','rejected','dismissed')`, [p.id])).rows[0]?.n || 0; } catch (e) {}
 
-      // NEXT ACTION — the single most impactful move, chosen by rule from the snapshot.
-      const a = [];
-      if (snap.security && (snap.security.critical > 0)) a.push({ pri: 0, text: `Fix ${snap.security.critical} critical security issue(s)`, page: 'security-audit' });
-      if (snap.seo && snap.seo.red > 0) a.push({ pri: 1, text: `${snap.seo.red} page(s) failing on-page SEO — fix metas/content`, page: 'onpage-audit' });
-      if (snap.rankings && snap.rankings.tracked === 0) a.push({ pri: 2, text: 'No rankings tracked yet — add keywords & run a sync', page: 'serp-rankings' });
-      if (snap.open_issues > 5) a.push({ pri: 3, text: `${snap.open_issues} open action items in Control Centre`, page: 'control-centre' });
-      if (snap.seo && snap.seo.orange > snap.seo.green) a.push({ pri: 4, text: `${snap.seo.orange} page(s) need on-page improvement`, page: 'onpage-audit' });
-      if (!a.length) a.push({ pri: 9, text: 'Healthy — run a fresh audit to find new opportunities', page: 'website-audit' });
-      a.sort((x, y) => x.pri - y.pri);
-      snap.next_action = a[0];
+      // DISCOVERED REACH — keywords the client ALREADY ranks for beyond the tracked set (SERP + Maps
+      // discovery). This is the true footprint + growth headroom, otherwise invisible to the summary.
+      try {
+        const dc = (await pool.query('SELECT keywords, maps_keywords FROM discovery_cache WHERE project_id=$1', [p.id])).rows[0];
+        const serpD = typeof dc?.keywords === 'string' ? JSON.parse(dc.keywords) : (dc?.keywords || []);
+        const mapsD = typeof dc?.maps_keywords === 'string' ? JSON.parse(dc.maps_keywords) : (dc?.maps_keywords || []);
+        const allD = [...serpD, ...mapsD];
+        const total = allD.length;
+        const page1 = allD.filter(k => { const p = k.position ?? k.maps_position; return p != null && p <= 10; }).length;
+        const striking = allD.filter(k => { const p = k.position ?? k.maps_position; return p != null && p > 10 && p <= 20; }).length;
+        if (total > 0) snap.discovered = { total, page1, striking };
+      } catch (e) {}
+
+      // ── STRATEGIC STATUS — the account-manager read, not the technician's. ──
+      const r = snap.rankings || {};
+      const mom = r.momentum; // negative = improving
+      let status, statusColor, headline;
+      if (r.tracked === 0) { status = 'Not started'; statusColor = 'gray'; headline = 'No rankings tracked yet — set up keyword tracking to start measuring performance.'; }
+      else if (mom != null && mom <= -1.5) { status = 'Growing'; statusColor = 'green'; headline = `Momentum is positive — rankings improved ~${Math.abs(mom)} positions on average in the last 3 weeks. Keep the current work going.`; }
+      else if (mom != null && mom >= 1.5) { status = 'At risk'; statusColor = 'red'; headline = `Rankings slipped ~${mom} positions on average — this account needs attention before the client notices.`; }
+      else if (r.visibility != null && r.visibility >= 50) { status = 'Strong'; statusColor = 'green'; headline = `${r.visibility}% of tracked keywords are on page one — a solid position to defend and expand.`; }
+      else if (r.striking >= 3 || (snap.discovered?.striking || 0) >= 5) { status = 'Opportunity'; statusColor = 'amber'; const totalStrike = (r.striking || 0) + (snap.discovered?.striking || 0); headline = `${totalStrike} keywords sit at positions 11–20 (page two) — one push moves them to page one. Best growth lever right now.`; }
+      else if (snap.discovered && snap.discovered.total > (r.tracked || 0) + 20) { status = 'Opportunity'; statusColor = 'amber'; headline = `Ranks for ${snap.discovered.total} keywords in discovery but only ${r.tracked} are tracked — formalise the winners and there's real headroom.`; }
+      else { status = 'Stable'; statusColor = 'blue'; headline = `Holding steady. Visibility ${r.visibility ?? '—'}%${snap.discovered ? ` · ${snap.discovered.total} keywords found in discovery` : ''} — look for new keywords/suburbs to open the next growth front.`; }
+      snap.status = status; snap.status_color = statusColor; snap.headline = headline;
+
+      // STRATEGIC FOCUS — the one move that grows the account this month (business framing, ranked).
+      const foc = [];
+      if (mom != null && mom >= 1.5) foc.push({ pri: 0, text: `Reverse the decline: review what changed and rebuild the pages that dropped.`, page: 'serp-rankings' });
+      if (r.striking >= 3) foc.push({ pri: 1, text: `Push ${r.striking} page-two keyword(s) onto page one — fastest visible win for the client.`, page: 'serp-rankings' });
+      if ((snap.discovered?.striking || 0) >= 5) foc.push({ pri: 1.2, text: `${snap.discovered.striking} discovered keyword(s) at positions 11–20 — track them and push to page one.`, page: 'discover-local' });
+      if (snap.discovered && snap.discovered.total > (r.tracked || 0) + 20) foc.push({ pri: 1.8, text: `Ranks for ${snap.discovered.total} keywords but tracks only ${r.tracked} — add the best discovered winners to tracking.`, page: 'discover-local' });
+      if (snap.security && snap.security.critical > 0) foc.push({ pri: 1.5, text: `Close ${snap.security.critical} critical security gap(s) before they become an incident.`, page: 'security-audit' });
+      if (r.tracked === 0) foc.push({ pri: 2, text: `Set up keyword & Maps tracking so this account can be measured and reported.`, page: 'serp-rankings' });
+      if (r.visibility != null && r.visibility >= 50) foc.push({ pri: 3, text: `Expand: find new keywords/suburbs — the core is already winning.`, page: 'discover-local' });
+      if (snap.seo && snap.seo.red > 0) foc.push({ pri: 4, text: `${snap.seo.red} page(s) failing on-page basics — quick foundational fix.`, page: 'onpage-audit' });
+      if (!foc.length) foc.push({ pri: 9, text: `Healthy — run a fresh audit and discovery to find the next growth opportunity.`, page: 'discover-local' });
+      foc.sort((x, y) => x.pri - y.pri);
+      snap.focus = foc[0];
+      snap.next_action = foc[0]; // keep the field name for the existing link handler
 
       // Overall health = blend of SEO + security (whatever exists)
       const parts = [snap.seo?.score, snap.security?.score].filter(v => v != null);
       snap.health = parts.length ? Math.round(parts.reduce((s, v) => s + v, 0) / parts.length) : null;
       out.push(snap);
     }
-    // Sort worst-health first so the projects needing attention are at the top
-    out.sort((x, y) => (x.health ?? 101) - (y.health ?? 101));
+    // Sort by strategic urgency: At risk first, then Opportunity, then the rest
+    const statusRank = { 'At risk': 0, 'Not started': 1, 'Opportunity': 2, 'Stable': 3, 'Strong': 4, 'Growing': 5 };
+    out.sort((x, y) => (statusRank[x.status] ?? 9) - (statusRank[y.status] ?? 9) || (x.health ?? 101) - (y.health ?? 101));
     res.json({ ok: true, projects: out, generated_at: new Date().toISOString() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

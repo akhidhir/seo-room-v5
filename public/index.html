@@ -32087,48 +32087,67 @@
           ) : !projects.length ? (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>No projects yet.</div>
           ) : (<>
-            {/* Portfolio KPI strip */}
-            <div style={{ display: 'flex', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 22px', flex: 1, minWidth: 150 }}>
-                <div style={{ fontSize: 30, fontWeight: 800, color: hColor(avgHealth) }}>{avgHealth ?? '—'}{avgHealth != null && <span style={{ fontSize: 16 }}>/100</span>}</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Avg portfolio health</div>
+            {/* Portfolio KPI strip — strategic account health */}
+            {(() => {
+              const atRisk = projects.filter(p => p.status === 'At risk').length;
+              const growing = projects.filter(p => p.status === 'Growing' || p.status === 'Strong').length;
+              const opportunity = projects.filter(p => p.status === 'Opportunity').length;
+              const kpi = (val, label, color, bg) => <div style={{ background: bg || 'var(--card)', border: '1px solid ' + (bg ? color + '55' : 'var(--border)'), borderRadius: 12, padding: '16px 22px', flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color }}>{val}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
+              </div>;
+              return (
+              <div style={{ display: 'flex', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
+                {kpi(atRisk, 'Accounts at risk', atRisk ? '#ef4444' : '#22c55e', atRisk ? 'rgba(239,68,68,0.08)' : null)}
+                {kpi(opportunity, 'Growth opportunities', '#f59e0b', opportunity ? 'rgba(245,158,11,0.06)' : null)}
+                {kpi(growing, 'Growing / strong', '#22c55e', null)}
+                {kpi((avgHealth ?? '—'), 'Avg portfolio health', hColor(avgHealth), null)}
               </div>
-              <div style={{ background: totalCritical ? 'rgba(239,68,68,0.08)' : 'var(--card)', border: '1px solid ' + (totalCritical ? 'rgba(239,68,68,0.3)' : 'var(--border)'), borderRadius: 12, padding: '16px 22px', flex: 1, minWidth: 150 }}>
-                <div style={{ fontSize: 30, fontWeight: 800, color: totalCritical ? '#ef4444' : '#22c55e' }}>{totalCritical}</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Critical security issues</div>
-              </div>
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 22px', flex: 1, minWidth: 150 }}>
-                <div style={{ fontSize: 30, fontWeight: 800, color: '#f59e0b' }}>{totalOpen}</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 1 }}>Open action items</div>
-              </div>
-            </div>
-            {/* Project rows */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {projects.map((p, i) => (
-                <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
-                  {/* Health ring */}
-                  <div style={{ width: 58, height: 58, borderRadius: '50%', border: `4px solid ${hColor(p.health)}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: hColor(p.health), flexShrink: 0 }}>{p.health ?? '—'}</div>
-                  {/* Name + metrics */}
-                  <div style={{ flex: '1 1 260px', minWidth: 200 }}>
-                    <div style={{ fontWeight: 800, fontSize: 16, cursor: 'pointer' }} onClick={() => goTo(p)}>{p.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>{p.domain}</div>
-                    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12 }}>
-                      {p.seo && <span title="On-page SEO">📄 SEO {p.seo.score}% <span style={{ color: '#ef4444' }}>{p.seo.red}r</span>/<span style={{ color: '#f59e0b' }}>{p.seo.orange}o</span>/<span style={{ color: '#22c55e' }}>{p.seo.green}g</span></span>}
-                      {p.security && <span title="Security score">🔒 Sec {p.security.score}%{p.security.critical > 0 && <span style={{ color: '#ef4444', fontWeight: 700 }}> · {p.security.critical} crit</span>}</span>}
-                      {p.rankings && <span title="Keyword rankings">📈 {p.rankings.top3} top-3 · {p.rankings.top10} top-10 · {p.rankings.tracked} tracked</span>}
-                      {p.open_issues > 0 && <span style={{ color: '#f59e0b' }}>⚑ {p.open_issues} open</span>}
+              );
+            })()}
+            {/* Project rows — strategic account view */}
+            {(() => {
+              const stColor = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444', blue: '#3b82f6', gray: '#64748b' };
+              const momArrow = (m) => m == null ? null : m <= -0.5 ? { t: `▲ improving ${Math.abs(m)}`, c: '#22c55e' } : m >= 0.5 ? { t: `▼ slipping ${m}`, c: '#ef4444' } : { t: '● steady', c: '#94a3b8' };
+              return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {projects.map((p, i) => {
+                  const sc = stColor[p.status_color] || '#64748b';
+                  const mom = momArrow(p.rankings?.momentum);
+                  return (
+                  <div key={i} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderLeft: `4px solid ${sc}`, borderRadius: 12, padding: 18 }}>
+                    {/* Header row: name + status + momentum */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+                      <span style={{ fontWeight: 800, fontSize: 17, cursor: 'pointer' }} onClick={() => goTo(p)}>{p.name}</span>
+                      <span style={{ fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 12, background: sc + '22', color: sc, textTransform: 'uppercase', letterSpacing: 0.5 }}>{p.status}</span>
+                      {mom && <span style={{ fontSize: 12, fontWeight: 700, color: mom.c }}>{mom.t}</span>}
+                      <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{p.domain}</span>
                     </div>
+                    {/* Strategic headline — the account story in plain English */}
+                    <div style={{ fontSize: 13.5, color: 'var(--text1)', lineHeight: 1.5, marginBottom: 12 }}>{p.headline}</div>
+                    {/* Strategic numbers that matter to a client conversation */}
+                    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 14 }}>
+                      {p.rankings && p.rankings.visibility != null && <div><div style={{ fontSize: 20, fontWeight: 800, color: p.rankings.visibility >= 50 ? '#22c55e' : p.rankings.visibility >= 25 ? '#f59e0b' : '#ef4444' }}>{p.rankings.visibility}%</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Page-1 visibility</div></div>}
+                      {p.rankings && <div><div style={{ fontSize: 20, fontWeight: 800, color: '#22c55e' }}>{p.rankings.top3}</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Top-3 rankings</div></div>}
+                      {p.rankings && p.rankings.striking > 0 && <div><div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>{p.rankings.striking}</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Striking distance (11–20)</div></div>}
+                      {p.rankings && <div><div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text2)' }}>{p.rankings.tracked}</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Keywords tracked</div></div>}
+                      {p.discovered && <div title="Keywords the site already ranks for, found in discovery but not formally tracked"><div style={{ fontSize: 20, fontWeight: 800, color: '#2dd4bf' }}>{p.discovered.total}</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Discovered reach</div></div>}
+                      <div><div style={{ fontSize: 20, fontWeight: 800, color: hColor(p.health) }}>{p.health ?? '—'}</div><div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase' }}>Health score</div></div>
+                    </div>
+                    {/* Strategic focus this month */}
+                    {p.focus && (
+                      <div onClick={() => goTo(p, p.focus.page)} style={{ background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 8, padding: '10px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 0.5, whiteSpace: 'nowrap' }}><i className="fas fa-bullseye" style={{ marginRight: 5 }} />Focus this month</span>
+                        <span style={{ fontSize: 13, color: 'var(--text1)', lineHeight: 1.4 }}>{p.focus.text}</span>
+                        <i className="fas fa-arrow-right" style={{ marginLeft: 'auto', color: '#a78bfa', fontSize: 12 }} />
+                      </div>
+                    )}
                   </div>
-                  {/* Next action */}
-                  {p.next_action && (
-                    <div onClick={() => goTo(p, p.next_action.page)} style={{ flex: '1 1 260px', minWidth: 220, background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.3)', borderRadius: 8, padding: '10px 14px', cursor: 'pointer' }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 800, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}><i className="fas fa-arrow-right" style={{ marginRight: 5 }} />Next action</div>
-                      <div style={{ fontSize: 13, color: 'var(--text1)', lineHeight: 1.4 }}>{p.next_action.text}</div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                  );
+                })}
+              </div>
+              );
+            })()}
           </>)}
         </div>
       );
