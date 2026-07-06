@@ -428,11 +428,13 @@ async function initDb() {
         engagement_time DOUBLE PRECISION DEFAULT 0,
         error_clicks INTEGER DEFAULT 0,
         script_errors INTEGER DEFAULT 0,
+        span_days INTEGER DEFAULT 1,
         fetched_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(project_id, metric_date, page_url)
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_clarity_daily_pd ON clarity_daily(project_id, metric_date)`).catch(() => {});
+    await client.query(`ALTER TABLE clarity_daily ADD COLUMN IF NOT EXISTS span_days INTEGER DEFAULT 1`).catch(() => {});
 
     // GSC keywords (position data from Google Search Console)
     await client.query(`
@@ -17920,9 +17922,10 @@ function buildClarityInsights(pages) {
   out.sort((a, b) => (b.impact || 0) - (a.impact || 0));
   return out.slice(0, 6);
 }
-// Call Clarity's export API for ONE day and parse into per-page rows. Throws {status, message} on API errors.
-async function fetchClarityDay(clarity_api_token) {
-  const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?numOfDays=1&dimension1=URL`;
+// Call Clarity's export API for N days (1-3, Clarity's max) and parse into per-page rows. Throws on API errors.
+async function fetchClarityDay(clarity_api_token, numDays = 1) {
+  const n = Math.min(3, Math.max(1, numDays));
+  const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?numOfDays=${n}&dimension1=URL`;
   const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${clarity_api_token}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(20000) });
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '');
@@ -17954,16 +17957,37 @@ async function fetchClarityDay(clarity_api_token) {
   }
   return Object.values(metricMap);
 }
-// Store today's snapshot, then rebuild the trailing-30-day aggregate + scores. Returns { pages, window }.
-async function accumulateClarity(projectId, clarity_api_token) {
-  const dayPages = await fetchClarityDay(clarity_api_token);
+// Accumulate Clarity data, then rebuild the trailing-30-day aggregate. Returns { pages, window }.
+// - First time (no history): seed the FULL 3 days Clarity allows, stored as one snapshot spanning 3 days.
+// - Otherwise: add a 1-day snapshot for today — unless the data already covers today (then just rebuild,
+//   saving the 10-calls/day quota). Windows never overlap, so the trailing-30 sum is exact.
+async function accumulateClarity(projectId, clarity_api_token, opts = {}) {
+  const cov = (await pool.query(
+    `SELECT MAX(metric_date + (COALESCE(span_days,1) - 1)) AS through FROM clarity_daily WHERE project_id=$1`, [projectId])).rows[0];
+  const coveredThrough = cov?.through ? new Date(cov.through) : null;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const coveredThroughStr = coveredThrough ? new Date(coveredThrough).toISOString().slice(0, 10) : null;
+
+  let span, snapshotDate, dayPages;
+  if (!coveredThroughStr) {
+    // Bootstrap: pull the max 3-day window and store it dated at its START (today-2), spanning 3 days.
+    span = 3; snapshotDate = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+    dayPages = await fetchClarityDay(clarity_api_token, 3);
+  } else if (coveredThroughStr >= todayStr && !opts.force) {
+    // Already have today — no API call, just recompute the aggregate.
+    return rebuildClarityAggregate(projectId);
+  } else {
+    span = 1; snapshotDate = todayStr;
+    dayPages = await fetchClarityDay(clarity_api_token, 1);
+  }
+
   for (const p of dayPages) {
     await pool.query(
-      `INSERT INTO clarity_daily (project_id, metric_date, page_url, page_title, sessions, dead_clicks, rage_clicks, excessive_scrolls, quick_backs, scroll_depth, engagement_time, error_clicks, script_errors, fetched_at)
-       VALUES ($1, CURRENT_DATE, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+      `INSERT INTO clarity_daily (project_id, metric_date, page_url, page_title, sessions, dead_clicks, rage_clicks, excessive_scrolls, quick_backs, scroll_depth, engagement_time, error_clicks, script_errors, span_days, fetched_at)
+       VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
        ON CONFLICT (project_id, metric_date, page_url)
-       DO UPDATE SET page_title=COALESCE($3, clarity_daily.page_title), sessions=$4, dead_clicks=$5, rage_clicks=$6, excessive_scrolls=$7, quick_backs=$8, scroll_depth=$9, engagement_time=$10, error_clicks=$11, script_errors=$12, fetched_at=NOW()`,
-      [projectId, p.page_url, p.page_title || null, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0]
+       DO UPDATE SET page_title=COALESCE($4, clarity_daily.page_title), sessions=$5, dead_clicks=$6, rage_clicks=$7, excessive_scrolls=$8, quick_backs=$9, scroll_depth=$10, engagement_time=$11, error_clicks=$12, script_errors=$13, span_days=$14, fetched_at=NOW()`,
+      [projectId, snapshotDate, p.page_url, p.page_title || null, p.sessions || 0, p.dead_clicks || 0, p.rage_clicks || 0, p.excessive_scrolls || 0, p.quick_backs || 0, p.scroll_depth || 0, p.engagement_time || 0, p.error_clicks || 0, p.script_errors || 0, span]
     );
   }
   return rebuildClarityAggregate(projectId);
@@ -18001,8 +18025,9 @@ async function rebuildClarityAggregate(projectId) {
     );
   }
   const w = (await pool.query(
-    `SELECT COUNT(DISTINCT metric_date)::int AS days, MIN(metric_date) AS start, MAX(metric_date) AS "end"
-       FROM clarity_daily WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days'`, [projectId])).rows[0];
+    `SELECT LEAST(30, COALESCE(SUM(span),0))::int AS days, MIN(d) AS start, MAX(d + (span-1)) AS "end"
+       FROM (SELECT metric_date d, MAX(COALESCE(span_days,1)) span FROM clarity_daily
+             WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY metric_date) t`, [projectId])).rows[0];
   return { pages, window: w };
 }
 
@@ -18021,8 +18046,9 @@ app.get('/api/projects/:projectId/clarity-metrics', async (req, res) => {
     );
     const fetchedAt = metrics.rows.length ? metrics.rows[0].fetched_at : null;
     const w = (await pool.query(
-      `SELECT COUNT(DISTINCT metric_date)::int AS days, MIN(metric_date) AS start, MAX(metric_date) AS "end"
-         FROM clarity_daily WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days'`, [projectId])).rows[0];
+      `SELECT LEAST(30, COALESCE(SUM(span),0))::int AS days, MIN(d) AS start, MAX(d + (span-1)) AS "end"
+         FROM (SELECT metric_date d, MAX(COALESCE(span_days,1)) span FROM clarity_daily
+               WHERE project_id=$1 AND metric_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY metric_date) t`, [projectId])).rows[0];
     res.json({
       configured, metrics: metrics.rows, fetched_at: fetchedAt,
       overall_score: clarityOverall(metrics.rows),
@@ -21438,11 +21464,9 @@ async function runDailyClarityAccumulate() {
   const projs = (await pool.query(`SELECT id, clarity_api_token FROM projects WHERE clarity_project_id IS NOT NULL AND clarity_api_token IS NOT NULL`)).rows;
   for (const p of projs) {
     try {
-      // Skip if today's snapshot already exists (avoids burning the 10-calls/day quota on restarts).
-      const has = (await pool.query(`SELECT 1 FROM clarity_daily WHERE project_id=$1 AND metric_date=CURRENT_DATE LIMIT 1`, [p.id])).rows.length;
-      if (has) { continue; }
+      // accumulateClarity seeds 3 days on first run, adds 1 day otherwise, and makes NO API call
+      // when the window already covers today — so this is quota-safe on restarts.
       await accumulateClarity(p.id, p.clarity_api_token);
-      console.log(`[clarity] daily snapshot stored for project ${p.id}`);
     } catch (e) { console.log(`[clarity] daily snapshot skipped for project ${p.id}: ${e.message}`); }
   }
 }

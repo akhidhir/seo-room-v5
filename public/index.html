@@ -14670,9 +14670,9 @@
         // Window + fetched info
         configured && fetchedAt && React.createElement('div', { style: { fontSize: 12, color: 'var(--text3)', marginBottom: 16 } },
           React.createElement('i', { className: 'fas fa-calendar-alt', style: { marginRight: 6 } }),
-          '30-day rolling window · ', daysCollected, daysCollected === 1 ? ' day' : ' days', ' collected so far',
-          daysCollected < 30 ? ' (fills to 30 automatically)' : '',
-          ' · updated ', new Date(fetchedAt).toLocaleString(), ' · ', metrics.length, ' pages'),
+          '30-day rolling window · ', daysCollected, daysCollected === 1 ? ' day' : ' days', ' collected',
+          daysCollected < 30 ? React.createElement('span', { title: 'Clarity\'s API only exposes the last 3 days of history — it can\'t backfill older data. We seed those 3 days now and add a day each day, building to a full 30.' }, ' (Clarity gives 3 days of history; builds to 30 automatically) ') : ' ',
+          '· updated ', new Date(fetchedAt).toLocaleString(), ' · ', metrics.length, ' pages'),
 
         // ===== PRIORITY INSIGHTS (deterministic, always-on: what to fix and why) =====
         configured && insights && insights.length > 0 && React.createElement('div', { className: 'card', style: { padding: 18, marginBottom: 16, borderLeft: '3px solid #6366f1' } },
