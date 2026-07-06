@@ -8761,6 +8761,20 @@ const AU_STATES = { nsw:'NSW', vic:'VIC', qld:'QLD', wa:'WA', sa:'SA', tas:'TAS'
   'south australia':'SA', 'tasmania':'TAS', 'northern territory':'NT', 'australian capital territory':'ACT' };
 
 function normSuburbKey(s) { return (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+// Does a GBP profile's business name belong to this project? Used to block cross-contamination
+// (e.g. a computer-repair profile landing on a plumbing project). Lenient enough for legitimate
+// variants ("Houseworks Plumbing" vs "Houseworks Plumbing & Gas") but rejects a different business.
+function gbpNameMatches(projectName, profileName) {
+  if (!profileName) return true;      // nothing to compare — don't block
+  if (!projectName) return true;
+  const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const GEN = new Set(['the', 'and', 'pty', 'ltd', 'co', 'group', 'services', 'service', 'plumbing', 'plumber', 'gas', 'perth', 'wa', 'nsw', 'qld', 'vic', 'sa', 'nt', 'act', 'au', 'australia', 'company', 'solutions', 'repairs', 'repair']);
+  const tokens = s => norm(s).split(' ').filter(w => w.length >= 4 && !GEN.has(w));
+  const projT = tokens(projectName);
+  const profT = new Set(tokens(profileName));
+  const nb = norm(projectName), np = norm(profileName);
+  return projT.length === 0 || projT.some(w => profT.has(w)) || nb.includes(np) || np.includes(nb);
+}
 // Name variants so a real page isn't missed over spelling: Mount↔Mt, Saint↔St, apostrophes, and↔&,
 // plus a no-space form to catch slugs like "mountsamson". Returns unique normalized phrases.
 function suburbVariants(sk) {
@@ -15135,18 +15149,9 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     // ── IDENTITY GUARD (100% accuracy) ── Never write a GBP profile onto a project unless the profile's
     // business name matches the project. This stops cross-contamination (e.g. Gold PC's "Computer repair
     // service" data landing on Houseworks Plumbing) that would otherwise generate false findings.
-    if (profile && profile.title && businessName) {
-      const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-      const GEN = new Set(['the', 'and', 'pty', 'ltd', 'co', 'group', 'services', 'service', 'plumbing', 'plumber', 'gas', 'perth', 'wa', 'nsw', 'qld', 'vic', 'sa', 'au', 'australia', 'company', 'the']);
-      const tokens = s => norm(s).split(' ').filter(w => w.length >= 4 && !GEN.has(w));
-      const projT = tokens(businessName);
-      const profT = new Set(tokens(profile.title));
-      const nb = norm(businessName), np = norm(profile.title);
-      const matches = projT.length === 0 || projT.some(w => profT.has(w)) || nb.includes(np) || np.includes(nb);
-      if (!matches) {
-        console.warn(`[rc-sync] REJECTED: profile "${profile.title}" does not match project "${businessName}" (project ${projectId}) — refusing to prevent cross-contamination.`);
-        return res.status(409).json({ error: `The GBP profile "${profile.title}" doesn't match this project ("${businessName}"). Sync refused to avoid mixing businesses — check the GBP location / Place ID in Project Settings.`, mismatch: true, profile_title: profile.title, project_name: businessName });
-      }
+    if (profile && profile.title && !gbpNameMatches(businessName, profile.title)) {
+      console.warn(`[rc-sync] REJECTED: profile "${profile.title}" does not match project "${businessName}" (project ${projectId}) — refusing to prevent cross-contamination.`);
+      return res.status(409).json({ error: `The GBP profile "${profile.title}" doesn't match this project ("${businessName}"). Sync refused to avoid mixing businesses — check the GBP location / Place ID in Project Settings.`, mismatch: true, profile_title: profile.title, project_name: businessName });
     }
 
     console.log(`[rc-sync] Syncing Rating Captain data for project ${projectId} (${businessName})`);
@@ -34365,6 +34370,17 @@ app.post('/api/projects/:projectId/audits/gbp/run', async (req, res) => {
           console.log(`[gbp-audit] Website check: phone=${gbpData.websiteCheck.hasPhone}, address=${gbpData.websiteCheck.hasAddress}, schema=${gbpData.websiteCheck.hasLocalBusinessSchema || false}`);
         }
       } catch (e) { console.log(`[gbp-audit] Website scrape error: ${e.message}`); }
+    }
+
+    // ── IDENTITY GUARD (100% accuracy) ── Before generating ANY finding, confirm the profile we gathered
+    // actually belongs to this business. If a wrong profile slipped in from any source, abort with a clear
+    // mismatch result instead of emitting false findings (e.g. "change your category to Plumber").
+    if (gbpData.profile && gbpData.profile.name && !gbpNameMatches(businessName, gbpData.profile.name)) {
+      console.warn(`[gbp-audit] MISMATCH: gathered profile "${gbpData.profile.name}" ≠ project "${businessName}" (project ${projectId}) — aborting to avoid false findings.`);
+      await pool.query(`UPDATE audits SET status='completed', completed_at=NOW(), audit_data=$2 WHERE id=$1`,
+        [auditId, JSON.stringify({ mismatch: true, profile_name: gbpData.profile.name, business_name: businessName, source: gbpData.source })]).catch(() => {});
+      return res.json({ ok: false, mismatch: true, findings: [], profile_name: gbpData.profile.name, business_name: businessName,
+        error: `The GBP profile found ("${gbpData.profile.name}") doesn't match this project ("${businessName}"). No findings were generated — verify the GBP location / Place ID in Project Settings before trusting GBP data.` });
     }
 
     // 2. Get maps ranking data + identify competitors
