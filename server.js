@@ -35607,7 +35607,14 @@ app.post('/api/projects/:projectId/audits/gbp-external/run', async (req, res) =>
         }
         const topCompetitors = Object.values(compMap).sort((a, b) => b.appearances - a.appearances).slice(0, 5);
         if (topCompetitors.length) serpProfile.mapsCompetitors = topCompetitors;
-        console.log(`[gbp-external] RC cache profile: ${serpProfile.title}, ${serpProfile.reviews} reviews, ${serpProfile.categories.length} categories, ${topCompetitors.length} competitors`);
+        // IDENTITY GUARD: never feed a mismatched business profile to the AI — a cross-contaminated cache
+        // is what produces false findings like "change your category from Computer repair service".
+        if (serpProfile.title && !gbpNameMatches(businessName, serpProfile.title)) {
+          console.warn(`[gbp-external] Cached profile "${serpProfile.title}" ≠ project "${businessName}" — discarding to avoid false findings.`);
+          serpProfile = null;
+        } else {
+          console.log(`[gbp-external] RC cache profile: ${serpProfile.title}, ${serpProfile.reviews} reviews, ${serpProfile.categories.length} categories, ${topCompetitors.length} competitors`);
+        }
       } else {
         console.log(`[gbp-external] No RC cache found — run "Sync from RC" first`);
       }
@@ -35636,7 +35643,13 @@ Service Areas: ${JSON.stringify(serviceAreas)}
 Known Competitors: ${JSON.stringify(competitors)}
 
 ===== CURRENT GBP DATA (from our APIs) =====
-${serpProfile ? JSON.stringify(serpProfile, null, 1) : 'No profile data available — please search Google Maps for this business.'}
+${serpProfile ? JSON.stringify(serpProfile, null, 1) : 'No profile data available for this business.'}
+
+===== CRITICAL ACCURACY RULES (must follow exactly) =====
+- The GBP DATA above is the VERIFIED profile for "${businessName}"${serpProfile?.type ? `, whose current primary category is "${typeof serpProfile.type === 'string' ? serpProfile.type : (serpProfile.type.displayName || serpProfile.type)}"` : ''}. Treat it as ground truth.
+- NEVER claim the current category, name, or any field is something other than what is shown above. Do NOT invent a "current" value. In particular, do NOT recommend changing the primary category unless the category SHOWN above is genuinely wrong for a ${industry || 'local service'} business.
+- Do NOT audit or pull data for any business other than "${businessName}". If a web search returns a different business, ignore it.
+- If no profile data is provided above, state that the GBP data is unavailable — do NOT fabricate profile details or category recommendations.
 
 ===== GRID SCAN DATA (Maps ranking positions across suburbs) =====
 ${gridData.length > 0 ? gridData.map(g => `Keyword: "${g.keyword}" | Grid: ${g.grid_size}x${g.grid_size} | ARP: ${g.arp || 'N/A'} | ATRP: ${g.atrp || 'N/A'} | SOLV: ${g.solv || 'N/A'}% | Found: ${g.found_in}/${g.data_points} | Top competitors: ${JSON.stringify((g.competitors?.top || []).slice(0, 3).map(c => ({ name: c.name, rating: c.rating, reviews: c.reviews, dominance: c.dominance })))}`).join('\n') : 'No grid scan data yet.'}
