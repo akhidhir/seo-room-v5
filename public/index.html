@@ -31804,6 +31804,7 @@
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [sel, setSel] = useState(null);
+      const [zoom, setZoom] = useState(1); // 1 = full view, up to 4x into the centre
       useEffect(() => {
         if (!project?.id) return;
         setLoading(true);
@@ -31817,16 +31818,19 @@
       // Dedupe identical keywords (discovery returns many "car key replacement" variants).
       const seenKw = new Set();
       const deduped = (data?.orbits || []).filter(o => { const k = (o.keyword || '').toLowerCase().trim(); if (seenKw.has(k)) return false; seenKw.add(k); return true; });
+      // Do the un-scanned positions actually VARY? (Often every keyword is #1 from a pin-standpoint
+      // scan — then position tells us nothing and packing by it just piles everything on one ring.)
+      const unscanned = deduped.filter(o => o.reach_km == null);
+      const posVals = new Set(unscanned.map(o => o.maps_position || o.best_position || 20));
+      const positionsVary = posVals.size > 3;
+      const N = Math.max(deduped.length, 1);
       const orbs = deduped.map((o, i) => {
-        // Distance from centre = how strong the keyword is:
-        //   • grid-scanned → its PROVEN reach in km (the real, measured value)
-        //   • not scanned yet → its FOUND POSITION as a proxy (#1 near centre → #20+ at the edge)
-        // This fills the middle, spreads dots across every ring, and tells a story at a glance.
         let km;
-        if (o.reach_km != null) km = Math.max(1.6, Math.min(19.5, o.reach_km));
-        else { const pos = o.maps_position || o.best_position || 20; km = Math.max(2.5, Math.min(21, 2.5 + (pos - 1) * 1.0)); }
-        // Slight jitter per dot so same-position keywords don't stack exactly.
-        const jitter = ((i * 37) % 11 - 5) * 0.18;
+        if (o.reach_km != null) km = Math.max(1.6, Math.min(19.5, o.reach_km)); // grid-scanned → real reach
+        else if (positionsVary) { const pos = o.maps_position || o.best_position || 20; km = Math.max(2.5, Math.min(21, 2.5 + (pos - 1) * 1.0)); }
+        // Positions don't vary → sunflower spread: sqrt(i/N) fills the whole disk EVENLY, no piling.
+        else km = 3 + Math.sqrt(i / N) * 18;
+        const jitter = positionsVary ? ((i * 37) % 11 - 5) * 0.18 : 0;
         return { ...o, orbitR: ringR(Math.max(1.6, km + jitter)), angle0: Math.round((i * 137.5) % 360), dur: 80 + (i % 11) * 14, dim: o.reach_km == null };
       });
       // Only label the important dots (grid-scanned, tracked, or top-volume) — labelling all 240
@@ -31854,8 +31858,15 @@
             </div>
           ) : (
             <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <div style={{ background: '#04070d', borderRadius: 14, border: '1px solid rgba(74,222,128,0.25)', padding: 8, flex: '1 1 640px', maxWidth: 900 }}>
-                <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', display: 'block' }}>
+              <div style={{ background: '#04070d', borderRadius: 14, border: '1px solid rgba(74,222,128,0.25)', padding: 8, flex: '1 1 640px', maxWidth: 900, position: 'relative' }}>
+                {/* Zoom controls */}
+                <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 5, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {[['+', () => setZoom(z => Math.min(4, +(z + 0.5).toFixed(1)))], ['−', () => setZoom(z => Math.max(1, +(z - 0.5).toFixed(1)))], ['⟳', () => setZoom(1)]].map(([lbl, fn], i) => (
+                    <button key={i} onClick={fn} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: lbl === '⟳' ? 14 : 20, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{lbl}</button>
+                  ))}
+                  {zoom > 1 && <div style={{ fontSize: 10, color: '#4ade80', textAlign: 'center', fontWeight: 700 }}>{zoom}×</div>}
+                </div>
+                <svg viewBox={`${C - C / zoom} ${C - C / zoom} ${SIZE / zoom} ${SIZE / zoom}`} style={{ width: '100%', display: 'block' }}>
                   {RINGS.map(km => (
                     <g key={km}>
                       <circle cx={C} cy={C} r={ringR(km)} fill="none" stroke="#22c55e" strokeOpacity="0.45" strokeWidth="1" strokeDasharray="3 7" />
