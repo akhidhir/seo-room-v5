@@ -32280,18 +32280,28 @@
       const [expandedRank, setExpandedRank] = useState(null);
       const [oppOnly, setOppOnly] = useState(false);
       const [subAct, setSubAct] = useState({}); // suburb -> status message for one-click actions
-      const [phaseAct, setPhaseAct] = useState({}); // phase index -> status
+      const [phaseAct, setPhaseAct] = useState({}); // phase index -> status ('done:N')
+      const [review, setReview] = useState(null); // { phase, i, subs:[...] } — review-first modal
+      const [reviewSel, setReviewSel] = useState(new Set()); // suburb names ticked in the modal
+      const [reviewBusy, setReviewBusy] = useState('');
       const svcLabel = () => ((result && result.service) || project.industry || 'services').toString().trim();
-      const createPhaseBriefs = async (ph, i) => {
+      const openPhaseReview = (ph, i) => {
         const names = (ph.suburbs || []).map(x => x.replace(/\s*\(.*$/, '').trim());
         const subs = names.map(n => (result.suburbs || []).find(s => s.suburb.toLowerCase() === n.toLowerCase())).filter(Boolean);
-        const todo = subs.filter(s => !(s.tasks && s.tasks[0] && s.tasks[0].done));
-        if (!todo.length) { setPhaseAct(a => ({ ...a, [i]: 'none' })); return; }
-        if (!confirm(`Create ${todo.length} landing-page brief${todo.length === 1 ? '' : 's'} in the Content Queue for ${ph.phase}? (Only suburbs without a page.)`)) return;
+        // Pre-tick only suburbs that don't already have a landing page.
+        const preSel = new Set(subs.filter(s => !(s.tasks && s.tasks[0] && s.tasks[0].done)).map(s => s.suburb));
+        setReview({ phase: ph.phase, i, subs });
+        setReviewSel(preSel);
+        setReviewBusy('');
+      };
+      const confirmPhaseBriefs = async () => {
+        if (!review) return;
+        const chosen = review.subs.filter(s => reviewSel.has(s.suburb));
+        if (!chosen.length) return;
         let done = 0;
-        setPhaseAct(a => ({ ...a, [i]: `saving:0/${todo.length}` }));
-        for (const s of todo) { try { await createLandingBrief(s); } catch (e) {} done++; setPhaseAct(a => ({ ...a, [i]: `saving:${done}/${todo.length}` })); }
-        setPhaseAct(a => ({ ...a, [i]: `done:${done}` }));
+        for (const s of chosen) { setReviewBusy(`Creating ${done + 1}/${chosen.length}…`); try { await createLandingBrief(s); } catch (e) {} done++; }
+        setPhaseAct(a => ({ ...a, [review.i]: `done:${done}` }));
+        setReview(null); setReviewBusy('');
       };
       const createLandingBrief = async (s) => {
         const svc = svcLabel();
@@ -32515,13 +32525,10 @@
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
                     <div style={{ fontWeight: 800, fontSize: 15 }}>{ph.phase} <span style={{ color: 'var(--text3)', fontWeight: 500, fontSize: 13 }}>· {ph.count} suburbs</span></div>
                     {buildPhase && (
-                      <button onClick={() => createPhaseBriefs(ph, i)} disabled={typeof st === 'string' && st.startsWith('saving')}
+                      <button onClick={() => openPhaseReview(ph, i)}
                         style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', border: 'none', background: (st && st.startsWith && st.startsWith('done')) ? '#22c55e22' : '#6366f1', color: (st && st.startsWith && st.startsWith('done')) ? '#22c55e' : '#fff' }}>
-                        <i className={typeof st === 'string' && st.startsWith('saving') ? 'fas fa-spinner fa-spin' : (st && st.startsWith && st.startsWith('done')) ? 'fas fa-check' : 'fas fa-file-circle-plus'}></i>
-                        {typeof st === 'string' && st.startsWith('saving') ? `Creating ${st.split(':')[1]}…`
-                          : (st && st.startsWith && st.startsWith('done')) ? `${st.split(':')[1]} briefs added`
-                          : st === 'none' ? 'All have pages ✓'
-                          : 'Create landing-page briefs'}
+                        <i className={(st && st.startsWith && st.startsWith('done')) ? 'fas fa-check' : 'fas fa-list-check'}></i>
+                        {(st && st.startsWith && st.startsWith('done')) ? `${st.split(':')[1]} briefs added — review more` : 'Review & create pages'}
                       </button>
                     )}
                   </div>
@@ -32532,6 +32539,51 @@
                 </div>
                 );
               })}
+
+              {/* REVIEW-FIRST MODAL — tick which suburbs to create landing-page briefs for */}
+              {review && (
+                <div onClick={(e) => { if (e.target === e.currentTarget && !reviewBusy) setReview(null); }}
+                  style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                  <div style={{ width: 560, maxWidth: '96vw', maxHeight: '82vh', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 14, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ fontWeight: 800, fontSize: 16 }}>{review.phase} — choose suburbs to build</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--text3)', marginTop: 4 }}>Ticked suburbs get a landing-page brief in your Content Queue. Suburbs that already have a page are unticked by default.</div>
+                    </div>
+                    <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <button onClick={() => setReviewSel(new Set(review.subs.map(s => s.suburb)))} style={{ fontSize: 12, color: 'var(--text2)', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Select all</button>
+                      <button onClick={() => setReviewSel(new Set())} style={{ fontSize: 12, color: 'var(--text2)', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>Clear</button>
+                      <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{reviewSel.size} selected</span>
+                    </div>
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
+                      {review.subs.length === 0 ? (
+                        <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No matching suburbs found in the survey.</div>
+                      ) : review.subs.map((s, si) => {
+                        const on = reviewSel.has(s.suburb);
+                        const hasPage = s.tasks && s.tasks[0] && s.tasks[0].done;
+                        return (
+                          <div key={si} onClick={() => setReviewSel(prev => { const n = new Set(prev); n.has(s.suburb) ? n.delete(s.suburb) : n.add(s.suburb); return n; })}
+                            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 18px', cursor: 'pointer', borderBottom: '1px solid var(--border)', background: on ? 'rgba(99,102,241,0.06)' : 'transparent' }}>
+                            <i className={on ? 'fas fa-check-square' : 'far fa-square'} style={{ color: on ? '#6366f1' : 'var(--text3)', fontSize: 15 }} />
+                            <span style={{ fontWeight: 600, fontSize: 13.5, flex: 1 }}>{s.suburb}</span>
+                            {hasPage && <span style={{ fontSize: 10.5, color: '#22c55e', fontWeight: 700 }}>has page</span>}
+                            {s.mapsRank != null && <span style={{ fontSize: 11, color: s.mapsRank <= 3 ? '#22c55e' : s.mapsRank <= 10 ? '#f59e0b' : '#ef4444', fontWeight: 700 }}>#{s.mapsRank}</span>}
+                            {s.mapsRank == null && s.mapsNotRanking && <span style={{ fontSize: 10.5, color: '#ef4444', fontWeight: 700 }}>not ranking</span>}
+                            <span style={{ fontSize: 11.5, color: 'var(--text3)', minWidth: 90, textAlign: 'right' }}>{(s.population || 0).toLocaleString()} · {s.distance}km</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                      {reviewBusy && <span style={{ fontSize: 12.5, color: 'var(--text3)' }}><i className="fas fa-spinner fa-spin" style={{ marginRight: 6 }} />{reviewBusy}</span>}
+                      <button onClick={() => { if (!reviewBusy) setReview(null); }} disabled={!!reviewBusy} style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--text2)', background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 16px', cursor: reviewBusy ? 'default' : 'pointer' }}>Cancel</button>
+                      <button onClick={confirmPhaseBriefs} disabled={!!reviewBusy || reviewSel.size === 0}
+                        style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: reviewSel.size === 0 ? 'var(--border)' : '#6366f1', border: 'none', borderRadius: 8, padding: '8px 18px', cursor: reviewBusy || reviewSel.size === 0 ? 'default' : 'pointer' }}>
+                        <i className="fas fa-file-circle-plus" style={{ marginRight: 6 }} />Create {reviewSel.size} brief{reviewSel.size === 1 ? '' : 's'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Ranked table */}
               <div className="integration-card">
