@@ -9328,6 +9328,59 @@
             </div>
           )}
 
+          {/* SITE-WIDE BIGGEST WINS — aggregate the Lighthouse opportunities across every page so the
+              systemic fixes (usually render-blocking + unused CSS/JS) surface, not just per-page images. */}
+          {(() => {
+            const META = {
+              'render-blocking-resources': { name: 'Render-blocking CSS/JS', fix: 'Defer non-critical JavaScript and inline critical CSS. A caching/optimisation plugin (WP Rocket, FlyingPress, or BerqWP) does this automatically — this is usually the #1 mobile-speed win.', dev: true },
+              'unused-css': { name: 'Unused CSS', fix: 'Remove or defer CSS the page never uses (page-builder themes load a lot). Handled by an optimisation plugin.', dev: true },
+              'unused-javascript': { name: 'Unused JavaScript', fix: 'Defer or delay JS until interaction; remove unused scripts and delay third-party embeds.', dev: true },
+              'server-response-time': { name: 'Slow server response (TTFB)', fix: 'Enable full-page caching + a CDN (Cloudflare); consider better hosting. Slow TTFB delays every metric.', dev: true },
+              'total-byte-weight': { name: 'Heavy page weight', fix: 'Compress images to WebP, minify CSS/JS, remove unused plugins.', dev: false },
+              'mainthread-work-breakdown': { name: 'Heavy JavaScript work', fix: 'Reduce page-builder/plugin bloat and split long tasks — less JS to execute on mobile CPUs.', dev: true },
+              'long-tasks': { name: 'Long main-thread tasks', fix: 'Break up / defer heavy scripts so the page becomes interactive sooner.', dev: true },
+              'dom-size': { name: 'Large DOM', fix: 'Simplify page structure (fewer nested Elementor sections/widgets).', dev: false },
+              'font-display': { name: 'Fonts block text', fix: 'Add font-display: swap so text shows before fonts finish loading.', dev: false },
+              'third-party-summary': { name: 'Third-party scripts', fix: 'Delay/defer chat widgets, pixels and embeds until the page is interactive.', dev: true },
+              'modern-image-formats': { name: 'Old image formats', fix: 'Serve images as WebP/AVIF — use the image fixer or an image plugin.', dev: false },
+              'uses-optimized-images': { name: 'Uncompressed images', fix: 'Compress images — use "Scan Hero / Image Fixes" below or an image plugin.', dev: false },
+              'offscreen-images': { name: 'Images not lazy-loaded', fix: 'Lazy-load below-the-fold images.', dev: false },
+              'unsized-images': { name: 'Images without dimensions', fix: 'Set width/height on images to stop layout shift.', dev: false },
+              'uses-responsive-images': { name: 'Oversized images', fix: 'Serve correctly sized images for mobile.', dev: false },
+              'uses-text-compression': { name: 'No text compression', fix: 'Enable Gzip/Brotli compression on the server.', dev: true },
+            };
+            const agg = {};
+            for (const r of cwvResults) {
+              for (const o of (r.opportunities || [])) {
+                if (!agg[o.id]) agg[o.id] = { id: o.id, pages: 0, wastedMs: 0 };
+                agg[o.id].pages++;
+                agg[o.id].wastedMs += (o.items || []).reduce((s, it) => s + (it.wastedMs || 0), 0);
+              }
+            }
+            const top = Object.values(agg).filter(a => META[a.id]).sort((a, b) => b.pages - a.pages || b.wastedMs - a.wastedMs).slice(0, 5);
+            if (top.length === 0) return null;
+            return (
+              <div style={{ marginBottom: 20, padding: '18px 20px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 12, borderLeft: '3px solid #3b82f6' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <i className="fas fa-gauge-high" style={{ color: '#3b82f6' }} />
+                  <span style={{ fontSize: 15, fontWeight: 700 }}>Biggest speed wins across the site</span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>Ranked by how many pages they affect. Fixes marked <b style={{ color: '#a78bfa' }}>plugin/dev</b> are site-wide and give the largest mobile gains — they're the real ceiling-raisers, not per-page image tweaks.</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {top.map((a, i) => { const m = META[a.id]; return (
+                    <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', paddingBottom: 10, borderBottom: i < top.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#3b82f6', minWidth: 58, marginTop: 2 }}>{a.pages} page{a.pages === 1 ? '' : 's'}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 2 }}>{m.name}{m.dev && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#a78bfa', background: 'rgba(167,139,250,0.14)', padding: '1px 7px', borderRadius: 10 }}>plugin/dev</span>}</div>
+                        <div style={{ fontSize: 12.5, color: 'var(--text3)', lineHeight: 1.5 }}>{m.fix}</div>
+                      </div>
+                    </div>
+                  ); })}
+                </div>
+              </div>
+            );
+          })()}
+
           {failingPages.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16, padding: '12px 18px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10 }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>{failingPages.length} pages need attention</span>
