@@ -41888,99 +41888,199 @@ async function computeRankingAudit(project) {
 
 // External Ranking Audit → human-friendly PDF, covering all six categories + Lead & conversion (coming soon).
 // GET so it can be opened in a new tab (window.open); returns a downloadable PDF.
+// Build the narrative deterministically from the verified findings — used as a fallback when the
+// AI is unavailable, so the button always produces a real report (never fake, never empty).
+function buildAuditNarrativeFallback(facts, ctx) {
+  const fails = facts.filter(f => f.status === 'fail');
+  const warns = facts.filter(f => f.status === 'warn');
+  const passes = facts.filter(f => f.status === 'pass');
+  const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  const big = fails[0] || warns[0] || null;
+  return {
+    intro: `A plain-English look at ${ctx.business}'s website from the outside — what's working, what's holding you back, and what to do first. No jargon.`,
+    short_version: [
+      passes.length
+        ? `The foundations are solid: ${passes.length} of the things we checked are already in good shape.`
+        : `We reviewed your site the way Google's crawler sees it.`,
+      big ? `The one thing worth tackling first: ${big.finding}. ${big.fix && big.fix !== '—' ? big.fix + '.' : ''}` : `Nothing major is holding you back right now — keep it up.`,
+    ],
+    big_one: big ? { title: big.area || cap(big.category), paragraphs: [{ text: big.finding }, { prefix: 'What to do:', text: (big.fix && big.fix !== '—') ? big.fix : 'Review this area and improve it.' }] } : null,
+    quick_wins: warns.filter(w => w !== big).map(w => ({ label: w.area || cap(w.category), detail: `${w.finding}. ${w.fix && w.fix !== '—' ? w.fix : ''}`.trim() })),
+    worth_attention: null,
+    good_news: passes.map(p => ({ label: p.area || cap(p.category), detail: p.finding })),
+    five_things: [...fails, ...warns].slice(0, 5).map(f => ({ title: f.area || cap(f.category), detail: (f.fix && f.fix !== '—') ? f.fix : f.finding, sev: f.status === 'fail' ? 'high' : 'med' })),
+  };
+}
+
+// EXTERNAL AUDIT → the button runs a full audit and Claude writes it up the way a human consultant
+// would: warm, plain-English, prioritised, in colour-banded sections. Grounded strictly in the
+// verified findings (real data only — the AI is told never to invent anything).
 app.get('/api/projects/:projectId/external-audit/pdf', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const audit = await computeRankingAudit(project);
-    const categories = audit.categories || [];
+    const business = project.business_name || project.name || 'Your business';
+    const svc = (project.smart_service || project.industry || '').toString().trim();
 
-    const PDFDocument = require('pdfkit');
-    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${(project.business_name || project.name || 'Site').replace(/[^a-zA-Z0-9 ]/g, '')}-Ranking-Audit.pdf"`);
-    doc.pipe(res);
-
-    const navy = '#14213d', blue = '#3a6ea5', green = '#22c55e', amber = '#f59e0b', red = '#ef4444', gray = '#6b7280', teal = '#14b8a6', light = '#f2f5f9';
-    const pageW = doc.page.width - 100;
-    const statusColor = { pass: green, warn: amber, fail: red, pending: gray, soon: gray };
-    const scoreColor = (s) => s == null ? gray : s >= 80 ? green : s >= 50 ? amber : red;
-    const surfacesLabel = (arr) => (arr || []).filter(x => x && x !== '—').join(' · ');
-
-    // ── Cover ──
-    doc.rect(0, 0, doc.page.width, doc.page.height).fill(navy);
-    doc.fillColor('#fff').fontSize(32).font('Helvetica-Bold').text('RANKING AUDIT', 50, 180, { width: pageW, align: 'center' });
-    doc.fillColor('#c9d6e5').fontSize(12).font('Helvetica').text('Local Pack · Google Maps · Search — a plain-English external review', 50, 224, { width: pageW, align: 'center' });
-    doc.fillColor(teal).fontSize(20).font('Helvetica-Bold').text(audit.business || project.name || 'Website', 50, 280, { width: pageW, align: 'center' });
-    doc.fillColor('#9fb2c7').fontSize(12).font('Helvetica').text(project.domain || '', 50, 310, { width: pageW, align: 'center' });
-    if (audit.overall != null) {
-      doc.circle(doc.page.width / 2, 430, 50).lineWidth(4).strokeColor(scoreColor(audit.overall)).stroke();
-      doc.fillColor(scoreColor(audit.overall)).fontSize(32).font('Helvetica-Bold').text(String(audit.overall), doc.page.width / 2 - 32, 411, { width: 64, align: 'center' });
-      doc.fillColor('#9fb2c7').fontSize(10).font('Helvetica').text('OVERALL SCORE', 50, 492, { width: pageW, align: 'center' });
-    }
-    doc.fillColor('#7f93aa').fontSize(10).text(`Reviewed ${audit.stats?.pages_found || 0} pages (${audit.stats?.location_pages || 0} location pages) from the outside, the way Google's crawler sees them.`, 90, 640, { width: pageW - 80, align: 'center' });
-    doc.fillColor('#7f93aa').fontSize(10).text(`Generated ${new Date(audit.generated_at || Date.now()).toLocaleString('en-AU', { dateStyle: 'long', timeStyle: 'short' })}`, 50, 700, { width: pageW, align: 'center' });
-    doc.fillColor('#fff').fontSize(11).text('Prepared by The SEO Room', 50, 720, { width: pageW, align: 'center' });
-
-    // ── Summary table ──
-    doc.addPage();
-    doc.fillColor(navy).fontSize(18).font('Helvetica-Bold').text('At a glance', 50, 50);
-    doc.fillColor(gray).fontSize(10).font('Helvetica').text('Each area scored against what moves you up in the map, the local pack and search results.', 50, 74, { width: pageW });
-    let y = 104;
-    for (const c of categories) {
-      const col = c.score != null ? scoreColor(c.score) : (statusColor[c.status] || gray);
-      doc.roundedRect(50, y, pageW, 30, 4).fill(light);
-      doc.roundedRect(50, y, 5, 30, 2).fill(col);
-      doc.fillColor(navy).fontSize(11.5).font('Helvetica-Bold').text(c.name, 66, y + 5, { width: pageW - 180 });
-      doc.fillColor(gray).fontSize(8).font('Helvetica').text(surfacesLabel(c.surfaces), 66, y + 19, { width: pageW - 180 });
-      const badge = c.status === 'soon' ? 'COMING SOON' : c.status === 'pending' ? 'NO DATA' : (c.score != null ? `${c.score}/100` : c.status.toUpperCase());
-      doc.fillColor(col).fontSize(12).font('Helvetica-Bold').text(badge, 50 + pageW - 120, y + 9, { width: 110, align: 'right' });
-      y += 36;
-    }
-
-    // ── Detail per category ──
-    for (const c of categories) {
-      doc.addPage();
-      const col = c.score != null ? scoreColor(c.score) : (statusColor[c.status] || gray);
-      doc.rect(50, 46, pageW, 4).fill(col);
-      doc.fillColor(navy).fontSize(17).font('Helvetica-Bold').text(c.name, 50, 60, { width: pageW - 120 });
-      doc.fillColor(gray).fontSize(9).font('Helvetica').text('Helps: ' + (surfacesLabel(c.surfaces) || '—'), 50, 84);
-      if (c.score != null) doc.fillColor(col).fontSize(20).font('Helvetica-Bold').text(`${c.score}`, 50 + pageW - 60, 58, { width: 60, align: 'right' });
-      doc.y = 106;
-
-      if (c.status === 'soon') { doc.fillColor(gray).fontSize(11).font('Helvetica-Oblique').text(c.note || 'Coming soon.', 50, doc.y, { width: pageW }); continue; }
-      if (!c.subs || !c.subs.length) { doc.fillColor(gray).fontSize(11).font('Helvetica-Oblique').text(c.note || 'No data available yet for this area.', 50, doc.y, { width: pageW }); continue; }
-
-      for (const sub of c.subs) {
-        if (doc.y > 720) doc.addPage();
-        doc.moveDown(0.5);
-        doc.fillColor(blue).fontSize(12).font('Helvetica-Bold').text(sub.name, 50, doc.y, { width: pageW });
-        doc.moveDown(0.2);
-        for (const ch of (sub.checks || [])) {
-          if (doc.y > 740) doc.addPage();
-          const cc = statusColor[ch.status] || gray;
-          const y0 = doc.y;
-          doc.circle(56, y0 + 6, 3.5).fill(cc);
-          doc.fillColor('#20242b').fontSize(10).font('Helvetica').text(ch.finding || '', 68, y0, { width: pageW - 20 });
-          if (ch.fix && ch.fix !== '—') {
-            doc.fillColor(teal).fontSize(9).font('Helvetica-Bold').text('Fix: ', 68, doc.y, { continued: true });
-            doc.fillColor('#333').font('Helvetica').text(ch.fix, { width: pageW - 30 });
-          }
-          if (ch.evidence && ch.evidence.url) {
-            doc.fillColor(blue).fontSize(8.5).font('Helvetica-Oblique').text(ch.evidence.label || 'View evidence', 68, doc.y, { width: pageW - 30, link: ch.evidence.url, underline: true });
-          }
-          doc.moveDown(0.5);
-        }
+    // Flatten every verified check into a compact fact list for the writer.
+    const facts = [];
+    for (const c of (audit.categories || [])) {
+      if (c.status === 'soon' || c.status === 'pending') continue;
+      for (const sub of (c.subs || [])) for (const ch of (sub.checks || [])) {
+        if (ch.status === 'pending') continue;
+        facts.push({ category: c.name, area: sub.name, status: ch.status, finding: ch.finding, fix: ch.fix, surfaces: (ch.surfaces || sub.surfaces || c.surfaces || []).join(', ') });
       }
     }
 
-    // ── Footer ──
-    const range = doc.bufferedPageRange();
-    for (let i = 0; i < range.count; i++) {
-      doc.switchToPage(i);
-      doc.fillColor('#9aa5b1').fontSize(8).font('Helvetica').text(`${project.domain || ''}  ·  Ranking Audit  ·  Prepared by The SEO Room  ·  Page ${i + 1} of ${range.count}`, 50, doc.page.height - 34, { width: pageW, align: 'center' });
+    const ctx = { business, domain: project.domain || '', service: svc, pages: audit.stats?.pages_found || 0, location_pages: audit.stats?.location_pages || 0 };
+
+    // ---- Ask Claude to write the narrative (falls back to a deterministic write-up if AI is off) ----
+    let nar = null;
+    if (anthropic && facts.length) {
+      try {
+        const prompt = `You are a friendly local-SEO consultant writing a short external website audit for the owner of a local ${svc || 'service'} business. Audience: a busy, non-technical small-business owner in Australia. Tone: warm, plain-English, encouraging but honest. NO jargon, NO SEO acronyms unless you explain them in the same breath.
+
+BUSINESS: ${business}
+WEBSITE: ${ctx.domain}
+PAGES REVIEWED: ${ctx.pages} (${ctx.location_pages} suburb/location pages)
+
+VERIFIED FINDINGS — these are the ONLY facts you may use. Do NOT invent numbers, page names, competitors, or issues that aren't here. If something isn't in this list, don't mention it.
+${JSON.stringify(facts, null, 1)}
+
+Write the audit as JSON with EXACTLY this shape:
+{
+  "intro": "1-2 sentence plain-English summary line for the cover page",
+  "short_version": ["paragraph", "paragraph"],
+  "big_one": { "title": "short headline (max ~8 words)", "paragraphs": [ {"prefix":"optional bold lead like 'Why it matters:'","text":"..."}, {"prefix":"What to do:","text":"..."} ] },
+  "quick_wins": [ {"label":"short bold label","detail":"one plain sentence, incl. what to do"} ],
+  "worth_attention": { "title":"short headline", "body":"one short paragraph" },
+  "good_news": [ {"label":"short bold label","detail":"one positive sentence"} ],
+  "five_things": [ {"title":"action","detail":"one sentence how","sev":"high|med|low"} ]
+}
+
+Rules:
+- "big_one" = the single most important problem to fix first (pick the worst finding). If there are no real problems, set big_one to null and be encouraging.
+- "quick_wins" = the smaller, easy fixes.
+- "worth_attention" = optional; use it for a medium issue that isn't the big one (e.g. reviews). Set to null if not needed.
+- "good_news" = the things already done well (the passing checks), phrased positively.
+- "five_things" = the prioritised to-do list, worst first, max 5.
+- Every claim must trace back to a verified finding. Return ONLY the JSON, nothing else.`;
+        const aiResp = await anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 3000, messages: [{ role: 'user', content: prompt }] });
+        const text = aiResp.content[0].text.trim();
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) nar = JSON.parse(m[0]);
+      } catch (e) { console.error('[external-audit] AI write failed, using fallback:', e.message); }
     }
+    if (!nar) nar = buildAuditNarrativeFallback(facts, ctx);
+
+    // ---- Render the banded, human-style PDF ----
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${business.replace(/[^a-zA-Z0-9 ]/g, '')}-Website-Audit.pdf"`);
+    doc.pipe(res);
+
+    const NAVY = '#14213d', BLUE = '#3a6ea5', GREEN = '#2e7d4f', AMBER = '#c77800', RED = '#c0392b', GREY = '#5f6b7a';
+    const M = 50, W = doc.page.width - M * 2;
+    const rule = (space = 10) => { doc.moveDown(0.3); doc.moveTo(M, doc.y).lineTo(M + W, doc.y).lineWidth(1).strokeColor('#dde3ec').stroke(); doc.moveDown(space / 14); };
+    const band = (text, color) => {
+      if (doc.y > 700) doc.addPage();
+      const h = 26; const y = doc.y;
+      doc.roundedRect(M, y, W, h, 4).fill(color);
+      doc.fillColor('#fff').font('Helvetica-Bold').fontSize(11.5).text(text, M + 12, y + 7, { width: W - 24 });
+      doc.y = y + h + 8; doc.x = M;
+    };
+    const para = (text, opts = {}) => { doc.fillColor(opts.color || '#20242b').font(opts.font || 'Helvetica').fontSize(opts.size || 10.5).text(text, M, doc.y, { width: W, align: 'left', lineGap: 3 }); doc.moveDown(opts.after != null ? opts.after : 0.5); };
+    const prefixPara = (prefix, text) => {
+      if (doc.y > 740) doc.addPage();
+      doc.fillColor('#14213d').font('Helvetica-Bold').fontSize(10.5).text(prefix + ' ', M, doc.y, { continued: true, lineGap: 3 });
+      doc.fillColor('#20242b').font('Helvetica').fontSize(10.5).text(text, { width: W, lineGap: 3 });
+      doc.moveDown(0.5);
+    };
+    const bullet = (label, detail, color) => {
+      if (doc.y > 740) doc.addPage();
+      const y = doc.y;
+      doc.circle(M + 3, y + 6, 2.2).fill(color || BLUE);
+      doc.fillColor('#14213d').font('Helvetica-Bold').fontSize(10.5).text(label + (label && detail ? '. ' : ''), M + 14, y, { continued: !!detail, lineGap: 3, width: W - 14 });
+      if (detail) doc.fillColor('#20242b').font('Helvetica').fontSize(10.5).text(detail, { width: W - 14, lineGap: 3 });
+      doc.moveDown(0.45);
+    };
+
+    // ── Cover ──
+    doc.rect(M, doc.y, W, 34).fill(NAVY);
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(13).text('WEBSITE AUDIT', M + 16, doc.y - 34 + 10);
+    doc.moveDown(2);
+    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(26).text(business, M, doc.y, { width: W });
+    doc.fillColor(BLUE).font('Helvetica').fontSize(12).text(ctx.domain, M, doc.y + 2, { width: W });
+    doc.moveDown(1);
+    doc.fillColor('#2b3038').font('Helvetica').fontSize(11.5).text(nar.intro || `A plain-English look at ${business}'s website from the outside.`, M, doc.y, { width: W, lineGap: 4 });
+    doc.moveDown(0.8);
+    const metaRow = (k, v) => { const y = doc.y; doc.fillColor(GREY).font('Helvetica').fontSize(9).text(k, M, y, { width: 90 }); doc.fillColor('#20242b').font('Helvetica').fontSize(10.5).text(v, M + 95, y, { width: W - 95 }); doc.moveDown(0.35); };
+    metaRow('Prepared by', 'The SEO Room');
+    metaRow('Reviewed', `${ctx.pages} pages${ctx.location_pages ? ` (incl. ${ctx.location_pages} suburb pages)` : ''} + site metadata`);
+    metaRow('How', "Viewed the site the way Google's crawler sees it");
+    rule(10);
+
+    // ── The short version ──
+    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(15).text('The short version', M, doc.y); doc.moveDown(0.4);
+    for (const p of (nar.short_version || [])) para(p);
+    rule(6);
+
+    // ── The big one ──
+    if (nar.big_one) {
+      band(`THE BIG ONE  ·  ${nar.big_one.title || 'The most important fix'}`, RED);
+      for (const p of (nar.big_one.paragraphs || [])) { if (p.prefix) prefixPara(p.prefix, p.text); else para(p.text); }
+      rule(6);
+    }
+
+    // ── Quick wins ──
+    if ((nar.quick_wins || []).length) {
+      band('QUICK WINS  ·  Small things that are easy to fix', AMBER);
+      for (const q of nar.quick_wins) bullet(q.label, q.detail, AMBER);
+      rule(6);
+    }
+
+    // ── Worth attention ──
+    if (nar.worth_attention && nar.worth_attention.body) {
+      band(`WORTH ATTENTION  ·  ${nar.worth_attention.title || ''}`.trim(), AMBER);
+      para(nar.worth_attention.body);
+      rule(6);
+    }
+
+    // ── The good news ──
+    if ((nar.good_news || []).length) {
+      band('THE GOOD NEWS  ·  Plenty is already right', GREEN);
+      for (const g of nar.good_news) bullet(g.label, g.detail, GREEN);
+      rule(6);
+    }
+
+    // ── If you only do five things ──
+    if ((nar.five_things || []).length) {
+      if (doc.y > 620) doc.addPage();
+      doc.fillColor(BLUE).font('Helvetica-Bold').fontSize(9).text('WHERE TO START', M, doc.y); doc.moveDown(0.1);
+      doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(15).text('If you only do five things', M, doc.y); doc.moveDown(0.6);
+      const sevColor = { high: RED, med: AMBER, low: BLUE };
+      nar.five_things.slice(0, 5).forEach((t, i) => {
+        if (doc.y > 730) doc.addPage();
+        const y = doc.y;
+        doc.roundedRect(M, y, 20, 20, 4).fill(sevColor[t.sev] || BLUE);
+        doc.fillColor('#fff').font('Helvetica-Bold').fontSize(11).text(String(i + 1), M, y + 4, { width: 20, align: 'center' });
+        doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(11).text(t.title, M + 30, y, { width: W - 30 });
+        doc.fillColor(GREY).font('Helvetica').fontSize(9.5).text(t.detail, M + 30, doc.y + 1, { width: W - 30, lineGap: 2 });
+        doc.moveDown(0.7);
+      });
+      doc.moveDown(0.3);
+    }
+
+    // ── Method note ──
+    if (doc.y > 700) doc.addPage();
+    rule(6);
+    doc.fillColor(GREY).font('Helvetica-Oblique').fontSize(9).text("One note on method: we read the site the way a search engine does — the plain page, without the moving parts. That's the honest way to see what Google sees. For deeper technical and speed checks, the dashboard's own audits go further.", M, doc.y, { width: W, lineGap: 2 });
+    doc.moveDown(0.6);
+    doc.fillColor(GREY).font('Helvetica').fontSize(9).text(`Prepared by The SEO Room  ·  ${ctx.domain}  ·  ${new Date().toLocaleDateString('en-AU', { dateStyle: 'long' })}`, M, doc.y, { width: W });
+
     doc.end();
   } catch (e) { console.error('[external-audit-pdf]', e.message); if (!res.headersSent) res.status(500).json({ error: e.message }); }
 });
