@@ -31928,6 +31928,13 @@
       const [loading, setLoading] = useState(true);
       const [sel, setSel] = useState(null);
       const [openSub, setOpenSub] = useState(null); // "zi-si" of the expanded suburb win-plan
+      const [posSource, setPosSource] = useState('tracked'); // 'tracked' (rank check at suburb) | 'grid' (grid scan)
+      // Return the suburb view for the selected source, falling back to the hybrid default fields.
+      const subView = (s) => {
+        const v = posSource === 'grid' ? s.grid : s.tracked;
+        if (v && (v.position != null || v.win_steps)) return { best_position: v.position, ranked: v.ranked, win_stage: v.win_stage, win_steps: v.win_steps };
+        return { best_position: s.best_position, ranked: s.ranked, win_stage: s.win_stage, win_steps: s.win_steps };
+      };
       const [zoom, setZoom] = useState(1); // 1 = full view, up to 4x
       const [pan, setPan] = useState({ x: 0, y: 0 }); // drag offset in viewBox units
       const dragRef = React.useRef(null);
@@ -32156,7 +32163,15 @@
           {/* SUBURB ZONES — every service suburb by distance: ranked vs untapped opportunity */}
           {!loading && (data?.suburb_zones || []).some(z => z.suburbs.length > 0) && (
             <div style={{ marginTop: 20 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-location-dot" style={{ marginRight: 8, color: '#4ade80' }} />Suburb coverage & opportunities — by distance</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 15, fontWeight: 800 }}><i className="fas fa-location-dot" style={{ marginRight: 8, color: '#4ade80' }} />Suburb coverage & opportunities — by distance</span>
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 0, border: '1px solid var(--border)', borderRadius: 999, overflow: 'hidden' }}>
+                  {[['tracked', 'Rank tracking'], ['grid', 'Grid scan']].map(([k, label]) => (
+                    <button key={k} onClick={() => setPosSource(k)} title={k === 'tracked' ? 'Position checked at the suburb itself (more precise, more frequent)' : 'Best position from the grid scan across the area'}
+                      style={{ padding: '4px 12px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', border: 'none', background: posSource === k ? 'var(--accent)' : 'transparent', color: posSource === k ? '#fff' : 'var(--text3)' }}>{label}</button>
+                  ))}
+                </div>
+              </div>
               <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
                 Every suburb the business serves, by real distance from {data?.business_location || 'the business'}. <span style={{ color: '#4ade80', fontWeight: 700 }}>#N = ranked</span> · <span style={{ color: '#60a5fa', fontWeight: 700 }}>HAS PAGE = page exists but not ranking</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>NO PAGE = greenfield</span>. <b style={{ color: 'var(--text2)' }}>Click any suburb for a plan to win it.</b>
               </div>
@@ -32169,7 +32184,7 @@
                       <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{z.suburbs.length} suburb{z.suburbs.length !== 1 ? 's' : ''}</span>
                     </div>
                     <div style={{ fontSize: 11, marginBottom: 10, color: 'var(--text3)' }}>
-                      <span style={{ color: '#4ade80', fontWeight: 700 }}>{z.ranked_count} ranked</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>{z.opportunity_count} to win</span>
+                      <span style={{ color: '#4ade80', fontWeight: 700 }}>{z.suburbs.filter(s => subView(s).ranked).length} ranked</span> · <span style={{ color: '#f59e0b', fontWeight: 700 }}>{z.suburbs.filter(s => !subView(s).ranked).length} to win</span>
                     </div>
                     {z.suburbs.length === 0 ? (
                       <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>No service suburbs here</div>
@@ -32178,24 +32193,25 @@
                         {z.suburbs.map((s, si) => {
                           const key = zi + '-' + si;
                           const isOpen = openSub === key;
-                          const winning = s.best_position != null && s.best_position <= 3;
+                          const sv = subView(s);
+                          const winning = sv.best_position != null && sv.best_position <= 3;
                           return (
                           <div key={si}>
-                            <div onClick={() => setOpenSub(isOpen ? null : key)} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 6px', borderRadius: 4, opacity: s.ranked ? 1 : 0.85, cursor: 'pointer', background: isOpen ? 'rgba(96,165,250,0.08)' : 'transparent' }}>
-                            {s.ranked
-                              ? <span style={{ fontSize: 10, fontWeight: 700, color: s.best_position <= 3 ? '#4ade80' : s.best_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 42 }}>#{s.best_position}</span>
+                            <div onClick={() => setOpenSub(isOpen ? null : key)} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 6px', borderRadius: 4, opacity: sv.ranked ? 1 : 0.85, cursor: 'pointer', background: isOpen ? 'rgba(96,165,250,0.08)' : 'transparent' }}>
+                            {sv.ranked
+                              ? <span style={{ fontSize: 10, fontWeight: 700, color: sv.best_position <= 3 ? '#4ade80' : sv.best_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 42 }}>#{sv.best_position}</span>
                               : s.has_page
                                 ? <span title="Has a landing page but isn't ranking yet — strengthen it" style={{ fontSize: 8.5, fontWeight: 800, color: '#60a5fa', minWidth: 42, textTransform: 'uppercase', letterSpacing: 0.3 }}>HAS PAGE</span>
                                 : <span title="No page yet — a greenfield opportunity" style={{ fontSize: 8.5, fontWeight: 800, color: '#f59e0b', minWidth: 42, textTransform: 'uppercase', letterSpacing: 0.3 }}>NO PAGE</span>}
-                            <span style={{ fontWeight: 600, color: s.ranked ? 'var(--text1)' : 'var(--text2)', flex: 1 }}>{s.suburb}</span>
+                            <span style={{ fontWeight: 600, color: sv.ranked ? 'var(--text1)' : 'var(--text2)', flex: 1 }}>{s.suburb}</span>
                             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{s.km} km</span>
                             {!winning && <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ fontSize: 9, color: 'var(--text3)' }} />}
                           </div>
-                            {isOpen && s.win_steps && (
+                            {isOpen && sv.win_steps && (
                               <div style={{ margin: '4px 0 8px 6px', padding: '10px 12px', background: 'rgba(96,165,250,0.06)', border: '1px solid var(--border)', borderRadius: 8 }}>
-                                <div style={{ fontSize: 11, fontWeight: 800, color: winning ? '#4ade80' : '#60a5fa', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{s.win_stage}</div>
+                                <div style={{ fontSize: 11, fontWeight: 800, color: winning ? '#4ade80' : '#60a5fa', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{sv.win_stage}</div>
                                 <ol style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                  {s.win_steps.map((st, sti) => <li key={sti} style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.45 }}>{st}</li>)}
+                                  {sv.win_steps.map((st, sti) => <li key={sti} style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.45 }}>{st}</li>)}
                                 </ol>
                                 {!winning && setPage && (
                                   <button onClick={(e) => { e.stopPropagation(); setPage('smart-map'); }} style={{ marginTop: 10, fontSize: 11, fontWeight: 700, padding: '5px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', background: '#6366f1', color: '#fff' }}>

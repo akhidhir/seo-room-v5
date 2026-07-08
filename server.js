@@ -42311,18 +42311,23 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       for (const p of parts) { if (SUBURB_GPS[p]) { bizGps = SUBURB_GPS[p]; break; } }
       if (!bizGps) { for (const sub of subNames) { if (new RegExp(`\\b${sub}\\b`).test(locLc)) { bizGps = SUBURB_GPS[sub]; break; } } }
       if (bizGps) {
-        // Which suburbs do we already RANK in? (extracted from the keywords we appear for)
-        const rankedSub = new Map(); // suburb -> best position
+        // Which suburbs do we already RANK in? Track TWO sources so the UI can toggle:
+        //  • tracked  = rank-tracking position checked AT the suburb (precise, more frequent)
+        //  • grid     = best position from the grid scan for that keyword (proven reach across the area)
+        const rankedSubT = new Map(); // suburb -> tracked position
+        const rankedSubG = new Map(); // suburb -> grid best position
         for (const o of orbits) {
           const kwl = ' ' + (o.keyword || '').toLowerCase() + ' ';
           for (const sub of subNames) {
             if (kwl.includes(' ' + sub + ' ') || kwl.includes(' ' + sub + '?') || (o.keyword || '').toLowerCase().endsWith(sub)) {
-              const pos = o.maps_position || 99;
-              if (pos < (rankedSub.get(sub) ?? 99)) rankedSub.set(sub, pos);
+              if (o.maps_position && o.maps_position < (rankedSubT.get(sub) ?? 99)) rankedSubT.set(sub, o.maps_position);
+              if (o.best_position && o.best_position < (rankedSubG.get(sub) ?? 99)) rankedSubG.set(sub, o.best_position);
               break;
             }
           }
         }
+        const rankedSub = new Map(); // hybrid default: tracked, else grid
+        for (const s of new Set([...rankedSubT.keys(), ...rankedSubG.keys()])) rankedSub.set(s, rankedSubT.get(s) ?? rankedSubG.get(s));
         // The FULL universe of suburbs = the project's service areas (from GBP). Every one is either
         // a suburb we rank in, or an OPPORTUNITY we don't yet — that's the growth map.
         const allSubs = new Map(); // suburb -> { km, ranked, best_position }
@@ -42330,7 +42335,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
           const s = name.toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
           if (!s || !SUBURB_GPS[s] || allSubs.has(s)) return;
           const km = Math.round(havKm(bizGps, SUBURB_GPS[s]) * 10) / 10;
-          allSubs.set(s, { suburb: s, km, ranked: rankedSub.has(s), best_position: rankedSub.has(s) ? rankedSub.get(s) : null });
+          allSubs.set(s, { suburb: s, km, ranked: rankedSub.has(s), best_position: rankedSub.has(s) ? rankedSub.get(s) : null, tpos: rankedSubT.get(s) ?? null, gpos: rankedSubG.get(s) ?? null });
         };
         for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) addSub(typeof a === 'string' ? a : (a.name || ''));
         for (const s of rankedSub.keys()) addSub(s); // include any ranked suburb even if not in service areas
@@ -42396,7 +42401,18 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
             lo: z.lo, hi: z.hi,
             ranked_count: inZone.filter(s => s.ranked).length,
             opportunity_count: inZone.filter(s => !s.ranked).length,
-            suburbs: inZone.map(s => { const S = s.suburb.replace(/\b\w/g, c => c.toUpperCase()); const hp = hasPageFor(s.suburb); const wp = winPlan(s.suburb, s.best_position, hp); return { suburb: S, km: s.km, ranked: s.ranked, best_position: s.best_position, has_page: hp, win_stage: wp.stage, win_steps: wp.steps }; }),
+            suburbs: inZone.map(s => {
+              const S = s.suburb.replace(/\b\w/g, c => c.toUpperCase());
+              const hp = hasPageFor(s.suburb);
+              const variant = (pos) => { const wp = winPlan(s.suburb, pos, hp); return { position: pos, ranked: pos != null, win_stage: wp.stage, win_steps: wp.steps }; };
+              return {
+                suburb: S, km: s.km, has_page: hp,
+                // Default (hybrid) fields kept for backward-compat; UI can toggle tracked/grid.
+                ranked: s.ranked, best_position: s.best_position, win_stage: variant(s.best_position).win_stage, win_steps: variant(s.best_position).win_steps,
+                tracked: variant(s.tpos),
+                grid: variant(s.gpos),
+              };
+            }),
           };
         });
       }
