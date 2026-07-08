@@ -42277,6 +42277,25 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       orbits.push(...belt);
     } catch (e) {}
 
+    // GRID BELT — keywords that were grid-scanned but are NOT tracked and NOT in discovery would otherwise
+    // never appear, even though they have PROVEN reach data. Add them so every grid-scanned keyword shows.
+    try {
+      const haveKw = new Set(orbits.map(o => o.keyword.toLowerCase().trim()));
+      for (const g of grids) {
+        const kwl = g.keyword.toLowerCase().trim();
+        if (haveKw.has(kwl)) continue;
+        const r = reachByKw.get(kwl);
+        orbits.push({
+          keyword: g.keyword, location: null, origin: 'grid', tracked: false,
+          maps_position: r?.best_position || null,
+          volume: volByKw.get(kwl) || null,
+          reach_km: r?.reach_km != null ? Math.round(r.reach_km * 10) / 10 : null,
+          best_position: r?.best_position || null, has_grid: true, scanned_at: r?.scanned_at || g.scanned_at || null,
+        });
+        haveKw.add(kwl);
+      }
+    } catch (e) { console.log('[orbits] grid belt skipped:', e.message); }
+
     // ── SUBURBS BY REAL DISTANCE ── For every keyword that names a known suburb, compute the ACTUAL
     // km from the business (not the rank proxy) and bucket into distance zones. This answers the real
     // question: "which suburbs do we rank in, and how far out does our reach extend?"
