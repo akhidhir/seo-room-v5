@@ -42312,20 +42312,34 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       if (!bizGps) { for (const sub of subNames) { if (new RegExp(`\\b${sub}\\b`).test(locLc)) { bizGps = SUBURB_GPS[sub]; break; } } }
       if (bizGps) {
         // Which suburbs do we already RANK in? Track TWO sources so the UI can toggle:
-        //  • tracked  = rank-tracking position checked AT the suburb (precise, more frequent)
-        //  • grid     = best position from the grid scan for that keyword (proven reach across the area)
+        //  • tracked = rank-tracking position, from keywords that NAME the suburb (precise point check)
+        //  • grid    = the grid scan's AVERAGE rank (ARP) for a scan CENTRED on that suburb — this is the
+        //             exact number shown on the Maps grid view, matched via the scan's `location` field.
         const rankedSubT = new Map(); // suburb -> tracked position
-        const rankedSubG = new Map(); // suburb -> grid best position
         for (const o of orbits) {
           const kwl = ' ' + (o.keyword || '').toLowerCase() + ' ';
           for (const sub of subNames) {
             if (kwl.includes(' ' + sub + ' ') || kwl.includes(' ' + sub + '?') || (o.keyword || '').toLowerCase().endsWith(sub)) {
               if (o.maps_position && o.maps_position < (rankedSubT.get(sub) ?? 99)) rankedSubT.set(sub, o.maps_position);
-              if (o.best_position && o.best_position < (rankedSubG.get(sub) ?? 99)) rankedSubG.set(sub, o.best_position);
               break;
             }
           }
         }
+        const normLoc = (name) => (name || '').toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
+        const rankedSubG = new Map(); // suburb -> best ARP across grid scans centred there
+        try {
+          const subGrids = (await pool.query(
+            `SELECT DISTINCT ON (LOWER(location), LOWER(keyword)) location, arp FROM grid_scans
+             WHERE project_id=$1 AND COALESCE(location,'')<>'' AND arp IS NOT NULL
+             ORDER BY LOWER(location), LOWER(keyword), scanned_at DESC`, [projectId])).rows;
+          for (const r of subGrids) {
+            const key = normLoc(r.location);
+            if (!key || !SUBURB_GPS[key]) continue;
+            const arp = Math.round(Number(r.arp) * 10) / 10;
+            if (!(arp > 0)) continue;
+            if (!rankedSubG.has(key) || arp < rankedSubG.get(key)) rankedSubG.set(key, arp);
+          }
+        } catch (e) { console.log('[orbits] grid-by-suburb skipped:', e.message); }
         const rankedSub = new Map(); // hybrid default: tracked, else grid
         for (const s of new Set([...rankedSubT.keys(), ...rankedSubG.keys()])) rankedSub.set(s, rankedSubT.get(s) ?? rankedSubG.get(s));
         // The FULL universe of suburbs = the project's service areas (from GBP). Every one is either
