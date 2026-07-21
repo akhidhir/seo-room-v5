@@ -596,3 +596,10 @@ heavy-lock finally release; Not-Indexed page fix CTA.
 NEXT (agreed roadmap): (1) finding→fix registry for 10 core types, (2) consolidate meta+linking executor families,
 (3) Prospect Audit (URL → external audit → 6-month strategy PDF → convert-to-project), (4) verification sweep on
 remaining executors. See report sections 4-6.
+
+## Known Gap (2026-07-05): suburb dictionary is Perth-heavy
+SUBURB_GPS (~336 entries) is mostly Perth suburbs. Site-intel suburb extraction + orbit/grid centring
+only recognise suburbs in that list, so interstate projects (Brisbane etc) get thin results.
+PROPER FIX (next session): per-project suburb source — GBP profile service areas (RC cache) +
+website placenames validated against DataForSEO's locations database; drop the hardcoded list.
+Maps discovery measurement now probes suburb-level location_name once and falls back to city.

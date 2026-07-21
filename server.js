@@ -814,6 +814,7 @@ async function initDb() {
     await client.query(`CREATE TRIGGER trg_normalize_action_item BEFORE INSERT OR UPDATE ON action_items FOR EACH ROW EXECUTE FUNCTION normalize_action_item()`).catch((e) => { console.log('[migrate] normalize trigger:', e.message); });
     await client.query(`ALTER TABLE gsc_keywords ADD COLUMN IF NOT EXISTS prev_position DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS competitors JSONB DEFAULT '[]'`).catch(() => {});
+    await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS source TEXT`).catch(() => {});
     // Maps discovery columns on discovery_cache
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ`).catch(() => {});
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS keyword_count INTEGER DEFAULT 0`).catch(() => {});

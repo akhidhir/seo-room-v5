@@ -1,2 +1,10 @@
 node_modules/
 node_modules/
+
+# --- added by deploy prep (client payloads / build junk) ---
+*.zip
+*.backup-*
+rc-sync-payloads/
+rc-sync-pending/
+rc_sync_payload.json
+zi*
