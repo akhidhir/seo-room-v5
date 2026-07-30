@@ -12032,7 +12032,18 @@ async function dataForSeoBacklinksSummary(domain) {
     }
   }
 
-  const r = data.tasks?.[0]?.result?.[0] || {};
+  // Only 20000 means the task really ran. Anything else (auth failure, exhausted prepaid balance,
+  // inactive Backlinks subscription, rate limit) used to fall through to `|| {}` and return a full
+  // set of zeros, which the scan then saved as a COMPLETE scan — indistinguishable from a site that
+  // genuinely has no backlinks. Fail loudly instead.
+  if (taskStatus !== 20000) {
+    throw new Error(`DataForSEO backlinks summary failed for "${domain}" (status ${taskStatus}${taskMsg ? ': ' + taskMsg : ''}). No data saved.`);
+  }
+  if (!data.tasks?.[0]?.result?.[0]) {
+    throw new Error(`DataForSEO backlinks summary returned no result for "${domain}". No data saved.`);
+  }
+
+  const r = data.tasks[0].result[0];
   const nofollowCount = r.referring_links_attributes?.nofollow || 0;
   const totalBl = r.backlinks || 0;
   return {
@@ -12095,6 +12106,13 @@ async function dataForSeoBacklinks(domain, limit = 500, offset = 0, orderBy) {
     body: JSON.stringify(body)
   });
   const data = await resp.json();
+  // Same rule as the summary helper: a non-20000 task is a FAILURE, not "zero backlinks".
+  // Silently returning an empty list here made the scan save a real summary alongside an empty
+  // backlink table, so the UI showed "1,240 backlinks — showing 0 of 1,240".
+  const blStatus = data.tasks?.[0]?.status_code;
+  if (blStatus !== 20000) {
+    throw new Error(`DataForSEO backlinks list failed for "${domain}" (status ${blStatus}${data.tasks?.[0]?.status_message ? ': ' + data.tasks[0].status_message : ''}). No data saved.`);
+  }
   const result = data.tasks?.[0]?.result?.[0] || {};
   const items = result.items || [];
   return {
@@ -47338,7 +47356,7 @@ app.post('/api/projects/:projectId/baseline/generate', async (req, res) => {
               messages: [{ role: 'user', content: `Write a baseline assessment for ${project.business_name || project.name} (${project.domain}), industry: ${project.industry || 'N/A'}:
 - Maps: ${gridEntries.length} keywords scanned, avg visibility ${avgSolv ? avgSolv.toFixed(0) + '%' : 'no data'}, ${mapsRankings.dominant} dominant, ${mapsRankings.notVisible} not visible
 - SERP: ${serpRankings.keywordsTracked} keywords tracked, avg position ${serpRankings.avgPosition || 'N/A'}, ${serpRankings.top3} in top 3, ${serpRankings.top10} in top 10
-- GSC: ${gscData.clicks} clicks, ${gscData.impressions} impressions, ${gscData.ctr}% CTR, avg position ${gscData.avgPosition || 'N/A'}
+- GSC: ${gscData.clicks} clicks, ${gscData.impressions} impressions, ${gscData.ctr != null ? gscData.ctr + '% CTR' : 'CTR not available'}, avg position ${gscData.avgPosition || 'N/A'}
 - Audit findings: ${findingsRes.rows.length} total, ${criticalFindings.length} critical
 - On-page: ${onPageStats.totalPages} pages audited, avg SEO score ${onPageStats.avgScore}%, ${onPageStats.issuesFound} issues
 - PageSpeed: ${pageSpeedStats ? `avg ${pageSpeedStats.avgPerformance}% performance, ${pageSpeedStats.poor} poor pages` : 'not scanned'}
@@ -47913,13 +47931,17 @@ app.get('/api/projects/:projectId/reports/:reportId/pdf', async (req, res) => {
     doc.fillColor(teal).fontSize(22).font('Helvetica').text(data.monthLabel || r.rows[0].month, 50, 235, { width: pageW, align: 'center' });
     doc.fillColor('#fff').fontSize(18).text(data.project?.name || 'Project', 50, 285, { width: pageW, align: 'center' });
     doc.fillColor('#999').fontSize(13).text(data.project?.domain || '', 50, 312, { width: pageW, align: 'center' });
-    const scoreColor = (data.healthScore || 0) >= 70 ? green : (data.healthScore || 0) >= 40 ? amber : red;
+    // A null score means not enough was measured to score honestly — show a grey dash, never a 0.
+    const hs = data.healthScore;
+    const scoreColor = hs == null ? '#999' : hs >= 70 ? green : hs >= 40 ? amber : red;
     doc.circle(doc.page.width / 2, 430, 45).lineWidth(4).strokeColor(scoreColor).stroke();
-    doc.fillColor(scoreColor).fontSize(32).font('Helvetica-Bold').text(String(data.healthScore || 0), doc.page.width / 2 - 30, 415, { width: 60, align: 'center' });
+    doc.fillColor(scoreColor).fontSize(32).font('Helvetica-Bold').text(hs == null ? '—' : String(hs), doc.page.width / 2 - 30, 415, { width: 60, align: 'center' });
     doc.fillColor('#999').fontSize(10).font('Helvetica').text('HEALTH SCORE', 50, 485, { width: pageW, align: 'center' });
-    if (data.previousMonth?.healthScore != null) {
-      const d = (data.healthScore || 0) - data.previousMonth.healthScore;
+    if (hs != null && data.previousMonth?.healthScore != null) {
+      const d = hs - data.previousMonth.healthScore;
       doc.fillColor(d >= 0 ? green : red).fontSize(12).text(`${d >= 0 ? '▲ +' : '▼ '}${d} vs last month`, 50, 505, { width: pageW, align: 'center' });
+    } else if (hs == null && data.healthBasis) {
+      doc.fillColor('#999').fontSize(9).text(data.healthBasis, 50, 505, { width: pageW, align: 'center' });
     }
     doc.fillColor('#fff').fontSize(11).font('Helvetica').text('Prepared by The SEO Room', 50, 700, { width: pageW, align: 'center' });
 
@@ -48072,19 +48094,19 @@ app.get('/report/:token', async (req, res) => {
   <div class="card"><h1>${esc(d.project?.name)} — SEO Performance Report</h1>
     <div class="sub">${esc(d.monthLabel)} · ${esc(d.project?.domain || '')} · ${esc(d.project?.location || '')}</div></div>
   <div class="card"><div class="score">
-    <div class="ring" style="background:${d.healthScore >= 70 ? '#16a34a' : d.healthScore >= 50 ? '#f59e0b' : '#dc2626'}">${num(d.healthScore)}</div>
+    <div class="ring" style="background:${d.healthScore == null ? '#9ca3af' : d.healthScore >= 70 ? '#16a34a' : d.healthScore >= 50 ? '#f59e0b' : '#dc2626'}">${d.healthScore == null ? '—' : num(d.healthScore)}</div>
     <div><div style="font-weight:700;font-size:16px">Overall SEO Health</div>
-    <div class="sub">Composite of visibility, rankings, site quality and performance${d.previousMonth?.healthScore != null ? ' · ' + delta(d.healthScore, d.previousMonth.healthScore).replace(/<[^>]+>/g, '') : ''}</div></div>
+    <div class="sub">${esc(d.healthBasis || 'Composite of visibility, rankings, site quality and performance')}${d.healthScore != null && d.previousMonth?.healthScore != null ? ' · ' + delta(d.healthScore, d.previousMonth.healthScore).replace(/<[^>]+>/g, '') : ''}</div></div>
   </div></div>
   ${d.executiveSummary ? `<div class="card"><h2>Summary</h2><div class="summary">${esc(d.executiveSummary)}</div></div>` : ''}
   <div class="card"><h2>Google Search Performance</h2><div class="grid">
     <div class="kpi"><div class="v">${num(g.clicks)}</div><div class="l">Clicks</div>${delta(g.clicks, pg.clicks)}</div>
     <div class="kpi"><div class="v">${num(g.impressions)}</div><div class="l">Impressions</div>${delta(g.impressions, pg.impressions)}</div>
-    <div class="kpi"><div class="v">${g.ctr != null ? num(g.ctr * 100, 1) + '%' : '—'}</div><div class="l">CTR</div></div>
+    <div class="kpi"><div class="v">${g.ctr != null ? num(g.ctr, 1) + '%' : '—'}</div><div class="l">CTR</div></div>
     <div class="kpi"><div class="v">${num(g.avgPosition, 1)}</div><div class="l">Avg Position</div>${delta(g.avgPosition, pg.avgPosition, true)}</div>
   </div></div>
   ${d.mapsRankings ? `<div class="card"><h2>Google Maps Visibility</h2><div class="grid">
-    <div class="kpi"><div class="v">${num(d.mapsRankings.avgArp, 1)}</div><div class="l">Avg Map Rank</div>${delta(d.mapsRankings.avgArp, d.previousMonth?.mapsRankings?.avgArp, true)}</div>
+    <div class="kpi"><div class="v">${d.mapsRankings.avgArp != null ? num(d.mapsRankings.avgArp, 1) : '—'}</div><div class="l">Avg Map Rank${d.mapsRankings.rankedKeywords != null && d.mapsRankings.totalKeywords ? ` (${d.mapsRankings.rankedKeywords}/${d.mapsRankings.totalKeywords} ranking)` : ''}</div>${d.mapsRankings.avgArp != null ? delta(d.mapsRankings.avgArp, d.previousMonth?.mapsRankings?.avgArp, true) : ''}</div>
     <div class="kpi"><div class="v">${d.mapsRankings.avgVisibility != null ? num(d.mapsRankings.avgVisibility, 1) + '%' : '—'}</div><div class="l">Top-3 Visibility</div>${delta(d.mapsRankings.avgVisibility, d.previousMonth?.mapsRankings?.avgVisibility)}</div>
     ${d.pageSpeedStats ? `<div class="kpi"><div class="v">${num(d.pageSpeedStats.avgPerformance)}</div><div class="l">Avg Site Speed Score</div>${delta(d.pageSpeedStats.avgPerformance, d.previousMonth?.pageSpeedStats?.avgPerformance)}</div>` : ''}
     ${d.onPageStats ? `<div class="kpi"><div class="v">${num(d.onPageStats.avgScore)}%</div><div class="l">On-Page SEO Score</div>${delta(d.onPageStats.avgScore, d.previousMonth?.onPageStats?.avgScore)}</div>` : ''}
@@ -48129,9 +48151,20 @@ async function buildMonthlyReportFor(projectId, userId) {
     const latestGrid = {};
     for (const r of gridRes.rows) { if (!latestGrid[r.keyword]) latestGrid[r.keyword] = r; }
     const gridEntries = Object.values(latestGrid);
-    const avgArp = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.arp || 0), 0) / gridEntries.length : null;
-    const avgAtrp = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.atrp || 0), 0) / gridEntries.length : null;
-    const avgSolv = gridEntries.length > 0 ? gridEntries.reduce((s, r) => s + (r.solv || 0), 0) / gridEntries.length : null;
+    // arp/atrp are NULL by design when the business was found at zero grid points. `|| 0` turned
+    // "not ranking anywhere" into "rank 0" — better than #1 — which dragged the client's average
+    // rank down and made a bad month look good. Average only the keywords that actually ranked.
+    const avgOf = (rows, key) => {
+      const vals = rows.map(r => Number(r[key])).filter(v => Number.isFinite(v) && v > 0);
+      return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+    };
+    const avgArp = avgOf(gridEntries, 'arp');
+    const avgAtrp = avgOf(gridEntries, 'atrp');
+    // SOLV is a percentage where a real 0 means "never in the top 3" — that IS a measurement, so
+    // zeros are kept here. Only skip rows where it was never recorded.
+    const solvVals = gridEntries.map(r => Number(r.solv)).filter(v => Number.isFinite(v));
+    const avgSolv = solvVals.length ? solvVals.reduce((s, v) => s + v, 0) / solvVals.length : null;
+    const rankedKeywordCount = gridEntries.filter(r => Number(r.arp) > 0).length;
 
     // Top keywords by grid scan
     const topMapKeywords = gridEntries
@@ -48207,6 +48240,9 @@ async function buildMonthlyReportFor(projectId, userId) {
       totalKeywords: gridEntries.length || mapsPositions.length,
       avgArp: avgArp,
       avgAtrp: avgAtrp,
+      // How many keywords the average rank is actually based on — so "Avg Map Rank 3.2" can be read
+      // honestly when only 2 of 20 keywords rank at all.
+      rankedKeywords: rankedKeywordCount,
       avgVisibility: avgSolv != null ? parseFloat(avgSolv.toFixed(1)) : null,
       comparedTo,
       serpChange: serpChangeFinal,
@@ -48230,7 +48266,8 @@ async function buildMonthlyReportFor(projectId, userId) {
     };
 
     // 2. GSC — pull live data if connected
-    let gscData = { clicks: 0, impressions: 0, ctr: 0, avgPosition: null, topPages: [], topQueries: [], totalKeywords: 0 };
+    // ctr starts null, not 0 — an unfetched CTR used to render as a confident "0.0%" on the client report.
+    let gscData = { clicks: 0, impressions: 0, ctr: null, avgPosition: null, topPages: [], topQueries: [], totalKeywords: 0 };
     try {
       const token = await getGscAccessToken(userId);
       if (token && project.gsc_property) {
@@ -48328,7 +48365,12 @@ async function buildMonthlyReportFor(projectId, userId) {
 
     // 3. Audit findings with details
     const findingsRes = await pool.query(
-      `SELECT pillar, severity, status, category, title FROM audit_findings WHERE project_id=$1 ORDER BY severity DESC, created_at DESC`,
+      // ORDER BY severity DESC was alphabetical, not severity order — and case-sensitive, so
+      // 'critical' and 'Critical' sorted into different places. Rank explicitly instead.
+      `SELECT pillar, severity, status, category, title FROM audit_findings WHERE project_id=$1
+       ORDER BY CASE lower(severity)
+                  WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3
+                  WHEN 'low' THEN 4 ELSE 5 END, created_at DESC`,
       [projectId]
     );
     const findingsByPillar = {};
@@ -48337,9 +48379,14 @@ async function buildMonthlyReportFor(projectId, userId) {
       const p = r.pillar || 'other';
       if (!findingsByPillar[p]) findingsByPillar[p] = { total: 0, critical: 0, high: 0, medium: 0, approved: 0, dismissed: 0, pending: 0 };
       findingsByPillar[p].total++;
-      if (r.severity === 'Critical') { findingsByPillar[p].critical++; criticalFindings.push({ pillar: p, title: r.title, status: r.status }); }
-      if (r.severity === 'High') findingsByPillar[p].high++;
-      if (r.severity === 'Medium') findingsByPillar[p].medium++;
+      // Severity is written BOTH ways across the codebase ('Critical' from the agent extractors,
+      // 'critical' from normSeverity). Exact-case matching silently dropped half the criticals from
+      // the per-pillar counts AND from "Top Priorities", while still counting them in total — so the
+      // buckets never summed to the total. Compare case-insensitively.
+      const sev = String(r.severity || '').toLowerCase();
+      if (sev === 'critical') { findingsByPillar[p].critical++; criticalFindings.push({ pillar: p, title: r.title, status: r.status }); }
+      if (sev === 'high') findingsByPillar[p].high++;
+      if (sev === 'medium') findingsByPillar[p].medium++;
       if (r.status === 'approved') findingsByPillar[p].approved++;
       if (r.status === 'dismissed') findingsByPillar[p].dismissed++;
       if (r.status === 'new') findingsByPillar[p].pending++;
@@ -48418,7 +48465,7 @@ async function buildMonthlyReportFor(projectId, userId) {
           system: 'You are an SEO agency report writer. Write a brief, professional executive summary (3-4 sentences) for a monthly SEO report. Be specific with numbers. No bullet points, no headers. Tone: confident, data-driven, action-oriented.',
           messages: [{ role: 'user', content: `Write an executive summary for ${project.business_name || project.name} (${project.domain}):
 - Maps: ${gridEntries.length} keywords tracked, avg visibility ${avgSolv ? avgSolv.toFixed(0) + '%' : 'N/A'}, ${mapsRankings.dominant} dominant, ${mapsRankings.notVisible} not visible
-- GSC: ${gscData.clicks} clicks, ${gscData.impressions} impressions, ${gscData.ctr}% CTR
+- GSC: ${gscData.clicks} clicks, ${gscData.impressions} impressions, ${gscData.ctr != null ? gscData.ctr + '% CTR' : 'CTR not available'}
 - Audit: ${findingsRes.rows.length} total findings, ${criticalFindings.length} critical
 - Actions: ${actionsByStatus.done} completed, ${actionsByStatus.pending} pending, ${completionRate}% completion rate
 - On-page: ${onPageStats.totalPages} pages, avg SEO score ${onPageStats.avgScore}%, ${onPageStats.pagesFixed} fixes applied
@@ -48429,14 +48476,31 @@ async function buildMonthlyReportFor(projectId, userId) {
     }
 
     // 8. Overall health score (0-100)
-    let healthScore = 50; // base
-    if (avgSolv) healthScore = Math.min(100, Math.max(0, Math.round(
-      (avgSolv * 0.3) + // Maps visibility weight
-      (completionRate * 0.2) + // Action completion weight
-      (onPageStats.avgScore * 0.2) + // On-page score weight
-      ((pageSpeedStats?.avgPerformance || 50) * 0.15) + // PageSpeed weight
-      (Math.min(100, (gscData.ctr || 0) * 20) * 0.15) // CTR weight (5% CTR = 100)
-    )));
+    // Scored ONLY from components that were actually measured, with the weights re-normalised over
+    // those components. Two things this deliberately does NOT do, because both put invented numbers
+    // in front of a client:
+    //   - fall back to a flat 50 when Maps visibility is missing or zero (a business ranking nowhere
+    //     used to score 50/100, and a genuine SOLV of 0 was treated as "no data")
+    //   - substitute 50 for a PageSpeed scan that never ran
+    // If nothing was measured the score is null and the report renders "—" instead of a number.
+    const healthParts = [
+      { value: avgSolv,                      weight: 0.30 }, // Maps visibility
+      { value: completionRate,               weight: 0.20 }, // Action completion
+      { value: onPageStats?.avgScore,        weight: 0.20 }, // On-page score
+      { value: pageSpeedStats?.avgPerformance, weight: 0.15 }, // PageSpeed
+      { value: gscData.ctr != null ? Math.min(100, gscData.ctr * 20) : null, weight: 0.15 } // CTR (5% = 100)
+    ].filter(p => p.value != null && Number.isFinite(Number(p.value)));
+
+    const healthWeight = healthParts.reduce((s, p) => s + p.weight, 0);
+    // Require at least half the weighting to be real before showing a score at all.
+    const healthScore = healthWeight >= 0.5
+      ? Math.min(100, Math.max(0, Math.round(
+          healthParts.reduce((s, p) => s + Number(p.value) * p.weight, 0) / healthWeight
+        )))
+      : null;
+    const healthBasis = healthScore != null
+      ? `Based on ${healthParts.length} of 5 measures (${Math.round(healthWeight * 100)}% of the full score)`
+      : `Not enough measured data to score this month — only ${healthParts.length} of 5 measures available`;
 
     // 8b. WORK COMPLETED — proof of work from change history + resolved findings (this month)
     let workCompleted = null;
@@ -48517,6 +48581,7 @@ async function buildMonthlyReportFor(projectId, userId) {
       monthLabel,
       project: { name: project.business_name || project.name, domain: project.domain, industry: project.industry, location: project.location },
       healthScore,
+      healthBasis,
       executiveSummary,
       discovered,
       mapsRankings,
@@ -49788,12 +49853,17 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
           const locId = project.gbp_location_id;
           const locData = seed[locId];
           if (locData?.reviews) {
+            // rating was hardcoded to 5 here. The seed file only carries comment + reply text, so
+            // every seeded review was being presented as five stars regardless of what it actually
+            // was. Carry the real value when the seed has one, otherwise null = unknown — never a
+            // flattering guess.
             const seedReviews = locData.reviews.filter(r => r.comment).map(r => ({
               comment: r.comment || '',
-              reviewer: '',
-              rating: 5,
-              date: null,
-              reply: r.reply || ''
+              reviewer: r.reviewer || '',
+              rating: (typeof r.rating === 'number' && r.rating >= 1 && r.rating <= 5) ? r.rating : null,
+              date: r.date || null,
+              reply: r.reply || '',
+              from_seed: true
             }));
             // Use seed if cache is empty OR seed has more data (updated seed deployed)
             if (seedReviews.length > cachedCount) {
@@ -49815,14 +49885,33 @@ app.get('/api/projects/:id/local-intel', async (req, res) => {
       } catch (e) { console.log(`[local-intel] Seed file fallback failed: ${e.message}`); }
     }
 
-    // Recalculate review stats from actual loaded reviews (DB/seed may have stale reply_rate)
+    // Reply-rate stats.
+    // The loaded review set is often a PARTIAL sample (the bundled seed holds a few dozen of a
+    // location's real total). Recomputing reply_rate over that sample and presenting it next to the
+    // real total_reviews produced a self-contradicting stat — e.g. "1,467 reviews, 12% replied"
+    // where the 12% came from 74 rows. Only trust the recomputation when we actually hold (almost)
+    // every review; otherwise keep the real stats and label the sample for what it is.
     if (allReviews.length > 0 && reviewStats) {
       const repliedCount = allReviews.filter(r => r.reply || r.review_reply?.comment || r.response).length;
-      reviewStats.total_reviews = Math.max(reviewStats.total_reviews || 0, allReviews.length);
-      reviewStats.replied_count = repliedCount;
-      reviewStats.unreplied_count = allReviews.length - repliedCount;
-      reviewStats.reply_rate = Math.round((repliedCount / allReviews.length) * 1000) / 10;
-      console.log(`[local-intel] Recalculated reply_rate: ${reviewStats.reply_rate}% (${repliedCount}/${allReviews.length})`);
+      const realTotal = reviewStats.total_reviews || 0;
+      const haveAll = realTotal === 0 || allReviews.length >= realTotal * 0.95;
+
+      reviewStats.reviews_loaded = allReviews.length;
+      reviewStats.is_partial_sample = !haveAll;
+
+      if (haveAll) {
+        reviewStats.total_reviews = Math.max(realTotal, allReviews.length);
+        reviewStats.replied_count = repliedCount;
+        reviewStats.unreplied_count = allReviews.length - repliedCount;
+        reviewStats.reply_rate = Math.round((repliedCount / allReviews.length) * 1000) / 10;
+        console.log(`[local-intel] Recalculated reply_rate: ${reviewStats.reply_rate}% (${repliedCount}/${allReviews.length})`);
+      } else {
+        // Keep whatever the API reported for the whole profile; expose the sample separately so the
+        // UI can say "based on N of M reviews" instead of implying it covers everything.
+        reviewStats.sample_replied_count = repliedCount;
+        reviewStats.sample_reply_rate = Math.round((repliedCount / allReviews.length) * 1000) / 10;
+        console.log(`[local-intel] Partial review sample (${allReviews.length}/${realTotal}) — keeping API reply stats, not recomputing.`);
+      }
     }
 
     // Scan review text + reply text for suburb mentions

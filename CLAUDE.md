@@ -616,10 +616,35 @@ Fixed this session (server.js only, no frontend changes):
    to verify it (the old identity guard was skipped entirely when `profile` was absent, while the re-point still
    happened).
 
-**Not yet fixed — highest remaining, in order:** client-report CTR ×100 (server.js ~47878, `g.ctr * 100` where ctr is
-already a %); invented health score of 50; `arp || 0` counting "not ranking" as rank 0; Local Intel hardcoded
-`rating: 5`; severity case-mismatch dropping criticals from the client PDF; Backlinks API saving zeros as "complete";
-hardcoded `sr_2026_…` key (rotate); `server.js.bak` committed with old secrets (`*.bak` not in .gitignore).
+### Batch 2 — client-report accuracy (same session)
+5. **CTR ×100 on the share page** — `gscData.ctr` is ALREADY a percentage (set at both the live-fetch and the
+   stored-keyword fallback). The share page multiplied again, so 3.4% printed as 340%. Also: `gscData.ctr` now
+   defaults to `null`, not `0` — an unfetched CTR used to render as a confident "0.0%".
+6. **Health score no longer invented.** Was `let healthScore = 50` with `(pageSpeedStats?.avgPerformance || 50)`.
+   Now scored only from measured components with weights re-normalised over them; needs ≥50% of the weighting to
+   show a number at all, else `null` → "—" on both the share page and the PDF cover. `healthBasis` string explains
+   what it's based on and is saved into `report_data`.
+7. **Avg Map Rank** — `arp`/`atrp` are NULL by design when found at zero grid points; `|| 0` made that "rank 0" and
+   pulled the average DOWN (flattering). Now averaged over ranking keywords only, via the `avgOf()` helper, and the
+   label shows `(N/M ranking)`. SOLV keeps genuine zeros — a real 0% IS a measurement.
+8. **Severity casing** — report counted `=== 'Critical'` while `normSeverity` writes lowercase, so criticals were
+   dropped from the per-pillar buckets AND from the PDF's "Top Priorities" while still counting in `total`.
+   Now `lower(severity)`, and the query orders by an explicit severity rank (the old `ORDER BY severity DESC` was
+   alphabetical AND case-sensitive).
+9. **Local Intel** — seeded reviews had `rating: 5` hardcoded; now carries the real value or `null`. Reply rate is
+   no longer recomputed from a partial sample and shown next to the real total — recomputes only when we hold ≥95%
+   of the reviews, otherwise keeps the API stats and exposes `is_partial_sample` / `sample_reply_rate`.
+10. **Backlinks** — `dataForSeoBacklinksSummary` and `dataForSeoBacklinks` returned all-zeros / empty on ANY
+   non-20000 task status (dead subscription, empty prepaid balance, auth failure), and the scan saved that as
+   `status='complete'` — identical to a site with genuinely no backlinks. Both now throw; the scan endpoint's
+   catch already returns 500 without saving.
+
+**Not yet fixed — highest remaining, in order:** monthly report has no recency bound on grid scans / PageSpeed /
+on-page / discovery data and shows no `measured_at` (a March scan can appear in an October report); report averages
+partial results from FAILED PageSpeed scans unlabelled; `onPageStats.pagesFixed` is a lifetime count of history ROWS
+(not this month, not pages) and is narrated into the AI summary; hardcoded `sr_2026_…` key (rotate); `server.js.bak`
+committed with old secrets (`*.bak` not in .gitignore); no timeout on serpApiSearch / DataForSEO helpers;
+rankSync/napCheck/imageOptimize jobs are memory-only so a redeploy makes them look like they never ran.
 
 ## Session Log 2026-07-04 (evening): Full v5 Audit + Cleanup
 
