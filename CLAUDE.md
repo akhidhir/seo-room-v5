@@ -609,10 +609,12 @@ Fixed this session (server.js only, no frontend changes):
    (pinned to its own project) and checks project ids in the BODY via `requestedProjectIds()` —
    `destination_project_id` previously let a caller publish to a DIFFERENT client's live site.
 4. **rc-sync / rc-grid-sync** were unauthenticated writes. Now `rcSyncAuthOk()`: accepts a JWT or `RC_SYNC_KEY`
-   (`?key=` or `x-rc-sync-key`). **Back-compat window: while RC_SYNC_KEY is unset the call is allowed with a loud
-   warning, so setting it can't break a running automation. Set it in Railway + add `?key=` to the scheduled tasks
-   to close this.** Also: rc-sync now refuses a location-id change that arrives without the profile to verify it
-   (the old identity guard was skipped entirely when `profile` was absent, while the re-point still happened).
+   (`?key=` or `x-rc-sync-key`). **FAIL CLOSED** — with RC_SYNC_KEY unset the only way in is a real login.
+   Safe to do because the three tasks that call these (`rc-sync-profiles`, `rc-data-sync`, `rc-grid-sync`) are all
+   currently DISABLED. **Before re-enabling any of them: set RC_SYNC_KEY in Railway and add the same key to the
+   task's URL, or it will 403.** Also: rc-sync now refuses a location-id change that arrives without the profile
+   to verify it (the old identity guard was skipped entirely when `profile` was absent, while the re-point still
+   happened).
 
 **Not yet fixed — highest remaining, in order:** client-report CTR ×100 (server.js ~47878, `g.ctr * 100` where ctr is
 already a %); invented health score of 50; `arp || 0` counting "not ranking" as rank 0; Local Intel hardcoded

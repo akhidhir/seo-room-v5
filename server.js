@@ -15870,18 +15870,20 @@ app.get('/api/projects/:projectId/gbp-optimise/queue', async (req, res) => {
 });
 
 // ── Auth for the RC sync endpoints (rc-sync, rc-grid-sync) ──
-// These are called by scheduled automations that have no dashboard login, so they are exempt from JWT.
-// They also WRITE — including re-pointing a project at a different Google Business Profile — so they
-// must not be open to the internet.
-// Accepts either a normal logged-in user OR a shared key (?key= or x-rc-sync-key).
-// Until RC_SYNC_KEY is configured the call is allowed with a loud warning, so setting the variable
-// can't break a running automation mid-flight. Once it IS set, the endpoint is fail-closed.
+// These WRITE — including re-pointing a project at a different Google Business Profile — so they must
+// never be open to the internet. They're exempt from JWT because scheduled automations call them
+// without a dashboard login.
+// Accepts a logged-in user OR the RC_SYNC_KEY secret (?key= or x-rc-sync-key header).
+// FAIL CLOSED: with RC_SYNC_KEY unset there is no way in except a real login. If you re-enable the
+// rc-sync-profiles / rc-data-sync / rc-grid-sync scheduled tasks, set RC_SYNC_KEY in Railway first and
+// add the same key to those tasks, or they will get a 403.
 function rcSyncAuthOk(req, res, label) {
   if (req.auth) return true;
   const key = process.env.RC_SYNC_KEY;
   if (!key) {
-    console.warn(`[${label}] UNAUTHENTICATED CALL ALLOWED — RC_SYNC_KEY is not set. Set RC_SYNC_KEY in Railway and add ?key=... to the scheduled task to close this. Caller: ${req.ip}`);
-    return true;
+    console.warn(`[${label}] REJECTED unauthenticated call from ${req.ip} — RC_SYNC_KEY is not configured on this server.`);
+    res.status(403).json({ error: 'This endpoint requires a sync key, which is not configured on the server. Set RC_SYNC_KEY and pass it as ?key=... (or an x-rc-sync-key header).' });
+    return false;
   }
   const given = req.query.key || req.get('x-rc-sync-key');
   if (given && given === key) return true;
