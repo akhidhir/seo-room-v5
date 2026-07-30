@@ -55288,6 +55288,389 @@ app.post('/api/projects/:projectId/security-audit/fix/dir-listing', async (req, 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ============================================================================
+// CLAUDE AUDIT — one-click AI website audit that lands as Action Plan tasks
+// ============================================================================
+// Flow: crawl the site → build a compact, factual page-by-page sheet → hand it
+// to Claude → reformat the returned findings into the dashboard's own shapes
+// (audit_findings + action_items) so they show up on the Control Centre board
+// like every other audit. Read-only: nothing is ever written to the live site.
+
+const CA_MAX_PAGES = 25;
+// Sonnet, not Haiku — the audit needs judgement, not just extraction. Override with an env var
+// if you want to trade quality for cost.
+const CA_MODEL = process.env.CLAUDE_AUDIT_MODEL || 'claude-sonnet-4-6';
+
+// Dedicated client. The shared `anthropic` client sits on an undici dispatcher capped at a 120s
+// headers timeout, which is right for the short Haiku extractions everywhere else — but this is one
+// long non-streaming call, and headers only arrive when generation finishes. On the shared client it
+// would be killed at ~2 minutes regardless of the per-request timeout.
+let caAnthropic = null;
+function caClient() {
+  if (caAnthropic) return caAnthropic;
+  if (!ANTHROPIC_API_KEY) return null;
+  let longFetch;
+  try {
+    const { Agent: UndiciAgent, fetch: undiciFetch } = require('undici');
+    const d = new UndiciAgent({ keepAliveTimeout: 1000, keepAliveMaxTimeout: 1000, connect: { timeout: 15000 }, bodyTimeout: 900000, headersTimeout: 900000 });
+    longFetch = (u, init) => undiciFetch(u, { ...init, dispatcher: d });
+  } catch (e) { console.error('[claude-audit] undici unavailable, using default fetch:', e.message); }
+  caAnthropic = new Anthropic(Object.assign(
+    // No retry: a retry on a 10-minute call would double the wall clock and the bill. The client
+    // timeout (not the dispatcher above) is the real ceiling.
+    { apiKey: ANTHROPIC_API_KEY, maxRetries: 0, timeout: 600000 },
+    longFetch ? { fetch: longFetch } : {}
+  ));
+  return caAnthropic;
+}
+const CA_UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
+
+function caAbsoluteUrl(raw) {
+  let u = (raw || '').toString().trim();
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return u.replace(/\/+$/, '');
+}
+
+// Pull the SEO-relevant facts out of one page's HTML. No judgement here — Claude does that.
+function caExtractPageFacts(url, html, status) {
+  const pick = (re) => { const m = html.match(re); return m ? (m[1] || '').trim() : ''; };
+  const strip = (s) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const title = strip(pick(/<title[^>]*>([\s\S]*?)<\/title>/i));
+  const metaDesc = pick(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i)
+    || pick(/<meta[^>]+content=["']([^"']*)["'][^>]*name=["']description["']/i);
+  const canonical = pick(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']*)["']/i);
+  const robots = pick(/<meta[^>]+name=["']robots["'][^>]*content=["']([^"']*)["']/i);
+  const viewport = pick(/<meta[^>]+name=["']viewport["'][^>]*content=["']([^"']*)["']/i);
+  const ogTitle = pick(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']*)["']/i);
+  const h1s = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)].map(m => strip(m[1])).filter(Boolean);
+  const h2s = [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/gi)].map(m => strip(m[1])).filter(Boolean);
+  const imgTags = [...html.matchAll(/<img\b[^>]*>/gi)].map(m => m[0]);
+  const imgsMissingAlt = imgTags.filter(t => !/\balt\s*=\s*["'][^"']+["']/i.test(t)).length;
+  const schemaTypes = [...new Set([...html.matchAll(/"@type"\s*:\s*"([^"]+)"/g)].map(m => m[1]))];
+  const bodyText = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  const wordCount = (bodyText.match(/[A-Za-z][A-Za-z']+/g) || []).length;
+  let host = ''; try { host = new URL(url).host; } catch (e) { /* keep empty */ }
+  const hrefs = [...html.matchAll(/<a\b[^>]*href=["']([^"'#][^"']*)["']/gi)].map(m => m[1]);
+  // Resolve against the page URL so protocol-relative (//cdn…) and query-string lookalikes
+  // (…?ref=ourdomain.com) are classified by their real host, not by a substring match.
+  const internal = hrefs.filter(h => {
+    if (/^(mailto:|tel:|javascript:)/i.test(h)) return false;
+    try { return new URL(h, url).host === host; } catch (e) { return h.startsWith('/'); }
+  });
+  return {
+    url,
+    http_status: status,
+    title,
+    title_length: title.length,
+    meta_description: metaDesc,
+    meta_description_length: metaDesc.length,
+    canonical,
+    robots_meta: robots,
+    has_viewport: !!viewport,
+    og_title: ogTitle,
+    h1_count: h1s.length,
+    h1: h1s[0] || '',
+    h2_count: h2s.length,
+    h2_sample: h2s.slice(0, 6),
+    image_count: imgTags.length,
+    images_missing_alt: imgsMissingAlt,
+    schema_types: schemaTypes.slice(0, 12),
+    word_count: wordCount,
+    internal_links: internal.length,
+    external_links: hrefs.length - internal.length,
+    body_sample: bodyText.replace(/\s+/g, ' ').trim().slice(0, 900),
+  };
+}
+
+async function caFetchPage(url) {
+  try {
+    const r = await fetch(url, { headers: CA_UA, redirect: 'follow', signal: AbortSignal.timeout(20000) });
+    const html = await r.text();
+    return caExtractPageFacts(url, html, r.status);
+  } catch (e) {
+    return { url, http_status: 0, fetch_error: e.message };
+  }
+}
+
+// Site-wide signals Claude can't see from individual pages.
+async function caSiteSignals(baseUrl) {
+  const out = { robots_txt: false, robots_txt_body: '', sitemap_xml: false, https_ok: false, homepage_final_url: '' };
+  try {
+    const r = await fetch(`${baseUrl}/robots.txt`, { headers: CA_UA, signal: AbortSignal.timeout(10000) });
+    if (r.ok) { out.robots_txt = true; out.robots_txt_body = (await r.text()).slice(0, 1200); }
+  } catch (e) { /* absent is itself a finding */ }
+  for (const sm of ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml']) {
+    try {
+      const r = await fetch(`${baseUrl}${sm}`, { headers: CA_UA, signal: AbortSignal.timeout(10000) });
+      if (r.ok) { out.sitemap_xml = true; break; }
+    } catch (e) { /* try next */ }
+  }
+  try {
+    const r = await fetch(baseUrl, { headers: CA_UA, redirect: 'follow', signal: AbortSignal.timeout(15000) });
+    out.https_ok = r.ok && r.url.startsWith('https://');
+    out.homepage_final_url = r.url; // where the homepage actually resolves after redirects
+  } catch (e) { /* leave defaults */ }
+  return out;
+}
+
+// Reformat one raw Claude finding into the exact shape the dashboard stores.
+function caShapeFinding(f) {
+  const sev = normSeverity(f.severity || 'medium');
+  const pages = Array.isArray(f.pages_affected) ? f.pages_affected : (f.pages_affected ? [f.pages_affected] : []);
+  const steps = Array.isArray(f.how_to_fix) ? f.how_to_fix : (f.how_to_fix ? [f.how_to_fix] : []);
+  return {
+    category: normCategory(f.category || 'Site Health'),
+    title: (f.title || 'Untitled finding').toString().slice(0, 240),
+    description: (f.description || '').toString().slice(0, 4000),
+    recommendation: (f.recommendation || '').toString().slice(0, 4000),
+    severity: ['critical', 'high', 'medium', 'low'].includes(sev) ? sev : 'medium',
+    current_value: (f.current_value == null ? '' : f.current_value).toString().slice(0, 500),
+    recommended_value: (f.recommended_value == null ? '' : f.recommended_value).toString().slice(0, 500),
+    pages_affected: pages.join('\n').slice(0, 2000),
+    how_to_steps: steps.map((s, i) => `${i + 1}. ${s}`).join('\n').slice(0, 3000),
+    effort: (f.effort || '').toString().slice(0, 40),
+    expected_impact: (f.expected_impact || '').toString().slice(0, 300),
+  };
+}
+
+const CA_PROMPT = `You are a senior technical SEO auditing a live website. You are given real crawl data — every number below was measured, nothing is assumed.
+
+Return findings ONLY for problems you can prove from the data. Never invent a page, number, or issue. If a field is empty because it was not captured, do NOT report it as missing — say nothing.
+
+Return a JSON array (and nothing else) where each element is:
+{
+  "title": "short, specific, action-oriented",
+  "category": "one of: Site Health | Content Quality | Schema & Data | Alt Text | Internal Linking | Broken Links | On-Page",
+  "severity": "critical | high | medium | low",
+  "description": "what is wrong and why it matters for rankings, in plain English",
+  "recommendation": "what to change",
+  "current_value": "the measured value, e.g. '4 pages have no meta description'",
+  "recommended_value": "the target state",
+  "pages_affected": ["full URLs"],
+  "how_to_fix": ["step 1", "step 2"],
+  "effort": "quick | medium | large",
+  "expected_impact": "one line on the likely result"
+}
+
+Rules:
+- Group the same issue across pages into ONE finding with all URLs in pages_affected. Do not emit one finding per page.
+- Severity: critical = blocks indexing or breaks the site; high = clear ranking loss; medium = meaningful improvement; low = polish.
+- Maximum 20 findings. Prioritise ruthlessly.
+- Output raw JSON only. No markdown fences, no commentary.`;
+
+// Run the audit: crawl → Claude → reformat → store as findings + tasks.
+app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
+  const projectId = req.params.id;
+  let auditId = null;
+  try {
+    if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const baseUrl = caAbsoluteUrl(req.body?.url || project.domain);
+    if (!baseUrl) return res.status(400).json({ error: 'No website URL. Set the domain in Project Settings or type one in.' });
+
+    const instructions = (req.body?.instructions || '').toString().slice(0, 1500);
+
+    // In-flight guard. The browser's api() helper retries on proxy timeouts, and this route takes
+    // minutes — without this, one click could kick off several full crawls and several paid calls.
+    // The source tag keeps this separate from the other website audits, which also write
+    // pillar='website' rows — otherwise one of those running would block this one.
+    const inFlight = await pool.query(
+      `SELECT id FROM audits WHERE project_id=$1 AND pillar='website' AND status='running'
+         AND audit_data->>'source' = 'claude_audit'
+         AND started_at > NOW() - INTERVAL '20 minutes' LIMIT 1`,
+      [projectId]
+    );
+    if (inFlight.rows.length) {
+      return res.status(409).json({ error: 'An audit is already running for this project. Give it a minute, then reload.' });
+    }
+
+    const auditRow = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at, audit_data)
+       VALUES ($1, 'website', 'running', NOW(), '{"source":"claude_audit"}'::jsonb) RETURNING *`,
+      [projectId]
+    );
+    auditId = auditRow.rows[0].id;
+
+    // 1. Which pages exist
+    let discovered = [];
+    try {
+      discovered = await discoverPages(baseUrl, project.wordpress_url || null, getWpAuthHeaders(project));
+    } catch (e) {
+      console.log('[claude-audit] discoverPages failed:', e.message);
+    }
+    let urls = discovered.map(p => p.url).filter(Boolean);
+    if (!urls.length) urls = [baseUrl];
+    if (!urls.includes(baseUrl)) urls.unshift(baseUrl);
+    urls = [...new Set(urls)].slice(0, CA_MAX_PAGES);
+
+    // 2. Fetch them (small batches so we don't hammer the host)
+    const pageFacts = [];
+    for (let i = 0; i < urls.length; i += 5) {
+      const batch = await Promise.all(urls.slice(i, i + 5).map(caFetchPage));
+      pageFacts.push(...batch);
+    }
+    const site = await caSiteSignals(baseUrl);
+    console.log(`[claude-audit] project ${projectId}: crawled ${pageFacts.length} pages of ${baseUrl}`);
+
+    // 3. Hand the facts to Claude
+    const context = {
+      business: project.business_name || project.name || '',
+      industry: project.industry || '',
+      location: project.location || '',
+      service_areas: Array.isArray(project.service_areas) ? project.service_areas.slice(0, 30) : [],
+      site_url: baseUrl,
+      site_signals: site,
+      pages_crawled: pageFacts.length,
+      pages: pageFacts,
+    };
+    const userMsg = `${instructions ? `EXTRA INSTRUCTIONS FROM THE USER (treat as priority):\n${instructions}\n\n` : ''}CRAWL DATA:\n${JSON.stringify(context)}`;
+
+    const aiResp = await caClient().messages.create({
+      model: CA_MODEL,
+      max_tokens: 16000, // shared with the model's thinking budget, so leave headroom
+      system: CA_PROMPT,
+      messages: [{ role: 'user', content: userMsg }],
+    });
+
+    // content[0] can be a thinking block on models with adaptive thinking — take the text blocks.
+    const rawText = (aiResp.content || [])
+      .filter(b => b && b.type === 'text' && typeof b.text === 'string')
+      .map(b => b.text).join('\n').trim();
+    if (!rawText) throw new Error('Claude returned no text. Try again.');
+    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error('Claude did not return findings in the expected format.');
+    let raw;
+    try { raw = JSON.parse(jsonMatch[0]); } catch (e) { throw new Error('Could not read Claude findings: ' + e.message); }
+    if (!Array.isArray(raw)) throw new Error('Claude findings were not a list.');
+
+    // 4. Reformat to the dashboard's shapes and store.
+    // Tasks are minted the same way every other source mints them (type src_*, one permanent
+    // ticket code per issue) so re-running the audit re-attaches to the SAME ticket instead of
+    // duplicating the board.
+    const shaped = raw.map(caShapeFinding).filter(f => f.title && f.title !== 'Untitled finding').slice(0, 20);
+    const projCode = deriveProjectCode(project);
+    const existingTasks = (await pool.query(
+      `SELECT id, title, ranking_page, code, status FROM action_items WHERE project_id=$1 AND type='src_claude_audit'`,
+      [projectId]
+    )).rows;
+    const caKey = (t, p) => `${(t || '').toLowerCase().trim()}|${(p || '').toLowerCase().trim()}`;
+    const taskByKey = new Map(existingTasks.map(r => [caKey(r.title, r.ranking_page), r]));
+
+    const created = [];
+    for (const f of shaped) {
+      const firstPage = (f.pages_affected || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || null;
+
+      const finding = (await pool.query(
+        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
+         VALUES ($1,$2,'website',$3,$4,$5,$6,$7,$8,$9,'new') RETURNING *`,
+        [projectId, auditId, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
+      )).rows[0];
+
+      let task = taskByKey.get(caKey(f.title, firstPage));
+      if (task) {
+        // Same issue as a previous run — refresh it and reopen if it had been closed.
+        task = (await pool.query(
+          `UPDATE action_items SET finding_id=$1, category=$2, description=$3, current_value=$4, new_value=$5,
+             severity=$6, pages_affected=$7, how_to_steps=$8, effort=$9, expected_impact=$10,
+             status = CASE WHEN status='done' THEN 'pending' ELSE status END
+           WHERE id=$11 RETURNING *`,
+          [finding.id, f.category, f.description, f.current_value, f.recommended_value, f.severity,
+            f.pages_affected, f.how_to_steps, f.effort, f.expected_impact, task.id]
+        )).rows[0];
+      } else {
+        task = (await pool.query(
+          `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, ranking_page, pages_affected, how_to_steps, effort, expected_impact)
+           VALUES ($1,$2,'website','src_claude_audit',$3,$4,$5,$6,$7,$8,'pending','manual',$9,$10,$11,$12,$13) RETURNING *`,
+          [projectId, finding.id, f.category, f.title, f.description, f.current_value, f.recommended_value, f.severity,
+            firstPage, f.pages_affected, f.how_to_steps, f.effort, f.expected_impact]
+        )).rows[0];
+        taskByKey.set(caKey(f.title, firstPage), task);
+      }
+
+      // Every task needs a permanent ticket code or the Control Centre will not show it.
+      if (!task.code) {
+        try {
+          const forClass = { title: task.title, category: f.category, pillar: 'website', type: 'src_claude_audit', ranking_page: firstPage, pages_affected: f.pages_affected };
+          const pCode = pillarCode(forClass);
+          const rcKey = findingIdentity(projectId, pCode, forClass);
+          const code = await ensureTicketCode(projectId, projCode, rcKey, pCode);
+          await pool.query('UPDATE action_items SET code=$1, root_cause_key=$2 WHERE id=$3', [code, rcKey, task.id]);
+          task.code = code; task.root_cause_key = rcKey;
+        } catch (codeErr) {
+          console.log('[claude-audit] ticket code failed:', codeErr.message);
+        }
+      }
+
+      created.push({ finding, action_item: normalizeActionRow(task) });
+    }
+
+    // RECONCILE — this run reported the site's COMPLETE current issue list, so any task from a
+    // previous Claude Audit that is no longer reported has been fixed. Close it, like the other
+    // sources do, instead of leaving stale tickets on the board forever.
+    const stillOpen = new Set(created.map(c => caKey(c.action_item.title, c.action_item.ranking_page)));
+    for (const old of existingTasks) {
+      if (stillOpen.has(caKey(old.title, old.ranking_page))) continue;
+      if ((old.status || '').toLowerCase() === 'done') continue;
+      await pool.query(`UPDATE action_items SET status='done', source_progress=100 WHERE id=$1`, [old.id]).catch(() => {});
+      if (old.code) {
+        await pool.query(
+          `UPDATE ticket_codes SET status='Done', finished_at=COALESCE(finished_at, NOW()), verified_at=NOW()
+           WHERE project_id=$1 AND code=$2 AND status IS DISTINCT FROM 'Done'`,
+          [projectId, old.code]
+        ).catch(() => {});
+      }
+    }
+
+    const summary = {
+      url: baseUrl,
+      pages_crawled: pageFacts.length,
+      findings: shaped.length,
+      by_severity: shaped.reduce((a, f) => { a[f.severity] = (a[f.severity] || 0) + 1; return a; }, {}),
+      instructions,
+      ran_at: new Date().toISOString(),
+    };
+    await pool.query(
+      `UPDATE audits SET status='completed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
+      [JSON.stringify({ source: 'claude_audit', summary, findings: shaped }), auditId]
+    );
+
+    res.json({ ok: true, audit_id: auditId, summary, findings: created.map(c => ({ ...c.finding, action_item_id: c.action_item.id, pages_affected: c.action_item.pages_affected, how_to_steps: c.action_item.how_to_steps })) });
+  } catch (e) {
+    console.error('[claude-audit] failed:', e.message);
+    if (auditId) {
+      await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), error_message=$1 WHERE id=$2`, [e.message, auditId]).catch(() => {});
+    }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Last completed Claude Audit for this project (so results survive navigation).
+app.get('/api/projects/:id/claude-audit/latest', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, status, audit_data, completed_at FROM audits
+       WHERE project_id=$1 AND pillar='website' AND status='completed'
+         AND audit_data->>'source' = 'claude_audit'
+       ORDER BY completed_at DESC LIMIT 1`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.json({ audit: null });
+    const row = r.rows[0];
+    res.json({ audit: { id: row.id, completed_at: row.completed_at, summary: row.audit_data.summary, findings: row.audit_data.findings || [] } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Serve index.html for all other routes (SPA fallback)
 app.get('*', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

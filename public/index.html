@@ -8414,6 +8414,238 @@
       );
     }
 
+    // ============ CLAUDE AUDIT PAGE ============
+    // One button: crawl the site, let Claude analyse it, land the findings on the
+    // Control Centre as pending tasks. Read-only — nothing touches the live site.
+    function ClaudeAuditPage({ project, setActiveTab }) {
+      const [url, setUrl] = useState('');
+      const [instructions, setInstructions] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [summary, setSummary] = useState(null);
+      const [findings, setFindings] = useState([]);
+      const [expanded, setExpanded] = useState({});
+      const [step, setStep] = useState('');
+
+      // Auto-fill the URL from the project, and restore the last run.
+      // `stale` guards against a slow response for project A landing after a switch to project B.
+      useEffect(() => {
+        if (!project?.id) return;
+        let stale = false;
+        const d = (project.domain || '').trim();
+        setUrl(d ? (/^https?:\/\//i.test(d) ? d : 'https://' + d) : '');
+        setSummary(null); setFindings([]); setError('');
+        (async () => {
+          try {
+            const r = await api(`/projects/${project.id}/claude-audit/latest`);
+            if (stale || !r || !r.audit) return;
+            setSummary(r.audit.summary); setFindings(r.audit.findings || []);
+          } catch (err) {
+            console.warn('[claude-audit] could not load last run:', err.message);
+          }
+        })();
+        return () => { stale = true; };
+      }, [project?.id, project?.domain]);
+
+      // Rolling status text while the audit runs — it takes a couple of minutes.
+      useEffect(() => {
+        if (!loading) { setStep(''); return; }
+        const steps = ['Finding your pages…', 'Reading each page…', 'Checking site-wide settings…', 'Claude is analysing…', 'Writing up the findings…', 'Creating tasks…'];
+        let i = 0; setStep(steps[0]);
+        const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); setStep(steps[i]); }, 18000);
+        return () => clearInterval(t);
+      }, [loading]);
+
+      const runAudit = async () => {
+        if (!project?.id) { setError('Select a project first.'); return; }
+        if (!url.trim()) { setError('Enter a website address.'); return; }
+        setLoading(true); setError(''); setSummary(null); setFindings([]);
+        try {
+          const r = await api(`/projects/${project.id}/claude-audit/run`, {
+            method: 'POST',
+            body: { url: url.trim(), instructions: instructions.trim() },
+          });
+          if (!r || r.error) { setError(r?.error || 'Audit failed.'); return; }
+          setSummary(r.summary); setFindings(r.findings || []);
+        } catch (e) {
+          // api() throws on non-OK responses, so the 409 "already running" lands here. A proxy
+          // timeout can make the browser retry while the first run is still going — rather than
+          // fail, wait for that run to finish and show its result.
+          if (/already running/i.test(e.message || '')) { await waitForRun(); return; }
+          setError(e.message || 'Audit failed.');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      // Poll for the result of a run that started in another request.
+      const waitForRun = async () => {
+        for (let i = 0; i < 44; i++) { // ~11 minutes — covers the server's 10-minute ceiling
+          await new Promise(r => setTimeout(r, 15000));
+          try {
+            const r = await api(`/projects/${project.id}/claude-audit/latest`);
+            if (r && r.audit && r.audit.summary) {
+              setSummary(r.audit.summary); setFindings(r.audit.findings || []);
+              return;
+            }
+          } catch (err) { /* keep waiting */ }
+        }
+        setError('The audit is taking longer than expected. Reload this page shortly to see the result.');
+      };
+
+      const SEV = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#3b82f6' };
+      const sevCount = summary?.by_severity || {};
+
+      return (
+        <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>
+              <i className="fas fa-wand-magic-sparkles" style={{ marginRight: 10, color: '#f97316' }} />Claude Audit
+            </h2>
+          </div>
+          <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 20 }}>
+            Claude crawls the site, finds what's holding it back, and puts every issue on the Control Centre as a task you can approve.
+          </div>
+
+          {/* ── Input card ── */}
+          <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 20, background: 'var(--bg2)', marginBottom: 24 }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--text3)', marginBottom: 8 }}>Website address</label>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <input
+                value={url}
+                onChange={(ev) => setUrl(ev.target.value)}
+                placeholder="https://example.com.au"
+                disabled={loading}
+                style={{ flex: '1 1 340px', minWidth: 240, padding: '11px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
+              />
+              <button
+                onClick={runAudit}
+                disabled={loading || !url.trim()}
+                style={{ padding: '11px 24px', borderRadius: 8, border: 'none', background: loading ? 'var(--border)' : '#f97316', color: loading ? 'var(--text3)' : '#fff', fontSize: 14, fontWeight: 700, cursor: loading ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {loading
+                  ? <><span className="spinner"></span>Auditing…</>
+                  : <><i className="fas fa-play" style={{ marginRight: 8 }} />Audit</>}
+              </button>
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--text3)', marginBottom: 8 }}>Anything specific? (optional)</label>
+              <input
+                value={instructions}
+                onChange={(ev) => setInstructions(ev.target.value)}
+                placeholder="e.g. focus on the suburb pages, or check the service pages only"
+                disabled={loading}
+                style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
+              />
+            </div>
+            {error && (
+              <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 8, background: '#ef444418', border: '1px solid #ef444455', color: '#ef4444', fontSize: 13 }}>
+                <i className="fas fa-triangle-exclamation" style={{ marginRight: 8 }} />{error}
+              </div>
+            )}
+          </div>
+
+          {/* ── Running ── */}
+          {loading && (
+            <div className="audit-loading-overlay" style={{ textAlign: 'center', padding: 60 }}>
+              <div className="spinner-large"></div>
+              <div className="audit-loading-text" style={{ marginTop: 16, fontWeight: 700 }}>Running Claude Audit</div>
+              <div style={{ color: 'var(--text3)', fontSize: 13, marginTop: 6 }}>{step}</div>
+              <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 14 }}>This usually takes 1–3 minutes. You can leave this page — the results are saved.</div>
+            </div>
+          )}
+
+          {/* ── Results ── */}
+          {!loading && summary && (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 24 }}>
+                {[
+                  { label: 'Pages checked', value: summary.pages_crawled, color: 'var(--text)' },
+                  { label: 'Findings', value: summary.findings, color: '#f97316' },
+                  { label: 'Critical', value: sevCount.critical || 0, color: SEV.critical },
+                  { label: 'High', value: sevCount.high || 0, color: SEV.high },
+                  { label: 'Medium', value: sevCount.medium || 0, color: SEV.medium },
+                ].map(s => (
+                  <div key={s.label} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: '16px 18px', background: 'var(--bg2)' }}>
+                    <div style={{ fontSize: 32, fontWeight: 800, color: s.color, lineHeight: 1.1 }}>{s.value}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--text3)', marginTop: 4 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+                <div style={{ fontSize: 13, color: 'var(--text3)' }}>
+                  {summary.findings} task{summary.findings === 1 ? '' : 's'} added to your Action Plan.
+                </div>
+                <button
+                  onClick={() => setActiveTab && setActiveTab('control-centre')}
+                  style={{ padding: '9px 18px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text)', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Open Control Centre <i className="fas fa-arrow-right" style={{ marginLeft: 6, fontSize: 11 }} />
+                </button>
+              </div>
+
+              {findings.map((f, i) => {
+                const sev = (f.severity || 'medium').toLowerCase();
+                const isOpen = !!expanded[i];
+                const steps = (f.how_to_steps || '').split('\n').filter(Boolean);
+                const pages = (f.pages_affected || '').split('\n').filter(Boolean);
+                return (
+                  <div key={f.id || i} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${SEV[sev] || SEV.medium}`, borderRadius: 10, marginBottom: 10, background: 'var(--bg2)', overflow: 'hidden' }}>
+                    <div
+                      onClick={() => setExpanded(p => ({ ...p, [i]: !p[i] }))}
+                      style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+                    >
+                      <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', borderRadius: 5, background: (SEV[sev] || SEV.medium) + '22', color: SEV[sev] || SEV.medium }}>{sev}</span>
+                      <span style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{f.title}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>{f.category}</span>
+                      <i className={`fas fa-chevron-${isOpen ? 'up' : 'down'}`} style={{ fontSize: 11, color: 'var(--text3)' }} />
+                    </div>
+                    {isOpen && (
+                      <div style={{ padding: '0 16px 16px 16px', fontSize: 13, lineHeight: 1.6 }}>
+                        {f.description && <div style={{ color: 'var(--text2)', marginBottom: 12 }}>{f.description}</div>}
+                        {f.recommendation && (
+                          <div style={{ padding: '10px 14px', borderRadius: 8, background: '#22c55e14', border: '1px solid #22c55e33', marginBottom: 12 }}>
+                            <i className="fas fa-lightbulb" style={{ marginRight: 8, color: '#22c55e' }} />{f.recommendation}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+                          {f.current_value && <div style={{ flex: '1 1 220px', padding: '8px 12px', borderRadius: 8, background: '#ef444414' }}><div style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 700 }}>Now</div><div>{f.current_value}</div></div>}
+                          {f.recommended_value && <div style={{ flex: '1 1 220px', padding: '8px 12px', borderRadius: 8, background: '#22c55e14' }}><div style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 700 }}>Target</div><div>{f.recommended_value}</div></div>}
+                        </div>
+                        {steps.length > 0 && (
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 700, marginBottom: 6 }}>How to fix</div>
+                            {steps.map((s, si) => <div key={si} style={{ color: 'var(--text2)' }}>{s}</div>)}
+                          </div>
+                        )}
+                        {pages.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--text3)', fontWeight: 700, marginBottom: 6 }}>Pages affected ({pages.length})</div>
+                            {pages.slice(0, 12).map((p, pi) => <div key={pi} style={{ fontSize: 12, color: 'var(--text3)', wordBreak: 'break-all' }}>{p}</div>)}
+                            {pages.length > 12 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>+ {pages.length - 12} more</div>}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {/* ── Empty ── */}
+          {!loading && !summary && !error && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-wand-magic-sparkles" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>No audit run yet</div>
+              <div style={{ fontSize: 13 }}>Check the address above and click Audit.</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ============ WEBSITE SECURITY AUDIT PAGE ============
     function SecurityAuditPage({ project, setActiveTab }) {
       const e = React.createElement;
@@ -41141,6 +41373,8 @@
             return <InternalLinkingPage project={project} />;
           case 'security-audit':
             return <SecurityAuditPage project={project} setActiveTab={setActiveTab} />;
+          case 'claude-audit':
+            return <ClaudeAuditPage project={project} setActiveTab={setActiveTab} />;
           case 'handshake':
             return <PlayersHandshakePage project={project} />;
           // 'action-plan' case removed 2026-07-04: nothing navigated to it — Control Centre is
@@ -41265,6 +41499,7 @@
             { id: 'competing-pages', label: 'Competing Pages', icon: 'fas fa-clone' },
           ] },
           { id: 'security-audit', label: 'Security Audit', icon: 'fas fa-shield-halved' },
+          { id: 'claude-audit', label: 'Claude Audit', icon: 'fas fa-wand-magic-sparkles' },
         ]},
         { section: 'BACKLINKS', items: [
           { id: 'backlinks', label: 'Backlinks', icon: 'fas fa-external-link-alt' },
