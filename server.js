@@ -55289,12 +55289,20 @@ app.post('/api/projects/:projectId/security-audit/fix/dir-listing', async (req, 
 });
 
 // ============================================================================
-// CLAUDE AUDIT — one-click AI website audit that lands as Action Plan tasks
+// CLAUDE AUDIT — one-click AI website audit (fully isolated)
 // ============================================================================
 // Flow: crawl the site → build a compact, factual page-by-page sheet → hand it
-// to Claude → reformat the returned findings into the dashboard's own shapes
-// (audit_findings + action_items) so they show up on the Control Centre board
-// like every other audit. Read-only: nothing is ever written to the live site.
+// to Claude → keep the findings on this feature's own page.
+//
+// ISOLATION RULES (2026-07-30) — do not relax these without a decision:
+//   • Read-only. Nothing is ever written to the live client site.
+//   • Writes NOTHING to shared tables: no action_items, no ticket_codes, no
+//     audit_findings. Findings live in this audit's own audit_data.
+//   • Uses pillar='claude_audit', NOT 'website'. The Website Audit and Website
+//     Agent both query `audits WHERE pillar='website'` with no source filter, so
+//     a 'website' row here would hijack their status, block their run cooldown,
+//     and get marked failed by their cleanup.
+// The whole feature is one revertable commit plus its own future ca_* tables.
 
 const CA_MAX_PAGES = 25;
 // Sonnet, not Haiku — the audit needs judgement, not just extraction. Override with an env var
@@ -55481,11 +55489,48 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
 
     // In-flight guard. The browser's api() helper retries on proxy timeouts, and this route takes
     // minutes — without this, one click could kick off several full crawls and several paid calls.
-    // The source tag keeps this separate from the other website audits, which also write
-    // pillar='website' rows — otherwise one of those running would block this one.
+    // ── Self-repair, unconditional and BEFORE any expensive work, so a failed crawl or AI call
+    // never leaves an earlier build's rows sitting on the shared board.
+
+    // 1. The first build filed its audits under pillar='website', where they hijack the Website
+    //    Audit's status and cooldown queries. Move them to their own pillar.
+    await pool.query(
+      `UPDATE audits SET pillar='claude_audit'
+       WHERE project_id=$1 AND pillar='website' AND audit_data->>'source' = 'claude_audit'`,
+      [projectId]
+    ).catch((e) => console.log('[claude-audit] pillar repair skipped:', e.message));
+
+    // 2. Remove anything an earlier build pushed onto the Control Centre. Scoped by the exact
+    //    type values this feature has ever used — no other source can match.
+    try {
+      const strays = (await pool.query(
+        `DELETE FROM action_items WHERE project_id=$1 AND type IN ('src_claude_audit','claude_audit') RETURNING code`,
+        [projectId]
+      )).rows;
+      const codes = [...new Set(strays.map(r => r.code).filter(Boolean))];
+      if (codes.length) {
+        // Only drop registry rows nothing else still points at — a code carries permanent state
+        // (assignee, status, due date) and could in theory be shared with a live ticket.
+        await pool.query(
+          `DELETE FROM ticket_codes t WHERE t.project_id=$1 AND t.code = ANY($2::text[])
+             AND NOT EXISTS (SELECT 1 FROM action_items a WHERE a.code = t.code)`,
+          [projectId, codes]
+        ).catch(() => {});
+      }
+      if (strays.length) console.log(`[claude-audit] removed ${strays.length} legacy Control Centre ticket(s)`);
+    } catch (cleanErr) {
+      console.log('[claude-audit] board cleanup skipped:', cleanErr.message);
+    }
+
+    // 3. Clear any audit_findings rows an earlier build left behind.
+    await pool.query(
+      `DELETE FROM audit_findings WHERE project_id=$1 AND audit_id IN (
+         SELECT id FROM audits WHERE project_id=$1 AND (pillar='claude_audit' OR audit_data->>'source' = 'claude_audit'))`,
+      [projectId]
+    ).catch((e) => console.log('[claude-audit] findings cleanup skipped:', e.message));
+
     const inFlight = await pool.query(
-      `SELECT id FROM audits WHERE project_id=$1 AND pillar='website' AND status='running'
-         AND audit_data->>'source' = 'claude_audit'
+      `SELECT id FROM audits WHERE project_id=$1 AND pillar='claude_audit' AND status='running'
          AND started_at > NOW() - INTERVAL '20 minutes' LIMIT 1`,
       [projectId]
     );
@@ -55495,7 +55540,7 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
 
     const auditRow = await pool.query(
       `INSERT INTO audits (project_id, pillar, status, started_at, audit_data)
-       VALUES ($1, 'website', 'running', NOW(), '{"source":"claude_audit"}'::jsonb) RETURNING *`,
+       VALUES ($1, 'claude_audit', 'running', NOW(), '{"source":"claude_audit"}'::jsonb) RETURNING *`,
       [projectId]
     );
     auditId = auditRow.rows[0].id;
@@ -55552,83 +55597,13 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
     try { raw = JSON.parse(jsonMatch[0]); } catch (e) { throw new Error('Could not read Claude findings: ' + e.message); }
     if (!Array.isArray(raw)) throw new Error('Claude findings were not a list.');
 
-    // 4. Reformat to the dashboard's shapes and store.
-    // Tasks are minted the same way every other source mints them (type src_*, one permanent
-    // ticket code per issue) so re-running the audit re-attaches to the SAME ticket instead of
-    // duplicating the board.
+    // 4. ISOLATION (2026-07-30): this feature is being rebuilt on its own `ca_*` tables and its own
+    // pages. It writes NOTHING to the shared tables — no action_items, no ticket codes, and no
+    // audit_findings rows (an unrecognised pillar there still surfaces as a Website finding on the
+    // other audit pages). Everything lives in this audit's own audit_data until the ca_* tables land.
     const shaped = raw.map(caShapeFinding).filter(f => f.title && f.title !== 'Untitled finding').slice(0, 20);
-    const projCode = deriveProjectCode(project);
-    const existingTasks = (await pool.query(
-      `SELECT id, title, ranking_page, code, status FROM action_items WHERE project_id=$1 AND type='src_claude_audit'`,
-      [projectId]
-    )).rows;
-    const caKey = (t, p) => `${(t || '').toLowerCase().trim()}|${(p || '').toLowerCase().trim()}`;
-    const taskByKey = new Map(existingTasks.map(r => [caKey(r.title, r.ranking_page), r]));
 
-    const created = [];
-    for (const f of shaped) {
-      const firstPage = (f.pages_affected || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || null;
-
-      const finding = (await pool.query(
-        `INSERT INTO audit_findings (project_id, audit_id, pillar, category, title, description, recommendation, severity, current_value, recommended_value, status)
-         VALUES ($1,$2,'website',$3,$4,$5,$6,$7,$8,$9,'new') RETURNING *`,
-        [projectId, auditId, f.category, f.title, f.description, f.recommendation, f.severity, f.current_value, f.recommended_value]
-      )).rows[0];
-
-      let task = taskByKey.get(caKey(f.title, firstPage));
-      if (task) {
-        // Same issue as a previous run — refresh it and reopen if it had been closed.
-        task = (await pool.query(
-          `UPDATE action_items SET finding_id=$1, category=$2, description=$3, current_value=$4, new_value=$5,
-             severity=$6, pages_affected=$7, how_to_steps=$8, effort=$9, expected_impact=$10,
-             status = CASE WHEN status='done' THEN 'pending' ELSE status END
-           WHERE id=$11 RETURNING *`,
-          [finding.id, f.category, f.description, f.current_value, f.recommended_value, f.severity,
-            f.pages_affected, f.how_to_steps, f.effort, f.expected_impact, task.id]
-        )).rows[0];
-      } else {
-        task = (await pool.query(
-          `INSERT INTO action_items (project_id, finding_id, pillar, type, category, title, description, current_value, new_value, severity, status, execution_type, ranking_page, pages_affected, how_to_steps, effort, expected_impact)
-           VALUES ($1,$2,'website','src_claude_audit',$3,$4,$5,$6,$7,$8,'pending','manual',$9,$10,$11,$12,$13) RETURNING *`,
-          [projectId, finding.id, f.category, f.title, f.description, f.current_value, f.recommended_value, f.severity,
-            firstPage, f.pages_affected, f.how_to_steps, f.effort, f.expected_impact]
-        )).rows[0];
-        taskByKey.set(caKey(f.title, firstPage), task);
-      }
-
-      // Every task needs a permanent ticket code or the Control Centre will not show it.
-      if (!task.code) {
-        try {
-          const forClass = { title: task.title, category: f.category, pillar: 'website', type: 'src_claude_audit', ranking_page: firstPage, pages_affected: f.pages_affected };
-          const pCode = pillarCode(forClass);
-          const rcKey = findingIdentity(projectId, pCode, forClass);
-          const code = await ensureTicketCode(projectId, projCode, rcKey, pCode);
-          await pool.query('UPDATE action_items SET code=$1, root_cause_key=$2 WHERE id=$3', [code, rcKey, task.id]);
-          task.code = code; task.root_cause_key = rcKey;
-        } catch (codeErr) {
-          console.log('[claude-audit] ticket code failed:', codeErr.message);
-        }
-      }
-
-      created.push({ finding, action_item: normalizeActionRow(task) });
-    }
-
-    // RECONCILE — this run reported the site's COMPLETE current issue list, so any task from a
-    // previous Claude Audit that is no longer reported has been fixed. Close it, like the other
-    // sources do, instead of leaving stale tickets on the board forever.
-    const stillOpen = new Set(created.map(c => caKey(c.action_item.title, c.action_item.ranking_page)));
-    for (const old of existingTasks) {
-      if (stillOpen.has(caKey(old.title, old.ranking_page))) continue;
-      if ((old.status || '').toLowerCase() === 'done') continue;
-      await pool.query(`UPDATE action_items SET status='done', source_progress=100 WHERE id=$1`, [old.id]).catch(() => {});
-      if (old.code) {
-        await pool.query(
-          `UPDATE ticket_codes SET status='Done', finished_at=COALESCE(finished_at, NOW()), verified_at=NOW()
-           WHERE project_id=$1 AND code=$2 AND status IS DISTINCT FROM 'Done'`,
-          [projectId, old.code]
-        ).catch(() => {});
-      }
-    }
+    const created = shaped;
 
     const summary = {
       url: baseUrl,
@@ -55643,7 +55618,7 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
       [JSON.stringify({ source: 'claude_audit', summary, findings: shaped }), auditId]
     );
 
-    res.json({ ok: true, audit_id: auditId, summary, findings: created.map(c => ({ ...c.finding, action_item_id: c.action_item.id, pages_affected: c.action_item.pages_affected, how_to_steps: c.action_item.how_to_steps })) });
+    res.json({ ok: true, audit_id: auditId, summary, findings: created });
   } catch (e) {
     console.error('[claude-audit] failed:', e.message);
     if (auditId) {
@@ -55658,8 +55633,7 @@ app.get('/api/projects/:id/claude-audit/latest', async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT id, status, audit_data, completed_at FROM audits
-       WHERE project_id=$1 AND pillar='website' AND status='completed'
-         AND audit_data->>'source' = 'claude_audit'
+       WHERE project_id=$1 AND pillar='claude_audit' AND status='completed'
        ORDER BY completed_at DESC LIMIT 1`,
       [req.params.id]
     );

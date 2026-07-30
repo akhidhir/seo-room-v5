@@ -8450,7 +8450,7 @@
       // Rolling status text while the audit runs — it takes a couple of minutes.
       useEffect(() => {
         if (!loading) { setStep(''); return; }
-        const steps = ['Finding your pages…', 'Reading each page…', 'Checking site-wide settings…', 'Claude is analysing…', 'Writing up the findings…', 'Creating tasks…'];
+        const steps = ['Finding your pages…', 'Reading each page…', 'Checking site-wide settings…', 'Claude is analysing…', 'Writing up the findings…', 'Almost there…'];
         let i = 0; setStep(steps[0]);
         const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); setStep(steps[i]); }, 18000);
         return () => clearInterval(t);
@@ -8459,6 +8459,10 @@
       const runAudit = async () => {
         if (!project?.id) { setError('Select a project first.'); return; }
         if (!url.trim()) { setError('Enter a website address.'); return; }
+        // Remember which run was the latest BEFORE we start, so the poller below can tell a genuinely
+        // new result from the previous one.
+        let priorId = null;
+        try { const p = await api(`/projects/${project.id}/claude-audit/latest`); priorId = p?.audit?.id ?? null; } catch (err) { /* fine */ }
         setLoading(true); setError(''); setSummary(null); setFindings([]);
         try {
           const r = await api(`/projects/${project.id}/claude-audit/run`, {
@@ -8471,20 +8475,21 @@
           // api() throws on non-OK responses, so the 409 "already running" lands here. A proxy
           // timeout can make the browser retry while the first run is still going — rather than
           // fail, wait for that run to finish and show its result.
-          if (/already running/i.test(e.message || '')) { await waitForRun(); return; }
+          if (/already running/i.test(e.message || '')) { await waitForRun(priorId); return; }
           setError(e.message || 'Audit failed.');
         } finally {
           setLoading(false);
         }
       };
 
-      // Poll for the result of a run that started in another request.
-      const waitForRun = async () => {
+      // Poll for the result of a run that started in another request. `priorId` is the run that was
+      // already there before we started — anything equal to it is the OLD result, not ours.
+      const waitForRun = async (priorId) => {
         for (let i = 0; i < 44; i++) { // ~11 minutes — covers the server's 10-minute ceiling
           await new Promise(r => setTimeout(r, 15000));
           try {
             const r = await api(`/projects/${project.id}/claude-audit/latest`);
-            if (r && r.audit && r.audit.summary) {
+            if (r && r.audit && r.audit.summary && r.audit.id !== priorId) {
               setSummary(r.audit.summary); setFindings(r.audit.findings || []);
               return;
             }
@@ -8504,7 +8509,7 @@
             </h2>
           </div>
           <div style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 20 }}>
-            Claude crawls the site, finds what's holding it back, and puts every issue on the Control Centre as a task you can approve.
+            Claude crawls the site and reports what's holding it back. Read-only, and kept entirely on this page — it does not write to your Action Plan or touch the live site.
           </div>
 
           {/* ── Input card ── */}
@@ -8575,14 +8580,8 @@
 
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
                 <div style={{ fontSize: 13, color: 'var(--text3)' }}>
-                  {summary.findings} task{summary.findings === 1 ? '' : 's'} added to your Action Plan.
+                  {summary.findings} finding{summary.findings === 1 ? '' : 's'}. Kept on this page only — nothing has been added to your Action Plan.
                 </div>
-                <button
-                  onClick={() => setActiveTab && setActiveTab('control-centre')}
-                  style={{ padding: '9px 18px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text)', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
-                >
-                  Open Control Centre <i className="fas fa-arrow-right" style={{ marginLeft: 6, fontSize: 11 }} />
-                </button>
               </div>
 
               {findings.map((f, i) => {
