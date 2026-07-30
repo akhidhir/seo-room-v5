@@ -2117,19 +2117,54 @@ app.get('/api/client/approval-items/:id', authMiddleware, async (req, res) => {
 // Apply optional auth to all routes
 app.use(optionalAuth);
 
-// Member-role project scoping — a 'member' can only touch projects they've been granted.
-// Admins and clients are untouched (clients have their own narrower guard).
+// Project scoping. Agency admins manage every project (that's the agency model), but:
+//   - a 'member' may only touch projects granted via project_access
+//   - a 'client' may only touch the single project their login is tied to
+// Enforced centrally here so a new /api/projects/:id route can't forget it.
 async function memberProjectIds(userId) {
   const rows = (await pool.query('SELECT project_id FROM project_access WHERE user_id=$1', [userId])).rows;
   return rows.map(r => Number(r.project_id));
 }
+
+// Some endpoints accept a project id in the BODY that overrides the one in the URL (e.g. the page
+// builder's destination_project_id). Scoping only the URL let a caller pass the check for project A
+// and then have the work executed against project B — including publishing to B's live website.
+// Every id the request could act on must clear the same check.
+const BODY_PROJECT_ID_KEYS = ['destination_project_id', 'destinationProjectId', 'target_project_id', 'targetProjectId', 'project_id', 'projectId'];
+function requestedProjectIds(req) {
+  const ids = new Set();
+  const m = req.path.match(/^\/api\/projects\/(\d+)(\/|$)/);
+  if (m) ids.add(Number(m[1]));
+  const b = req.body;
+  if (b && typeof b === 'object' && !Array.isArray(b)) {
+    for (const k of BODY_PROJECT_ID_KEYS) {
+      const n = Number(b[k]);
+      if (b[k] != null && Number.isInteger(n) && n > 0) ids.add(n);
+    }
+  }
+  return [...ids];
+}
+
 app.use(async (req, res, next) => {
   try {
-    if (!req.auth || req.auth.role !== 'member') return next();
-    const m = req.path.match(/^\/api\/projects\/(\d+)(\/|$)/);
-    if (!m) return next();
-    const allowed = await memberProjectIds(req.auth.userId);
-    if (!allowed.includes(Number(m[1]))) return res.status(403).json({ error: 'You do not have access to this project' });
+    if (!req.auth) return next();
+    const role = req.auth.role;
+    if (role !== 'member' && role !== 'client') return next(); // agency admin — full access by design
+    const ids = requestedProjectIds(req);
+    if (ids.length === 0) return next();
+
+    let allowed;
+    if (role === 'member') {
+      allowed = await memberProjectIds(req.auth.userId);
+    } else {
+      // Client logins are pinned to one project by their token.
+      allowed = req.auth.projectId ? [Number(req.auth.projectId)] : [];
+    }
+    const denied = ids.find(id => !allowed.includes(id));
+    if (denied != null) {
+      console.warn(`[scope] ${role} user ${req.auth.userId} denied access to project ${denied} via ${req.method} ${req.path}`);
+      return res.status(403).json({ error: 'You do not have access to this project' });
+    }
     next();
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -6698,6 +6733,8 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
 
 app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
   try {
+    // destination_project_id is still honoured (the builder legitimately targets another project),
+    // but it is now scope-checked in the same middleware as the URL id — see requestedProjectIds().
     const destId = req.body.destination_project_id || req.params.projectId;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [destId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Destination project not found' });
@@ -6902,6 +6939,8 @@ Return ONLY the copy itself — no JSON, no surrounding quotes, no commentary.`;
 
 app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
   try {
+    // PUBLISHES TO A LIVE CLIENT SITE. destination_project_id is scope-checked in the same middleware
+    // as the URL id — see requestedProjectIds(). Do not read a project id from anywhere else here.
     const destId = req.body.destination_project_id || req.params.projectId;
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [destId])).rows[0];
     if (!project) return res.status(404).json({ error: 'Destination project not found' });
@@ -15139,6 +15178,7 @@ app.get('/api/gbp-sync/targets', async (req, res) => {
 });
 
 app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
+  if (!rcSyncAuthOk(req, res, 'rc-sync')) return;
   const { projectId } = req.params;
   const { location_id, profile, healthcheck, reviews_stats, posts, rc_location_id, db_location_id } = req.body;
   try {
@@ -15153,6 +15193,14 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
     if (profile && profile.title && !gbpNameMatches(businessName, profile.title)) {
       console.warn(`[rc-sync] REJECTED: profile "${profile.title}" does not match project "${businessName}" (project ${projectId}) — refusing to prevent cross-contamination.`);
       return res.status(409).json({ error: `The GBP profile "${profile.title}" doesn't match this project ("${businessName}"). Sync refused to avoid mixing businesses — check the GBP location / Place ID in Project Settings.`, mismatch: true, profile_title: profile.title, project_name: businessName });
+    }
+    // The guard above can only judge a payload that CARRIES a profile. A caller that sends location ids
+    // with no profile would previously skip the guard entirely and still re-point the project at another
+    // business's GBP location further down. Re-pointing a project is an identity change — require the
+    // profile that proves it's the right business.
+    if ((rc_location_id || db_location_id) && !(profile && profile.title)) {
+      console.warn(`[rc-sync] REJECTED: location id change on project ${projectId} with no profile to verify it against.`);
+      return res.status(400).json({ error: 'Changing the GBP/RC location id requires the profile in the same payload so the business identity can be verified. Sync refused.' });
     }
 
     console.log(`[rc-sync] Syncing Rating Captain data for project ${projectId} (${businessName})`);
@@ -15431,6 +15479,7 @@ app.post('/api/projects/:projectId/rc-sync', async (req, res) => {
 
 // Accept RC keyword monitoring data and store as grid_scans
 app.post('/api/projects/:projectId/rc-grid-sync', async (req, res) => {
+  if (!rcSyncAuthOk(req, res, 'rc-grid-sync')) return;
   const { projectId } = req.params;
   const { keywords } = req.body; // Array of { keyword, rc_keyword_id, grid_points: [{lat, lng, position}], grid_size, center_lat, center_lng, radius_km }
   try {
@@ -15819,6 +15868,27 @@ app.get('/api/projects/:projectId/gbp-optimise/queue', async (req, res) => {
     res.json({ queue: rows, pending: rows.filter(r => r.status === 'queued').length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ── Auth for the RC sync endpoints (rc-sync, rc-grid-sync) ──
+// These are called by scheduled automations that have no dashboard login, so they are exempt from JWT.
+// They also WRITE — including re-pointing a project at a different Google Business Profile — so they
+// must not be open to the internet.
+// Accepts either a normal logged-in user OR a shared key (?key= or x-rc-sync-key).
+// Until RC_SYNC_KEY is configured the call is allowed with a loud warning, so setting the variable
+// can't break a running automation mid-flight. Once it IS set, the endpoint is fail-closed.
+function rcSyncAuthOk(req, res, label) {
+  if (req.auth) return true;
+  const key = process.env.RC_SYNC_KEY;
+  if (!key) {
+    console.warn(`[${label}] UNAUTHENTICATED CALL ALLOWED — RC_SYNC_KEY is not set. Set RC_SYNC_KEY in Railway and add ?key=... to the scheduled task to close this. Caller: ${req.ip}`);
+    return true;
+  }
+  const given = req.query.key || req.get('x-rc-sync-key');
+  if (given && given === key) return true;
+  console.warn(`[${label}] REJECTED unauthenticated call with bad/missing key from ${req.ip}`);
+  res.status(403).json({ error: 'Invalid or missing sync key' });
+  return false;
+}
 
 // ── GBP queue flush support (used by a Claude/Cowork session or scheduled task) ──
 // The flusher reads pending writes over HTTP, pushes each via the RatingCaptain MCP
@@ -22818,6 +22888,74 @@ app.get('/api/projects/:projectId/wp-changes', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Guard against rolling a BAD original back onto a live page.
+// Rollback writes original_value in as the WHOLE field. Some older executors stored only a fragment
+// (e.g. '(no H1)', '<h2>Old heading</h2>', a bare URL) or a truncated copy. Writing one of those back
+// would erase the page or the Elementor layout. Those rows are already in the database, so this check
+// has to run on read, not just at write time.
+// Returns an error string when the rollback must be refused, otherwise null.
+function rollbackOriginalIsUnsafe(change) {
+  const val = String(change.original_value || '');
+  const field = change.field_name;
+  const manual = ' Restore this page from a WordPress revision instead (Dashboard → the page → Revisions).';
+
+  if (field === 'content') {
+    if (val.length === 5000) {
+      return 'The stored original for this change was truncated by an older version of the app — rolling it back would destroy part of the page.' + manual;
+    }
+    // A whole page is never this short, and never a single tag or a bare URL. These are the fragment
+    // shapes written by the old serp-fix / broken-link executors.
+    if (/^\s*\(no\s/i.test(val) || /^\s*https?:\/\/\S*\s*$/i.test(val)) {
+      return 'This change recorded only a placeholder instead of the page it replaced, so there is nothing safe to restore.' + manual;
+    }
+    if (val.length < 200 && /^\s*<(h[1-6])[^>]*>[\s\S]*<\/\1>\s*$/i.test(val)) {
+      return 'This change recorded only the heading it replaced, not the whole page. Restoring it would wipe the rest of the page.' + manual;
+    }
+    if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+      return 'The stored original for this change is Elementor layout data, not page content — restoring it into the content field would corrupt the page.' + manual;
+    }
+  }
+
+  if (field === '_elementor_data' || field === 'elementor_data') {
+    // Elementor data is always a JSON array of sections. Anything else would blank the layout.
+    const t = val.trim();
+    if (!t.startsWith('[') && !t.startsWith('{')) {
+      return 'The stored original for this Elementor change is not valid layout data, so restoring it would blank the page layout.' + manual;
+    }
+    try { JSON.parse(t); } catch {
+      return 'The stored original for this Elementor change is not valid layout data (it will not parse), so restoring it would blank the page layout.' + manual;
+    }
+  }
+
+  return null;
+}
+
+// Fields that rollback genuinely knows how to restore. Anything else would be written as an
+// unregistered meta key: WordPress ignores it, returns 200, and we would mark the change
+// "rolled back" while the site is unchanged. Refuse honestly instead.
+// NOTE: the writer below adds a leading underscore to anything that isn't 'content'/'_elementor_data',
+// so both the bare and underscored spellings of the Yoast keys are valid here.
+const ROLLBACKABLE_FIELDS = new Set([
+  'content', '_elementor_data', 'elementor_data',
+  'yoast_wpseo_title', 'yoast_wpseo_metadesc', 'yoast_wpseo_focuskw', 'yoast_wpseo_canonical',
+  '_yoast_wpseo_title', '_yoast_wpseo_metadesc', '_yoast_wpseo_focuskw', '_yoast_wpseo_canonical',
+  'yoast_wpseo_meta_robots_noindex', '_yoast_wpseo_meta_robots_noindex',
+  'seoroom_schema', '_seoroom_schema'
+]);
+function rollbackFieldUnsupported(field) {
+  if (ROLLBACKABLE_FIELDS.has(field)) return null;
+  const known = {
+    slug: 'Undo a slug change by editing the page URL in WordPress (and keep the redirect in place).',
+    status: 'Restore a trashed page from WordPress → Pages → Trash.',
+    menu_url: 'Edit the menu item in WordPress → Appearance → Menus.',
+    meta: 'This change bundled several fields together; undo them individually on the page.',
+    post_content: 'Undo this content change from the page\'s WordPress revisions.',
+    elementor_content: 'Undo this content change in the Elementor editor (its revision history).',
+    json_ld: 'This added schema markup; remove it from the page rather than restoring a previous value.'
+  };
+  return `Automatic rollback is not supported for "${field}". ${known[field] || 'Undo this change in WordPress directly.'} Marking it undone here would be false — the site would stay changed.`;
+}
+
 // Rollback a specific change
 app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, res) => {
   const { projectId, changeId } = req.params;
@@ -22834,9 +22972,8 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
     if (change.original_value === 'none' || change.original_value == null || change.original_value === '') {
       return res.status(400).json({ error: 'This change has no stored original value (it was an additive fix like CWV/schema) — it cannot be rolled back automatically. Remove it manually if needed.' });
     }
-    if (change.field_name === 'content' && change.original_value.length === 5000) {
-      return res.status(400).json({ error: 'The stored original for this change was truncated by an older version of the app — rolling it back would destroy part of the page. Restore this page manually from a WordPress revision instead.' });
-    }
+    const unsafe = rollbackOriginalIsUnsafe(change);
+    if (unsafe) return res.status(400).json({ error: unsafe });
 
     // Get project for WP auth
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -22884,6 +23021,11 @@ app.post('/api/projects/:projectId/wp-changes/rollback/:changeId', async (req, r
     // Determine page type (try pages then posts)
     const current = await readWpYoastMeta(wpBase, change.page_id, authHeaders);
     if (!current) return res.status(404).json({ error: 'Page not found in WordPress' });
+
+    // Refuse fields we cannot actually restore, rather than writing an unregistered meta key that
+    // WordPress silently ignores while we report success.
+    const unsupported = rollbackFieldUnsupported(change.field_name);
+    if (unsupported) return res.status(400).json({ error: unsupported });
 
     // Write original value back — handle different field types
     let payload;
@@ -22963,7 +23105,12 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
     for (const row of allChanges.rows) {
       // SAFETY: never write a placeholder or truncated original back to a live client page.
       if (row.original_value === 'none' || row.original_value == null || row.original_value === '') { skipped.push(row.field_name + ' (no stored original)'); continue; }
-      if (row.field_name === 'content' && row.original_value.length === 5000) { skipped.push('content (original was truncated by an older app version — restore via WordPress revision)'); continue; }
+      // Same fragment/format checks as the single-change rollback. This path is MORE dangerous:
+      // it picks the OLDEST row per field, so one bad legacy row would wipe the page.
+      const badOriginal = rollbackOriginalIsUnsafe(row);
+      if (badOriginal) { skipped.push(`${row.field_name} (${badOriginal.split('.')[0]})`); continue; }
+      const badField = rollbackFieldUnsupported(row.field_name);
+      if (badField) { skipped.push(`${row.field_name} (cannot be rolled back automatically — undo it in WordPress)`); continue; }
       if (row.field_name === 'content') {
         contentValue = row.original_value;
       } else if (row.field_name === '_elementor_data') {
@@ -23027,13 +23174,23 @@ app.post('/api/projects/:projectId/wp-changes/rollback-page/:pageId', async (req
       }).catch(() => {});
     }
 
-    // Mark all as rolled back
-    await pool.query(
-      'UPDATE wp_change_history SET rolled_back_at=NOW() WHERE project_id=$1 AND page_id=$2 AND rolled_back_at IS NULL',
-      [projectId, pageId]
-    );
-    console.log(`[rollback] Rolled back all changes for page ${pageId}${skipped.length ? ` (skipped unsafe: ${skipped.join('; ')})` : ''}`);
-    res.json({ success: true, rolled_back: chRes.rows.length - skipped.length, skipped });
+    // Mark ONLY the fields we actually restored. Rows we skipped are still live on the site, so
+    // marking them rolled back would hide a real, un-undone change from the change history.
+    const restoredFields = [
+      ...Object.keys(metaFields),
+      ...(contentValue !== null ? ['content'] : []),
+      ...(elementorValue !== null ? ['_elementor_data'] : [])
+    ];
+    let rolledBack = 0;
+    if (restoredFields.length > 0) {
+      const upd = await pool.query(
+        'UPDATE wp_change_history SET rolled_back_at=NOW() WHERE project_id=$1 AND page_id=$2 AND rolled_back_at IS NULL AND field_name = ANY($3)',
+        [projectId, pageId, restoredFields]
+      );
+      rolledBack = upd.rowCount;
+    }
+    console.log(`[rollback] Page ${pageId}: restored ${restoredFields.join(', ') || 'nothing'}${skipped.length ? ` — skipped unsafe: ${skipped.join('; ')}` : ''}`);
+    res.json({ success: true, rolled_back: rolledBack, restored_fields: restoredFields, skipped });
   } catch (e) {
     console.error('[rollback] Error:', e.message);
     res.status(500).json({ error: e.message });
@@ -38571,33 +38728,69 @@ app.post('/api/projects/:projectId/technical-fix', async (req, res) => {
     // ---- FIX TYPE 4: Mixed content HTTP→HTTPS in post content ----
     if (title.includes('https') || title.includes('mixed content') || title.includes('non-https')) {
       if (!wpUrl || !authHeaders) return res.status(400).json({ error: 'WordPress connection required' });
-      let fixed = 0;
+      let fixed = 0, skippedElementor = 0, skippedNoSource = 0, failed = 0;
+      const escDomain = domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       for (const type of ['pages', 'posts']) {
         let page = 1;
         while (page <= 10) {
-          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${page}&status=publish&_fields=id,content`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+          // context=edit is REQUIRED. Without it WordPress omits content.raw, and the old code fell
+          // back to content.rendered — writing the site's RENDERED html back in as the post source
+          // (shortcodes expanded, wpautop applied). That silently mangled every page it touched.
+          const resp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}?per_page=50&page=${page}&status=publish&context=edit&_fields=id,link,title,content,meta`, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
           if (!resp.ok) break;
           const items = await resp.json();
           if (!Array.isArray(items) || items.length === 0) break;
           for (const item of items) {
-            const content = item.content?.raw || item.content?.rendered || '';
-            if (content.includes('http://') && content.includes(domain)) {
-              const newContent = content.replace(new RegExp(`http://${domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), `https://${domain}`);
-              if (newContent !== content) {
-                await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.id}`, {
-                  method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
-                });
-                fixed++;
-              }
-            }
+            // Elementor renders from _elementor_data, not post_content. Editing post_content there
+            // changes nothing visible, so counting it as fixed would be false.
+            if (item.meta && item.meta._elementor_data) { skippedElementor++; continue; }
+            if (typeof item.content?.raw !== 'string') { skippedNoSource++; continue; }
+            const content = item.content.raw;
+            if (!content.includes('http://') || !content.includes(domain)) continue;
+            const newContent = content.replace(new RegExp(`http://${escDomain}`, 'g'), `https://${domain}`);
+            if (newContent === content) continue;
+
+            const writeResp = await fetch(`${wpUrl}/wp-json/wp/v2/${type}/${item.id}`, {
+              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+            });
+            if (!writeResp.ok) { failed++; continue; }
+            // Verify from the write response body (immune to page caches), then record history with
+            // the FULL original so this is genuinely undoable.
+            let applied = false;
+            try {
+              const body = await writeResp.json();
+              const after = body?.content?.raw;
+              applied = typeof after === 'string' ? !new RegExp(`http://${escDomain}`).test(after) : true;
+            } catch { applied = true; }
+            if (!applied) { failed++; continue; }
+            await pool.query(
+              `INSERT INTO wp_change_history (project_id, page_id, page_url, page_title, change_type, field_name, original_value, new_value)
+               VALUES ($1, $2, $3, $4, 'mixed_content_fix', 'content', $5, $6)`,
+              [projectId, item.id, item.link || '', item.title?.raw || item.title?.rendered || '', content, newContent]
+            );
+            fixed++;
           }
           if (items.length < 50) break;
           page++;
         }
       }
-      await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
-      return res.json({ success: true, fix_type: 'mixed_content', pages_fixed: fixed });
+      // Only mark the finding fixed if something actually changed and nothing failed. Marking it
+      // fixed after zero edits is how a live problem gets closed off the board.
+      const complete = fixed > 0 && failed === 0 && skippedElementor === 0 && skippedNoSource === 0;
+      if (complete) await pool.query(`UPDATE audit_findings SET status='fixed' WHERE id=$1`, [finding_id]);
+      const notes = [];
+      if (skippedElementor) notes.push(`${skippedElementor} Elementor page(s) skipped — fix those links in Elementor`);
+      if (skippedNoSource) notes.push(`${skippedNoSource} page(s) skipped — WordPress did not return editable source`);
+      if (failed) notes.push(`${failed} page(s) failed to update`);
+      return res.json({
+        success: true, fix_type: 'mixed_content', pages_fixed: fixed,
+        finding_status: complete ? 'fixed' : 'partial',
+        skipped_elementor: skippedElementor, skipped_no_source: skippedNoSource, failed,
+        message: fixed === 0 && notes.length === 0
+          ? 'No insecure links found in editable page content.'
+          : `Updated ${fixed} page(s).${notes.length ? ' ' + notes.join('. ') + '.' : ''}`
+      });
     }
 
     // ---- FIX TYPE 5: Missing H1 — inject from page title ----
@@ -46174,6 +46367,28 @@ app.post('/api/projects/:projectId/serp-actions', async (req, res) => {
 });
 
 // ============ SERP ACTION FIX (On-Page) ============
+// Read a page's TRUE post_content source for a heading fix.
+// Two hard requirements, both learned the hard way:
+//  1. context=edit — without it WordPress omits content.raw and the caller silently falls back to
+//     content.rendered. Writing rendered html back as the source expands shortcodes and wpautop and
+//     permanently mangles the page.
+//  2. Elementor pages render from the _elementor_data meta, not post_content. Editing post_content
+//     there changes nothing visible, so reporting it as a fix would be a lie.
+async function serpFixReadSource(wpBase, pageType, wpId, authHeaders) {
+  const resp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}?context=edit&_fields=id,content,meta`, {
+    headers: authHeaders, signal: AbortSignal.timeout(15000)
+  });
+  if (!resp.ok) return { status: 500, error: `Failed to fetch page: ${resp.status}` };
+  const data = await resp.json();
+  if (data.meta && data.meta._elementor_data) {
+    return { status: 409, error: 'This is an Elementor page — its headings live in the Elementor layout, not the WordPress content field. Editing it here would change nothing on the live page. Edit the heading in Elementor instead.' };
+  }
+  if (typeof data.content?.raw !== 'string') {
+    return { status: 502, error: 'WordPress did not return the editable page source (content.raw). This usually means the Application Password lacks edit rights. Refusing to write, because the alternative is saving the rendered page over its own source and breaking the layout.' };
+  }
+  return { content: data.content.raw };
+}
+
 app.post('/api/projects/:projectId/serp-fix', async (req, res) => {
   const { projectId } = req.params;
   const { fixType, pageUrl, newValue, oldValue } = req.body;
@@ -46237,46 +46452,34 @@ app.post('/api/projects/:projectId/serp-fix', async (req, res) => {
 
     } else if (fixType === 'h1_replace') {
       if (!newValue) return res.status(400).json({ error: 'newValue required for h1_replace' });
-      // Fetch current page content
-      const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
-        headers: authHeaders, signal: AbortSignal.timeout(15000)
-      });
-      if (!pageResp.ok) return res.status(500).json({ error: `Failed to fetch page: ${pageResp.status}` });
-      const pageData = await pageResp.json();
-      const content = pageData.content?.raw || pageData.content?.rendered || '';
+      // context=edit is REQUIRED: without it WP omits content.raw and we would fall back to
+      // content.rendered — writing the site's RENDERED html back as the post source, which
+      // expands shortcodes and destroys the page.
+      const src = await serpFixReadSource(wpBase, pageType, wpId, authHeaders);
+      if (src.error) return res.status(src.status).json({ error: src.error });
+      const content = src.content;
 
       // Find and replace existing H1
       const h1Regex = /<h1[^>]*>([\s\S]*?)<\/h1>/i;
       const h1Match = content.match(h1Regex);
-      if (!h1Match) {
-        // No H1 found — inject one
-        const newContent = `<h1>${newValue}</h1>\n${content}`;
-        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
-          method: 'POST', headers: authHeaders,
-          body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
-        });
-        if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
-        changes.push({ field: 'content', old: '(no H1)', new: `<h1>${newValue}</h1>` });
-      } else {
-        const oldH1 = h1Match[1].replace(/<[^>]+>/g, '').trim();
-        const newContent = content.replace(h1Regex, `<h1>${newValue}</h1>`);
-        const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
-          method: 'POST', headers: authHeaders,
-          body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
-        });
-        if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
-        changes.push({ field: 'content', old: `<h1>${oldH1}</h1>`, new: `<h1>${newValue}</h1>` });
-      }
+      const newContent = h1Match
+        ? content.replace(h1Regex, `<h1>${newValue}</h1>`)
+        : `<h1>${newValue}</h1>\n${content}`;
+      const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
+        method: 'POST', headers: authHeaders,
+        body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
+      });
+      if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
+      // original_value MUST be the FULL previous post_content. Rollback writes this value back as the
+      // entire page — storing a fragment like '(no H1)' would erase the page.
+      changes.push({ field: 'content', old: content, new: newContent });
       console.log(`[serp-fix] H1 replaced on ${pageType}/${wpId}`);
 
     } else if (fixType === 'h2_replace') {
       if (!oldValue || !newValue) return res.status(400).json({ error: 'oldValue and newValue required for h2_replace' });
-      const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
-        headers: authHeaders, signal: AbortSignal.timeout(15000)
-      });
-      if (!pageResp.ok) return res.status(500).json({ error: `Failed to fetch page: ${pageResp.status}` });
-      const pageData = await pageResp.json();
-      const content = pageData.content?.raw || pageData.content?.rendered || '';
+      const src = await serpFixReadSource(wpBase, pageType, wpId, authHeaders);
+      if (src.error) return res.status(src.status).json({ error: src.error });
+      const content = src.content;
 
       // Replace matching H2
       const h2Regex = new RegExp(`<h2[^>]*>${oldValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}<\\/h2>`, 'gi');
@@ -46287,19 +46490,17 @@ app.post('/api/projects/:projectId/serp-fix', async (req, res) => {
         body: JSON.stringify({ content: newContent }), signal: AbortSignal.timeout(15000)
       });
       if (!writeResp.ok) return res.status(500).json({ error: `WP write failed: ${writeResp.status}` });
-      changes.push({ field: 'content', old: `<h2>${oldValue}</h2>`, new: `<h2>${newValue}</h2>` });
+      changes.push({ field: 'content', old: content, new: newContent }); // FULL original — see h1_replace
       console.log(`[serp-fix] H2 replaced on ${pageType}/${wpId}`);
 
     } else if (fixType === 'h2_replace_all') {
       // Replace all occurrences of oldValue H2 with different new values (one per occurrence)
       const { replacements } = req.body;
       if (!oldValue || !replacements || !replacements.length) return res.status(400).json({ error: 'oldValue and replacements[] required' });
-      const pageResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
-        headers: authHeaders, signal: AbortSignal.timeout(15000)
-      });
-      if (!pageResp.ok) return res.status(500).json({ error: `Failed to fetch page: ${pageResp.status}` });
-      const pageData = await pageResp.json();
-      let content = pageData.content?.raw || pageData.content?.rendered || '';
+      const src = await serpFixReadSource(wpBase, pageType, wpId, authHeaders);
+      if (src.error) return res.status(src.status).json({ error: src.error });
+      const originalContent = src.content;
+      let content = originalContent;
       const escapedOld = oldValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const h2Pattern = new RegExp(`(<h2[^>]*>)${escapedOld}(<\\/h2>)`, 'i');
 
@@ -46307,11 +46508,13 @@ app.post('/api/projects/:projectId/serp-fix', async (req, res) => {
       for (const newVal of replacements) {
         if (h2Pattern.test(content)) {
           content = content.replace(h2Pattern, `$1${newVal}$2`);
-          changes.push({ field: 'content', old: `<h2>${oldValue}</h2>`, new: `<h2>${newVal}</h2>` });
           replaced++;
         }
       }
       if (replaced === 0) return res.status(404).json({ error: `H2 "${oldValue}" not found in page content` });
+      // One history row for the whole edit, holding the FULL original — not one row per heading with a
+      // fragment in it (a fragment would erase the page on rollback).
+      changes.push({ field: 'content', old: originalContent, new: content });
 
       const writeResp = await fetch(`${wpBase}/wp-json/wp/v2/${pageType}/${wpId}`, {
         method: 'POST', headers: authHeaders,

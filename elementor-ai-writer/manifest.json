@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "SEO Room — Elementor AI Writer",
+  "version": "1.5.0",
+  "description": "Lists every Elementor section (H1, H2, text, buttons) with a Fill button each, plus Fill all. Writes AI suburb copy based on the page slug.",
+  "host_permissions": [
+    "https://seo-room-v5-production.up.railway.app/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*/wp-admin/post.php*"],
+      "js": ["bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*/wp-admin/post.php*"],
+      "js": ["content.js"],
+      "world": "ISOLATED",
+      "run_at": "document_idle"
+    }
+  ]
+}

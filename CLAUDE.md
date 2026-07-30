@@ -6,7 +6,7 @@
 - Push the work forward — don't wait for permission on small steps
 - Do NOT assume or act on your own — take instruction from the user and do only what they say
 - No chatty or silly responses — direct and to the point only
-- File paths: edits to `/sessions/.../mnt/Desktop/...` may not sync to disk; copy files to Desktop and have user cp + git push
+- File paths: use Read/Write/Edit/Grep/Glob on the repo directly; the bash sandbox cannot see it (see File Sync Workflow)
 - Lock files: `.git/HEAD.lock` and `.git/index.lock` often need user to remove via `rm -f` in their terminal
 - User prefers "always accurate data" — no fake/sample data ever
 - User wants the BEST option for each feature, not just what works — mix and match APIs if needed
@@ -18,24 +18,30 @@ SEO automation system for The SEO Room agency. PDCA-cycle local SEO dashboard.
 
 ## Architecture
 
-- **Dashboard v5**: `~/Desktop/seo-room-v5/` — Node + Express + PostgreSQL on Railway
+- **Dashboard v5**: `~/Documents/Project Management (GitHub)/seo-room-v5/` — Node + Express + PostgreSQL on Railway
+  - Shorthand used below: `$V5`. Set once per terminal: `V5="$HOME/Documents/Project Management (GitHub)/seo-room-v5"`
+  - Folder name has spaces + parentheses — ALWAYS quote it in shell commands
 - **Single-file React**: `public/index.html` via Babel standalone (~40,000+ lines)
 - **Server**: `server.js` (~52,000+ lines)
 - **Live URL**: https://seo-room-v5-production.up.railway.app
 - **GitHub**: https://github.com/akhidhir/seo-room-v5.git
 - **Auto-deploys** from `main` branch
-- **Railway CLI**: `cd ~/Desktop/seo-room-v5 && railway logs` — NOTE: only returns the last ~100 lines; grep immediately after an action or use the Railway web dashboard for history
+- **Railway CLI**: `cd "$V5" && railway logs` — NOTE: only returns the last ~100 lines; grep immediately after an action or use the Railway web dashboard for history
 - **Railway builds with RAILPACK** (not Nixpacks) — apt packages go in `railpack.json` (`deploy.aptPackages`). Chromium is installed this way for headless NAP checks.
 
 ## File Sync Workflow (Critical)
 
-Sandbox can't git push. The workflow is:
-1. Edit files in sandbox
-2. Copy to Desktop: `cp server.js /sessions/.../mnt/Desktop/server-v5-latest.js`
-3. User runs: `cd ~/Desktop/seo-room-v5 && cp ~/Desktop/server-v5-latest.js server.js && rm -f .git/HEAD.lock .git/index.lock && git add server.js && git commit -m "message" && git push && rm ~/Desktop/server-v5-latest.js`
-4. For both files: copy both, user runs cp for both then git add both
+The repo lives OUTSIDE Desktop, so the bash sandbox CANNOT mount it. Consequences:
+- **Read/Write/Edit/Grep/Glob work directly on the repo** (host tools) — this is the normal way to change code.
+- **No shell commands against the repo** — no `git`, `npm`, `node`, `railway`, `wc`, `find` from the sandbox. The user runs those in Terminal.
 
-**IMPORTANT**: Edit tool writes directly to mounted folder (`~/Desktop/seo-room-v5/`), so user can also just `git add -A && git commit && git push` directly without the copy step.
+Deploy after edits — user runs:
+```
+V5="$HOME/Documents/Project Management (GitHub)/seo-room-v5"
+cd "$V5" && rm -f .git/HEAD.lock .git/index.lock && git add -A && git commit -m "message" && git push
+```
+
+No copy-to-Desktop step is needed any more — Edit writes straight into the repo.
 
 ## APIs & Integrations
 
@@ -361,7 +367,7 @@ const PILLAR_CATEGORIES = {
 ### Ops notes
 - railway logs CLI returns only ~100 lines — grep immediately or use web dashboard.
 - Railway migrated to RAILPACK builder: nixpacks.toml is IGNORED. Use railpack.json ({ "deploy": { "aptPackages": [...] } }).
-- Desktop file sync from sandbox is flaky: after cp to /sessions/.../mnt/Desktop/, VERIFY with host-side Glob before giving the user the deploy command; use a fresh filename if a copy goes missing.
+- (Obsolete — repo moved off Desktop) The old copy-to-Desktop sync dance no longer applies; edit the repo in place.
 - package.json: puppeteer-core added (uses system chromium, no bundled download).
 
 ## Recent Changes (June 12 2026 session)
@@ -499,7 +505,7 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 
 ## v4 Reference
 
-- Path: `~/Desktop/seo-room-v4/`
+- Path: NOT on Desktop any more — location unconfirmed (was `~/Desktop/seo-room-v4/`). Ask before assuming.
 - Live: https://seo-room-v4-production.up.railway.app
 - Had: managed agents via Claude API, WordPress plugin integration, Ahrefs data ingestion (handleAhrefsIngest), page health system, backlink gap analysis
 - v5 should match v4 quality with better architecture
@@ -584,6 +590,34 @@ no transfers, no navigating to another page to fix it. Applies to all projects, 
   fall back to read-back with one 2s retry. Never report failure when the write applied.
 - Never mark a finding/ticket fixed when nothing changed.
 - Homepage guards: never trash/redirect/slug-change the homepage; duplicate title with homepage = retitle homepage brand-first.
+
+## Session Log 2026-07-31: Full code review + top-5 fixes
+
+Full review report: `~/Desktop/V5-REVIEW-2026-07-30.md` (security / site-safety / data-accuracy / reliability / dead code).
+
+Fixed this session (server.js only, no frontend changes):
+1. **Rollback could wipe live pages.** serp-fix stored FRAGMENTS (`(no H1)`, `<h1>Old</h1>`) as `field_name='content'`;
+   rollback writes original_value in as the WHOLE page. Now: serp-fix stores the FULL prior post_content, and
+   `rollbackOriginalIsUnsafe()` + `rollbackFieldUnsupported()` refuse bad/legacy rows on BOTH rollback paths
+   (single + per-page). Per-page rollback now marks only the fields it actually restored — it used to mark
+   skipped rows rolled back too.
+2. **Mixed-content fix corrupted pages.** It read without `context=edit`, so `content.raw` was absent and it wrote
+   `content.rendered` back as the source (shortcodes expanded). Now: `context=edit`, skips Elementor pages, records
+   full history, verifies from the write response, and only marks the finding fixed when it really is.
+   New helper `serpFixReadSource()` enforces the same rules for the heading fixers.
+3. **Project scoping.** The guard only covered `role==='member'` and only read the URL. Now covers `client` too
+   (pinned to its own project) and checks project ids in the BODY via `requestedProjectIds()` —
+   `destination_project_id` previously let a caller publish to a DIFFERENT client's live site.
+4. **rc-sync / rc-grid-sync** were unauthenticated writes. Now `rcSyncAuthOk()`: accepts a JWT or `RC_SYNC_KEY`
+   (`?key=` or `x-rc-sync-key`). **Back-compat window: while RC_SYNC_KEY is unset the call is allowed with a loud
+   warning, so setting it can't break a running automation. Set it in Railway + add `?key=` to the scheduled tasks
+   to close this.** Also: rc-sync now refuses a location-id change that arrives without the profile to verify it
+   (the old identity guard was skipped entirely when `profile` was absent, while the re-point still happened).
+
+**Not yet fixed — highest remaining, in order:** client-report CTR ×100 (server.js ~47878, `g.ctr * 100` where ctr is
+already a %); invented health score of 50; `arp || 0` counting "not ranking" as rank 0; Local Intel hardcoded
+`rating: 5`; severity case-mismatch dropping criticals from the client PDF; Backlinks API saving zeros as "complete";
+hardcoded `sr_2026_…` key (rotate); `server.js.bak` committed with old secrets (`*.bak` not in .gitignore).
 
 ## Session Log 2026-07-04 (evening): Full v5 Audit + Cleanup
 
