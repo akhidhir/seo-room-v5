@@ -49,14 +49,20 @@ const SEODITY_MONTHLY_BUDGET = parseInt(process.env.SEODITY_MONTHLY_BUDGET || '1
 const LATE_API_KEY = process.env.LATE_API_KEY;
 const LATE_GBP_ACCOUNT_ID = process.env.LATE_GBP_ACCOUNT_ID;
 
-// Shared key for the seoroom-reader / seoroom-api WordPress plugins. These endpoints can CREATE and
-// PUBLISH pages on a client site, so this is a real credential.
-// It was hardcoded in 12 places (and in CLAUDE.md), which made the repo the source of truth and
-// rotation effectively impossible. Now it comes from the environment.
-// TO ROTATE: set SEOROOM_PLUGIN_KEY in Railway, update SEOROOM_READER_KEY in the plugin on each
-// client site, then delete the fallback literal below.
-// NOTE: the old value is in git history regardless — rotation is the only thing that actually fixes it.
-const SEOROOM_PLUGIN_KEY = process.env.SEOROOM_PLUGIN_KEY || 'sr_2026_kX9mNpQ4wR7vBz';
+// Key for the seoroom-reader / seoroom-api WordPress plugins (endpoints that can CREATE and PUBLISH
+// pages on a client site). Env-only — NO fallback literal. The old shared key `sr_2026_…` was
+// hardcoded in 12 places plus CLAUDE.md and is therefore burned; it must never come back into code.
+// The plugin route is optional: every caller below falls back to per-project `wp_api_key`, then to
+// the site's WordPress Application Password.
+const SEOROOM_PLUGIN_KEY = process.env.SEOROOM_PLUGIN_KEY || null;
+
+// Guard for the handful of one-shot Sureflow routes that ONLY work through that plugin. Without the
+// key they would post the string "null" as the password and get an opaque 403 from WordPress.
+function requireSeoroomPluginKey(res) {
+  if (SEOROOM_PLUGIN_KEY) return true;
+  res.status(503).json({ error: 'SEOROOM_PLUGIN_KEY is not set. This route drives the "SEO Room Reader" WordPress plugin, which is not currently in use. Set the env var if you re-enable that plugin.' });
+  return false;
+}
 
 // Managed Agents (Claude API)
 const AGENT_IDS = {
@@ -4658,6 +4664,7 @@ async function createNewElementorPage(wpUrl, authHeaders, postType, title, tree,
 
 // One-shot: cleanup duplicate suburb template pages, keep only page 367
 app.get('/cleanup-suburb-templates', async (req, res) => {
+  if (!requireSeoroomPluginKey(res)) return;
   try {
     const axios = require('axios');
     // List all pages
@@ -4679,6 +4686,7 @@ app.get('/cleanup-suburb-templates', async (req, res) => {
 
 // One-shot: create suburb template v2 on sureflow — matches wireframe exactly
 app.get('/create-suburb-template-now', async (req, res) => {
+  if (!requireSeoroomPluginKey(res)) return;
   try {
     const axios = require('axios');
     // Trash old template pages
@@ -5996,6 +6004,7 @@ app.post('/api/projects/:id/create-suburb-template', async (req, res) => {
 
 // One-shot: diagnose page 367 meta data on sureflow
 app.get('/diagnose-suburb-template', async (req, res) => {
+  if (!requireSeoroomPluginKey(res)) return;
   try {
     const axios = require('axios');
     const r = await axios.get(`https://sureflow.seoroom.au/wp-json/seoroom/v1/read-meta/367?api_key=${encodeURIComponent(SEOROOM_PLUGIN_KEY)}`, { timeout: 15000 });
@@ -6007,6 +6016,7 @@ app.get('/diagnose-suburb-template', async (req, res) => {
 
 // One-shot: fix page 367 on sureflow (fixes settings format + native re-save)
 app.get('/fix-suburb-template', async (req, res) => {
+  if (!requireSeoroomPluginKey(res)) return;
   try {
     const axios = require('axios');
     const r = await axios.get(`https://sureflow.seoroom.au/wp-json/seoroom/v1/fix-page/367?api_key=${encodeURIComponent(SEOROOM_PLUGIN_KEY)}`, { timeout: 30000 });
@@ -6018,6 +6028,7 @@ app.get('/fix-suburb-template', async (req, res) => {
 
 // One-shot: create minimal test page on sureflow to verify Elementor works
 app.get('/test-elementor-minimal', async (req, res) => {
+  if (!requireSeoroomPluginKey(res)) return;
   try {
     const axios = require('axios');
     const r = await axios.get(`https://sureflow.seoroom.au/wp-json/seoroom/v1/test-minimal?api_key=${encodeURIComponent(SEOROOM_PLUGIN_KEY)}`, { timeout: 30000 });
@@ -6036,7 +6047,8 @@ app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
     if (!title || !tree) return res.status(400).json({ error: 'title and tree required' });
 
     // Try SEO Room API plugin first (works on hosts that strip auth headers)
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
+    // Per-site plugin keys come from SEOROOM_PLUGIN_KEY (env) — only used when it is actually set.
+    const SEOROOM_API_KEYS = SEOROOM_PLUGIN_KEY ? { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY } : {};
     const wpHost = project.wordpress_url ? new URL(project.wordpress_url).hostname : '';
     const wpApiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key;
     if (wpApiKey) {
@@ -6662,7 +6674,8 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
     const hostNorm = (h) => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     const target = hostNorm(host);
     // Sites that strip the Authorization header use the seoroom-reader plugin + API key instead.
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
+    // Per-site plugin keys come from SEOROOM_PLUGIN_KEY (env) — only used when it is actually set.
+    const SEOROOM_API_KEYS = SEOROOM_PLUGIN_KEY ? { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY } : {};
     let srcAuth = null, srcName = '', srcApiKey = SEOROOM_API_KEYS[target] || null;
     const matches = (p) => hostNorm(p.wordpress_url) === target || hostNorm(p.domain) === target;
     if (matches(project)) { srcAuth = getWpAuthHeaders(project); srcName = project.name; if (!srcApiKey) srcApiKey = project.wp_api_key || null; }
@@ -6755,7 +6768,8 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
     // Sites that strip the Authorization header (e.g. sureflow.seoroom.au) use the seoroom-api plugin + API key instead.
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
+    // Per-site plugin keys come from SEOROOM_PLUGIN_KEY (env) — only used when it is actually set.
+    const SEOROOM_API_KEYS = SEOROOM_PLUGIN_KEY ? { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY } : {};
     const wpHost = (() => { try { return new URL(project.wordpress_url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
     const apiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key || null;
     if (!wpUrl || (!apiKey && !authHeaders)) return res.status(400).json({ error: "Set this project's WordPress URL + Application Password (or seoroom-api key) in Project Settings first." });
@@ -6836,7 +6850,8 @@ async function pbResolvePage(host, postId) {
   try {
     const norm = h => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     const target = norm(host);
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
+    // Per-site plugin keys come from SEOROOM_PLUGIN_KEY (env) — only used when it is actually set.
+    const SEOROOM_API_KEYS = SEOROOM_PLUGIN_KEY ? { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY } : {};
     let apiKey = SEOROOM_API_KEYS[target] || null;
     if (!apiKey) {
       const all = (await pool.query('SELECT * FROM projects')).rows;
@@ -6960,7 +6975,8 @@ app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Destination project not found' });
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
+    // Per-site plugin keys come from SEOROOM_PLUGIN_KEY (env) — only used when it is actually set.
+    const SEOROOM_API_KEYS = SEOROOM_PLUGIN_KEY ? { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY } : {};
     const wpHost = (() => { try { return new URL(project.wordpress_url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
     const apiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key || null;
     if (!wpUrl) return res.status(400).json({ error: 'WordPress connection required.' });

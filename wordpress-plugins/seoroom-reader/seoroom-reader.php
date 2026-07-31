@@ -10,16 +10,19 @@ if (!defined('ABSPATH')) exit;
 
 // API key — must match SEOROOM_PLUGIN_KEY in the dashboard's environment.
 //
-// These endpoints can CREATE and PUBLISH pages on this site, so this is a real credential.
-// Set it per-site WITHOUT editing this file, in order of preference:
-//   1. wp-config.php:  define('SEOROOM_READER_KEY', 'the-key');
-//   2. environment:    SEOROOM_READER_KEY=the-key
-// The literal below is the legacy shared key and exists only so existing installs keep working.
-// ROTATE: set a new key via (1) on every site, set SEOROOM_PLUGIN_KEY in Railway to match,
-// then delete this fallback. The old value is in git history, so rotation is the only real fix.
+// These endpoints can CREATE and PUBLISH pages on this site, so this is a real credential and there
+// is deliberately NO default. The old shared key (`sr_2026_…`) was committed to the repo and is
+// burned — never reintroduce a literal here.
+//
+// Set it per site in wp-config.php:
+//     define('SEOROOM_READER_KEY', 'your-long-random-key');
+// or as an environment variable SEOROOM_READER_KEY.
+//
+// With no key set, every route in this plugin refuses — which is the correct behaviour for a plugin
+// that is installed but not configured.
 if (!defined('SEOROOM_READER_KEY')) {
     $seoroom_env_key = getenv('SEOROOM_READER_KEY');
-    define('SEOROOM_READER_KEY', $seoroom_env_key ? $seoroom_env_key : 'sr_2026_kX9mNpQ4wR7vBz');
+    define('SEOROOM_READER_KEY', $seoroom_env_key ? $seoroom_env_key : '');
 }
 
 add_action('rest_api_init', function () {
@@ -39,8 +42,12 @@ add_action('rest_api_init', function () {
 });
 
 function seoroom_reader_check_key($req) {
+    // Fail closed when the site has no key configured. Without this line the check would rely on
+    // PHP falsiness to reject an empty submitted key — correct today, but one refactor away from
+    // "empty === empty" opening every publish endpoint on the site.
+    if (SEOROOM_READER_KEY === '') return false;
     $key = $req->get_param('api_key');
-    return ($key && hash_equals(SEOROOM_READER_KEY, (string) $key));
+    return (is_string($key) && $key !== '' && hash_equals(SEOROOM_READER_KEY, $key));
 }
 
 function seoroom_reader_get_elementor($req) {
