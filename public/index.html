@@ -8426,76 +8426,96 @@
       const [findings, setFindings] = useState([]);
       const [expanded, setExpanded] = useState({});
       const [step, setStep] = useState('');
+      const pollRef = React.useRef(null);
 
-      // Auto-fill the URL from the project, and restore the last run.
-      // `stale` guards against a slow response for project A landing after a switch to project B.
+      // Apply whatever the server says about the most recent run. One place, so a poll result and
+      // a page load are handled identically.
+      const applyStatus = (a) => {
+        if (!a) return false;
+        if (a.status === 'running') { setLoading(true); setStep(caStepText(a.progress)); return true; }
+        setLoading(false);
+        if (a.status === 'failed') { setError(a.error || 'Audit failed.'); setStep(''); return false; }
+        if (a.summary) { setSummary(a.summary); setFindings(a.findings || []); setError(''); }
+        setStep('');
+        return false;
+      };
+
+      const caStepText = (p) => {
+        if (!p || !p.step) return 'Starting…';
+        if (p.total) return `${p.step} — ${p.done || 0} of ${p.total}`;
+        return p.step + '…';
+      };
+
+      // On open: fill the URL from the project, show the last result, and reattach to a run that is
+      // still going (e.g. you navigated away, or reloaded the tab).
       useEffect(() => {
         if (!project?.id) return;
         let stale = false;
         const d = (project.domain || '').trim();
         setUrl(d ? (/^https?:\/\//i.test(d) ? d : 'https://' + d) : '');
-        setSummary(null); setFindings([]); setError('');
+        setSummary(null); setFindings([]); setError(''); setLoading(false); setStep('');
         (async () => {
           try {
-            const r = await api(`/projects/${project.id}/claude-audit/latest`);
-            if (stale || !r || !r.audit) return;
-            setSummary(r.audit.summary); setFindings(r.audit.findings || []);
+            // repair=1 only here — the poller hits this endpoint every 3s and must stay light.
+            const r = await api(`/projects/${project.id}/claude-audit/status?repair=1`);
+            if (stale) return;
+            if (applyStatus(r?.audit)) poll(r.audit.id);
           } catch (err) {
             console.warn('[claude-audit] could not load last run:', err.message);
           }
         })();
-        return () => { stale = true; };
+        // Switching project must kill the old poll too, or it keeps writing the previous client's
+        // results into the view you are now looking at.
+        return () => { stale = true; if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
       }, [project?.id, project?.domain]);
 
-      // Rolling status text while the audit runs — it takes a couple of minutes.
-      useEffect(() => {
-        if (!loading) { setStep(''); return; }
-        const steps = ['Finding your pages…', 'Reading each page…', 'Checking site-wide settings…', 'Claude is analysing…', 'Writing up the findings…', 'Almost there…'];
-        let i = 0; setStep(steps[0]);
-        const t = setInterval(() => { i = Math.min(i + 1, steps.length - 1); setStep(steps[i]); }, 18000);
-        return () => clearInterval(t);
-      }, [loading]);
+      // Stop polling when the component goes away.
+      useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+      const poll = (auditId) => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        const started = Date.now();
+        pollRef.current = setInterval(async () => {
+          if (Date.now() - started > 15 * 60 * 1000) { // safety net
+            clearInterval(pollRef.current); pollRef.current = null;
+            setLoading(false);
+            setError('The audit is taking longer than expected. Reload the page to check on it.');
+            return;
+          }
+          try {
+            const r = await api(`/projects/${project.id}/claude-audit/status`);
+            const a = r?.audit;
+            if (!a || a.id !== auditId) return; // not our run yet
+            if (!applyStatus(a)) { clearInterval(pollRef.current); pollRef.current = null; }
+          } catch (err) { /* transient — keep polling */ }
+        }, 3000);
+      };
 
       const runAudit = async () => {
         if (!project?.id) { setError('Select a project first.'); return; }
         if (!url.trim()) { setError('Enter a website address.'); return; }
-        // Remember which run was the latest BEFORE we start, so the poller below can tell a genuinely
-        // new result from the previous one.
-        let priorId = null;
-        try { const p = await api(`/projects/${project.id}/claude-audit/latest`); priorId = p?.audit?.id ?? null; } catch (err) { /* fine */ }
-        setLoading(true); setError(''); setSummary(null); setFindings([]);
+        setLoading(true); setError(''); setSummary(null); setFindings([]); setStep('Starting…');
         try {
+          // Returns straight away with an id — the real work runs on the server and we poll it.
           const r = await api(`/projects/${project.id}/claude-audit/run`, {
             method: 'POST',
             body: { url: url.trim(), instructions: instructions.trim() },
           });
-          if (!r || r.error) { setError(r?.error || 'Audit failed.'); return; }
-          setSummary(r.summary); setFindings(r.findings || []);
-        } catch (e) {
-          // api() throws on non-OK responses, so the 409 "already running" lands here. A proxy
-          // timeout can make the browser retry while the first run is still going — rather than
-          // fail, wait for that run to finish and show its result.
-          if (/already running/i.test(e.message || '')) { await waitForRun(priorId); return; }
-          setError(e.message || 'Audit failed.');
-        } finally {
+          if (r?.audit_id) { poll(r.audit_id); return; }
           setLoading(false);
+          setError(r?.error || 'Could not start the audit.');
+        } catch (e) {
+          // A run was already going — attach to it instead of failing.
+          const m = (e.message || '').match(/already running/i);
+          if (m) {
+            try {
+              const s = await api(`/projects/${project.id}/claude-audit/status`);
+              if (s?.audit) { applyStatus(s.audit); poll(s.audit.id); return; }
+            } catch (err2) { /* fall through */ }
+          }
+          setLoading(false);
+          setError(e.message || 'Could not start the audit.');
         }
-      };
-
-      // Poll for the result of a run that started in another request. `priorId` is the run that was
-      // already there before we started — anything equal to it is the OLD result, not ours.
-      const waitForRun = async (priorId) => {
-        for (let i = 0; i < 44; i++) { // ~11 minutes — covers the server's 10-minute ceiling
-          await new Promise(r => setTimeout(r, 15000));
-          try {
-            const r = await api(`/projects/${project.id}/claude-audit/latest`);
-            if (r && r.audit && r.audit.summary && r.audit.id !== priorId) {
-              setSummary(r.audit.summary); setFindings(r.audit.findings || []);
-              return;
-            }
-          } catch (err) { /* keep waiting */ }
-        }
-        setError('The audit is taking longer than expected. Reload this page shortly to see the result.');
       };
 
       const SEV = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#3b82f6' };
@@ -8556,7 +8576,7 @@
               <div className="spinner-large"></div>
               <div className="audit-loading-text" style={{ marginTop: 16, fontWeight: 700 }}>Running Claude Audit</div>
               <div style={{ color: 'var(--text3)', fontSize: 13, marginTop: 6 }}>{step}</div>
-              <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 14 }}>This usually takes 1–3 minutes. You can leave this page — the results are saved.</div>
+              <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 14 }}>Usually 1–3 minutes. It keeps running on the server, so you can leave this page and come back.</div>
             </div>
           )}
 

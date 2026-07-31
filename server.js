@@ -64,8 +64,10 @@ if (!DATABASE_URL) {
 
 // Warn on missing optional integrations
 if (!GOOGLE_CLIENT_ID) console.warn('[boot] GOOGLE_CLIENT_ID not set — GSC OAuth disabled');
-if (!SERPAPI_KEY) console.warn('[boot] SERPAPI_KEY not set — SERP + Maps rank tracking disabled');
-if (!LOCAL_FALCON_KEY) console.warn('[boot] LOCAL_FALCON_KEY not set — Local Falcon grid scanning disabled');
+// SerpAPI is being retired in favour of DataForSEO. Rank + Maps tracking, grid scan and keyword
+// discovery all run on DataForSEO — that is the key worth warning about.
+if (!DATAFORSEO_AUTH) console.warn('[boot] DataForSEO not configured — SERP + Maps rank tracking, grid scan and keyword discovery disabled');
+if (!SERPAPI_KEY) console.warn('[boot] SERPAPI_KEY not set — only the remaining SerpAPI-only features (AI Overview scan, autocomplete seeds) are affected');
 if (!ANTHROPIC_API_KEY) console.warn('[boot] ANTHROPIC_API_KEY not set — AI audits disabled');
 
 // Database pool
@@ -21582,7 +21584,9 @@ async function runHealthChecks() {
   try { await pool.query('SELECT 1'); checks.database = { ok: true }; }
   catch (e) { checks.database = { ok: false, error: e.message }; recordSystemIssue('critical', 'health-check', 'Database unreachable: ' + e.message); }
   // 2. Required env keys present
-  const keys = { ANTHROPIC_API_KEY: 'AI audits/fixes', SERPAPI_KEY: 'rank tracking', PAGESPEED_API_KEY: 'CWV scans', GOOGLE_CLIENT_ID: 'Google OAuth' };
+  // DataForSEO is the rank/maps provider. SERPAPI_KEY is deliberately NOT required — it is being
+  // retired, and listing it here logged a 'high' system issue every 10 minutes once it was removed.
+  const keys = { ANTHROPIC_API_KEY: 'AI audits/fixes', DATAFORSEO_LOGIN: 'rank + maps tracking', PAGESPEED_API_KEY: 'CWV scans', GOOGLE_CLIENT_ID: 'Google OAuth' };
   for (const [k, why] of Object.entries(keys)) {
     if (!process.env[k]) { checks[k] = { ok: false, error: 'missing — ' + why + ' will fail' }; recordSystemIssue('high', 'health-check', `Env key ${k} missing (${why})`); }
     else checks[k] = { ok: true };
@@ -26102,7 +26106,8 @@ app.post('/api/projects/:projectId/content-queue/:id/apply-chat', async (req, re
 app.post(['/api/projects/:projectId/competitor-wordcount', '/api/builds/:buildId/competitor-wordcount'], async (req, res) => {
   const { keyword, location } = req.body;
   if (!keyword) return res.status(400).json({ error: 'Missing keyword' });
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+  // Primary path is DataForSEO; SerpAPI is only a fallback below. Gate on the provider we actually need.
+  if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
 
   try {
     let project;
@@ -44265,7 +44270,9 @@ app.delete('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
 });
 
 app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+  // Grid scan runs entirely on DataForSEO (dataForSeoMaps). It used to be gated on SERPAPI_KEY,
+  // which meant removing SerpAPI would 503 the flagship feature for no reason.
+  if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
   const { projectId } = req.params;
   const { keyword_ids, grid_size = 5, radius_km = 10, force } = req.body;
 
@@ -44515,9 +44522,10 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
   }
 });
 
-// SerpAPI grid scan for RC keywords (keyword-only, no suburb — for comparison with RC data)
+// Grid scan for RC keywords (keyword-only, no suburb — for comparison with RC data).
+// Runs on DataForSEO despite the historical "SerpAPI" naming.
 app.post('/api/projects/:projectId/maps/grid-scan-rc', async (req, res) => {
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+  if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
   const { projectId } = req.params;
   const { keywords: keywordList, grid_size = 5, radius_km = 10 } = req.body;
 
@@ -46964,9 +46972,10 @@ app.post('/api/projects/:projectId/rank-tracking/import', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Discover keywords a domain ranks for via SerpAPI (site: search)
+// Discover keywords a domain ranks for — Google Search Console + DataForSEO (ranked_keywords + SERP).
+// No SerpAPI call anywhere in this handler; the old SERPAPI_KEY gate was vestigial.
 app.post('/api/projects/:projectId/rank-tracking/discover', async (req, res) => {
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured' });
+  if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
   const { projectId } = req.params;
   const limit = parseInt(req.body.limit) || 50; // Default 50, accepts 10/20/30/40/50
   try {
@@ -55872,42 +55881,20 @@ async function caSelfRepair(projectId) {
   ).catch((e) => console.log('[claude-audit] findings cleanup skipped:', e.message));
 }
 
-// Run the audit: crawl → Claude → findings (isolated; writes nothing to shared tables).
-app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
-  const projectId = req.params.id;
-  let auditId = null;
+// Write live progress onto the audit row so the page can poll it. Kept in audit_data alongside the
+// source tag, so progress survives a redeploy and there is no in-memory job state to lose.
+async function caProgress(auditId, step, done, total) {
+  await pool.query(
+    `UPDATE audits SET audit_data = COALESCE(audit_data,'{}'::jsonb) || $1::jsonb WHERE id=$2`,
+    [JSON.stringify({ progress: { step, done: done ?? null, total: total ?? null, at: new Date().toISOString() } }), auditId]
+  ).catch(() => { /* progress is cosmetic — never fail the run over it */ });
+}
+
+// The actual work. Runs detached from the HTTP request: Railway's proxy closes long requests with a
+// 502, and this takes minutes. The browser polls /status instead.
+async function caRunAudit(projectId, auditId, project, baseUrl, instructions) {
   try {
-    if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
-
-    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
-    if (!project) return res.status(404).json({ error: 'Project not found' });
-
-    const baseUrl = caAbsoluteUrl(req.body?.url || project.domain);
-    if (!baseUrl) return res.status(400).json({ error: 'No website URL. Set the domain in Project Settings or type one in.' });
-
-    const instructions = (req.body?.instructions || '').toString().slice(0, 1500);
-
-    await caSelfRepair(projectId);
-
-    // In-flight guard. The browser's api() helper retries on proxy timeouts, and this route takes
-    // minutes — without this, one click could kick off several full crawls and several paid calls.
-    const inFlight = await pool.query(
-      `SELECT id FROM audits WHERE project_id=$1 AND pillar='claude_audit' AND status='running'
-         AND started_at > NOW() - INTERVAL '20 minutes' LIMIT 1`,
-      [projectId]
-    );
-    if (inFlight.rows.length) {
-      return res.status(409).json({ error: 'An audit is already running for this project. Give it a minute, then reload.' });
-    }
-
-    const auditRow = await pool.query(
-      `INSERT INTO audits (project_id, pillar, status, started_at, audit_data)
-       VALUES ($1, 'claude_audit', 'running', NOW(), '{"source":"claude_audit"}'::jsonb) RETURNING *`,
-      [projectId]
-    );
-    auditId = auditRow.rows[0].id;
-
-    // 1. Which pages exist
+    await caProgress(auditId, 'Finding your pages');
     let discovered = [];
     try {
       discovered = await discoverPages(baseUrl, project.wordpress_url || null, getWpAuthHeaders(project));
@@ -55919,16 +55906,18 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
     if (!urls.includes(baseUrl)) urls.unshift(baseUrl);
     urls = [...new Set(urls)].slice(0, CA_MAX_PAGES);
 
-    // 2. Fetch them (small batches so we don't hammer the host)
+    // Fetch in small batches so we don't hammer the host.
     const pageFacts = [];
     for (let i = 0; i < urls.length; i += 5) {
+      await caProgress(auditId, 'Reading your pages', pageFacts.length, urls.length);
       const batch = await Promise.all(urls.slice(i, i + 5).map(caFetchPage));
       pageFacts.push(...batch);
     }
+
+    await caProgress(auditId, 'Checking site-wide settings', urls.length, urls.length);
     const site = await caSiteSignals(baseUrl);
     console.log(`[claude-audit] project ${projectId}: crawled ${pageFacts.length} pages of ${baseUrl}`);
 
-    // 3. Hand the facts to Claude
     const context = {
       business: project.business_name || project.name || '',
       industry: project.industry || '',
@@ -55941,6 +55930,7 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
     };
     const userMsg = `${instructions ? `EXTRA INSTRUCTIONS FROM THE USER (treat as priority):\n${instructions}\n\n` : ''}CRAWL DATA:\n${JSON.stringify(context)}`;
 
+    await caProgress(auditId, `Claude is analysing ${pageFacts.length} pages`);
     const aiResp = await caClient().messages.create({
       model: CA_MODEL,
       max_tokens: 16000, // shared with the model's thinking budget, so leave headroom
@@ -55959,13 +55949,9 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
     try { raw = JSON.parse(jsonMatch[0]); } catch (e) { throw new Error('Could not read Claude findings: ' + e.message); }
     if (!Array.isArray(raw)) throw new Error('Claude findings were not a list.');
 
-    // 4. ISOLATION (2026-07-30): this feature is being rebuilt on its own `ca_*` tables and its own
-    // pages. It writes NOTHING to the shared tables — no action_items, no ticket codes, and no
-    // audit_findings rows (an unrecognised pillar there still surfaces as a Website finding on the
-    // other audit pages). Everything lives in this audit's own audit_data until the ca_* tables land.
+    // ISOLATION: nothing is written to action_items, ticket_codes or audit_findings. The findings
+    // live in this audit's own audit_data until the ca_* tables land.
     const shaped = raw.map(caShapeFinding).filter(f => f.title && f.title !== 'Untitled finding').slice(0, 20);
-
-    const created = shaped;
 
     const summary = {
       url: baseUrl,
@@ -55979,13 +55965,86 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
       `UPDATE audits SET status='completed', completed_at=NOW(), audit_data=$1 WHERE id=$2`,
       [JSON.stringify({ source: 'claude_audit', summary, findings: shaped }), auditId]
     );
-
-    res.json({ ok: true, audit_id: auditId, summary, findings: created });
+    console.log(`[claude-audit] project ${projectId}: done — ${shaped.length} findings`);
   } catch (e) {
     console.error('[claude-audit] failed:', e.message);
-    if (auditId) {
-      await pool.query(`UPDATE audits SET status='failed', completed_at=NOW(), error_message=$1 WHERE id=$2`, [e.message, auditId]).catch(() => {});
+    await pool.query(
+      `UPDATE audits SET status='failed', completed_at=NOW(), error_message=$1 WHERE id=$2`,
+      [e.message, auditId]
+    ).catch(() => {});
+  }
+}
+
+// Start an audit. Returns immediately with the audit id — poll /status for progress and results.
+app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
+  const projectId = req.params.id;
+  try {
+    if (!anthropic) return res.status(400).json({ error: 'AI not configured (ANTHROPIC_API_KEY missing).' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const baseUrl = caAbsoluteUrl(req.body?.url || project.domain);
+    if (!baseUrl) return res.status(400).json({ error: 'No website URL. Set the domain in Project Settings or type one in.' });
+
+    const instructions = (req.body?.instructions || '').toString();
+
+    await caSelfRepair(projectId);
+
+    // One run at a time per project — a crawl plus a paid AI call is not something to double up on.
+    const inFlight = await pool.query(
+      `SELECT id FROM audits WHERE project_id=$1 AND pillar='claude_audit' AND status='running'
+         AND started_at > NOW() - INTERVAL '20 minutes' LIMIT 1`,
+      [projectId]
+    );
+    if (inFlight.rows.length) {
+      return res.status(409).json({ error: 'An audit is already running for this project.', audit_id: inFlight.rows[0].id });
     }
+
+    const auditRow = await pool.query(
+      `INSERT INTO audits (project_id, pillar, status, started_at, audit_data)
+       VALUES ($1, 'claude_audit', 'running', NOW(), '{"source":"claude_audit"}'::jsonb) RETURNING id`,
+      [projectId]
+    );
+    const auditId = auditRow.rows[0].id;
+
+    // Detached on purpose — do NOT await.
+    caRunAudit(projectId, auditId, project, baseUrl, instructions);
+
+    res.status(202).json({ ok: true, started: true, audit_id: auditId });
+  } catch (e) {
+    console.error('[claude-audit] could not start:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Progress + result for the most recent audit (running, failed, or completed).
+app.get('/api/projects/:id/claude-audit/status', async (req, res) => {
+  try {
+    // Opening the page is enough to undo anything a pre-isolation build left on the shared board.
+    // Only on the page's first call — this endpoint is also polled every 3s while a run is going.
+    if (req.query.repair === '1') await caSelfRepair(req.params.id);
+    const r = await pool.query(
+      `SELECT id, status, audit_data, error_message, started_at, completed_at FROM audits
+       WHERE project_id=$1 AND pillar='claude_audit' ORDER BY id DESC LIMIT 1`,
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.json({ audit: null });
+    const row = r.rows[0];
+    const d = row.audit_data || {};
+    res.json({
+      audit: {
+        id: row.id,
+        status: row.status,
+        error: row.error_message || null,
+        progress: d.progress || null,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+        summary: d.summary || null,
+        findings: d.findings || [],
+      },
+    });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
