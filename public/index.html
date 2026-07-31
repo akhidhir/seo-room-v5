@@ -32650,6 +32650,55 @@
       const [serviceSaved, setServiceSaved] = useState(false);
       const [checkingComp, setCheckingComp] = useState(false);
       const [compProgress, setCompProgress] = useState(null);
+      // The two keywords that get their own rank column. Per project; seeded from the service so a
+      // new project is never blank.
+      const seedKws = (() => {
+        const stored = Array.isArray(project.smart_keywords) ? project.smart_keywords : [];
+        if (stored.length) return [stored[0] || '', stored[1] || ''];
+        const base = (project.smart_service || project.industry || '').toString().trim().toLowerCase();
+        return base ? [base, 'emergency ' + base] : ['', ''];
+      })();
+      const [kw1, setKw1] = useState(seedKws[0]);
+      const [kw2, setKw2] = useState(seedKws[1]);
+      const [kwSaved, setKwSaved] = useState(false);
+      const [checkingKw, setCheckingKw] = useState(false);
+      const [kwProgress, setKwProgress] = useState(null);
+
+      const saveKeywords = async () => {
+        setError('');
+        const kws = [kw1, kw2].map(k => (k || '').trim().toLowerCase()).filter(Boolean);
+        try {
+          const r = await api(`/projects/${project.id}/smart-map-ranking/keywords`, { method: 'POST', body: { keywords: kws } });
+          if (r && r.error) { setError('Save failed: ' + r.error); return; }
+          project.smart_keywords = kws;
+          if (result) setResult({ ...result, smartKeywords: kws });
+          setKwSaved(true); setTimeout(() => setKwSaved(false), 2000);
+        } catch (e) { setError('Save failed: ' + (e.message || 'unknown error')); }
+      };
+
+      const checkKeywordRanks = async (force) => {
+        if (!result || !result.suburbs) return;
+        const kws = [kw1, kw2].map(k => (k || '').trim().toLowerCase()).filter(Boolean);
+        if (!kws.length) { setError('Enter at least one keyword first.'); return; }
+        const calls = result.suburbs.length * kws.length;
+        if (!window.confirm(`Measure your Maps position for ${kws.map(k => '"' + k + '"').join(' and ')} across ${result.suburbs.length} suburbs?\nUp to ${calls} checks, about $${(calls * 0.002).toFixed(2)}.${force ? '' : ' Anything measured in the last 30 days is reused free.'}\nRuns in the background (~1–3 min).`)) return;
+        setError(''); setCheckingKw(true); setKwProgress({ checked: 0, total: calls });
+        try {
+          await saveKeywords();
+          const start = await api(`/projects/${project.id}/smart-map-ranking/keywords/run`, { method: 'POST', body: { keywords: kws, suburbs: result.suburbs, force: !!force } });
+          if (start && start.error) { setError(start.error); setCheckingKw(false); setKwProgress(null); return; }
+          const poll = async () => {
+            try {
+              const st = await api(`/projects/${project.id}/smart-map-ranking/keywords/status`);
+              if (st.status === 'running') { setKwProgress({ checked: st.checked, total: st.total }); setTimeout(poll, 2500); return; }
+              setCheckingKw(false); setKwProgress(null);
+              if (st.status === 'error') { setError('Keyword check failed: ' + (st.error || 'unknown')); return; }
+              runSurvey(); // reload so the new positions appear in the columns
+            } catch (e) { setTimeout(poll, 4000); }
+          };
+          setTimeout(poll, 2500);
+        } catch (e) { setError(e.message || 'Could not start the keyword check.'); setCheckingKw(false); setKwProgress(null); }
+      };
 
       const saveService = async () => {
         setError('');
@@ -32736,11 +32785,20 @@
             case 'population': return s.population || 0;
             case 'distance': return s.distance || 0;
             case 'competitors': return s.competitors == null ? Infinity : s.competitors;
-            case 'per_capita': return s.per_capita == null ? Infinity : s.per_capita;
             case 'mapsRank': return s.mapsRank == null ? Infinity : s.mapsRank;
-            case 'opportunity': return hasComp ? (s.opportunity ?? s.score) : s.score;
-            case 'completion': return s.completion || 0;
-            default: return s.rank;
+            case 'completion': return s.completion == null ? -1 : s.completion;
+            default: {
+              // Keyword rank columns: kw0 / kw1. Sort best-first, then "not ranking", then unmeasured
+              // last — so a column click surfaces where you already rank rather than where you don't.
+              const m = /^kw(\d+)$/.exec(sortBy || '');
+              if (m) {
+                const kw = (result.smartKeywords || [])[Number(m[1])];
+                const kr = (s.keywordRanks || []).find(k => k.keyword === kw);
+                if (!kr || !kr.measured) return 100000;
+                return kr.position == null ? 9999 : kr.position;
+              }
+              return s.rank;
+            }
           }
         };
         return [...arr].sort((a, b) => {
@@ -32819,7 +32877,7 @@
         setResult(null); setAccepted(false); setSavedAt(null);
       };
 
-      const tierColor = (t) => t === 'High' ? '#22c55e' : t === 'Medium' ? '#f59e0b' : '#64748b';
+      // (tierColor removed with the Tier column — tiers were quartiles of a score, not a real grouping)
 
       return (
         <div>
@@ -32885,8 +32943,53 @@
                   {checkingComp ? 'Checking…' : (result.hasCompetitors ? 'Re-check Competitors' : 'Check Competitors')}
                 </button>
                 {checkingComp && compProgress && <div style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>Checked {compProgress.checked} / {compProgress.total} suburbs…</div>}
-                {!checkingComp && result.hasCompetitors && <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>Re-ranked by opportunity — fewer competitors weighted highest. "—" = lookup failed.</div>}
+                {!checkingComp && result.hasCompetitors && <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>Competitors is the count in the Maps results — the search reads the top 20, so "20+" means saturated, not exactly 20. "—" = lookup failed.</div>}
               </div>
+
+              {/* Two tracked keywords — each gets its own rank column in the table below */}
+              <div className="integration-card" style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ flex: '1 1 200px' }}>
+                  <label className="form-label" style={{ fontSize: 12 }}>Keyword 1</label>
+                  <input className="form-input" value={kw1} onChange={e => setKw1(e.target.value)} placeholder="e.g. plumber" disabled={checkingKw} />
+                </div>
+                <div style={{ flex: '1 1 200px' }}>
+                  <label className="form-label" style={{ fontSize: 12 }}>Keyword 2</label>
+                  <input className="form-input" value={kw2} onChange={e => setKw2(e.target.value)} placeholder="e.g. emergency plumber" disabled={checkingKw} />
+                </div>
+                <button className="btn" onClick={saveKeywords} disabled={checkingKw} style={{ height: 38 }} title="Save these two keywords for this project">
+                  {kwSaved ? <><i className="fas fa-check" style={{ marginRight: 6, color: '#22c55e' }}></i>Saved</> : <><i className="fas fa-floppy-disk" style={{ marginRight: 6 }}></i>Save</>}
+                </button>
+                <button className="btn btn-primary" onClick={() => checkKeywordRanks(false)} disabled={checkingKw} style={{ height: 38 }}>
+                  {checkingKw ? <span className="spinner"></span> : <i className="fas fa-location-crosshairs" style={{ marginRight: 6 }}></i>}
+                  {checkingKw ? 'Checking…' : 'Check rankings'}
+                </button>
+                {!checkingKw && (result.keywordCoverage || []).some(k => k.measured > 0) && (
+                  <button className="btn" onClick={() => checkKeywordRanks(true)} disabled={checkingKw} style={{ height: 38 }} title="Re-measure everything, ignoring the 30-day cache">
+                    <i className="fas fa-rotate" style={{ marginRight: 6 }}></i>Refresh all
+                  </button>
+                )}
+                {checkingKw && kwProgress && <div style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>Checked {kwProgress.checked} / {kwProgress.total}…</div>}
+                {!checkingKw && (
+                  <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
+                    {(result.keywordCoverage || []).length
+                      ? (result.keywordCoverage || []).map(k => `"${k.keyword}": ${k.measured}/${result.suburbs.length} measured`).join(' · ')
+                      : 'Measured from a point at each suburb. "—" = not measured yet.'}
+                  </div>
+                )}
+              </div>
+
+              {/* The suburb-page check is only trustworthy if we could actually read the site. */}
+              {result.pageCheckReliable === false && (
+                <div className="integration-card" style={{ marginBottom: 16, borderLeft: '3px solid #f59e0b' }}>
+                  <div style={{ fontSize: 13, color: '#f59e0b', fontWeight: 600 }}>
+                    <i className="fas fa-triangle-exclamation" style={{ marginRight: 6 }}></i>Couldn't read the website this run
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>
+                    The sitemap and WordPress both failed, so "suburb landing page" is shown as unknown rather than missing — it is not a claim that these pages don't exist.
+                    {(result.pageSourceErrors || []).length ? ' ' + result.pageSourceErrors.join('; ') : ''}
+                  </div>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
                 <div className="integration-card" style={{ flex: '1 1 160px', textAlign: 'center' }}>
                   <div style={{ fontSize: 28, fontWeight: 700, color: '#a855f7' }}>{result.total}</div>
@@ -32997,11 +33100,13 @@
                         <th style={{ padding: '6px 8px' }} onClick={() => toggleSort('state')}>State{sortArrow('state')}</th>
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('population')}>Population{sortArrow('population')}</th>
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('distance')}>Distance{sortArrow('distance')}</th>
-                        {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('competitors')}>Competitors{sortArrow('competitors')}</th>}
-                        {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('per_capita')} title="Competitors per 10,000 residents — lower = less saturated">Per 10k{sortArrow('per_capita')}</th>}
-                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('opportunity')}>{result.hasCompetitors ? 'Opportunity' : 'Score'}{sortArrow('opportunity')}</th>
-                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('mapsRank')} title="Your current Google Maps position for a tracked keyword in this suburb (— = no keyword tracked here yet)">Maps Rank{sortArrow('mapsRank')}</th>
-                        <th style={{ padding: '6px 8px' }}>Tier</th>
+                        {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('competitors')} title="Businesses in the Maps results for this service here. The search reads the top 20, so 20+ means saturated rather than exactly 20.">Competitors{sortArrow('competitors')}</th>}
+                        {(result.smartKeywords || []).map((kw, ki) => (
+                          <th key={kw} style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={() => toggleSort('kw' + ki)}
+                              title={`Your Google Maps position for "${kw}" measured from a point at each suburb`}>
+                            {kw}{sortArrow('kw' + ki)}
+                          </th>
+                        ))}
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('completion')} title="How much of the suburb checklist is already done">Done{sortArrow('completion')}</th>
                       </tr>
                     </thead>
@@ -33014,11 +33119,14 @@
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.state}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.distance} km</td>
-                          {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : s.competitors}</td>}
-                          {result.hasCompetitors && <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text2)' }}>{s.per_capita == null ? '—' : s.per_capita}</td>}
-                          <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{result.hasCompetitors ? (s.opportunity ?? s.score) : s.score}</td>
-                          <td title={s.mapsRank != null ? `${s.mapsRankSource === 'grid' ? 'Measured by grid scan' : 'From tracked keyword'}${s.mapsRankKeyword ? ' for "' + s.mapsRankKeyword + '"' : ''}${s.mapsPointKm != null ? ` — nearest measured point ${s.mapsPointKm}km away` : ''}` : s.mapsNotRanking ? `Grid scan measured near here${s.mapsPointKm != null ? ' (' + s.mapsPointKm + 'km)' : ''} — you don't appear in the local pack` : 'Not measured here yet — run a grid scan that covers this suburb'} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: s.mapsRank == null ? (s.mapsNotRanking ? '#ef4444' : 'var(--text3)') : s.mapsRank <= 3 ? '#22c55e' : s.mapsRank <= 10 ? '#f59e0b' : '#ef4444' }}>{s.mapsRank != null ? '#' + s.mapsRank : s.mapsNotRanking ? <span style={{ fontSize: 11 }}>not ranking</span> : '—'}</td>
-                          <td style={{ padding: '6px 8px' }}><span style={{ fontSize: 11, fontWeight: 700, color: tierColor(s.tier) }}>{s.tier}</span></td>
+                          {result.hasCompetitors && <td title={s.competitors >= 20 ? 'The search reads the top 20 results, so this is "20 or more" — not an exact count' : ''} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : (s.competitors >= 20 ? '20+' : s.competitors)}</td>}
+                          {(result.smartKeywords || []).map((kw, ki) => {
+                            const kr = (s.keywordRanks || []).find(k => k.keyword === kw);
+                            // Three states kept distinct: ranked / measured-but-absent / never measured.
+                            if (!kr || !kr.measured) return <td key={kw} title={`"${kw}" has not been measured in ${s.suburb} yet — use Check rankings`} style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text3)' }}>—</td>;
+                            if (kr.position == null) return <td key={kw} title={`Measured in ${s.suburb} for "${kw}" — you don't appear in the Maps results`} style={{ padding: '6px 8px', textAlign: 'right', color: '#ef4444', fontSize: 11, fontWeight: 600 }}>not ranking</td>;
+                            return <td key={kw} title={`Measured from a point at ${s.suburb}`} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: kr.position <= 3 ? '#22c55e' : kr.position <= 10 ? '#f59e0b' : '#ef4444' }}>#{kr.position}</td>;
+                          })}
                           <td style={{ padding: '6px 8px' }}>
                             {s.completion != null ? (
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
@@ -33044,9 +33152,9 @@
                                   </div>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 28px' }}>
                                     {s.tasks.map((t, ti) => (
-                                      <div key={ti} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: t.done ? '#22c55e' : 'var(--text2)', flexWrap: 'wrap' }}>
-                                        <i className={t.done ? 'fas fa-circle-check' : 'far fa-circle'} style={{ color: t.done ? '#22c55e' : 'var(--text3)' }}></i>
-                                        <span>{t.label}{t.done ? ' ✓ done' : ' — to do'}</span>
+                                      <div key={ti} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: t.unknown ? '#f59e0b' : t.done ? '#22c55e' : 'var(--text2)', flexWrap: 'wrap' }}>
+                                        <i className={t.unknown ? 'fas fa-circle-question' : t.done ? 'fas fa-circle-check' : 'far fa-circle'} style={{ color: t.unknown ? '#f59e0b' : t.done ? '#22c55e' : 'var(--text3)' }}></i>
+                                        <span>{t.label}{t.unknown ? ' — couldn\'t check (site unreachable)' : t.done ? ' ✓ done' : ' — to do'}</span>
                                         {ti === 0 && t.done && s.pageUrl && (
                                           <a href={s.pageUrl} target="_blank" rel="noopener" style={{ fontSize: 12, color: '#60a5fa', textDecoration: 'none' }}>
                                             <i className="fas fa-external-link-alt" style={{ fontSize: 10, marginRight: 3 }}></i>{(s.pageUrl || '').replace(/^https?:\/\/[^/]+/, '') || 'view'}

@@ -922,6 +922,23 @@ async function initDb() {
         used_at TIMESTAMPTZ
       )
     `).catch(() => {});
+    // Smart Map Ranking — measured Maps position per (project, keyword, suburb).
+    // Cached like the competitor counts so re-opening the page costs nothing; a refresh re-measures.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS smart_kw_rank_cache (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword TEXT NOT NULL,
+        suburb TEXT NOT NULL,
+        position INTEGER,          -- NULL = measured but not in the local pack ("not ranking")
+        measured BOOLEAN DEFAULT TRUE,
+        checked_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (project_id, keyword, suburb)
+      )
+    `).catch(() => {});
+    // Two tracked keywords per project for the Smart Map Ranking columns (e.g. plumber, emergency plumber)
+    await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_keywords JSONB DEFAULT '[]'::jsonb`).catch(() => {});
+
     // Smart Map Ranking — cached competitor counts per suburb (so they persist + aren't re-paid each survey)
     await client.query(`
       CREATE TABLE IF NOT EXISTS smart_comp_cache (
@@ -43986,6 +44003,10 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     // Keep page ENTRIES (path + normalized text) instead of one flat blob — so we can (a) match name
     // variants and (b) return the exact URL that matched, making the result verifiable.
     let pageEntries = []; // [{ path, url, norm }]
+    // Track which discovery sources actually answered. "This suburb has no page" is only a safe claim
+    // when we genuinely managed to read the site; otherwise the checklist must say "couldn't check".
+    const pageSources = { discover: 0, sitemap: 0, wpRest: 0 };
+    const pageSourceErrors = [];
     try {
       const projUrl = (project.domain || '').startsWith('http')
         ? project.domain.replace(/\/+$/, '')
@@ -43995,9 +44016,16 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       try {
         const pages = await discoverPages(projUrl, project.wordpress_url || projUrl, getWpAuthHeaders(project));
         for (const p of (pages || [])) rawEntries.push({ path: p.slug || '', url: p.url || `${projUrl}/${p.slug || ''}`, text: `${p.slug || ''} ${p.title || ''}` });
-      } catch (e) {}
-      // Source 2: direct + nested sitemap crawl (catches suburb pages in deep child sitemaps)
-      try { const smPaths = await collectSitemapPaths(projUrl); for (const sp of smPaths) rawEntries.push({ path: sp, url: `${projUrl}/${sp}`, text: sp }); } catch (e) {}
+        pageSources.discover = (pages || []).length;
+      } catch (e) { pageSourceErrors.push('page discovery: ' + e.message); }
+      // Source 2: direct + nested sitemap crawl (catches suburb pages in deep child sitemaps).
+      // THE SITEMAP IS THE AUTHORITY for "does this suburb have a page?" — if it fails we must say so
+      // rather than quietly reporting every suburb as having no page.
+      try {
+        const smPaths = await collectSitemapPaths(projUrl);
+        for (const sp of smPaths) rawEntries.push({ path: sp, url: `${projUrl}/${sp}`, text: sp });
+        pageSources.sitemap = (smPaths || []).length;
+      } catch (e) { pageSourceErrors.push('sitemap: ' + e.message); }
       // Source 3: WordPress REST — pages + any public custom post types (catches pages missing from the
       // sitemap, e.g. noindexed suburb pages or CPTs Yoast/RankMath excludes).
       try {
@@ -44011,12 +44039,12 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
               if (!rr.ok) break;
               const arr = await rr.json();
               if (!Array.isArray(arr) || arr.length === 0) break;
-              for (const it of arr) rawEntries.push({ path: it.slug || '', url: it.link || `${wpBase}/${it.slug || ''}`, text: `${it.slug || ''} ${(it.title && (it.title.rendered || it.title)) || ''}` });
+              for (const it of arr) { rawEntries.push({ path: it.slug || '', url: it.link || `${wpBase}/${it.slug || ''}`, text: `${it.slug || ''} ${(it.title && (it.title.rendered || it.title)) || ''}` }); pageSources.wpRest++; }
               if (arr.length < 100) break;
             }
-          } catch (e) {}
+          } catch (e) { pageSourceErrors.push('wp rest: ' + e.message); }
         }
-      } catch (e) {}
+      } catch (e) { pageSourceErrors.push('wp rest: ' + e.message); }
       // Dedupe by URL/path and precompute normalized (spaced) + no-space forms
       const seenP = new Set();
       for (const e of rawEntries) {
@@ -44026,8 +44054,12 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         pageEntries.push({ path: e.path, url: e.url, norm: ' ' + norm + ' ', nospace: norm.replace(/\s+/g, '') });
       }
       pagesScanned = pageEntries.length;
-      console.log(`[smart-map] Page detection: ${pagesScanned} pages for project ${req.params.projectId}`);
-    } catch (e) {}
+      console.log(`[smart-map] Page detection: ${pagesScanned} pages for project ${req.params.projectId} (sitemap=${pageSources.sitemap}, discover=${pageSources.discover}, wp=${pageSources.wpRest})${pageSourceErrors.length ? ' — errors: ' + pageSourceErrors.join('; ') : ''}`);
+    } catch (e) { pageSourceErrors.push('page detection: ' + e.message); }
+    // Did we actually manage to read the site? If nothing came back, "no suburb page" is not a finding,
+    // it's a failed check — and saying "create a page" for 92 suburbs that already have one is worse
+    // than saying nothing.
+    const pageCheckReliable = pagesScanned > 0;
     try { const rc = (await pool.query('SELECT reviews FROM reviews_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (rc) reviewsBlob = ' ' + normSuburbKey(JSON.stringify(rc.reviews || '')) + ' '; } catch (e) {}
     try { const pc = (await pool.query('SELECT posts FROM posts_cache WHERE project_id=$1', [req.params.projectId])).rows[0]; if (pc) postsBlob = ' ' + normSuburbKey(JSON.stringify(pc.posts || '')) + ' '; } catch (e) {}
     const hasWord = (blob, word) => blob.length > 2 && word.length > 1 && blob.includes(' ' + word + ' ');
@@ -44112,31 +44144,74 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
       return { pos: best.found ? best.position : null, keyword: primaryGrid.keyword, scanned: true, source: 'grid', notRanking: !best.found, pointKm: Math.round(best.d * 10) / 10 };
     };
 
+    // ── The two tracked keywords for this project's rank columns ──
+    // Per-project so a plumber gets "plumber / emergency plumber" and a locksmith gets its own pair.
+    // Seeded from the industry the first time so the columns are never blank on a new project.
+    const smartKeywords = (() => {
+      const raw = Array.isArray(project.smart_keywords) ? project.smart_keywords
+        : (typeof project.smart_keywords === 'string' ? (() => { try { return JSON.parse(project.smart_keywords); } catch { return []; } })() : []);
+      const cleaned = raw.map(k => String(k || '').trim().toLowerCase()).filter(Boolean).slice(0, 2);
+      if (cleaned.length) return cleaned;
+      const base = (project.smart_service || project.industry || '').toString().trim().toLowerCase();
+      return base ? [base, `emergency ${base}`] : [];
+    })();
+
+    // Cached measured positions for those keywords, per suburb.
+    const kwRankMap = {}; // suburbKey -> { keyword -> { position, measured, checked_at } }
+    if (smartKeywords.length) {
+      try {
+        const rows = (await pool.query(
+          'SELECT keyword, suburb, position, measured, checked_at FROM smart_kw_rank_cache WHERE project_id=$1 AND keyword = ANY($2)',
+          [req.params.projectId, smartKeywords]
+        )).rows;
+        for (const r of rows) {
+          if (!kwRankMap[r.suburb]) kwRankMap[r.suburb] = {};
+          kwRankMap[r.suburb][r.keyword] = { position: r.position, measured: r.measured !== false, checked_at: r.checked_at };
+        }
+      } catch (e) { console.log('[smart-map] keyword rank cache read skipped:', e.message); }
+    }
+
     const ranked = within.map((s, i) => {
       const sk = normSuburbKey(s.suburb);
       const matchedPage = findSuburbPage(s.suburb);
       // Grid scan is the richest source; fall back to a tracked keyword only if the grid didn't cover this suburb.
       const mr = findGridRank(s) || findSuburbRank(s.suburb);
+
+      // Per-keyword measured positions. Three distinct states, never collapsed into one:
+      //   { measured: true,  position: 4 }    → ranked #4
+      //   { measured: true,  position: null } → measured, not in the local pack
+      //   { measured: false }                 → never checked here (blank, not "not ranking")
+      const keywordRanks = smartKeywords.map(kw => {
+        const hit = kwRankMap[sk] && kwRankMap[sk][kw];
+        return hit
+          ? { keyword: kw, position: hit.position, measured: true, checkedAt: hit.checked_at }
+          : { keyword: kw, position: null, measured: false, checkedAt: null };
+      });
+
       const tasks = [
-        { label: 'Suburb landing page', done: !!matchedPage },
+        // Only assert "no page" when the site was actually readable this run.
+        { label: 'Suburb landing page', done: !!matchedPage, unknown: !pageCheckReliable && !matchedPage },
         { label: 'In GBP service areas', done: anyVariant(serviceAreaBlob, s.suburb) },
         { label: 'Review mentions suburb', done: anyVariant(reviewsBlob, s.suburb) },
         { label: 'GBP post mentions suburb', done: anyVariant(postsBlob, s.suburb) },
       ];
-      const doneCount = tasks.filter(t => t.done).length;
+      // A check we couldn't run isn't a failed check — leave it out of the denominator.
+      const scorable = tasks.filter(t => !t.unknown);
+      const doneCount = scorable.filter(t => t.done).length;
       const { lat: _la, lng: _ln, ...srest } = s; // don't leak raw coords into the row payload
       return {
         rank: i + 1, ...srest,
-        tier: i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low',
         isHome: normSuburbKey(s.suburb) === centerKey,
-        tasks, completion: Math.round((doneCount / tasks.length) * 100),
+        tasks, completion: scorable.length ? Math.round((doneCount / scorable.length) * 100) : null,
         pageUrl: matchedPage ? matchedPage.url : null, // the page that matched — lets you verify the ✓
-        mapsRank: mr ? mr.pos : null, // measured Maps position (null = not covered OR covered-but-not-ranking)
-        mapsRankKeyword: mr ? mr.keyword : null, // the keyword behind the rank — shown so it's verifiable
-        mapsScanned: mr ? !!mr.scanned : false, // was this suburb measured at all (grid point or tracked kw)?
-        mapsNotRanking: mr ? !!mr.notRanking : false, // measured but you don't appear = clear opportunity
-        mapsRankSource: mr ? mr.source : null, // 'grid' | 'tracked'
-        mapsPointKm: mr && mr.pointKm != null ? mr.pointKm : null, // how far the measuring grid point was (accuracy)
+        pageCheckReliable,
+        keywordRanks,
+        mapsRank: mr ? mr.pos : null, // kept in the payload for the expanded row / other consumers
+        mapsRankKeyword: mr ? mr.keyword : null,
+        mapsScanned: mr ? !!mr.scanned : false,
+        mapsNotRanking: mr ? !!mr.notRanking : false,
+        mapsRankSource: mr ? mr.source : null,
+        mapsPointKm: mr && mr.pointKm != null ? mr.pointKm : null,
       };
     });
 
@@ -44206,7 +44281,22 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
 
     const plan = buildSmartPlan(ranked);
 
-    res.json({ center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, pagesScanned, opportunityCount, gridCovered: ranked.filter(s => s.mapsRankSource === 'grid').length, gridKeyword: primaryGrid ? primaryGrid.keyword : null, weights: { distance: wDist, population: wPop }, suburbs: ranked, plan });
+    const kwMeasured = smartKeywords.map(kw => ({
+      keyword: kw,
+      measured: ranked.filter(s => (s.keywordRanks || []).some(k => k.keyword === kw && k.measured)).length,
+    }));
+
+    res.json({
+      center: ctr, radiusKm: radius, total: n, service: svcKey, hasCompetitors, pagesScanned, opportunityCount,
+      gridCovered: ranked.filter(s => s.mapsRankSource === 'grid').length,
+      gridKeyword: primaryGrid ? primaryGrid.keyword : null,
+      weights: { distance: wDist, population: wPop },
+      smartKeywords,              // the two tracked keywords, in column order
+      keywordCoverage: kwMeasured, // how many suburbs have a measured position for each
+      pageCheckReliable,          // false = we could not read the site; "no page" is not a claim we can make
+      pageSources, pageSourceErrors,
+      suburbs: ranked, plan,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -44221,6 +44311,139 @@ app.post('/api/projects/:projectId/smart-map-ranking/service', async (req, res) 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Save the two tracked keywords whose Maps position gets its own column on Smart Map Ranking.
+app.post('/api/projects/:projectId/smart-map-ranking/keywords', async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.keywords) ? req.body.keywords : [];
+    const kws = raw.map(k => String(k || '').trim().toLowerCase()).filter(Boolean).slice(0, 2);
+    await pool.query('UPDATE projects SET smart_keywords=$1::jsonb WHERE id=$2', [JSON.stringify(kws), req.params.projectId]);
+    res.json({ ok: true, keywords: kws });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Re-attach coordinates to survey rows.
+// The survey deliberately strips lat/lng from the row payload, so anything the browser sends back
+// has no coordinates. Passing those straight into dataForSeoMaps silently drops to a nationwide
+// `location_name: 'Australia'` search instead of measuring at the suburb — the results look
+// plausible, which is exactly why it goes unnoticed. Resolve them server-side instead.
+async function attachSuburbCoords(suburbs, stateHint) {
+  await loadAuSuburbs().catch(() => {});
+  return suburbs.map(s => {
+    if (s.lat != null && s.lng != null) return s;
+    const rec = geocodeSuburbText(`${s.suburb || ''} ${s.state || stateHint || ''}`) || geocodeSuburbText(s.suburb || '');
+    return rec ? { ...s, lat: rec.lat, lng: rec.lng } : { ...s, lat: null, lng: null };
+  });
+}
+
+// Background keyword-rank scan: measures this project's Maps position for EACH tracked keyword in
+// EVERY suburb, from a GPS point at that suburb. Results are cached per (project, keyword, suburb)
+// so re-opening the page costs nothing — only an explicit refresh re-measures.
+const smartKwJobs = {}; // projectId -> { status, checked, total, error, keywords }
+
+app.get('/api/projects/:projectId/smart-map-ranking/keywords/status', (req, res) => {
+  const job = smartKwJobs[req.params.projectId];
+  if (!job) return res.json({ status: 'none' });
+  res.json({ status: job.status, checked: job.checked, total: job.total, error: job.error, keywords: job.keywords });
+});
+
+app.post('/api/projects/:projectId/smart-map-ranking/keywords/run', async (req, res) => {
+  try {
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured.' });
+    const projectId = req.params.projectId;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const bodyKws = Array.isArray(req.body?.keywords) ? req.body.keywords : null;
+    const stored = Array.isArray(project.smart_keywords) ? project.smart_keywords
+      : (typeof project.smart_keywords === 'string' ? (() => { try { return JSON.parse(project.smart_keywords); } catch { return []; } })() : []);
+    const base = (project.smart_service || project.industry || '').toString().trim().toLowerCase();
+    const keywords = (bodyKws || (stored.length ? stored : (base ? [base, `emergency ${base}`] : [])))
+      .map(k => String(k || '').trim().toLowerCase()).filter(Boolean).slice(0, 2);
+    if (!keywords.length) return res.status(400).json({ error: 'No keywords set. Add them in the keyword boxes above the table.' });
+
+    // Suburbs come from the survey the page is already showing, so we measure exactly what is on
+    // screen. Coordinates are re-resolved here because the survey strips them from the payload.
+    const sent = (Array.isArray(req.body?.suburbs) ? req.body.suburbs : []).filter(s => s && s.suburb);
+    const withCoords = await attachSuburbCoords(sent, project.location);
+    const suburbs = withCoords.filter(s => s.lat != null && s.lng != null);
+    if (!suburbs.length) return res.status(400).json({ error: 'Could not resolve coordinates for any suburb. Run the survey first.' });
+    const unresolved = withCoords.length - suburbs.length;
+    if (unresolved) console.log(`[smart-kw] ${unresolved} suburb(s) had no coordinates and were skipped`);
+
+    const existing = smartKwJobs[projectId];
+    if (existing && existing.status === 'running') return res.json({ started: true, already: true, total: existing.total });
+
+    const force = req.body?.force === true;
+    const job = { status: 'running', checked: 0, total: suburbs.length * keywords.length, error: null, keywords };
+    smartKwJobs[projectId] = job;
+    res.json({ started: true, total: job.total, keywords });
+
+    (async () => {
+      const ownName = (project.business_name || '').toLowerCase().trim();
+      const ownDomain = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+      // Same matching rules the rank sync uses — name, name-without-spaces, or website domain.
+      const isUs = (place) => {
+        const t = (place.title || '').toLowerCase();
+        const pd = (place.website || place.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+        if (ownDomain && pd && (pd.includes(ownDomain) || ownDomain.includes(pd))) return true;
+        if (!ownName) return false;
+        if (t.includes(ownName) || t.replace(/\s+/g, '').includes(ownName.replace(/\s+/g, ''))) return true;
+        const words = ownName.split(/\s+/).filter(w => w.length > 2);
+        return words.length >= 2 && words.every(w => t.includes(w));
+      };
+
+      // Skip anything measured in the last 30 days unless the user asked for a forced refresh.
+      let fresh = {};
+      if (!force) {
+        try {
+          const rows = (await pool.query(
+            `SELECT keyword, suburb FROM smart_kw_rank_cache WHERE project_id=$1 AND keyword = ANY($2) AND checked_at > NOW() - INTERVAL '30 days'`,
+            [projectId, keywords]
+          )).rows;
+          for (const r of rows) fresh[`${r.keyword}|${r.suburb}`] = true;
+        } catch (e) {}
+      }
+
+      for (const kw of keywords) {
+        for (const s of suburbs) {
+          const sk = normSuburbKey(s.suburb);
+          if (fresh[`${kw}|${sk}`]) { job.checked++; continue; }
+          let position = null, measured = false;
+          try {
+            const data = await dataForSeoMaps({ keyword: `${kw} ${s.suburb}`, lat: s.lat, lng: s.lng, depth: 20 });
+            const places = data.local_results || [];
+            measured = true; // the lookup succeeded — absence from the list is a real "not ranking"
+            for (let idx = 0; idx < places.length; idx++) {
+              if (isUs(places[idx])) { position = places[idx].position || (idx + 1); break; }
+            }
+          } catch (e) {
+            // A failed lookup is NOT "not ranking" — leave it unmeasured so the column stays blank
+            // rather than showing a red "not ranking" the client would act on.
+            measured = false;
+            console.log(`[smart-kw] ${kw} / ${s.suburb} lookup failed: ${e.message}`);
+          }
+          if (measured) {
+            try {
+              await pool.query(
+                `INSERT INTO smart_kw_rank_cache (project_id, keyword, suburb, position, measured, checked_at)
+                 VALUES ($1,$2,$3,$4,TRUE,NOW())
+                 ON CONFLICT (project_id, keyword, suburb) DO UPDATE SET position=$4, measured=TRUE, checked_at=NOW()`,
+                [projectId, kw, sk, position]
+              );
+            } catch (e) { console.log('[smart-kw] cache write failed:', e.message); }
+          }
+          job.checked++;
+        }
+      }
+
+      const billable = job.total - Object.keys(fresh).length;
+      try { await logApiCost(parseInt(projectId), 'smart_map_keywords', 'dataforseo', billable, +(billable * API_COST_RATES.dataforseo.maps).toFixed(4), { keywords }); } catch (e) {}
+      job.status = 'done';
+      console.log(`[smart-kw] Project ${projectId}: measured ${billable} of ${job.total} (${Object.keys(fresh).length} still fresh) for ${keywords.join(', ')}`);
+    })().catch(e => { job.status = 'error'; job.error = e.message; console.error('[smart-kw] job failed:', e.message); });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Background competitor scan: checks EVERY suburb in range, re-ranks by opportunity (low competition weighted highest)
 const smartCompJobs = {}; // projectId -> { status, checked, total, suburbs, plan, error, service }
 
@@ -44232,7 +44455,13 @@ app.post('/api/projects/:projectId/smart-map-ranking/competitors/run', async (re
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const service = (req.body.service || project.smart_service || project.industry || '').toString().trim();
     if (!service) return res.status(400).json({ error: 'Enter the service to check competitors for (e.g. "plumber").' });
-    const suburbs = Array.isArray(req.body.suburbs) ? req.body.suburbs.slice() : [];
+    // Coordinates must be re-resolved: the survey strips lat/lng from the rows the browser holds, so
+    // these arrived with none and every lookup silently fell back to a nationwide search instead of
+    // measuring at the suburb. See attachSuburbCoords().
+    const suburbs = await attachSuburbCoords(
+      (Array.isArray(req.body.suburbs) ? req.body.suburbs.slice() : []).filter(s => s && s.suburb),
+      project.location
+    );
     if (suburbs.length === 0) return res.status(400).json({ error: 'No suburbs to check. Run the survey first.' });
     const radius = parseFloat(req.body.radiusKm) || 25;
 
