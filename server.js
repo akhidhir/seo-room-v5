@@ -55830,7 +55830,49 @@ Rules:
 - Maximum 20 findings. Prioritise ruthlessly.
 - Output raw JSON only. No markdown fences, no commentary.`;
 
-// Run the audit: crawl → Claude → reformat → store as findings + tasks.
+// Undo anything an earlier, non-isolated build of this feature left in the shared tables.
+// Cheap and idempotent, so it runs on every page load as well as every audit — that way a stray
+// ticket is cleared by simply opening the page, without paying for an audit run.
+async function caSelfRepair(projectId) {
+  // 1. The first build filed its audits under pillar='website', where they hijack the Website
+  //    Audit's status and cooldown queries. Move them to their own pillar.
+  await pool.query(
+    `UPDATE audits SET pillar='claude_audit'
+     WHERE project_id=$1 AND pillar='website' AND audit_data->>'source' = 'claude_audit'`,
+    [projectId]
+  ).catch((e) => console.log('[claude-audit] pillar repair skipped:', e.message));
+
+  // 2. Remove anything an earlier build pushed onto the Control Centre. Scoped by the exact
+  //    type values this feature has ever used — no other source can match.
+  try {
+    const strays = (await pool.query(
+      `DELETE FROM action_items WHERE project_id=$1 AND type IN ('src_claude_audit','claude_audit') RETURNING code`,
+      [projectId]
+    )).rows;
+    const codes = [...new Set(strays.map(r => r.code).filter(Boolean))];
+    if (codes.length) {
+      // Only drop registry rows nothing else still points at — a code carries permanent state
+      // (assignee, status, due date) and could in theory be shared with a live ticket.
+      await pool.query(
+        `DELETE FROM ticket_codes t WHERE t.project_id=$1 AND t.code = ANY($2::text[])
+           AND NOT EXISTS (SELECT 1 FROM action_items a WHERE a.code = t.code)`,
+        [projectId, codes]
+      ).catch(() => {});
+    }
+    if (strays.length) console.log(`[claude-audit] project ${projectId}: removed ${strays.length} legacy Control Centre ticket(s)`);
+  } catch (cleanErr) {
+    console.log('[claude-audit] board cleanup skipped:', cleanErr.message);
+  }
+
+  // 3. Clear any audit_findings rows an earlier build left behind.
+  await pool.query(
+    `DELETE FROM audit_findings WHERE project_id=$1 AND audit_id IN (
+       SELECT id FROM audits WHERE project_id=$1 AND (pillar='claude_audit' OR audit_data->>'source' = 'claude_audit'))`,
+    [projectId]
+  ).catch((e) => console.log('[claude-audit] findings cleanup skipped:', e.message));
+}
+
+// Run the audit: crawl → Claude → findings (isolated; writes nothing to shared tables).
 app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
   const projectId = req.params.id;
   let auditId = null;
@@ -55845,48 +55887,10 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
 
     const instructions = (req.body?.instructions || '').toString().slice(0, 1500);
 
+    await caSelfRepair(projectId);
+
     // In-flight guard. The browser's api() helper retries on proxy timeouts, and this route takes
     // minutes — without this, one click could kick off several full crawls and several paid calls.
-    // ── Self-repair, unconditional and BEFORE any expensive work, so a failed crawl or AI call
-    // never leaves an earlier build's rows sitting on the shared board.
-
-    // 1. The first build filed its audits under pillar='website', where they hijack the Website
-    //    Audit's status and cooldown queries. Move them to their own pillar.
-    await pool.query(
-      `UPDATE audits SET pillar='claude_audit'
-       WHERE project_id=$1 AND pillar='website' AND audit_data->>'source' = 'claude_audit'`,
-      [projectId]
-    ).catch((e) => console.log('[claude-audit] pillar repair skipped:', e.message));
-
-    // 2. Remove anything an earlier build pushed onto the Control Centre. Scoped by the exact
-    //    type values this feature has ever used — no other source can match.
-    try {
-      const strays = (await pool.query(
-        `DELETE FROM action_items WHERE project_id=$1 AND type IN ('src_claude_audit','claude_audit') RETURNING code`,
-        [projectId]
-      )).rows;
-      const codes = [...new Set(strays.map(r => r.code).filter(Boolean))];
-      if (codes.length) {
-        // Only drop registry rows nothing else still points at — a code carries permanent state
-        // (assignee, status, due date) and could in theory be shared with a live ticket.
-        await pool.query(
-          `DELETE FROM ticket_codes t WHERE t.project_id=$1 AND t.code = ANY($2::text[])
-             AND NOT EXISTS (SELECT 1 FROM action_items a WHERE a.code = t.code)`,
-          [projectId, codes]
-        ).catch(() => {});
-      }
-      if (strays.length) console.log(`[claude-audit] removed ${strays.length} legacy Control Centre ticket(s)`);
-    } catch (cleanErr) {
-      console.log('[claude-audit] board cleanup skipped:', cleanErr.message);
-    }
-
-    // 3. Clear any audit_findings rows an earlier build left behind.
-    await pool.query(
-      `DELETE FROM audit_findings WHERE project_id=$1 AND audit_id IN (
-         SELECT id FROM audits WHERE project_id=$1 AND (pillar='claude_audit' OR audit_data->>'source' = 'claude_audit'))`,
-      [projectId]
-    ).catch((e) => console.log('[claude-audit] findings cleanup skipped:', e.message));
-
     const inFlight = await pool.query(
       `SELECT id FROM audits WHERE project_id=$1 AND pillar='claude_audit' AND status='running'
          AND started_at > NOW() - INTERVAL '20 minutes' LIMIT 1`,
@@ -55989,6 +55993,8 @@ app.post('/api/projects/:id/claude-audit/run', async (req, res) => {
 // Last completed Claude Audit for this project (so results survive navigation).
 app.get('/api/projects/:id/claude-audit/latest', async (req, res) => {
   try {
+    // Opening the page is enough to undo anything a pre-isolation build left on the shared board.
+    await caSelfRepair(req.params.id);
     const r = await pool.query(
       `SELECT id, status, audit_data, completed_at FROM audits
        WHERE project_id=$1 AND pillar='claude_audit' AND status='completed'
