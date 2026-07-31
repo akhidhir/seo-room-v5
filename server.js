@@ -44152,7 +44152,10 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
         : (typeof project.smart_keywords === 'string' ? (() => { try { return JSON.parse(project.smart_keywords); } catch { return []; } })() : []);
       const cleaned = raw.map(k => String(k || '').trim().toLowerCase()).filter(Boolean).slice(0, 2);
       if (cleaned.length) return cleaned;
-      const base = (project.smart_service || project.industry || '').toString().trim().toLowerCase();
+      // Seed only from the searched service term (e.g. "plumber"), never from `industry` — that is a
+      // business category ("Plumbing and Gas") and produced "emergency plumbing and gas", which no
+      // one searches. No service set = no columns, rather than a wrong guess.
+      const base = (project.smart_service || '').toString().trim().toLowerCase();
       return base ? [base, `emergency ${base}`] : [];
     })();
 
@@ -44356,7 +44359,7 @@ app.post('/api/projects/:projectId/smart-map-ranking/keywords/run', async (req, 
     const bodyKws = Array.isArray(req.body?.keywords) ? req.body.keywords : null;
     const stored = Array.isArray(project.smart_keywords) ? project.smart_keywords
       : (typeof project.smart_keywords === 'string' ? (() => { try { return JSON.parse(project.smart_keywords); } catch { return []; } })() : []);
-    const base = (project.smart_service || project.industry || '').toString().trim().toLowerCase();
+    const base = (project.smart_service || '').toString().trim().toLowerCase(); // never `industry` — see survey seed
     const keywords = (bodyKws || (stored.length ? stored : (base ? [base, `emergency ${base}`] : [])))
       .map(k => String(k || '').trim().toLowerCase()).filter(Boolean).slice(0, 2);
     if (!keywords.length) return res.status(400).json({ error: 'No keywords set. Add them in the keyword boxes above the table.' });
