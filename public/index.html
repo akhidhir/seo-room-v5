@@ -32183,6 +32183,22 @@
         if (v && (v.position != null || v.win_steps)) return { best_position: v.position, ranked: v.ranked, win_stage: v.win_stage, win_steps: v.win_steps };
         return { best_position: s.best_position, ranked: s.ranked, win_stage: s.win_stage, win_steps: s.win_steps };
       };
+      // Per-suburb breakdown for the clicked keyword. Derived from that keyword's existing grid scan
+      // (nearest measured point per suburb), so opening it costs nothing.
+      const [subs, setSubs] = useState(null);       // { keyword, suburbs:[...] } | { error } | null
+      const [subsLoading, setSubsLoading] = useState(false);
+      const [showAllSubs, setShowAllSubs] = useState(false);
+      useEffect(() => {
+        if (!sel || !project?.id) { setSubs(null); return; }
+        let stale = false;
+        setSubsLoading(true); setSubs(null); setShowAllSubs(false);
+        api(`/projects/${project.id}/maps-orbits/keyword-suburbs?keyword=${encodeURIComponent(sel.keyword)}`)
+          .then(d => { if (!stale) setSubs(d); })
+          .catch(e => { if (!stale) setSubs({ error: e.message || 'Could not load suburbs' }); })
+          .finally(() => { if (!stale) setSubsLoading(false); });
+        return () => { stale = true; };
+      }, [sel && sel.keyword, project?.id]);
+
       const [zoom, setZoom] = useState(1); // 1 = full view, up to 4x
       const [pan, setPan] = useState({ x: 0, y: 0 }); // drag offset in viewBox units
       const dragRef = React.useRef(null);
@@ -32355,6 +32371,47 @@
                       <div><span style={{ color: 'var(--text3)' }}>{sel.tracked === false ? 'Found at scan point: ' : 'Best grid position: '}</span>{sel.best_position ? `#${sel.best_position}` : '—'}</div>
                       {sel.tracked !== false && <div><span style={{ color: 'var(--text3)' }}>Tracked position: </span>{sel.maps_position ? `#${sel.maps_position} (${sel.location})` : '—'}</div>}
                       <div><span style={{ color: 'var(--text3)' }}>Search volume: </span>{sel.volume ? sel.volume.toLocaleString() + '/mo' : 'unknown'}</div>
+                    </div>
+
+                    {/* Where this keyword ranks, suburb by suburb */}
+                    <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
+                        <i className="fas fa-location-dot" style={{ marginRight: 6, color: '#4ade80' }} />By suburb
+                      </div>
+                      {subsLoading && <div style={{ fontSize: 12, color: 'var(--text3)' }}>Working it out…</div>}
+                      {!subsLoading && subs && subs.error && <div style={{ fontSize: 12, color: '#ef4444' }}>{subs.error}</div>}
+                      {!subsLoading && subs && !subs.error && !subs.suburbs?.length && (
+                        <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5 }}>
+                          {subs.message || 'No measured points near any suburb for this keyword yet.'}
+                        </div>
+                      )}
+                      {!subsLoading && subs && !subs.error && subs.suburbs?.length > 0 && (
+                        <>
+                          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>
+                            ranking in {subs.ranking} of {subs.total} · measured within {subs.reachKm}km of a scan point
+                          </div>
+                          <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {(showAllSubs ? subs.suburbs : subs.suburbs.slice(0, 12)).map((s, si) => (
+                              <div key={si} title={s.source === 'measured' ? 'Measured directly at this suburb' : `Nearest scan point was ${s.pointKm}km away`}
+                                style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '3px 4px', borderRadius: 4 }}>
+                                <span style={{ minWidth: 30, fontWeight: 700, color: s.position == null ? '#ef4444' : s.position <= 3 ? '#4ade80' : s.position <= 10 ? '#f59e0b' : '#94a3b8' }}>
+                                  {s.position == null ? '—' : '#' + s.position}
+                                </span>
+                                <span style={{ flex: 1, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.suburb}</span>
+                                <span style={{ color: 'var(--text3)', fontSize: 11 }}>{s.km}km</span>
+                              </div>
+                            ))}
+                          </div>
+                          {subs.suburbs.length > 12 && (
+                            <button onClick={() => setShowAllSubs(v => !v)} style={{ marginTop: 6, fontSize: 11, background: 'transparent', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0 }}>
+                              {showAllSubs ? 'Show fewer' : `Show all ${subs.suburbs.length}`}
+                            </button>
+                          )}
+                          <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6, lineHeight: 1.4 }}>
+                            "—" means measured near there and you didn't appear.
+                          </div>
+                        </>
+                      )}
                     </div>
                     {sel.tracked === false ? (
                       <button className="btn btn-primary" onClick={() => setPage && setPage('discover-local')} style={{ marginTop: 12, width: '100%', fontSize: 12 }}>

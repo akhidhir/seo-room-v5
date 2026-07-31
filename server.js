@@ -42579,6 +42579,96 @@ app.get('/api/portfolio/project/:projectId/detail', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Per-suburb breakdown for ONE keyword — powers the panel that opens when you click a dot on
+// Ranking Orbits. No new API spend: it reads the keyword's existing grid scan and works out the
+// position at each suburb from the nearest measured grid point, the same way Smart Map Ranking does.
+// Where a suburb was measured directly (smart_kw_rank_cache) that value wins, because it was taken
+// at the suburb rather than inferred from a point nearby.
+app.get('/api/projects/:projectId/maps-orbits/keyword-suburbs', async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.projectId);
+    const keyword = (req.query.keyword || '').toString().trim();
+    if (!keyword) return res.status(400).json({ error: 'keyword required' });
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const g = (await pool.query(
+      `SELECT keyword, center_lat, center_lng, radius_km, grid_size, grid_points, scanned_at
+       FROM grid_scans WHERE project_id=$1 AND LOWER(keyword)=LOWER($2)
+       ORDER BY scanned_at DESC LIMIT 1`, [projectId, keyword])).rows[0];
+
+    // Directly-measured positions for this keyword, if the Smart Map keyword scan has run.
+    const direct = {};
+    try {
+      const rows = (await pool.query(
+        'SELECT suburb, position, checked_at FROM smart_kw_rank_cache WHERE project_id=$1 AND keyword=$2',
+        [projectId, keyword.toLowerCase()]
+      )).rows;
+      for (const r of rows) direct[r.suburb] = r;
+    } catch (e) {}
+
+    if (!g && !Object.keys(direct).length) {
+      return res.json({ keyword, scanned: false, suburbs: [], message: 'This keyword has not been grid-scanned or measured yet.' });
+    }
+
+    const pts = g ? (typeof g.grid_points === 'string' ? JSON.parse(g.grid_points) : (g.grid_points || []))
+      .filter(p => p && p.lat != null && p.lng != null) : [];
+    // How far one measuring point can honestly speak for — same cap Smart Map uses, so the two pages
+    // can't disagree about the same keyword.
+    const spacing = (g && g.grid_size > 1 && g.radius_km) ? (g.radius_km * 2) / (g.grid_size - 1) : 3;
+    const reach = Math.min(3.5, Math.max(1.5, spacing * 0.6));
+
+    await loadAuSuburbs().catch(() => {});
+    const centre = g && g.center_lat != null ? { lat: g.center_lat, lng: g.center_lng } : null;
+    const radius = (g && g.radius_km) ? Math.max(g.radius_km, 10) : 25;
+    const all = Array.isArray(AU_SUBURBS) ? AU_SUBURBS : [];
+    const near = centre
+      ? all.filter(s => s.lat != null && haversineKm(centre.lat, centre.lng, s.lat, s.lng) <= radius)
+      : [];
+
+    const out = [];
+    for (const s of near) {
+      const sk = normSuburbKey(s.suburb || s.name || '');
+      if (!sk) continue;
+      const km = Math.round(haversineKm(centre.lat, centre.lng, s.lat, s.lng) * 10) / 10;
+      const d = direct[sk];
+      if (d) {
+        out.push({ suburb: s.suburb || s.name, state: s.state || '', km, position: d.position, source: 'measured', measuredAt: d.checked_at, pointKm: 0 });
+        continue;
+      }
+      let best = null;
+      for (const p of pts) {
+        const pd = haversineKm(s.lat, s.lng, p.lat, p.lng);
+        if (pd > reach) continue;
+        if (!best || pd < best.pd) best = { pd, found: !!p.found, position: p.position || p.pos || null };
+      }
+      if (!best) continue; // no measuring point close enough — say nothing rather than guess
+      out.push({
+        suburb: s.suburb || s.name, state: s.state || '', km,
+        position: best.found ? best.position : null,
+        source: 'grid', pointKm: Math.round(best.pd * 10) / 10,
+      });
+    }
+
+    // Dedupe by suburb name (the dataset carries duplicates across postcodes), keeping the closest.
+    const bySub = {};
+    for (const r of out) {
+      const k = normSuburbKey(r.suburb);
+      if (!bySub[k] || r.km < bySub[k].km) bySub[k] = r;
+    }
+    const suburbs = Object.values(bySub).sort((a, b) => a.km - b.km);
+
+    res.json({
+      keyword, scanned: true, scannedAt: g ? g.scanned_at : null,
+      reachKm: Math.round(reach * 10) / 10,
+      gridPoints: pts.length,
+      ranking: suburbs.filter(s => s.position != null).length,
+      total: suburbs.length,
+      suburbs,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
   try {
     const projectId = parseInt(req.params.projectId);
