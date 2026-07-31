@@ -33098,6 +33098,31 @@
                     </button>
                   )}
                 </div>
+                {/* The keyword columns are useless until measured, and the control for that used to sit
+                    far above the table — so the columns just looked broken. Put the action here. */}
+                {(() => {
+                  if (!activeKeywords.length) return (
+                    <div style={{ fontSize: 12.5, marginBottom: 10, lineHeight: 1.5, background: 'rgba(245,158,11,0.08)', border: '1px solid #f59e0b55', borderRadius: 8, padding: '10px 12px', color: 'var(--text2)' }}>
+                      <i className="fas fa-circle-info" style={{ marginRight: 6, color: '#f59e0b' }}></i>
+                      No keyword columns yet — scroll up and enter the two keywords a customer would search (e.g. <b>plumber</b>, <b>emergency plumber</b>), then Save.
+                    </div>
+                  );
+                  const measuredAny = (result.suburbs || []).some(s => (s.keywordRanks || []).some(k => k.measured));
+                  if (measuredAny) return null;
+                  const calls = (result.suburbs || []).length * activeKeywords.length;
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 12.5, marginBottom: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid #f59e0b55', borderRadius: 8, padding: '10px 12px', color: 'var(--text2)' }}>
+                      <span>
+                        <i className="fas fa-circle-info" style={{ marginRight: 6, color: '#f59e0b' }}></i>
+                        The {activeKeywords.map(k => `"${k}"`).join(' and ')} column{activeKeywords.length === 1 ? '' : 's'} show “—” because nothing has been measured yet.
+                      </span>
+                      <button className="btn btn-primary" onClick={() => checkKeywordRanks(false)} disabled={checkingKw} style={{ marginLeft: 'auto', height: 32, fontSize: 12.5 }}>
+                        {checkingKw ? <span className="spinner"></span> : <i className="fas fa-location-crosshairs" style={{ marginRight: 6 }}></i>}
+                        {checkingKw && kwProgress ? `Checking ${kwProgress.checked}/${kwProgress.total}…` : `Check rankings (~$${(calls * 0.002).toFixed(2)})`}
+                      </button>
+                    </div>
+                  );
+                })()}
                 {result.gridKeyword && (
                   <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 10, lineHeight: 1.5, background: 'rgba(99,102,241,0.05)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
                     <i className="fas fa-circle-info" style={{ marginRight: 6, color: '#6366f1' }}></i>
