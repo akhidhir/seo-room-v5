@@ -639,6 +639,19 @@ Fixed this session (server.js only, no frontend changes):
    `status='complete'` — identical to a site with genuinely no backlinks. Both now throw; the scan endpoint's
    catch already returns 500 without saving.
 
+### Batch 3 — false positive in the client Website Audit
+11. **"52 links on your homepage go nowhere"** was a raw count of `href=""` + `href="#"`. On Elementor
+   (every client site) most `#` anchors are WORKING UI: nav dropdown parents, accordion/tab headers,
+   lightbox + carousel triggers, review "read more" expanders, menu toggles. Verified against
+   houseworksplumbing.com.au: of the 52, only ~6 were real — 4× "Learn More", 1× "Book Now", 1× "Call Us".
+   The advice ("point them somewhere or delete them") would have broken the Services dropdown.
+   Replaced with `findDeadCtaLinks(html)` (cheerio, defined next to `_jaccard`): flags an `<a>` with an
+   empty/`#` href ONLY when it has real button text and is not a menu/accordion/tab/lightbox/toggle
+   (class regex + ancestor check + aria/role/data-toggle + `nav`/`.menu-item` containment + generic
+   wording list). Reports labels, not a count: *"6 buttons on the homepage do nothing when clicked —
+   "Learn More", "Book Now", …"*. Unit test: `outputs/test-dead-cta.js` (PASS, no false pos/neg).
+   **Lesson for any future site check: never count `href="#"` as broken on a page-builder site.**
+
 **Not yet fixed — highest remaining, in order:** monthly report has no recency bound on grid scans / PageSpeed /
 on-page / discovery data and shows no `measured_at` (a March scan can appear in an October report); report averages
 partial results from FAILED PageSpeed scans unlabelled; `onPageStats.pagesFixed` is a lifetime count of history ROWS

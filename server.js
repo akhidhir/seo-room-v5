@@ -41900,6 +41900,54 @@ function _words(t) { return (t || '').split(/[^a-z0-9]+/).filter(w => w.length >
 function _shingles(words, k = 5) { const s = new Set(); for (let i = 0; i + k <= words.length; i++) s.add(words.slice(i, i + k).join(' ')); return s; }
 function _jaccard(a, b) { if (!a.size || !b.size) return 0; let inter = 0; for (const x of a) if (b.has(x)) inter++; return inter / (a.size + b.size - inter); }
 
+// Find links that a CUSTOMER would click expecting to go somewhere, but which lead nowhere.
+//
+// Deliberately NOT "count every href='#'". On Elementor/Divi/WP sites the vast majority of `#`
+// anchors are functioning interface controls — menu dropdown parents, accordion and tab headers,
+// lightbox and carousel triggers, "read more" expanders, back-to-top. Reporting those as broken
+// produced client advice like "52 links go nowhere, point them somewhere or delete them", which
+// would break the site's navigation if followed.
+//
+// A dead CTA is: an <a> with an empty or '#' href, that has real visible text, and is not part of
+// a menu/accordion/tab/lightbox/toggle. Returns an array of the button labels.
+const UI_CONTROL_CLASS_RE = /(menu|submenu|sub-arrow|toggle|accordion|tab-title|tab-link|lightbox|gallery|swiper|slider|carousel|arrow|dropdown|collapse|offcanvas|search|hamburger|read-?more|show-?more|expand|back-to-top|scroll-to|social|share|pagination|filter|tooltip|popup|modal|close|skip-link)/i;
+const UI_TEXT_RE = /^(read more|show more|more|less|show less|next|prev|previous|close|menu|search|share|top|back to top|\+|-|›|‹|»|«|→|←|\.{3}|…)$/i;
+function findDeadCtaLinks(html) {
+  let $;
+  try { $ = cheerio.load(html); } catch { return []; }
+  const labels = [];
+  const seen = new Set();
+
+  $('a').each((_, el) => {
+    const $a = $(el);
+    const href = ($a.attr('href') || '').trim();
+    // Only empty or bare-fragment hrefs. '#section' is a real in-page jump — leave it alone.
+    if (href !== '' && href !== '#') return;
+
+    // Explicit interactive controls announce themselves — trust them.
+    if ($a.is('[aria-haspopup], [aria-expanded], [aria-controls], [data-toggle], [data-bs-toggle], [role="button"], [role="tab"], [onclick]')) return;
+
+    // Class on the link, or on any ancestor up to a few levels (Elementor wraps heavily).
+    if (UI_CONTROL_CLASS_RE.test($a.attr('class') || '')) return;
+    if ($a.parents().slice(0, 6).toArray().some(p => UI_CONTROL_CLASS_RE.test($(p).attr('class') || ''))) return;
+
+    // Inside a nav, or a submenu parent <li> — that's the menu, not a CTA.
+    if ($a.closest('nav, [role="navigation"], ul.sub-menu, li.menu-item-has-children, .elementor-nav-menu, .menu-item').length) return;
+
+    const text = $a.text().replace(/\s+/g, ' ').trim();
+    if (!text) return;                 // icon-only → a control, not a CTA
+    if (text.length > 60) return;      // a paragraph wrapped in a link, not a button
+    if (UI_TEXT_RE.test(text)) return; // generic expander wording
+
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;         // same label repeated → report once
+    seen.add(key);
+    labels.push(text);
+  });
+
+  return labels;
+}
+
 async function computeRankingAudit(project) {
     const projectId = project.id;
     const projUrl = (project.domain || '').startsWith('http') ? project.domain.replace(/\/+$/, '') : 'https://' + (project.domain || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
@@ -41986,13 +42034,29 @@ async function computeRankingAudit(project) {
       }
     } catch (e) {}
 
-    // Broken/empty links on the homepage (quick check)
+    // Dead call-to-action buttons on the homepage.
+    // NOT a raw count of href="#" — on a page builder site most of those are working UI (nav
+    // dropdown parents, accordions, tabs, lightboxes, "read more" toggles, carousel arrows). Counting
+    // them produced findings like "52 links go nowhere, delete them", which is both wrong and
+    // dangerous: deleting the Services dropdown parent breaks the menu. Report only buttons a
+    // customer would click expecting to go somewhere.
     try {
       const r = await fetch(projUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) });
-      if (r.ok) { const html = await r.text();
-        const empties = (html.match(/href=(["'])\s*\1/g) || []).length + (html.match(/href=(["'])#\1/g) || []).length;
+      if (r.ok) {
+        const html = await r.text();
+        const dead = findDeadCtaLinks(html);
+        const n = dead.length;
+        const sample = dead.slice(0, 5).map(t => `"${t}"`).join(', ');
         onpageSubs.push({ name: 'Links', checks: [
-          { status: empties > 0 ? 'warn' : 'pass', finding: empties > 0 ? `${empties} link(s) on the homepage point nowhere (empty href)` : 'No empty links on the homepage', fix: empties > 0 ? 'Point them at the right page or remove them' : '—', evidence: empties > 0 ? { type: 'link', url: projUrl, label: 'Open homepage' } : null, surfaces: ['SERP'] },
+          {
+            status: n > 0 ? 'warn' : 'pass',
+            finding: n > 0
+              ? `${n} button${n === 1 ? '' : 's'} on the homepage do${n === 1 ? 'es' : ''} nothing when clicked${sample ? ` — ${sample}${n > 5 ? ', …' : ''}` : ''}`
+              : 'Homepage buttons all lead somewhere',
+            fix: n > 0 ? 'Point each one at the page it should open (menu dropdowns and accordions are fine as they are — these are the real ones)' : '—',
+            evidence: n > 0 ? { type: 'link', url: projUrl, label: 'Open homepage' } : null,
+            surfaces: ['SERP'],
+          },
         ] });
       }
     } catch (e) {}
