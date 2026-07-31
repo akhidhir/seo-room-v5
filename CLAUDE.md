@@ -528,7 +528,8 @@ Sources: https://support.google.com/business/answer/7091 | https://support.googl
 
 ### Current State (Sureflow — Hardcoded)
 - Endpoint: `GET /create-suburb-template-now` — one-shot, creates template on sureflow.seoroom.au
-- Plugin API key: `sr_2026_kX9mNpQ4wR7vBz`
+- Plugin API key: `SEOROOM_PLUGIN_KEY` env var (Railway). Never write the value in this file — it lets
+  a holder create and publish pages on a client site.
 - Template: 14 Elementor sections (Hero with Elementor Form widget, Service Strip, Top Service, CTA Bars, Service Blocks, Why Choose Us, Differences, Assurance, Service Area List, FAQ)
 - Form uses real Elementor Pro Form widget (`widgetType: 'form'`) matching homepage styling exactly
 - Theme: teal #006E68, mint #81C2B2, heading #10202E, Familjen Grotesk / Space Grotesk fonts

@@ -8,9 +8,18 @@
 
 if (!defined('ABSPATH')) exit;
 
-// API key — must match the key the dashboard uses for this site.
+// API key — must match SEOROOM_PLUGIN_KEY in the dashboard's environment.
+//
+// These endpoints can CREATE and PUBLISH pages on this site, so this is a real credential.
+// Set it per-site WITHOUT editing this file, in order of preference:
+//   1. wp-config.php:  define('SEOROOM_READER_KEY', 'the-key');
+//   2. environment:    SEOROOM_READER_KEY=the-key
+// The literal below is the legacy shared key and exists only so existing installs keep working.
+// ROTATE: set a new key via (1) on every site, set SEOROOM_PLUGIN_KEY in Railway to match,
+// then delete this fallback. The old value is in git history, so rotation is the only real fix.
 if (!defined('SEOROOM_READER_KEY')) {
-    define('SEOROOM_READER_KEY', 'sr_2026_kX9mNpQ4wR7vBz');
+    $seoroom_env_key = getenv('SEOROOM_READER_KEY');
+    define('SEOROOM_READER_KEY', $seoroom_env_key ? $seoroom_env_key : 'sr_2026_kX9mNpQ4wR7vBz');
 }
 
 add_action('rest_api_init', function () {

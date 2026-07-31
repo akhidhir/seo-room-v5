@@ -1,10 +1,22 @@
 node_modules/
-node_modules/
 
-# --- added by deploy prep (client payloads / build junk) ---
+# --- client payloads / build junk ---
 *.zip
 *.backup-*
 rc-sync-payloads/
 rc-sync-pending/
 rc_sync_payload.json
 zi*
+
+# --- editor/OS junk ---
+.DS_Store
+.env
+.env.*
+
+# Backup copies of source files. server.js.bak was committed for months carrying an old JWT_SECRET
+# fallback and a second accepted reset password — a backup of a file with secrets is still a file
+# with secrets. Never commit these.
+*.bak
+*.orig
+*.old
+*.save

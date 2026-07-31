@@ -49,6 +49,15 @@ const SEODITY_MONTHLY_BUDGET = parseInt(process.env.SEODITY_MONTHLY_BUDGET || '1
 const LATE_API_KEY = process.env.LATE_API_KEY;
 const LATE_GBP_ACCOUNT_ID = process.env.LATE_GBP_ACCOUNT_ID;
 
+// Shared key for the seoroom-reader / seoroom-api WordPress plugins. These endpoints can CREATE and
+// PUBLISH pages on a client site, so this is a real credential.
+// It was hardcoded in 12 places (and in CLAUDE.md), which made the repo the source of truth and
+// rotation effectively impossible. Now it comes from the environment.
+// TO ROTATE: set SEOROOM_PLUGIN_KEY in Railway, update SEOROOM_READER_KEY in the plugin on each
+// client site, then delete the fallback literal below.
+// NOTE: the old value is in git history regardless — rotation is the only thing that actually fixes it.
+const SEOROOM_PLUGIN_KEY = process.env.SEOROOM_PLUGIN_KEY || 'sr_2026_kX9mNpQ4wR7vBz';
+
 // Managed Agents (Claude API)
 const AGENT_IDS = {
   website: process.env.WEBSITE_AUDIT_AGENT,
@@ -4652,14 +4661,14 @@ app.get('/cleanup-suburb-templates', async (req, res) => {
   try {
     const axios = require('axios');
     // List all pages
-    const list = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/list-pages?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 15000 });
+    const list = await axios.get(`https://sureflow.seoroom.au/wp-json/seoroom/v1/list-pages?api_key=${encodeURIComponent(SEOROOM_PLUGIN_KEY)}`, { timeout: 15000 });
     const pages = list.data;
     // Find suburb template pages that aren't page 367
     const toDelete = pages.filter(p => p.title && p.title.toLowerCase().includes('suburb template') && p.id !== 367).map(p => p.id);
     if (toDelete.length === 0) return res.json({ message: 'No duplicates found', kept: 367 });
     // Delete them
     const del = await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/delete-pages', {
-      api_key: 'sr_2026_kX9mNpQ4wR7vBz', ids: toDelete
+      api_key: SEOROOM_PLUGIN_KEY, ids: toDelete
     }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
     res.json({ kept: 367, trashed: del.data.trashed, count: del.data.count });
   } catch (e) {
@@ -4673,7 +4682,7 @@ app.get('/create-suburb-template-now', async (req, res) => {
   try {
     const axios = require('axios');
     // Trash old template pages
-    try { await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/delete-pages', { api_key: 'sr_2026_kX9mNpQ4wR7vBz', ids: [367,378,382,386,389] }, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 }); } catch(e) { /* ignore */ }
+    try { await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/delete-pages', { api_key: SEOROOM_PLUGIN_KEY, ids: [367,378,382,386,389] }, { headers: { 'Content-Type': 'application/json' }, timeout: 10000 }); } catch(e) { /* ignore */ }
 
     const rid = () => Math.random().toString(16).slice(2, 9);
     const S = (s,c) => ({id:rid(),elType:'section',settings:s||{},elements:c});
@@ -4775,7 +4784,7 @@ app.get('/create-suburb-template-now', async (req, res) => {
     // Send as pre-encoded JSON string to avoid PHP empty-object encoding issues
     const treeJson = JSON.stringify(tree);
     const r = await axios.post('https://sureflow.seoroom.au/wp-json/seoroom/v1/create-page', {
-      api_key: 'sr_2026_kX9mNpQ4wR7vBz', title: 'Suburb Template - [Suburb Name]', slug: 'suburb-template-v5', tree_json: treeJson, status: 'draft'
+      api_key: SEOROOM_PLUGIN_KEY, title: 'Suburb Template - [Suburb Name]', slug: 'suburb-template-v5', tree_json: treeJson, status: 'draft'
     }, { headers: { 'Content-Type': 'application/json' }, timeout: 60000 });
     console.log('[suburb-template] Created page:', r.data);
     res.json(r.data);
@@ -5989,7 +5998,7 @@ app.post('/api/projects/:id/create-suburb-template', async (req, res) => {
 app.get('/diagnose-suburb-template', async (req, res) => {
   try {
     const axios = require('axios');
-    const r = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/read-meta/367?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 15000 });
+    const r = await axios.get(`https://sureflow.seoroom.au/wp-json/seoroom/v1/read-meta/367?api_key=${encodeURIComponent(SEOROOM_PLUGIN_KEY)}`, { timeout: 15000 });
     res.json(r.data);
   } catch (e) {
     res.status(500).json({ error: e.response?.data || e.message });
@@ -6000,7 +6009,7 @@ app.get('/diagnose-suburb-template', async (req, res) => {
 app.get('/fix-suburb-template', async (req, res) => {
   try {
     const axios = require('axios');
-    const r = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/fix-page/367?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 30000 });
+    const r = await axios.get(`https://sureflow.seoroom.au/wp-json/seoroom/v1/fix-page/367?api_key=${encodeURIComponent(SEOROOM_PLUGIN_KEY)}`, { timeout: 30000 });
     res.json(r.data);
   } catch (e) {
     res.status(500).json({ error: e.response?.data || e.message });
@@ -6011,7 +6020,7 @@ app.get('/fix-suburb-template', async (req, res) => {
 app.get('/test-elementor-minimal', async (req, res) => {
   try {
     const axios = require('axios');
-    const r = await axios.get('https://sureflow.seoroom.au/wp-json/seoroom/v1/test-minimal?api_key=sr_2026_kX9mNpQ4wR7vBz', { timeout: 30000 });
+    const r = await axios.get(`https://sureflow.seoroom.au/wp-json/seoroom/v1/test-minimal?api_key=${encodeURIComponent(SEOROOM_PLUGIN_KEY)}`, { timeout: 30000 });
     res.json(r.data);
   } catch (e) {
     res.status(500).json({ error: e.response?.data || e.message });
@@ -6027,7 +6036,7 @@ app.post('/api/projects/:id/create-elementor-page', async (req, res) => {
     if (!title || !tree) return res.status(400).json({ error: 'title and tree required' });
 
     // Try SEO Room API plugin first (works on hosts that strip auth headers)
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
     const wpHost = project.wordpress_url ? new URL(project.wordpress_url).hostname : '';
     const wpApiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key;
     if (wpApiKey) {
@@ -6653,7 +6662,7 @@ app.post('/api/projects/:projectId/page-builder/template', async (req, res) => {
     const hostNorm = (h) => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     const target = hostNorm(host);
     // Sites that strip the Authorization header use the seoroom-reader plugin + API key instead.
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
     let srcAuth = null, srcName = '', srcApiKey = SEOROOM_API_KEYS[target] || null;
     const matches = (p) => hostNorm(p.wordpress_url) === target || hostNorm(p.domain) === target;
     if (matches(project)) { srcAuth = getWpAuthHeaders(project); srcName = project.name; if (!srcApiKey) srcApiKey = project.wp_api_key || null; }
@@ -6746,7 +6755,7 @@ app.post('/api/projects/:projectId/page-builder/build', async (req, res) => {
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
     // Sites that strip the Authorization header (e.g. sureflow.seoroom.au) use the seoroom-api plugin + API key instead.
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
     const wpHost = (() => { try { return new URL(project.wordpress_url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
     const apiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key || null;
     if (!wpUrl || (!apiKey && !authHeaders)) return res.status(400).json({ error: "Set this project's WordPress URL + Application Password (or seoroom-api key) in Project Settings first." });
@@ -6827,7 +6836,7 @@ async function pbResolvePage(host, postId) {
   try {
     const norm = h => (h || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '').toLowerCase();
     const target = norm(host);
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
     let apiKey = SEOROOM_API_KEYS[target] || null;
     if (!apiKey) {
       const all = (await pool.query('SELECT * FROM projects')).rows;
@@ -6951,7 +6960,7 @@ app.post('/api/projects/:projectId/page-builder/publish', async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Destination project not found' });
     const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
     const authHeaders = getWpAuthHeaders(project);
-    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': 'sr_2026_kX9mNpQ4wR7vBz' };
+    const SEOROOM_API_KEYS = { 'sureflow.seoroom.au': SEOROOM_PLUGIN_KEY };
     const wpHost = (() => { try { return new URL(project.wordpress_url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
     const apiKey = SEOROOM_API_KEYS[wpHost] || project.wp_api_key || null;
     if (!wpUrl) return res.status(400).json({ error: 'WordPress connection required.' });
