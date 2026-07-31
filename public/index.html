@@ -32652,15 +32652,13 @@
       const [compProgress, setCompProgress] = useState(null);
       // The two keywords that get their own rank column. Per project; seeded from the service so a
       // new project is never blank.
+      // NO auto-derivation. Every attempt to guess these produced a phrase nobody searches:
+      // `industry` gave "Plumbing and Gas", and the competitor-check service field turned out to hold
+      // the same words, so "emergency plumbing and gas" came back a second time. A keyword is what a
+      // customer types — only the user knows it. Empty until they say otherwise.
       const seedKws = (() => {
         const stored = Array.isArray(project.smart_keywords) ? project.smart_keywords : [];
-        if (stored.length) return [stored[0] || '', stored[1] || ''];
-        // Seed ONLY from the service you actually search on (the competitor-check service, e.g.
-        // "plumber"). NOT from `industry`, which is a business category — "Plumbing and Gas" produced
-        // "emergency plumbing and gas", a phrase nobody types into Google. If there's no service set,
-        // leave the boxes empty rather than inventing one.
-        const base = (project.smart_service || '').toString().trim().toLowerCase();
-        return base ? [base, 'emergency ' + base] : ['', ''];
+        return [stored[0] || '', stored[1] || ''];
       })();
       const [kw1, setKw1] = useState(seedKws[0]);
       const [kw2, setKw2] = useState(seedKws[1]);
@@ -32981,12 +32979,14 @@
                 {!checkingKw && (
                   <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
                     {activeKeywords.length
-                      ? activeKeywords.map(kw => {
-                          const n = (result.suburbs || []).filter(s => (s.keywordRanks || []).some(k => k.keyword === kw && k.measured)).length;
-                          return `"${kw}": ${n}/${(result.suburbs || []).length} measured`;
-                        }).join(' · ')
-                      : 'Add a keyword to get a rank column.'}
-                    {' '}· "absent" = measured, you're not in the results. "—" = not measured yet.
+                      ? <>
+                          {activeKeywords.map(kw => {
+                            const n = (result.suburbs || []).filter(s => (s.keywordRanks || []).some(k => k.keyword === kw && k.measured)).length;
+                            return `"${kw}": ${n}/${(result.suburbs || []).length} measured`;
+                          }).join(' · ')}
+                          {' '}· "absent" = measured, you're not in the results. "—" = not measured yet.
+                        </>
+                      : <span style={{ color: '#f59e0b' }}>Type the two keywords a customer would search — e.g. <b>plumber</b> and <b>emergency plumber</b> — then Save. The suburb is added to each automatically.</span>}
                   </div>
                 )}
               </div>
