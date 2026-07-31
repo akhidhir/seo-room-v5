@@ -591,6 +591,47 @@ no transfers, no navigating to another page to fix it. Applies to all projects, 
 - Never mark a finding/ticket fixed when nothing changed.
 - Homepage guards: never trash/redirect/slug-change the homepage; duplicate title with homepage = retitle homepage brand-first.
 
+## SerpAPI retirement (2026-07-31) — DataForSEO is the provider
+
+**Decision: SerpAPI is being removed. DataForSEO does everything except AI Overview.**
+`SERPAPI_KEY` stays set ONLY for the AI Search page (`/aio/scan`) — that feature is 100% SerpAPI-specific
+(`engine: 'google_ai_overview'`, `data.ai_overview.text_blocks/references`) and is a rebuild, not a swap.
+Every other feature now runs on DataForSEO.
+
+**Phase 1 — vestigial gates (done).** Four endpoints 503'd without `SERPAPI_KEY` while running 100% on
+DataForSEO: `maps/grid-scan`, `maps/grid-scan-rc`, `rank-tracking/discover`, `competitor-wordcount`.
+All now gate on `DATAFORSEO_AUTH`. The 10-minute health check listed `SERPAPI_KEY` as required and would
+have logged a `high` system issue forever once it was removed — now checks `DATAFORSEO_LOGIN`.
+**Removing SERPAPI_KEY from Railway before this fix would have broken grid scan, the flagship feature.**
+
+**Phase 2 — drop-in branches (done).**
+- `rank-tracking/sync`: SerpAPI branch gone; `provider=serpapi` is accepted but silently served by
+  DataForSEO. Seodity's per-keyword fallback and its budget-exhausted fallback both now go to DataForSEO.
+- **Deep-maps fallback rewritten, not deleted.** When the business isn't in the local-pack top 3 the sync
+  searches Maps directly for the full depth-20 listing. That path was SerpAPI-only, so a DataForSEO sync
+  left `maps_position` NULL for anyone outside the top 3 — indistinguishable from "not ranking", and it
+  would have shown up in Maps Rankings and the client report as a collapse. Now `dataForSeoMaps` for every
+  provider (GPS when known, else `location_name`). `dataForSeoMaps` already returns a SerpAPI-shaped
+  `local_results[]`, so the matching loop was unchanged.
+- `discovery/maps/run`: provider forced to `dataforseo`.
+- `maps/sync-serpapi`: DataForSEO-only. Route name kept (nothing in the frontend calls it).
+- **Deleted `/api/debug/serp-test` and `/api/debug/maps-test`** and removed them from the `optionalAuth`
+  whitelist — they were auth-exempt, so anonymous callers could spend the agency's SerpAPI money.
+  `/api/debug/dfs-test` covers the same need. (`dfs-test` and `ai-test` are still auth-exempt — fix next.)
+- Cost model corrected: `maps_sync` defaulted to the SerpAPI rate ($0.01) while running on DataForSEO
+  ($0.004) — every quoted estimate was ~2.5× the real cost. `gbp_audit` and `handshake` likewise.
+- Frontend: "SerpAPI (GPS)" removed from the 3 provider dropdowns; stale SerpAPI copy updated.
+
+**Phase 3+ — NOT done.** Suburb-level organic GPS (`dataForSeoSerp` is `location_name` only — DataForSEO
+does support `location_coordinate`, needs adding); re-verify the Citations/NAP `site:` pass on DataForSEO
+before trusting it (the checker purges saved listings based on it); `resolveCompetitorWebsite` needs a
+re-parse (DataForSEO has no `knowledge_graph`); keyword-research autocomplete has no DataForSEO helper yet.
+
+**Verification tooling:** `~/.cowork-to-code-bridge/scripts/v5_verify.sh` runs `node --check server.js` AND
+Babel-parses the JSX in `public/index.html` — a JSX syntax error white-screens the app and `node --check`
+cannot see it. `v5_deploy.sh` (preview|apply) replaces `deploy_seo_room.sh`, which still pointed at the old
+`~/Desktop` path and always aborted; it refuses to commit if `node --check` fails.
+
 ## Session Log 2026-07-31: Full code review + top-5 fixes
 
 Full review report: `~/Desktop/V5-REVIEW-2026-07-30.md` (security / site-safety / data-accuracy / reliability / dead code).

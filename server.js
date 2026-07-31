@@ -1655,7 +1655,10 @@ function authMiddleware(req, res, next) {
 
 // Whitelist certain paths from auth requirement
 function optionalAuth(req, res, next) {
-  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/drive/callback', '/api/debug/serp-test', '/api/debug/maps-test', '/api/debug/dfs-test', '/api/test-gpthuman', '/api/debug/ai-test'];
+  // NOTE: debug routes that spend money on a paid API must NOT be listed here — anonymous callers
+  // could run up the bill. serp-test/maps-test were removed with SerpAPI; dfs-test and ai-test
+  // remain exempt and should be moved behind auth too.
+  const whitelistPaths = ['/api/auth/register', '/api/auth/login', '/api/auth/reset-password', '/api/health', '/api/gsc/callback', '/api/gbp/callback', '/api/drive/callback', '/api/debug/dfs-test', '/api/test-gpthuman', '/api/debug/ai-test'];
   // (removed) emergency restore-page is no longer auth-exempt — it writes to client WordPress
   // sites and could fall back to the wrong project's credentials. JWT required like everything else.
   // Allow invite routes without auth (client signup flow)
@@ -11592,17 +11595,15 @@ function estimateFeatureCost(feature, params = {}) {
   switch (feature) {
     case 'serp_sync': {
       const kwCount = params.keywords || 0;
-      const provider = params.provider || 'dataforseo';
-      const rate = provider === 'serpapi' ? API_COST_RATES.serpapi.google : API_COST_RATES.dataforseo.serp;
       const volumeCost = API_COST_RATES.dataforseo.search_volume * Math.min(kwCount, 1); // 1 batch call
       // ×2: every keyword is checked on desktop AND mobile
-      return { calls: kwCount * 2, cost: +(kwCount * 2 * rate + volumeCost).toFixed(4), provider };
+      return { calls: kwCount * 2, cost: +(kwCount * 2 * API_COST_RATES.dataforseo.serp + volumeCost).toFixed(4), provider: 'dataforseo' };
     }
     case 'maps_sync': {
+      // Defaulted to the SerpAPI rate ($0.01) while the feature actually ran on DataForSEO ($0.004),
+      // so every quoted estimate was ~2.5× the real cost.
       const kwCount = params.keywords || 0;
-      const provider = params.provider || 'serpapi';
-      const rate = provider === 'serpapi' ? API_COST_RATES.serpapi.google : API_COST_RATES.dataforseo.serp;
-      return { calls: kwCount, cost: +(kwCount * rate).toFixed(4), provider };
+      return { calls: kwCount, cost: +(kwCount * API_COST_RATES.dataforseo.serp).toFixed(4), provider: 'dataforseo' };
     }
     case 'grid_scan': {
       // Grid scan runs on DataForSEO Maps (dataForSeoMaps), not SerpAPI — estimate must match the real provider/rate
@@ -11616,13 +11617,12 @@ function estimateFeatureCost(feature, params = {}) {
     }
     case 'discover_maps': {
       const kwCount = params.keywords || 30; // estimated service keywords
-      const provider = params.provider || 'dataforseo';
-      const rate = provider === 'serpapi' ? API_COST_RATES.serpapi.google_maps : API_COST_RATES.dataforseo.maps;
       const volumeCost = API_COST_RATES.dataforseo.search_volume;
-      return { calls: kwCount, cost: +(kwCount * rate + volumeCost).toFixed(4), provider };
+      return { calls: kwCount, cost: +(kwCount * API_COST_RATES.dataforseo.maps + volumeCost).toFixed(4), provider: 'dataforseo' };
     }
     case 'gbp_audit': {
-      return { calls: 2, cost: +(API_COST_RATES.serpapi.google_maps + API_COST_RATES.anthropic.haiku).toFixed(4), provider: 'serpapi+anthropic' };
+      // Runs on DataForSEO Maps + Haiku — was quoted at the SerpAPI rate.
+      return { calls: 2, cost: +(API_COST_RATES.dataforseo.maps + API_COST_RATES.anthropic.haiku).toFixed(4), provider: 'dataforseo+anthropic' };
     }
     case 'gsc_audit': {
       return { calls: 1, cost: +(API_COST_RATES.anthropic.haiku).toFixed(4), provider: 'anthropic' };
@@ -11635,7 +11635,8 @@ function estimateFeatureCost(feature, params = {}) {
       return { calls: params.pages || 15, cost: 0, provider: 'google' };
     }
     case 'handshake': {
-      return { calls: 6, cost: +(API_COST_RATES.serpapi.google_maps * 3 + API_COST_RATES.anthropic.haiku * 2 + 0.01).toFixed(4), provider: 'serpapi+anthropic' };
+      // Runs on DataForSEO Maps + Haiku — was quoted at the SerpAPI rate.
+      return { calls: 6, cost: +(API_COST_RATES.dataforseo.maps * 3 + API_COST_RATES.anthropic.haiku * 2 + 0.01).toFixed(4), provider: 'dataforseo+anthropic' };
     }
     default:
       return { calls: 0, cost: 0, provider: 'unknown' };
@@ -42745,7 +42746,8 @@ app.get('/api/projects/:projectId/discovery/maps/test', async (req, res) => {
 
 // POST: start background Maps discovery
 app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
-  const mapsProvider = (req.body?.provider || 'dataforseo').toLowerCase();
+  // SerpAPI retired — Maps discovery runs on DataForSEO regardless of what the caller asks for.
+  const mapsProvider = 'dataforseo';
   const { projectId } = req.params;
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
@@ -42975,35 +42977,13 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
             || titleNoSpaces.includes(domainBase);
         };
 
-        // Maps search helper — SerpAPI or DataForSEO
+        // Maps search helper — DataForSEO only (SerpAPI retired).
         async function discoverMapsSearch(keyword) {
-          if (mapsProvider === 'serpapi') {
-            const data = await serpApiSearch({
-              engine: 'google_maps',
-              q: keyword,
-              ll: `@${locGps.lat},${locGps.lng},14z`,
-              google_domain: 'google.com.au',
-              hl: 'en',
-            });
-            // Normalize SerpAPI google_maps response to match expected shape
-            const results = (data.local_results || []).map((r, idx) => ({
-              position: r.position || (idx + 1),
-              title: r.title || '',
-              rating: r.rating || null,
-              reviews: r.reviews || 0,
-              type: r.type || '',
-              address: r.address || '',
-              website: r.website || '',
-              domain: r.website ? r.website.replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '') : '',
-            }));
-            return { local_results: results, cost: 0 };
-          } else {
-            // Search by location_name, not pin coordinates (pin standpoint made everything #1).
-            // scanLocation is chosen once before the loop: the business's own suburb if Google's
-            // location database recognises it (validated with one cheap test call), else the city —
-            // metro-level markets are too coarse for suburban businesses (Brisbane found 0).
-            return dataForSeoMaps({ keyword, location: scanLocation });
-          }
+          // Search by location_name, not pin coordinates (pin standpoint made everything #1).
+          // scanLocation is chosen once before the loop: the business's own suburb if Google's
+          // location database recognises it (validated with one cheap test call), else the city —
+          // metro-level markets are too coarse for suburban businesses (Brisbane found 0).
+          return dataForSeoMaps({ keyword, location: scanLocation });
         }
 
         // Choose + VALIDATE the scan location once: suburb-level first, city fallback.
@@ -43088,7 +43068,7 @@ app.post('/api/projects/:projectId/discovery/maps/run', async (req, res) => {
         // Sort by position
         foundKeywords.sort((a, b) => (a.maps_position || 99) - (b.maps_position || 99));
 
-        const discMapsCost = mapsProvider === 'serpapi' ? services.length * API_COST_RATES.serpapi.google_maps : totalCost;
+        const discMapsCost = totalCost;
         await logApiCost(parseInt(projectId), 'discover_maps', mapsProvider, services.length, discMapsCost, { found: foundKeywords.length });
         console.log(`[maps-discovery] Done. Found ${foundKeywords.length} keywords where business ranks on Maps. Cost: $${discMapsCost.toFixed(4)}`);
 
@@ -43519,13 +43499,12 @@ app.delete('/api/projects/:projectId/maps/clean', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// SERPapi-powered Maps/Local Pack sync
+// Maps/Local Pack sync. Legacy route name (`sync-serpapi`) kept so any old caller still resolves;
+// nothing in the frontend references it and it now runs on DataForSEO only.
 app.post('/api/projects/:projectId/maps/sync-serpapi', async (req, res) => {
-  // DataForSEO is the default — cheaper per query than SerpAPI. Falls back if not configured.
-  const provider = (req.body?.provider || (DATAFORSEO_AUTH ? 'dataforseo' : 'serpapi')).toLowerCase();
+  const provider = 'dataforseo'; // SerpAPI retired
   const force = req.body?.force === true;
-  if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
-  if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured.' });
+  if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured.' });
   const { projectId } = req.params;
   try {
     const projRes = await pool.query('SELECT * FROM projects WHERE id=$1', [projectId]);
@@ -44696,10 +44675,14 @@ app.get('/api/projects/:projectId/rank-tracking/sync/status', (req, res) => {
   res.json({ status: job.running ? 'running' : (job.error ? 'failed' : 'done'), done: job.done, total: job.total, synced: job.synced, error: job.error || null, started_at: job.started_at, finished_at: job.finished_at || null });
 });
 app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
-  // DataForSEO is the default — cheaper per query than SerpAPI. Falls back if not configured.
-  let provider = (req.body?.provider || (DATAFORSEO_AUTH ? 'dataforseo' : 'serpapi')).toLowerCase(); // 'seodity', 'serpapi' or 'dataforseo'
+  // SerpAPI is retired here — DataForSEO does organic (desktop + mobile) and Maps. Any caller still
+  // asking for 'serpapi' (an old bookmark, a cached bundle) is served by DataForSEO rather than 503'd.
+  let provider = (req.body?.provider || 'dataforseo').toLowerCase(); // 'seodity' or 'dataforseo'
+  if (provider === 'serpapi') {
+    console.log('[rank-sync] provider=serpapi requested but SerpAPI is retired — using DataForSEO');
+    provider = 'dataforseo';
+  }
   const force = req.body?.force === true;
-  if (provider === 'serpapi' && !SERPAPI_KEY) return res.status(503).json({ error: 'SERPAPI_KEY not configured. Add it to Railway env vars.' });
   if (provider === 'dataforseo' && !DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.' });
   if (provider === 'seodity' && !SEODITY_API_KEY) return res.status(503).json({ error: 'SEODITY_API_KEY not configured. Add it to Railway env vars.' });
   const { projectId } = req.params;
@@ -44731,10 +44714,11 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const kwRes = await pool.query('SELECT * FROM rank_keywords WHERE project_id=$1', [projectId]);
     if (kwRes.rows.length === 0) return res.status(400).json({ error: 'No keywords to track. Add keywords first.' });
 
-    // Seodity free credits: if the monthly budget can't cover this sync, auto-fall back to SerpAPI
+    // Seodity free credits: if the monthly budget can't cover this sync, fall back to DataForSEO
+    // (was SerpAPI, which is retired).
     if (provider === 'seodity' && !(await seodityCanSpend(kwRes.rows.length))) {
-      if (SERPAPI_KEY) { console.log('[rank-sync] Seodity monthly budget exhausted — falling back to SerpAPI'); provider = 'serpapi'; }
-      else return res.status(429).json({ error: 'Seodity monthly credit budget exhausted and no SerpAPI fallback configured.' });
+      if (DATAFORSEO_AUTH) { console.log('[rank-sync] Seodity monthly budget exhausted — falling back to DataForSEO'); provider = 'dataforseo'; }
+      else return res.status(429).json({ error: 'Seodity monthly credit budget exhausted and DataForSEO is not configured.' });
     }
 
     const resolvedLoc = resolveDataForSeoLocation(project.location);
@@ -44811,33 +44795,26 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
           // One search per device — desktop drives the full parse (organic + local pack +
           // competitors); mobile adds the mobile organic position (most local searches are mobile).
           const doSearch = async (device) => {
-            if (provider === 'serpapi' || provider === 'seodity') {
+            if (provider === 'seodity') {
               // Suburb-specific location text for better accuracy
               // Format: "Warner, Queensland, Australia" or "Brisbane, Queensland, Australia"
               let serpLocation = resolvedLoc.replace(/,/g, ', ');
-              // If we detected a suburb with GPS, use suburb name as the location for suburb-level targeting
               if (detectedSuburb && SUBURB_GPS[detectedSuburb.toLowerCase()]) {
                 // Resolve suburb state from resolvedLoc (e.g. "Brisbane,Queensland,Australia" → "Queensland")
                 const locParts = resolvedLoc.split(',');
                 const state = locParts.length >= 2 ? locParts[1] : 'Queensland';
                 serpLocation = `${detectedSuburb.charAt(0).toUpperCase() + detectedSuburb.slice(1)}, ${state}, Australia`;
               }
-              if (provider === 'seodity') {
-                if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using Seodity location="${serpLocation}"`);
-                try {
-                  return await seoditySerpSearch({ query, location: serpLocation, device });
-                } catch (se) {
-                  // Per-keyword fallback so one Seodity hiccup never breaks a sync
-                  if (!SERPAPI_KEY) throw se;
-                  if (idx < 3) console.log(`[rank-sync] Seodity failed (${se.message.slice(0, 80)}) — SerpAPI fallback for "${query}"`);
-                  return await serpApiSearch({ engine: 'google', q: query, gl: 'au', google_domain: 'google.com.au', location: serpLocation, num: 30, device });
-                }
+              if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using Seodity location="${serpLocation}"`);
+              try {
+                return await seoditySerpSearch({ query, location: serpLocation, device });
+              } catch (se) {
+                // Per-keyword fallback so one Seodity hiccup never breaks a sync. Was SerpAPI; now
+                // DataForSEO, which is the provider everything else in this sync already uses.
+                if (!DATAFORSEO_AUTH) throw se;
+                if (idx < 3) console.log(`[rank-sync] Seodity failed (${se.message.slice(0, 80)}) — DataForSEO fallback for "${query}"`);
+                return await dataForSeoSerp({ keyword: query, location: resolvedLoc, depth: 30, device });
               }
-              if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using SerpAPI location="${serpLocation}"`);
-              return await serpApiSearch({
-                engine: 'google', q: query, gl: 'au', google_domain: 'google.com.au',
-                location: serpLocation, num: 30, device,
-              });
             }
             // DataForSEO city-level
             if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using DataForSEO location "${resolvedLoc}"`);
@@ -44926,30 +44903,18 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
             }
           }
 
-          // Fallback: if business not found in top 3 local pack, do a google_maps search for full listing
-          // (also for Seodity syncs — Seodity has no GPS Maps API, so the maps part stays on SerpAPI)
-          if (!maps.position && (provider === 'serpapi' || provider === 'seodity') && SERPAPI_KEY) {
+          // Fallback: not in the local pack top 3 → search Maps directly for the full depth-20 listing.
+          // This used to be SerpAPI-only, which meant a DataForSEO sync left maps_position NULL for
+          // every business outside the top 3 — indistinguishable from "not ranking at all", and it
+          // would have shown up in Maps Rankings and the client report as a collapse. Now runs on
+          // DataForSEO for every provider.
+          if (!maps.position && DATAFORSEO_AUTH) {
             try {
               const mapsGps = gps || projectGps;
-              const mapsParams = {
-                engine: 'google_maps',
-                q: query,
-                google_domain: 'google.com.au',
-                hl: 'en',
-                type: 'search',
-              };
-              if (mapsGps) {
-                mapsParams.ll = `@${mapsGps.lat},${mapsGps.lng},14z`;
-              } else {
-                // Use location text as fallback
-                const locParts = resolvedLoc.split(',');
-                const state = locParts.length >= 2 ? locParts[1] : '';
-                mapsParams.location = detectedSuburb
-                  ? `${detectedSuburb.charAt(0).toUpperCase() + detectedSuburb.slice(1)}, ${state}, Australia`
-                  : resolvedLoc.replace(/,/g, ', ');
-              }
-              if (idx < 3) console.log(`[rank-sync] "${query}" not in local pack top3, trying google_maps engine...`);
-              const mapsData = await serpApiSearch(mapsParams);
+              if (idx < 3) console.log(`[rank-sync] "${query}" not in local pack top3, trying DataForSEO Maps...`);
+              const mapsData = mapsGps
+                ? await dataForSeoMaps({ keyword: query, lat: mapsGps.lat, lng: mapsGps.lng, depth: 20 })
+                : await dataForSeoMaps({ keyword: query, location: resolvedLoc, depth: 20 });
               const mapsResults = mapsData.local_results || [];
               for (let mp = 0; mp < mapsResults.length; mp++) {
                 const place = mapsResults[mp];
@@ -49241,56 +49206,9 @@ app.post('/api/projects/:id/blog-posts/import-keywords', async (req, res) => {
 
 // ==================== 15. SERVE ====================
 
-// Debug: test SerpAPI call with location
-app.get('/api/debug/serp-test', async (req, res) => {
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'No SERPAPI_KEY' });
-  const q = req.query.q || 'blocked drain warner';
-  const suburb = (req.query.suburb || 'warner').toLowerCase();
-  const gps = SUBURB_GPS[suburb];
-  try {
-    const params = { engine: 'google', q, google_domain: 'google.com.au', gl: 'au', hl: 'en', num: 30 };
-    if (gps) {
-      params.uule = generateUULE(gps.lat, gps.lng);
-    } else if (req.query.location) {
-      params.location = req.query.location;
-    } else {
-      params.location = 'Brisbane, Queensland, Australia';
-    }
-    const data = await serpApiSearch(params);
-    const organic = (data.organic_results || []).slice(0, 10).map(r => {
-      let host = '';
-      try { host = new URL(r.link || '').hostname.replace(/^www\./, '').toLowerCase(); } catch(e) { host = r.link; }
-      return { pos: r.position, host, title: r.title, link: (r.link || '').substring(0, 80) };
-    });
-    const local = (data.local_results?.places || data.local_results || []).map(p => ({ pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews }));
-    res.json({ query: q, suburb, gps: gps || null, uule: params.uule || null, location: params.location || null, organic, local, searchInfo: data.search_information });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Debug: test google_maps engine (full maps listing, up to 20 results)
-app.get('/api/debug/maps-test', async (req, res) => {
-  if (!SERPAPI_KEY) return res.status(503).json({ error: 'No SERPAPI_KEY' });
-  const q = req.query.q || 'seo agency perth';
-  const suburb = (req.query.suburb || 'perth').toLowerCase();
-  const gps = SUBURB_GPS[suburb];
-  try {
-    const params = { engine: 'google_maps', q, google_domain: 'google.com.au', hl: 'en', type: 'search' };
-    if (gps) {
-      params.ll = `@${gps.lat},${gps.lng},14z`;
-    } else if (req.query.location) {
-      params.location = req.query.location;
-    } else {
-      params.location = 'Perth, Western Australia, Australia';
-    }
-    const data = await serpApiSearch(params);
-    const results = (data.local_results || []).map(p => ({
-      pos: p.position, title: p.title, rating: p.rating, reviews: p.reviews,
-      website: (p.website || p.links?.website || '').substring(0, 60),
-      address: p.address, type: p.type
-    }));
-    res.json({ query: q, suburb, gps: gps || null, ll: params.ll || null, location: params.location || null, total: results.length, results, searchInfo: data.search_information });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+// (removed) /api/debug/serp-test and /api/debug/maps-test — SerpAPI-only debug routes that were
+// auth-exempt, meaning any anonymous caller could spend money on the agency's SerpAPI account.
+// /api/debug/dfs-test below covers the same need on DataForSEO.
 
 // DataForSEO debug — test SERP results for a keyword
 app.get('/api/debug/dfs-test', async (req, res) => {
