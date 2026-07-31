@@ -32660,6 +32660,9 @@
       })();
       const [kw1, setKw1] = useState(seedKws[0]);
       const [kw2, setKw2] = useState(seedKws[1]);
+      // Columns are driven by the project's own keywords, NOT by result.smartKeywords — a restored
+      // saved plan has no smartKeywords field, which silently rendered zero keyword columns.
+      const activeKeywords = [kw1, kw2].map(k => (k || '').trim().toLowerCase()).filter(Boolean);
       const [kwSaved, setKwSaved] = useState(false);
       const [checkingKw, setCheckingKw] = useState(false);
       const [kwProgress, setKwProgress] = useState(null);
@@ -32792,7 +32795,7 @@
               // last — so a column click surfaces where you already rank rather than where you don't.
               const m = /^kw(\d+)$/.exec(sortBy || '');
               if (m) {
-                const kw = (result.smartKeywords || [])[Number(m[1])];
+                const kw = [kw1, kw2].map(k => (k || '').trim().toLowerCase()).filter(Boolean)[Number(m[1])];
                 const kr = (s.keywordRanks || []).find(k => k.keyword === kw);
                 if (!kr || !kr.measured) return 100000;
                 return kr.position == null ? 9999 : kr.position;
@@ -32963,7 +32966,7 @@
                   {checkingKw ? <span className="spinner"></span> : <i className="fas fa-location-crosshairs" style={{ marginRight: 6 }}></i>}
                   {checkingKw ? 'Checking…' : 'Check rankings'}
                 </button>
-                {!checkingKw && (result.keywordCoverage || []).some(k => k.measured > 0) && (
+                {!checkingKw && (result.suburbs || []).some(s => (s.keywordRanks || []).some(k => k.measured)) && (
                   <button className="btn" onClick={() => checkKeywordRanks(true)} disabled={checkingKw} style={{ height: 38 }} title="Re-measure everything, ignoring the 30-day cache">
                     <i className="fas fa-rotate" style={{ marginRight: 6 }}></i>Refresh all
                   </button>
@@ -32971,9 +32974,13 @@
                 {checkingKw && kwProgress && <div style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>Checked {kwProgress.checked} / {kwProgress.total}…</div>}
                 {!checkingKw && (
                   <div style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
-                    {(result.keywordCoverage || []).length
-                      ? (result.keywordCoverage || []).map(k => `"${k.keyword}": ${k.measured}/${result.suburbs.length} measured`).join(' · ')
-                      : 'Measured from a point at each suburb. "—" = not measured yet.'}
+                    {activeKeywords.length
+                      ? activeKeywords.map(kw => {
+                          const n = (result.suburbs || []).filter(s => (s.keywordRanks || []).some(k => k.keyword === kw && k.measured)).length;
+                          return `"${kw}": ${n}/${(result.suburbs || []).length} measured`;
+                        }).join(' · ')
+                      : 'Add a keyword to get a rank column.'}
+                    {' '}· "absent" = measured, you're not in the results. "—" = not measured yet.
                   </div>
                 )}
               </div>
@@ -33099,12 +33106,12 @@
                         <th style={{ padding: '6px 8px' }} onClick={() => toggleSort('suburb')}>Suburb{sortArrow('suburb')}</th>
                         <th style={{ padding: '6px 8px' }} onClick={() => toggleSort('state')}>State{sortArrow('state')}</th>
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('population')}>Population{sortArrow('population')}</th>
-                        <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('distance')}>Distance{sortArrow('distance')}</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={() => toggleSort('distance')} title="Straight-line distance from your business to this suburb — the point the ranking was measured from">km from pin{sortArrow('distance')}</th>
                         {result.hasCompetitors && <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('competitors')} title="Businesses in the Maps results for this service here. The search reads the top 20, so 20+ means saturated rather than exactly 20.">Competitors{sortArrow('competitors')}</th>}
-                        {(result.smartKeywords || []).map((kw, ki) => (
+                        {activeKeywords.map((kw, ki) => (
                           <th key={kw} style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={() => toggleSort('kw' + ki)}
-                              title={`Your Google Maps position for "${kw}" measured from a point at each suburb`}>
-                            {kw}{sortArrow('kw' + ki)}
+                              title={`Your Google Maps position for "${kw}", measured from a point at each suburb`}>
+                            "{kw}"{sortArrow('kw' + ki)}
                           </th>
                         ))}
                         <th style={{ padding: '6px 8px', textAlign: 'right' }} onClick={() => toggleSort('completion')} title="How much of the suburb checklist is already done">Done{sortArrow('completion')}</th>
@@ -33118,14 +33125,15 @@
                           <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.opportunityFlag && <i className="fas fa-bullseye" title={s.opportunityReason || 'Growth opportunity'} style={{ color: '#f59e0b', marginRight: 6, fontSize: 11 }}></i>}{s.suburb}{s.isHome && <span style={{ marginLeft: 6, fontSize: 10, color: '#a855f7' }}>(HOME)</span>}</td>
                           <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{s.state}</td>
                           <td style={{ padding: '6px 8px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
-                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.distance} km</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>{s.isHome ? <span style={{ color: '#a855f7' }}>0 (own suburb)</span> : `${s.distance} km`}</td>
                           {result.hasCompetitors && <td title={s.competitors >= 20 ? 'The search reads the top 20 results, so this is "20 or more" — not an exact count' : ''} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: compColor(s.competitors) }}>{s.competitors == null ? '—' : (s.competitors >= 20 ? '20+' : s.competitors)}</td>}
-                          {(result.smartKeywords || []).map((kw, ki) => {
+                          {activeKeywords.map((kw, ki) => {
                             const kr = (s.keywordRanks || []).find(k => k.keyword === kw);
                             // Three states kept distinct: ranked / measured-but-absent / never measured.
-                            if (!kr || !kr.measured) return <td key={kw} title={`"${kw}" has not been measured in ${s.suburb} yet — use Check rankings`} style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text3)' }}>—</td>;
-                            if (kr.position == null) return <td key={kw} title={`Measured in ${s.suburb} for "${kw}" — you don't appear in the Maps results`} style={{ padding: '6px 8px', textAlign: 'right', color: '#ef4444', fontSize: 11, fontWeight: 600 }}>not ranking</td>;
-                            return <td key={kw} title={`Measured from a point at ${s.suburb}`} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: kr.position <= 3 ? '#22c55e' : kr.position <= 10 ? '#f59e0b' : '#ef4444' }}>#{kr.position}</td>;
+                            // "absent" is a finding. "—" means we haven't looked. Never merge the two.
+                            if (!kr || !kr.measured) return <td key={kw} title={`"${kw}" has not been measured in ${s.suburb} yet — press Check rankings`} style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--text3)' }}>—</td>;
+                            if (kr.position == null) return <td key={kw} title={`Measured at ${s.suburb} for "${kw}" — you don't appear in the Maps results`} style={{ padding: '6px 8px', textAlign: 'right', color: '#ef4444', fontWeight: 600 }}>absent</td>;
+                            return <td key={kw} title={`Measured from a point at ${s.suburb} for "${kw}"`} style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: kr.position <= 3 ? '#22c55e' : kr.position <= 10 ? '#f59e0b' : '#ef4444' }}>#{kr.position}</td>;
                           })}
                           <td style={{ padding: '6px 8px' }}>
                             {s.completion != null ? (
