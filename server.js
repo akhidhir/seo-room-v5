@@ -11877,29 +11877,42 @@ async function dataForSeoBusinessInfo({ keyword, location }) {
 
 // DataForSEO Organic SERP — replaces serpApiSearch({ engine: 'google', ... })
 // Returns normalized results matching the shape the dashboard expects
-async function dataForSeoSerp({ keyword, location, depth, device }) {
+async function dataForSeoSerp({ keyword, location, depth, device, lat, lng }) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured. Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD.');
-  // DataForSEO requires location_name without spaces after commas, e.g. "Perth,Western Australia,Australia"
-  const normalizedLocation = (location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */).replace(/,\s+/g, ',');
   const task = {
     keyword,
     language_code: 'en',
     depth: depth || 30,
     device: device === 'mobile' ? 'mobile' : 'desktop',
     se_domain: 'google.com.au',
-    location_name: normalizedLocation,
   };
+  // GPS when we have it — suburb-level targeting used to be the reason to reach for SerpAPI.
+  // DataForSEO accepts location_coordinate ("lat,lng,zoom") on organic, same as it does on Maps.
+  if (lat != null && lng != null) {
+    task.location_coordinate = `${lat},${lng},14z`;
+  } else {
+    // DataForSEO requires location_name without spaces after commas, e.g. "Perth,Western Australia,Australia"
+    task.location_name = (location || 'Australia' /* city-agnostic fallback — was hardcoded Perth */).replace(/,\s+/g, ',');
+  }
   const resp = await fetch('https://api.dataforseo.com/v3/serp/google/organic/live/advanced', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
     body: JSON.stringify([task]),
+    signal: AbortSignal.timeout(60000),
   });
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`DataForSEO SERP error ${resp.status}: ${text.substring(0, 200)}`);
   }
   const data = await resp.json();
-  const allItems = data.tasks?.[0]?.result?.[0]?.items || [];
+  // Task-level errors arrive with HTTP 200 and no results. Returning [] here made "the API rejected
+  // our location" look identical to "this site ranks for nothing" — the same silent-zero bug that
+  // once made a whole grid scan find nothing for $0. Fail loudly instead.
+  const dfsTask = data.tasks?.[0];
+  if (dfsTask && dfsTask.status_code && dfsTask.status_code !== 20000) {
+    throw new Error(`DataForSEO task ${dfsTask.status_code}: ${dfsTask.status_message} (location: ${task.location_name || task.location_coordinate})`);
+  }
+  const allItems = dfsTask?.result?.[0]?.items || [];
   // Split into organic results and local pack (maps)
   const organic_results = allItems
     .filter(i => i.type === 'organic')
@@ -12332,17 +12345,39 @@ function cleanHost(url) {
   return (url || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
 }
 
-// Resolve a competitor business NAME to its website domain via SerpAPI (local pack → knowledge graph →
-// first non-aggregator organic result). Used when Maps grid scans captured the name but not the site.
+// Resolve a competitor business NAME to its website domain. Used when Maps grid scans captured the
+// name but not the site.
+//
+// Was SerpAPI (local pack → knowledge_graph → first organic). DataForSEO returns no `knowledge_graph`,
+// so that middle step is replaced by a Maps lookup, which is actually a better source for a local
+// business: it returns the business's own listed website rather than whatever Google decided to
+// panel. Order is now: Maps listing → local pack in the organic SERP → first non-aggregator organic.
 async function resolveCompetitorWebsite(name, locationHint, ownDomain) {
+  const usable = (h) => h && h.includes('.') && h !== ownDomain && !COMP_SKIP_HOST.test(h);
+  const query = `${name} ${locationHint || ''}`.trim();
+
+  // 1. Maps — the business's own listed website.
   try {
-    const data = await serpApiSearch({ engine: 'google', q: `${name} ${locationHint || ''}`.trim(), gl: 'au', hl: 'en', num: 5 });
-    const lp = data?.local_results?.places || (Array.isArray(data?.local_results) ? data.local_results : []);
-    for (const p of lp) { const h = cleanHost(p.website); if (h && h.includes('.') && h !== ownDomain && !COMP_SKIP_HOST.test(h)) return h; }
-    const kg = cleanHost(data?.knowledge_graph?.website);
-    if (kg && kg.includes('.') && kg !== ownDomain && !COMP_SKIP_HOST.test(kg)) return kg;
-    for (const o of (data?.organic_results || [])) { const h = cleanHost(o.link); if (h && h.includes('.') && h !== ownDomain && !COMP_SKIP_HOST.test(h)) return h; }
-  } catch (e) {}
+    const maps = await dataForSeoMaps({ keyword: query, location: locationHint || 'Australia', depth: 5 });
+    for (const p of (maps?.local_results || [])) {
+      const h = cleanHost(p.website || p.domain);
+      if (usable(h)) return h;
+    }
+  } catch (e) { /* fall through to organic */ }
+
+  // 2. Organic SERP — local pack first, then the first real result.
+  try {
+    const data = await dataForSeoSerp({ keyword: query, location: locationHint || 'Australia', depth: 5 });
+    for (const p of (data?.local_results?.places || [])) {
+      const h = cleanHost(p.website || p.domain);
+      if (usable(h)) return h;
+    }
+    for (const o of (data?.organic_results || [])) {
+      const h = cleanHost(o.link || o.domain);
+      if (usable(h)) return h;
+    }
+  } catch (e) { /* unresolved */ }
+
   return null;
 }
 
@@ -12386,9 +12421,12 @@ async function discoverCompetitorDomains(projectId, project, resolve = true, pre
   } catch (e) {}
   // 2. Players Handshake
   try {
-    const hs = await pool.query(`SELECT data FROM audits WHERE project_id=$1 AND pillar='handshake' ORDER BY created_at DESC LIMIT 1`, [projectId]);
-    for (const c of (hs.rows[0]?.data?.competitors || [])) ingest(c.name, c.website || c.gbp?.website, (c.appearances || 0) + (c.dominance || 0), 'handshake');
-  } catch (e) {}
+    // The audits table has no `data` column — it is `audit_data`. This query threw every single time
+    // and the empty catch below swallowed it, so this competitor source has never once contributed.
+    const hs = await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='handshake' ORDER BY created_at DESC LIMIT 1`, [projectId]);
+    const hsData = hs.rows[0]?.audit_data || {};
+    for (const c of (hsData.competitors || [])) ingest(c.name, c.website || c.gbp?.website, (c.appearances || 0) + (c.dominance || 0), 'handshake');
+  } catch (e) { console.log('[competitors] handshake source skipped:', e.message); }
   // 3. Organic SERP competitors (from saved SERP analyses) — the domains actually ranking for our keywords.
   //    Weighted by ranking position (higher rank = stronger) and how often they appear across keywords.
   try {
@@ -17892,33 +17930,56 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     // search pages echo the business name even with no real listing). So we verify EVERY directory with a
     // Google "site:" search — an indexed page on that directory for this business is reliable proof of a listing.
     // The HTTP pass above is kept only to extract NAP details (name/phone/address) when a listing is confirmed.
-    if (SERPAPI_KEY) {
+    if (DATAFORSEO_AUTH) {
       const dirUrlByName = Object.fromEntries(
         AUSTRALIAN_DIRECTORIES.map(d => [d.name, (d.url || '').replace(/^https?:\/\//, '').replace(/\/$/, '')])
       );
-      console.log(`[citations] Google-verifying ${results.length} directories via SerpAPI site: search`);
-      for (const r of results) {
-        // GBP connection comes straight from Project Settings — already authoritative, don't override it.
-        if (r.name === 'Google Business Profile' && r.status === 'listed') continue;
-        const site = dirUrlByName[r.name];
-        if (!site) continue;
+
+      // CONTROL QUERY — do not skip this.
+      // A "no results" answer is only meaningful if the provider actually honours the `site:`
+      // operator. If it doesn't, every directory would come back empty and the loop below would
+      // demote all of them to not_listed AND null their saved listing_url — silently destroying a
+      // client's real citation record. So first run a bare `site:<directory>` that MUST return
+      // results. If it comes back empty, the operator isn't working: skip verification entirely and
+      // keep the HTTP-derived statuses.
+      let siteOperatorWorks = false;
+      const controlSite = dirUrlByName['Yellow Pages'] || dirUrlByName['True Local'] || Object.values(dirUrlByName).find(Boolean);
+      if (controlSite) {
         try {
-          const sr = await serpApiSearch({ engine: 'google', q: `site:${site} "${businessName}"`, gl: 'au', hl: 'en', num: 5 });
-          const org = sr.organic_results || [];
-          const hit = org.find(o => (o.link || '').includes(site) && htmlContainsBiz((o.title || '') + ' ' + (o.snippet || '')));
-          if (hit) {
-            r.status = 'listed';
-            r.listing_url = hit.link;
-            r.notes = 'Verified in Google index';
-            if (!r.found_name) r.found_name = (hit.title || '').split(/[|\-–—]/)[0].trim();
-          } else {
-            r.status = 'not_listed';
-            r.notes = 'Not in Google index for this directory';
-            r.listing_url = null;
-          }
+          const control = await dataForSeoSerp({ keyword: `site:${controlSite}`, location: 'Australia', depth: 5 });
+          siteOperatorWorks = (control.organic_results || []).length > 0;
         } catch (e) {
-          console.log(`[citations] Google verify failed for ${r.name}: ${e.message}`);
-          // Leave the HTTP-derived status as-is if SerpAPI errors
+          console.log(`[citations] site: control query failed: ${e.message}`);
+        }
+      }
+
+      if (!siteOperatorWorks) {
+        console.warn('[citations] SKIPPING Google verification — the site: control query returned nothing, so a "not found" cannot be trusted. Keeping directory-fetch results.');
+      } else {
+        console.log(`[citations] Google-verifying ${results.length} directories via DataForSEO site: search`);
+        for (const r of results) {
+          // GBP connection comes straight from Project Settings — already authoritative, don't override it.
+          if (r.name === 'Google Business Profile' && r.status === 'listed') continue;
+          const site = dirUrlByName[r.name];
+          if (!site) continue;
+          try {
+            const sr = await dataForSeoSerp({ keyword: `site:${site} "${businessName}"`, location: 'Australia', depth: 5 });
+            const org = sr.organic_results || [];
+            const hit = org.find(o => (o.link || '').includes(site) && htmlContainsBiz((o.title || '') + ' ' + (o.snippet || '')));
+            if (hit) {
+              r.status = 'listed';
+              r.listing_url = hit.link;
+              r.notes = 'Verified in Google index';
+              if (!r.found_name) r.found_name = (hit.title || '').split(/[|\-–—]/)[0].trim();
+            } else {
+              r.status = 'not_listed';
+              r.notes = 'Not in Google index for this directory';
+              r.listing_url = null;
+            }
+          } catch (e) {
+            console.log(`[citations] Google verify failed for ${r.name}: ${e.message}`);
+            // Leave the HTTP-derived status as-is when the lookup errors — never demote on an error.
+          }
         }
       }
     }
@@ -44724,9 +44785,12 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
     const resolvedLoc = resolveDataForSeoLocation(project.location);
     console.log(`[rank-sync] Starting sync for ${kwRes.rows.length} keywords, provider="${provider}", domain="${domain}", businessName="${businessName}", project.location="${project.location}", resolved="${resolvedLoc}"`);
 
-    // Resolve GPS for SerpAPI — use project location suburb GPS or service area center
+    // Resolve the project's GPS centre — suburb match first, then service areas.
+    // This used to run only when provider==='serpapi'. With SerpAPI retired that condition is never
+    // true, which would have left projectGps null and silently dropped GPS precision from BOTH the
+    // organic query and the deep-maps fallback. It applies to every provider now.
     let projectGps = null;
-    if (provider === 'serpapi') {
+    {
       const locLower = (project.location || '').toLowerCase().trim();
       // Try exact suburb match first
       const locParts = locLower.split(/[,\s]+/);
@@ -44745,7 +44809,7 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
           if (SUBURB_GPS[areaLower]) { projectGps = SUBURB_GPS[areaLower]; break; }
         }
       }
-      console.log(`[rank-sync] SerpAPI GPS: projectGps=${projectGps ? `${projectGps.lat},${projectGps.lng}` : 'none (will use location text)'}`);
+      console.log(`[rank-sync] GPS centre: ${projectGps ? `${projectGps.lat},${projectGps.lng}` : 'none (will use location text)'}`);
     }
 
     const results = [];
@@ -44816,9 +44880,13 @@ app.post('/api/projects/:projectId/rank-tracking/sync', async (req, res) => {
                 return await dataForSeoSerp({ keyword: query, location: resolvedLoc, depth: 30, device });
               }
             }
-            // DataForSEO city-level
-            if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using DataForSEO location "${resolvedLoc}"`);
-            return await dataForSeoSerp({ keyword: query, location: resolvedLoc, depth: 30, device });
+            // DataForSEO. Use GPS when we resolved a suburb centre — that is suburb-level targeting,
+            // which is what the old "SerpAPI (GPS)" option existed for. Falls back to city-level text.
+            const kwGps = gps || projectGps;
+            if (idx < 3) console.log(`[rank-sync] "${query}" (${device}) using DataForSEO ${kwGps ? `GPS ${kwGps.lat},${kwGps.lng}` : `location "${resolvedLoc}"`}`);
+            return kwGps
+              ? await dataForSeoSerp({ keyword: query, depth: 30, device, lat: kwGps.lat, lng: kwGps.lng })
+              : await dataForSeoSerp({ keyword: query, location: resolvedLoc, depth: 30, device });
           };
           const data = await doSearch('desktop');
           if (idx === 0) console.log(`[rank-sync] First keyword "${query}" response keys:`, Object.keys(data));

@@ -622,10 +622,29 @@ have logged a `high` system issue forever once it was removed — now checks `DA
   ($0.004) — every quoted estimate was ~2.5× the real cost. `gbp_audit` and `handshake` likewise.
 - Frontend: "SerpAPI (GPS)" removed from the 3 provider dropdowns; stale SerpAPI copy updated.
 
-**Phase 3+ — NOT done.** Suburb-level organic GPS (`dataForSeoSerp` is `location_name` only — DataForSEO
-does support `location_coordinate`, needs adding); re-verify the Citations/NAP `site:` pass on DataForSEO
-before trusting it (the checker purges saved listings based on it); `resolveCompetitorWebsite` needs a
-re-parse (DataForSEO has no `knowledge_graph`); keyword-research autocomplete has no DataForSEO helper yet.
+**Phase 3 — the parts that needed real work (done).**
+- `dataForSeoSerp` now accepts `lat`/`lng` → `location_coordinate`, so suburb-level organic targeting
+  survives SerpAPI's removal (that precision was the only reason to keep the "SerpAPI (GPS)" option).
+  It also **throws on a non-20000 task status** — it used to return `[]`, making "the API rejected our
+  location" identical to "this site ranks for nothing" — and has a 60s timeout.
+- **rank-sync GPS block was gated on `provider === 'serpapi'`**, which phase 2 made permanently false.
+  Left unfixed it would have silently dropped GPS from both the organic query AND the deep-maps
+  fallback. Now runs for every provider, and the organic query uses GPS when a suburb centre resolves.
+- `resolveCompetitorWebsite` re-parsed: was local pack → `knowledge_graph` → organic. DataForSEO has no
+  `knowledge_graph`, so it is now Maps listing → local pack → organic. Maps is a better source anyway —
+  it returns the business's own listed website.
+- **Competitor source #2 had never worked.** `SELECT data FROM audits` — the column is `audit_data`.
+  It threw on every call and an empty `catch {}` swallowed it, so Handshake never once contributed to
+  competitor discovery. Fixed, and the catch now logs.
+- Citations/NAP `site:` pass moved to DataForSEO **with a control query**: a bare `site:<directory>`
+  that must return results before any directory is demoted. Without it, a provider that ignored `site:`
+  would return empty for all 25 directories and the loop would mark every one `not_listed` AND null its
+  saved `listing_url` — destroying a client's citation record. Verified live against the API:
+  `site:yellowpages.com.au "Plumbdog"` → 5 correct listings; quoted phrases work. The empty result for
+  a business that isn't listed is a true negative, not a provider quirk.
+
+**Still NOT done:** keyword-research autocomplete has no DataForSEO helper (guarded by `if (SERPAPI_KEY)`,
+fails soft); AI Search / AI Overview is still SerpAPI and is a rebuild, not a swap.
 
 **Verification tooling:** `~/.cowork-to-code-bridge/scripts/v5_verify.sh` runs `node --check server.js` AND
 Babel-parses the JSX in `public/index.html` — a JSX syntax error white-screens the app and `node --check`
