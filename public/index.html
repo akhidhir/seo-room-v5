@@ -32176,7 +32176,10 @@
       const [loading, setLoading] = useState(true);
       const [sel, setSel] = useState(null);
       const [openSub, setOpenSub] = useState(null); // "zi-si" of the expanded suburb win-plan
-      const [posSource, setPosSource] = useState('tracked'); // 'tracked' (rank check at suburb) | 'grid' (grid scan)
+      // Default to the GRID source. Rank tracking searches a location NAME (city-level) and so gives
+      // different numbers to the grid scan and to Smart Map Ranking — defaulting to it made the pages
+      // look like they contradicted each other. Grid is the shared method, so it is the default.
+      const [posSource, setPosSource] = useState('grid'); // 'grid' (GPS grid scan) | 'tracked' (city-level name)
       // Return the suburb view for the selected source, falling back to the hybrid default fields.
       const subView = (s) => {
         const v = posSource === 'grid' ? s.grid : s.tracked;
@@ -32383,6 +32386,7 @@
                     <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>
                         <i className="fas fa-location-dot" style={{ marginRight: 6, color: '#4ade80' }} />By suburb
+                        <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 6 }}>· "{sel.keyword}" from GPS</span>
                       </div>
                       {subsLoading && <div style={{ fontSize: 12, color: 'var(--text3)' }}>Working it out…</div>}
                       {!subsLoading && subs && subs.error && <div style={{ fontSize: 12, color: '#ef4444' }}>{subs.error}</div>}
@@ -32513,7 +32517,7 @@
                 <span style={{ fontSize: 15, fontWeight: 800 }}><i className="fas fa-location-dot" style={{ marginRight: 8, color: '#4ade80' }} />Suburb coverage & opportunities — by distance</span>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: 0, border: '1px solid var(--border)', borderRadius: 999, overflow: 'hidden' }}>
                   {[['tracked', 'Rank tracking'], ['grid', 'Grid scan']].map(([k, label]) => (
-                    <button key={k} onClick={() => setPosSource(k)} title={k === 'tracked' ? 'Position checked at the suburb itself (more precise, more frequent)' : 'Best position from the grid scan across the area'}
+                    <button key={k} onClick={() => setPosSource(k)} title={k === 'tracked' ? 'From rank tracking — one search per keyword using a location NAME (city-level). Will not match the grid scan or Smart Map Ranking.' : 'From the grid scan — the bare keyword searched from GPS points. Same method as Smart Map Ranking, so the numbers agree.'}
                       style={{ padding: '4px 12px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', border: 'none', background: posSource === k ? 'var(--accent)' : 'transparent', color: posSource === k ? '#fff' : 'var(--text3)' }}>{label}</button>
                   ))}
                 </div>
@@ -33054,12 +33058,12 @@
                 <div style={{ flex: '1 1 200px' }}>
                   <label className="form-label" style={{ fontSize: 12 }}>Keyword 1 <span style={{ color: 'var(--text3)', fontWeight: 400 }}>+ suburb</span></label>
                   <input className="form-input" value={kw1} onChange={e => setKw1(e.target.value)} placeholder="plumber" disabled={checkingKw} />
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>searches "{(kw1 || 'plumber').trim()} Cashmere", "{(kw1 || 'plumber').trim()} Joyner", …</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>searches "{(kw1 || 'plumber').trim()}" from a GPS point at each suburb</div>
                 </div>
                 <div style={{ flex: '1 1 200px' }}>
                   <label className="form-label" style={{ fontSize: 12 }}>Keyword 2 <span style={{ color: 'var(--text3)', fontWeight: 400 }}>+ suburb</span></label>
                   <input className="form-input" value={kw2} onChange={e => setKw2(e.target.value)} placeholder="emergency plumber" disabled={checkingKw} />
-                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>the suburb name is added automatically for each row</div>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>same method as a grid scan, so these match Ranking Orbits</div>
                 </div>
                 <button className="btn" onClick={saveKeywords} disabled={checkingKw} style={{ height: 38 }} title="Save these two keywords for this project">
                   {kwSaved ? <><i className="fas fa-check" style={{ marginRight: 6, color: '#22c55e' }}></i>Saved</> : <><i className="fas fa-floppy-disk" style={{ marginRight: 6 }}></i>Save</>}
@@ -33083,6 +33087,7 @@
                             return `"${kw}": ${n}/${(result.suburbs || []).length} measured`;
                           }).join(' · ')}
                           {' '}· "absent" = measured, you're not in the results. "—" = not measured yet.
+                    {' '}Measured the same way as a grid scan (bare keyword, GPS at the suburb), so these agree with Ranking Orbits.
                         </>
                       : <span style={{ color: '#f59e0b' }}>Type the two keywords a customer would search — e.g. <b>plumber</b> and <b>emergency plumber</b> — then Save. The suburb is added to each automatically.</span>}
                   </div>

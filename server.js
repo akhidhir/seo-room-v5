@@ -938,6 +938,11 @@ async function initDb() {
     `).catch(() => {});
     // Two tracked keywords per project for the Smart Map Ranking columns (e.g. plumber, emergency plumber)
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS smart_keywords JSONB DEFAULT '[]'::jsonb`).catch(() => {});
+    // How the position was searched. 'generic' = the bare keyword from a GPS point at the suburb —
+    // the same thing a grid scan does, so Smart Map and Ranking Orbits agree. Older rows were measured
+    // as "<keyword> <suburb>", a different search with legitimately different results; they are left
+    // in place but ignored on read so the two pages can never quietly disagree.
+    await client.query(`ALTER TABLE smart_kw_rank_cache ADD COLUMN IF NOT EXISTS query_mode TEXT DEFAULT 'suburb'`).catch(() => {});
 
     // Smart Map Ranking — cached competitor counts per suburb (so they persist + aren't re-paid each survey)
     await client.query(`
@@ -44250,8 +44255,11 @@ app.post('/api/projects/:projectId/smart-map-ranking', async (req, res) => {
     const kwRankMap = {}; // suburbKey -> { keyword -> { position, measured, checked_at } }
     if (smartKeywords.length) {
       try {
+        // Only 'generic' rows — see the query_mode comment in initDb. Rows measured the old way
+        // ("<keyword> <suburb>") are a different search and would disagree with the grid scan.
         const rows = (await pool.query(
-          'SELECT keyword, suburb, position, measured, checked_at FROM smart_kw_rank_cache WHERE project_id=$1 AND keyword = ANY($2)',
+          `SELECT keyword, suburb, position, measured, checked_at FROM smart_kw_rank_cache
+           WHERE project_id=$1 AND keyword = ANY($2) AND COALESCE(query_mode,'suburb')='generic'`,
           [req.params.projectId, smartKeywords]
         )).rows;
         for (const r of rows) {
@@ -44487,7 +44495,8 @@ app.post('/api/projects/:projectId/smart-map-ranking/keywords/run', async (req, 
       if (!force) {
         try {
           const rows = (await pool.query(
-            `SELECT keyword, suburb FROM smart_kw_rank_cache WHERE project_id=$1 AND keyword = ANY($2) AND checked_at > NOW() - INTERVAL '30 days'`,
+            `SELECT keyword, suburb FROM smart_kw_rank_cache WHERE project_id=$1 AND keyword = ANY($2)
+               AND checked_at > NOW() - INTERVAL '30 days' AND COALESCE(query_mode,'suburb')='generic'`,
             [projectId, keywords]
           )).rows;
           for (const r of rows) fresh[`${r.keyword}|${r.suburb}`] = true;
@@ -44500,7 +44509,11 @@ app.post('/api/projects/:projectId/smart-map-ranking/keywords/run', async (req, 
           if (fresh[`${kw}|${sk}`]) { job.checked++; continue; }
           let position = null, measured = false;
           try {
-            const data = await dataForSeoMaps({ keyword: `${kw} ${s.suburb}`, lat: s.lat, lng: s.lng, depth: 20 });
+            // The BARE keyword from a GPS point at the suburb — exactly what a grid scan measures, so
+            // these columns reconcile with Ranking Orbits and Maps Rankings. Appending the suburb
+            // ("plumber Cashmere") is a different Google search: generic queries are proximity-driven,
+            // suburb-named ones pull in businesses from much further out, and the two disagree by design.
+            const data = await dataForSeoMaps({ keyword: kw, lat: s.lat, lng: s.lng, depth: 20 });
             const places = data.local_results || [];
             measured = true; // the lookup succeeded — absence from the list is a real "not ranking"
             for (let idx = 0; idx < places.length; idx++) {
@@ -44515,9 +44528,9 @@ app.post('/api/projects/:projectId/smart-map-ranking/keywords/run', async (req, 
           if (measured) {
             try {
               await pool.query(
-                `INSERT INTO smart_kw_rank_cache (project_id, keyword, suburb, position, measured, checked_at)
-                 VALUES ($1,$2,$3,$4,TRUE,NOW())
-                 ON CONFLICT (project_id, keyword, suburb) DO UPDATE SET position=$4, measured=TRUE, checked_at=NOW()`,
+                `INSERT INTO smart_kw_rank_cache (project_id, keyword, suburb, position, measured, checked_at, query_mode)
+                 VALUES ($1,$2,$3,$4,TRUE,NOW(),'generic')
+                 ON CONFLICT (project_id, keyword, suburb) DO UPDATE SET position=$4, measured=TRUE, checked_at=NOW(), query_mode='generic'`,
                 [projectId, kw, sk, position]
               );
             } catch (e) { console.log('[smart-kw] cache write failed:', e.message); }
