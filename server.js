@@ -48555,10 +48555,10 @@ app.get('/report/:token', async (req, res) => {
     <div class="kpi"><div class="v">${g.ctr != null ? num(g.ctr, 1) + '%' : '—'}</div><div class="l">CTR</div></div>
     <div class="kpi"><div class="v">${num(g.avgPosition, 1)}</div><div class="l">Avg Position</div>${delta(g.avgPosition, pg.avgPosition, true)}</div>
   </div></div>
-  ${d.mapsRankings ? `<div class="card"><h2>Google Maps Visibility</h2><div class="grid">
+  ${d.mapsRankings ? `<div class="card"><h2>Google Maps Visibility${d.mapsRankings.measuredAt ? ` <span style="font-weight:400;font-size:12px;color:#6b7280">· measured ${new Date(d.mapsRankings.measuredAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</span>` : ''}</h2><div class="grid">
     <div class="kpi"><div class="v">${d.mapsRankings.avgArp != null ? num(d.mapsRankings.avgArp, 1) : '—'}</div><div class="l">Avg Map Rank${d.mapsRankings.rankedKeywords != null && d.mapsRankings.totalKeywords ? ` (${d.mapsRankings.rankedKeywords}/${d.mapsRankings.totalKeywords} ranking)` : ''}</div>${d.mapsRankings.avgArp != null ? delta(d.mapsRankings.avgArp, d.previousMonth?.mapsRankings?.avgArp, true) : ''}</div>
     <div class="kpi"><div class="v">${d.mapsRankings.avgVisibility != null ? num(d.mapsRankings.avgVisibility, 1) + '%' : '—'}</div><div class="l">Top-3 Visibility</div>${delta(d.mapsRankings.avgVisibility, d.previousMonth?.mapsRankings?.avgVisibility)}</div>
-    ${d.pageSpeedStats ? `<div class="kpi"><div class="v">${num(d.pageSpeedStats.avgPerformance)}</div><div class="l">Avg Site Speed Score</div>${delta(d.pageSpeedStats.avgPerformance, d.previousMonth?.pageSpeedStats?.avgPerformance)}</div>` : ''}
+    ${d.pageSpeedStats ? `<div class="kpi"><div class="v">${num(d.pageSpeedStats.avgPerformance)}</div><div class="l">Avg Site Speed Score${d.pageSpeedStats.partial ? ` (${d.pageSpeedStats.totalPages} of ${d.pageSpeedStats.pagesAttempted} pages)` : ''}</div>${delta(d.pageSpeedStats.avgPerformance, d.previousMonth?.pageSpeedStats?.avgPerformance)}</div>` : ''}
     ${d.onPageStats ? `<div class="kpi"><div class="v">${num(d.onPageStats.avgScore)}%</div><div class="l">On-Page SEO Score</div>${delta(d.onPageStats.avgScore, d.previousMonth?.onPageStats?.avgScore)}</div>` : ''}
   </div></div>` : ''}
   ${wc && wc.total_changes > 0 ? `<div class="card"><h2>Work Completed This Month</h2>
@@ -48592,9 +48592,12 @@ async function buildMonthlyReportFor(projectId, userId) {
     const monthLabel = now.toLocaleDateString('en-AU', { year: 'numeric', month: 'long' });
 
     // 1. Maps Rankings — from grid_scans (most accurate) + rank_tracking
+    // BOUNDED TO 90 DAYS. Unbounded, a scan from months ago appeared in this month's client report
+    // with no date on it — the client reads it as current. Nothing older than a quarter is "this month".
     const gridRes = await pool.query(
       `SELECT keyword, arp, atrp, solv, found_in, data_points, grid_size, competitors, scanned_at
-       FROM grid_scans WHERE project_id=$1 ORDER BY scanned_at DESC`,
+       FROM grid_scans WHERE project_id=$1 AND scanned_at >= NOW() - INTERVAL '90 days'
+       ORDER BY scanned_at DESC`,
       [projectId]
     );
     // Latest scan per keyword
@@ -48693,6 +48696,8 @@ async function buildMonthlyReportFor(projectId, userId) {
       // How many keywords the average rank is actually based on — so "Avg Map Rank 3.2" can be read
       // honestly when only 2 of 20 keywords rank at all.
       rankedKeywords: rankedKeywordCount,
+      // When these figures were actually measured, so the client isn't shown a stale scan as current.
+      measuredAt: gridEntries.length ? gridEntries.map(r => r.scanned_at).filter(Boolean).sort().slice(-1)[0] || null : null,
       avgVisibility: avgSolv != null ? parseFloat(avgSolv.toFixed(1)) : null,
       comparedTo,
       serpChange: serpChangeFinal,
@@ -48885,10 +48890,14 @@ async function buildMonthlyReportFor(projectId, userId) {
     try {
       // Prefer a completed scan, but fall back to a 'failed' one's PARTIAL results — on throttled hosts a full
       // scan often ends 'failed' while some pages still got scored, and those are worth showing.
-      const psRes = await pool.query(`SELECT audit_data FROM audits WHERE project_id=$1 AND pillar='speed' AND status IN ('completed','failed') AND audit_data IS NOT NULL ORDER BY (status='completed') DESC, completed_at DESC NULLS LAST, started_at DESC LIMIT 1`, [projectId]);
-      const ad = psRes.rows[0]?.audit_data;
+      // Bounded to 90 days for the same reason as the grid scans — an old scan presented in this
+      // month's report reads as current to the client.
+      const psRes = await pool.query(`SELECT audit_data, status, completed_at, started_at FROM audits WHERE project_id=$1 AND pillar='speed' AND status IN ('completed','failed') AND audit_data IS NOT NULL AND COALESCE(completed_at, started_at) >= NOW() - INTERVAL '90 days' ORDER BY (status='completed') DESC, completed_at DESC NULLS LAST, started_at DESC LIMIT 1`, [projectId]);
+      const row = psRes.rows[0];
+      const ad = row?.audit_data;
       const parsed = typeof ad === 'string' ? JSON.parse(ad || '{}') : (ad || {});
-      const psData = Array.isArray(parsed.results) ? parsed.results.filter(p => p && !p.error && p.performance_score != null) : [];
+      const all = Array.isArray(parsed.results) ? parsed.results : [];
+      const psData = all.filter(p => p && !p.error && p.performance_score != null);
       if (psData.length > 0) {
         const avgOf = (key) => { const v = psData.map(p => p[key]).filter(s => s != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null; };
         const perf = psData.map(p => p.performance_score).filter(s => s != null);
@@ -48901,6 +48910,11 @@ async function buildMonthlyReportFor(projectId, userId) {
           needsImprovement: perf.filter(s => s >= 50 && s < 90).length,
           poor: perf.filter(s => s < 50).length,
           totalPages: psData.length,
+          // A scan that died partway still gets shown (those scores are real), but it must be
+          // LABELLED — averaging 6 of 50 pages and calling it "the site's speed" is not honest.
+          measuredAt: row?.completed_at || row?.started_at || null,
+          partial: row?.status === 'failed' || (all.length > psData.length),
+          pagesAttempted: all.length || psData.length,
         };
       }
     } catch (e) { /* skip */ }
