@@ -42661,7 +42661,10 @@ app.get('/api/projects/:projectId/maps-orbits/keyword-suburbs', async (req, res)
     res.json({
       keyword, scanned: true, scannedAt: g ? g.scanned_at : null,
       reachKm: Math.round(reach * 10) / 10,
-      gridPoints: pts.length,
+      pointCount: pts.length,
+      gridSize: g ? g.grid_size : null,
+      // Raw measured points, so the page can draw the same heatmap Maps Rankings uses.
+      gridPoints: pts.map(p => ({ row: p.row, col: p.col, position: p.position || p.pos || null, found: !!p.found, error: p.error || null })),
       ranking: suburbs.filter(s => s.position != null).length,
       total: suburbs.length,
       suburbs,
@@ -42700,7 +42703,10 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         }
         if (p.found && pos && (bestPos === null || pos < bestPos)) bestPos = pos;
       }
-      reachByKw.set(g.keyword.toLowerCase().trim(), { reach_km: reach, best_position: bestPos, arp: g.arp, scanned_at: g.scanned_at });
+      // `reach` stays null when the business never placed top-10 at any point. That is NOT the same
+      // as "never scanned" — the UI used to show both as "not grid-scanned yet", which told you to go
+      // run a scan that had already run and found a real gap. Record that the scan happened.
+      reachByKw.set(g.keyword.toLowerCase().trim(), { reach_km: reach, best_position: bestPos, arp: g.arp, scanned_at: g.scanned_at, scanned: true, points: pts.length });
     }
 
     // Volume map from discovery cache (SERP + Maps lists)
@@ -42731,6 +42737,8 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         reach_km: g?.reach_km != null ? Math.round(g.reach_km * 10) / 10 : null,
         best_position: g?.best_position || null,
         has_grid: !!g, scanned_at: g?.scanned_at || null,
+        // Distinguishes "never scanned" from "scanned, ranked nowhere in the top 10".
+        grid_scanned: !!g?.scanned, grid_point_count: g?.points || 0,
       };
     });
 

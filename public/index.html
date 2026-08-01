@@ -32188,6 +32188,7 @@
       const [subs, setSubs] = useState(null);       // { keyword, suburbs:[...] } | { error } | null
       const [subsLoading, setSubsLoading] = useState(false);
       const [showAllSubs, setShowAllSubs] = useState(false);
+      const [kwFilter, setKwFilter] = useState('');
       useEffect(() => {
         if (!sel || !project?.id) { setSubs(null); return; }
         let stale = false;
@@ -32359,15 +32360,52 @@
                   </g>
                 </svg>
               </div>
+              {/* Keyword list — always available, so you don't have to hunt for a dot to click. */}
+              {!sel && (
+                <div style={{ position: 'absolute', top: 16, right: 60, width: 280, background: 'rgba(20,22,34,0.95)', border: '1px solid var(--border)', borderRadius: 12, padding: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+                  <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 8 }}>
+                    <i className="fas fa-list" style={{ marginRight: 8, color: '#4ade80' }} />Keywords
+                  </div>
+                  <input value={kwFilter} onChange={e => setKwFilter(e.target.value)} placeholder="Filter…"
+                    style={{ width: '100%', padding: '6px 10px', marginBottom: 8, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }} />
+                  <div style={{ maxHeight: 460, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    {orbs
+                      .filter(o => !kwFilter.trim() || o.keyword.toLowerCase().includes(kwFilter.trim().toLowerCase()))
+                      .sort((a, b) => (a.maps_position || a.best_position || 99) - (b.maps_position || b.best_position || 99))
+                      .slice(0, 200)
+                      .map((o, i) => {
+                        const pos = o.maps_position || o.best_position;
+                        return (
+                          <div key={i} onClick={() => setSel(o)} title={o.grid_scanned ? 'Grid-scanned — click for the map' : 'Not grid-scanned yet'}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 6px', borderRadius: 4, cursor: 'pointer' }}>
+                            <span style={{ minWidth: 26, fontWeight: 700, color: pos == null ? 'var(--text3)' : pos <= 3 ? '#4ade80' : pos <= 10 ? '#f59e0b' : '#94a3b8' }}>{pos ? '#' + pos : '—'}</span>
+                            <span style={{ flex: 1, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
+                            {o.grid_scanned && <i className="fas fa-border-all" style={{ fontSize: 9, color: '#4ade80', opacity: 0.7 }} />}
+                          </div>
+                        );
+                      })}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 8, lineHeight: 1.4 }}>
+                    Click one to see its map and suburb positions. <i className="fas fa-border-all" style={{ fontSize: 9, color: '#4ade80' }} /> = grid-scanned.
+                  </div>
+                </div>
+              )}
+
               {/* Detail — floating overlay so the chart can be full-width */}
-              <div style={{ position: 'absolute', top: 16, right: 60, width: 280, pointerEvents: 'none' }}>
+              <div style={{ position: 'absolute', top: 16, right: 60, width: sel ? 620 : 280, pointerEvents: 'none' }}>
                 {sel ? (
                   <div style={{ background: 'rgba(20,22,34,0.95)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, pointerEvents: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
-                    <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>{sel.keyword}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <div style={{ fontWeight: 800, fontSize: 16, flex: 1 }}>{sel.keyword}</div>
+                      <button onClick={() => setSel(null)} title="Back to the keyword list"
+                        style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text3)', cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>
+                        <i className="fas fa-arrow-left" style={{ marginRight: 5 }} />All keywords
+                      </button>
+                    </div>
                     <div style={{ fontSize: 13, lineHeight: 2 }}>
                       <div><span style={{ color: 'var(--text3)' }}>Origin: </span>{sel.origin === 'discovered' ? '✨ Discovered quick-win' : '🤝 Agreed with client'}</div>
                       <div><span style={{ color: 'var(--text3)' }}>Status: </span>{sel.tracked === false ? 'not tracked yet' : 'tracked'}</div>
-                      <div><span style={{ color: 'var(--text3)' }}>Proven reach: </span>{sel.reach_km != null ? `${sel.reach_km} km` : 'not grid-scanned yet'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>Proven reach: </span>{sel.reach_km != null ? `${sel.reach_km} km` : (sel.grid_scanned ? <span style={{ color: '#ef4444' }}>scanned — not in the top 10 anywhere</span> : 'not grid-scanned yet')}</div>
                       <div><span style={{ color: 'var(--text3)' }}>{sel.tracked === false ? 'Found at scan point: ' : 'Best grid position: '}</span>{sel.best_position ? `#${sel.best_position}` : '—'}</div>
                       {sel.tracked !== false && <div><span style={{ color: 'var(--text3)' }}>Tracked position: </span>{sel.maps_position ? `#${sel.maps_position} (${sel.location})` : '—'}</div>}
                       <div><span style={{ color: 'var(--text3)' }}>Search volume: </span>{sel.volume ? sel.volume.toLocaleString() + '/mo' : 'unknown'}</div>
@@ -32390,6 +32428,14 @@
                           <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>
                             ranking in {subs.ranking} of {subs.total} · measured within {subs.reachKm}km of a scan point
                           </div>
+                          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                          {/* The map: same heatmap Maps Rankings draws, from the same measured points. */}
+                          {subs.gridPoints?.length > 0 && (
+                            <div style={{ flexShrink: 0 }}>
+                              <GridHeatmap gridPoints={subs.gridPoints} gridSize={subs.gridSize || Math.round(Math.sqrt(subs.gridPoints.length))} keyword={sel.keyword} location={''} />
+                            </div>
+                          )}
+                          <div style={{ flex: 1, minWidth: 200 }}>
                           <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                             {(showAllSubs ? subs.suburbs : subs.suburbs.slice(0, 12)).map((s, si) => (
                               <div key={si} title={s.source === 'measured' ? 'Measured directly at this suburb' : `Nearest scan point was ${s.pointKm}km away`}
@@ -32409,6 +32455,8 @@
                           )}
                           <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6, lineHeight: 1.4 }}>
                             "—" means measured near there and you didn't appear.
+                          </div>
+                          </div>
                           </div>
                         </>
                       )}
