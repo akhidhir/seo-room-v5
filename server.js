@@ -42926,8 +42926,20 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
               const S = s.suburb.replace(/\b\w/g, c => c.toUpperCase());
               const hp = hasPageFor(s.suburb);
               const variant = (pos) => { const wp = winPlan(s.suburb, pos, hp); return { position: pos, ranked: pos != null, win_stage: wp.stage, win_steps: wp.steps }; };
+              // Compass bearing from the business to the suburb, so the chart can place it in the
+              // right DIRECTION as well as at the right distance. Sending a bearing rather than raw
+              // coordinates keeps the payload free of exact locations, same as the suburb rows elsewhere.
+              const sg = SUBURB_GPS[s.suburb];
+              let bearing = null;
+              if (sg && bizGps) {
+                const toRad = (d) => d * Math.PI / 180;
+                const φ1 = toRad(bizGps.lat), φ2 = toRad(sg.lat), Δλ = toRad(sg.lng - bizGps.lng);
+                const y = Math.sin(Δλ) * Math.cos(φ2);
+                const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+                bearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+              }
               return {
-                suburb: S, km: s.km, has_page: hp,
+                suburb: S, km: s.km, has_page: hp, bearing,
                 // Default (hybrid) fields kept for backward-compat; UI can toggle tracked/grid.
                 ranked: s.ranked, best_position: s.best_position, win_stage: variant(s.best_position).win_stage, win_steps: variant(s.best_position).win_steps,
                 tracked: variant(s.tpos),
