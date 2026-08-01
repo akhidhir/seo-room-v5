@@ -32376,7 +32376,15 @@
                     <div style={{ fontSize: 13, lineHeight: 2 }}>
                       <div><span style={{ color: 'var(--text3)' }}>Origin: </span>{sel.origin === 'discovered' ? '✨ Discovered quick-win' : '🤝 Agreed with client'}</div>
                       <div><span style={{ color: 'var(--text3)' }}>Status: </span>{sel.tracked === false ? 'not tracked yet' : 'tracked'}</div>
-                      <div><span style={{ color: 'var(--text3)' }}>Proven reach: </span>{sel.reach_km != null ? `${sel.reach_km} km` : 'not grid-scanned yet'}</div>
+                      <div><span style={{ color: 'var(--text3)' }}>Reach: </span>{
+                        sel.reach_km != null ? `${sel.reach_km} km`
+                        : sel.sparse ? <span style={{ color: '#f59e0b' }}>too patchy to call</span>
+                        : sel.grid_scanned ? <span style={{ color: '#ef4444' }}>scanned — not top 10 anywhere</span>
+                        : 'not grid-scanned yet'
+                      }</div>
+                      {sel.grid_scanned && <div><span style={{ color: 'var(--text3)' }}>Coverage: </span><span style={{ color: sel.coverage >= 50 ? '#4ade80' : sel.coverage >= 20 ? '#f59e0b' : '#ef4444' }}>found at {sel.found_points} of {sel.grid_point_count} points ({sel.coverage}%)</span></div>}
+                      {sel.arp != null && <div><span style={{ color: 'var(--text3)' }}>Avg of found points: </span>{sel.arp} <span style={{ color: 'var(--text3)', fontSize: 11 }}>(blanks not counted)</span></div>}
+                      {sel.scanned_at && <div><span style={{ color: 'var(--text3)' }}>Scanned: </span>{new Date(sel.scanned_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</div>}
                       <div><span style={{ color: 'var(--text3)' }}>{sel.tracked === false ? 'Found at scan point: ' : 'Best grid position: '}</span>{sel.best_position ? `#${sel.best_position}` : '—'}</div>
                       {sel.tracked !== false && <div><span style={{ color: 'var(--text3)' }}>Tracked position: </span>{sel.maps_position ? `#${sel.maps_position} (${sel.location})` : '—'}</div>}
                       <div><span style={{ color: 'var(--text3)' }}>Search volume: </span>{sel.volume ? sel.volume.toLocaleString() + '/mo' : 'unknown'}</div>
@@ -32450,16 +32458,20 @@
             <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-key" style={{ marginRight: 8, color: '#60a5fa' }} />Keywords by proven reach</div>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>
-              Grouped by how far out each keyword still holds a top-10 Maps spot, measured by grid scan.
-              "best #2" is your best position anywhere on that grid — not your position at that distance.
+              Grouped by how far out each keyword still holds a top-10 Maps spot. "best #2" is your best
+              position anywhere on that grid — not your position at that distance — and the % is how much
+              of the grid you actually appeared on. A strong "best" on a low % means one good spot and a
+              lot of blanks. Reach is only quoted when you were found on at least a fifth of the points.
               {unmeasuredOrbs.length > 0 && ` ${unmeasuredOrbs.length} keyword${unmeasuredOrbs.length === 1 ? ' has' : 's have'} no grid scan, so ${unmeasuredOrbs.length === 1 ? 'it sits' : 'they sit'} in their own group rather than a distance they were never measured against.`}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
               {zoneBuckets.map((z, zi) => (
                 <div key={zi} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: ['#4ade80', '#2dd4bf', '#60a5fa', '#94a3b8'][zi] }} />
-                    <span style={{ fontWeight: 800, fontSize: 14 }} title="How far from your business this keyword still holds a top-10 Maps spot, measured by grid scan">Reach {z.lo}–{z.hi === 23 ? '20+' : z.hi} km</span>
+                    {/* Colours run weakest→strongest. They used to run the other way, so the SHORTEST
+                        reach wore the green dot and read as the best result. */}
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: ['#94a3b8', '#60a5fa', '#2dd4bf', '#4ade80'][zi] }} />
+                    <span style={{ fontWeight: 800, fontSize: 14 }} title="How far from your business this keyword still holds a top-10 Maps spot. Only counted when the scan found you at a fifth or more of its points — otherwise it is one lucky hit, not reach.">Reach {z.lo}–{z.hi === 23 ? '20+' : z.hi} km</span>
                     <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{z.items.length} keyword{z.items.length !== 1 ? 's' : ''}</span>
                   </div>
                   {z.items.length === 0 ? (
@@ -32471,7 +32483,8 @@
                         return (
                         <div key={oi} onClick={() => setSel(o)} title={bp ? `Best position anywhere on the grid: #${bp}. Reach ${o.reach_km}km.` : ''} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
                           {bp && <span style={{ fontSize: 10, fontWeight: 700, color: bp <= 3 ? '#4ade80' : bp <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 40 }}>best #{bp}</span>}
-                          <span style={{ color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
+                          <span style={{ flex: 1, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
+                          {o.coverage != null && <span title={`Found at ${o.found_points} of ${o.grid_point_count} measured points`} style={{ fontSize: 10, color: o.coverage >= 50 ? '#4ade80' : o.coverage >= 20 ? '#f59e0b' : '#ef4444' }}>{o.coverage}%</span>}
                         </div>
                         );
                       })}

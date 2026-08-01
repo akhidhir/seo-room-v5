@@ -42695,17 +42695,34 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       if (g.center_lat == null) continue;
       const center = { lat: g.center_lat, lng: g.center_lng };
       const pts = typeof g.grid_points === 'string' ? JSON.parse(g.grid_points) : (g.grid_points || []);
-      let reach = null, bestPos = null;
+      let reach = null, bestPos = null, foundPts = 0, totalPts = 0;
       for (const p of pts) {
         if (!p || p.lat == null) continue;
+        totalPts++;
         const pos = p.position || p.pos;
+        if (p.found) foundPts++;
         if (p.found && pos && pos <= 10) {
           const d = havKm(center, { lat: p.lat, lng: p.lng });
           if (reach === null || d > reach) reach = d;
         }
         if (p.found && pos && (bestPos === null || pos < bestPos)) bestPos = pos;
       }
-      reachByKw.set(g.keyword.toLowerCase().trim(), { reach_km: reach, best_position: bestPos, arp: g.arp, scanned_at: g.scanned_at });
+      // REACH ONLY COUNTS IF THE COVERAGE IS REAL.
+      // Reach is a MAXIMUM — the furthest single point where we appeared. On a sparse scan (found at
+      // 3 of 25 points) one lucky hit 12km out produced "proven reach 10–15km" while the business was
+      // invisible at the other 22 points. That reads as strength and is the opposite of the truth.
+      // Below a fifth of the grid there is no reach worth quoting; the keyword is reported as sparse
+      // instead, with the coverage shown so the blanks stop being invisible.
+      const coverage = totalPts ? foundPts / totalPts : 0;
+      const MIN_COVERAGE = 0.2;
+      const sparse = totalPts > 0 && coverage < MIN_COVERAGE;
+      if (sparse) reach = null;
+      reachByKw.set(g.keyword.toLowerCase().trim(), {
+        reach_km: reach, best_position: bestPos, arp: g.arp, scanned_at: g.scanned_at,
+        points: totalPts, found_points: foundPts,
+        coverage: totalPts ? Math.round(coverage * 100) : null,
+        sparse,
+      });
     }
 
     // Volume map from discovery cache (SERP + Maps lists)
@@ -42736,6 +42753,14 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         reach_km: g?.reach_km != null ? Math.round(g.reach_km * 10) / 10 : null,
         best_position: g?.best_position || null,
         has_grid: !!g, scanned_at: g?.scanned_at || null,
+        // "Scanned" is not the same as "ranks nowhere" — keep them distinct.
+        grid_scanned: !!g, grid_point_count: g?.points || 0,
+        // Coverage is the honest headline: found at N of M measured points. A strong best_position on
+        // low coverage means one good spot and a lot of blanks — the opposite of strength.
+        found_points: g?.found_points ?? null,
+        coverage: g?.coverage ?? null,
+        sparse: !!g?.sparse,
+        arp: g?.arp != null ? Math.round(Number(g.arp) * 10) / 10 : null,
       };
     });
 
