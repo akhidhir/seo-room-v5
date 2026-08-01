@@ -42811,11 +42811,29 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       // Business centre: find the FIRST known suburb anywhere in the location string. A full street
       // address ("8 A King William Street, Bayswater, Perth 6053") has the suburb in the MIDDLE, so
       // taking split(',')[0] misses it — scan every comma-part, and the whole string as a fallback.
+      // Suburb coordinates come from the FULL ABS dataset (~15k suburbs) first, falling back to the
+      // hand-maintained SUBURB_GPS list only when the dataset can't resolve a name.
+      // SUBURB_GPS is ~336 entries, mostly Perth, and its interstate values are approximations — it
+      // placed Warner 1.6km from Cashmere when the real gap is ~5km, which threw every distance,
+      // every distance bucket, and the ranked/opportunity counts for Brisbane clients. It also acted
+      // as a filter: a suburb missing from those 336 never appeared at all, reading as "no
+      // opportunity" when it had simply never been considered.
+      await loadAuSuburbs().catch(() => {});
+      const suburbGpsFor = (name) => {
+        const key = normSuburbKey(name);
+        if (!key) return null;
+        const rec = geocodeSuburbText(`${name} ${project.location || ''}`) || geocodeSuburbText(name);
+        if (rec && rec.lat != null) return { lat: rec.lat, lng: rec.lng, source: 'abs' };
+        if (SUBURB_GPS[key]) return { ...SUBURB_GPS[key], source: 'legacy' };
+        return null;
+      };
+
       const subNames = Object.keys(SUBURB_GPS).filter(s => s.length > 3).sort((a, b) => b.length - a.length);
       const locLc = (project.location || '').toLowerCase();
       let bizGps = null;
       const parts = locLc.split(',').map(p => p.replace(/[0-9]/g, '').trim()).filter(Boolean);
-      for (const p of parts) { if (SUBURB_GPS[p]) { bizGps = SUBURB_GPS[p]; break; } }
+      for (const p of parts) { const g = suburbGpsFor(p); if (g) { bizGps = g; break; } }
+      if (!bizGps) { const g = suburbGpsFor(project.location || ''); if (g) bizGps = g; }
       if (!bizGps) { for (const sub of subNames) { if (new RegExp(`\\b${sub}\\b`).test(locLc)) { bizGps = SUBURB_GPS[sub]; break; } } }
       if (bizGps) {
         // Which suburbs do we already RANK in? Track TWO sources so the UI can toggle:
@@ -42841,7 +42859,9 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
              ORDER BY LOWER(location), LOWER(keyword), scanned_at DESC`, [projectId])).rows;
           for (const r of subGrids) {
             const key = normLoc(r.location);
-            if (!key || !SUBURB_GPS[key]) continue;
+            // Was gated on SUBURB_GPS, so a grid scan centred on a suburb missing from those 336
+            // entries was silently discarded — a real measurement thrown away.
+            if (!key) continue;
             const arp = Math.round(Number(r.arp) * 10) / 10;
             if (!(arp > 0)) continue;
             if (!rankedSubG.has(key) || arp < rankedSubG.get(key)) rankedSubG.set(key, arp);
@@ -42852,11 +42872,14 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         // The FULL universe of suburbs = the project's service areas (from GBP). Every one is either
         // a suburb we rank in, or an OPPORTUNITY we don't yet — that's the growth map.
         const allSubs = new Map(); // suburb -> { km, ranked, best_position }
+        const subGpsCache = {};
         const addSub = (name) => {
           const s = name.toLowerCase().split(',')[0].replace(/\b(qld|wa|nsw|vic|sa|tas|nt|act)\b/g, '').replace(/[0-9]/g, '').replace(/\s+/g, ' ').trim();
-          if (!s || !SUBURB_GPS[s] || allSubs.has(s)) return;
-          const km = Math.round(havKm(bizGps, SUBURB_GPS[s]) * 10) / 10;
-          allSubs.set(s, { suburb: s, km, ranked: rankedSub.has(s), best_position: rankedSub.has(s) ? rankedSub.get(s) : null, tpos: rankedSubT.get(s) ?? null, gpos: rankedSubG.get(s) ?? null });
+          if (!s || allSubs.has(s)) return;
+          const g = subGpsCache[s] !== undefined ? subGpsCache[s] : (subGpsCache[s] = suburbGpsFor(s));
+          if (!g) return; // genuinely unresolvable — better to omit than place it at a guessed point
+          const km = Math.round(havKm(bizGps, g) * 10) / 10;
+          allSubs.set(s, { suburb: s, km, gps: g, ranked: rankedSub.has(s), best_position: rankedSub.has(s) ? rankedSub.get(s) : null, tpos: rankedSubT.get(s) ?? null, gpos: rankedSubG.get(s) ?? null });
         };
         for (const a of (Array.isArray(project.service_areas) ? project.service_areas : [])) addSub(typeof a === 'string' ? a : (a.name || ''));
         for (const s of rankedSub.keys()) addSub(s); // include any ranked suburb even if not in service areas
@@ -42929,7 +42952,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
               // Compass bearing from the business to the suburb, so the chart can place it in the
               // right DIRECTION as well as at the right distance. Sending a bearing rather than raw
               // coordinates keeps the payload free of exact locations, same as the suburb rows elsewhere.
-              const sg = SUBURB_GPS[s.suburb];
+              const sg = s.gps || SUBURB_GPS[s.suburb];
               let bearing = null;
               if (sg && bizGps) {
                 const toRad = (d) => d * Math.PI / 180;
