@@ -32236,10 +32236,16 @@
         const y = C + orbitR * Math.sin(ang);
         return { ...o, km: finalKm, orbitR, x, y, dim: o.reach_km == null };
       });
-      // Group keywords into distance zones for the side table. Pull the suburb out of the keyword
-      // where possible (the part that isn't a generic service word).
+      // Group by PROVEN REACH — how far out the keyword still holds a top-10 spot, measured by a grid
+      // scan. Only grid-scanned keywords have a real distance; for the rest `km` is a layout device
+      // (derived from position, or an even spread) that exists purely so the dots don't pile up in the
+      // middle. Bucketing those under a kilometre heading presented spacing as measurement, so they
+      // now go in their own group instead.
       const ZONES = [{ lo: 0, hi: 5 }, { lo: 5, hi: 10 }, { lo: 10, hi: 15 }, { lo: 15, hi: 23 }];
-      const zoneBuckets = ZONES.map(z => ({ ...z, items: orbs.filter(o => o.km > z.lo && o.km <= z.hi).sort((a, b) => (a.maps_position || 99) - (b.maps_position || 99)) }));
+      const measuredOrbs = orbs.filter(o => o.reach_km != null);
+      const unmeasuredOrbs = orbs.filter(o => o.reach_km == null);
+      const byBestPos = (a, b) => ((a.maps_position || a.best_position || 99) - (b.maps_position || b.best_position || 99));
+      const zoneBuckets = ZONES.map(z => ({ ...z, items: measuredOrbs.filter(o => o.km > z.lo && o.km <= z.hi).sort(byBestPos) }));
       // RENDER BUDGET — the constellation rotates continuously, so every extra dot is repainted on
       // every frame forever. Discovery can return hundreds of keyword variants; animating them all
       // freezes weaker machines (blank/frozen page). Cap what we DRAW to the most meaningful dots
@@ -32438,30 +32444,65 @@
           {/* ZONE TABLE — keywords grouped by rank-proxy distance (shown first, above suburbs) */}
           {!loading && orbs.length > 0 && (
             <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 12 }}><i className="fas fa-key" style={{ marginRight: 8, color: '#60a5fa' }} />Keywords by ranking strength</div>
+            <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-key" style={{ marginRight: 8, color: '#60a5fa' }} />Keywords by proven reach</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>
+              Grouped by how far out each keyword still holds a top-10 Maps spot, measured by grid scan.
+              "best #2" is your best position anywhere on that grid — not your position at that distance.
+              {unmeasuredOrbs.length > 0 && ` ${unmeasuredOrbs.length} keyword${unmeasuredOrbs.length === 1 ? ' has' : 's have'} no grid scan, so ${unmeasuredOrbs.length === 1 ? 'it sits' : 'they sit'} in their own group rather than a distance they were never measured against.`}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
               {zoneBuckets.map((z, zi) => (
                 <div key={zi} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                     <span style={{ width: 10, height: 10, borderRadius: '50%', background: ['#4ade80', '#2dd4bf', '#60a5fa', '#94a3b8'][zi] }} />
-                    <span style={{ fontWeight: 800, fontSize: 14 }}>{z.lo}–{z.hi === 23 ? '20+' : z.hi} km</span>
+                    <span style={{ fontWeight: 800, fontSize: 14 }} title="How far from your business this keyword still holds a top-10 Maps spot, measured by grid scan">Reach {z.lo}–{z.hi === 23 ? '20+' : z.hi} km</span>
                     <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{z.items.length} keyword{z.items.length !== 1 ? 's' : ''}</span>
                   </div>
                   {z.items.length === 0 ? (
                     <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>None in this zone</div>
                   ) : (
                     <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {z.items.slice(0, 40).map((o, oi) => (
-                        <div key={oi} onClick={() => setSel(o)} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
-                          {o.maps_position && <span style={{ fontSize: 10, fontWeight: 700, color: o.maps_position <= 3 ? '#4ade80' : o.maps_position <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 24 }}>#{o.maps_position}</span>}
+                      {z.items.slice(0, 40).map((o, oi) => {
+                        const bp = o.maps_position || o.best_position;
+                        return (
+                        <div key={oi} onClick={() => setSel(o)} title={bp ? `Best position anywhere on the grid: #${bp}. Reach ${o.reach_km}km.` : ''} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
+                          {bp && <span style={{ fontSize: 10, fontWeight: 700, color: bp <= 3 ? '#4ade80' : bp <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 40 }}>best #{bp}</span>}
                           <span style={{ color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
                         </div>
-                      ))}
+                        );
+                      })}
                       {z.items.length > 40 && <div style={{ fontSize: 11, color: 'var(--text3)', paddingLeft: 6 }}>+{z.items.length - 40} more</div>}
                     </div>
                   )}
                 </div>
               ))}
+
+              {/* Keywords with no grid scan — no measured reach, so they get their own group rather
+                  than being filed under a kilometre heading they were never measured against. */}
+              {unmeasuredOrbs.length > 0 && (
+                <div style={{ background: 'var(--card)', border: '1px dashed var(--border)', borderRadius: 10, padding: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#64748b' }} />
+                    <span style={{ fontWeight: 800, fontSize: 14 }} title="No grid scan, so there is no measured reach for these">Not measured yet</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{unmeasuredOrbs.length} keyword{unmeasuredOrbs.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {[...unmeasuredOrbs].sort(byBestPos).slice(0, 40).map((o, oi) => {
+                      const bp = o.maps_position || o.best_position;
+                      return (
+                        <div key={oi} onClick={() => setSel(o)} title="Not grid-scanned — its place on the chart is spacing, not distance" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
+                          {bp ? <span style={{ fontSize: 10, fontWeight: 700, color: bp <= 3 ? '#4ade80' : bp <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 40 }}>best #{bp}</span> : <span style={{ fontSize: 10, color: 'var(--text3)', minWidth: 40 }}>—</span>}
+                          <span style={{ color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
+                        </div>
+                      );
+                    })}
+                    {unmeasuredOrbs.length > 40 && <div style={{ fontSize: 11, color: 'var(--text3)', paddingLeft: 6 }}>+{unmeasuredOrbs.length - 40} more</div>}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 8, lineHeight: 1.4 }}>
+                    Grid-scan these to get a real reach. Until then their distance on the chart above is spacing only.
+                  </div>
+                </div>
+              )}
             </div>
             </div>
           )}
