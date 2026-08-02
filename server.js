@@ -465,6 +465,69 @@ async function initDb() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_history ON local_visibility_points(project_id, keyword, suburb, measured_at)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_runs_project ON local_visibility_runs(project_id, measured_at DESC)`).catch(() => {});
 
+    // ===== AI Presence (part of Local Visibility) =====
+    // Do the AI assistants name this business when someone asks who to call, and if not, which
+    // pages are they reading instead. Also a dated snapshot — AI answers are unstable between runs,
+    // so a single reading is noise and only the trend across weeks means anything.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_presence_runs (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        questions JSONB DEFAULT '[]',
+        engines JSONB DEFAULT '[]',
+        status TEXT DEFAULT 'running',
+        error TEXT,
+        answers_ok INTEGER DEFAULT 0,
+        answers_failed INTEGER DEFAULT 0,
+        api_calls INTEGER DEFAULT 0,
+        cost NUMERIC(10,4) DEFAULT 0,
+        measured_at TIMESTAMPTZ DEFAULT NOW(),
+        finished_at TIMESTAMPTZ
+      )
+    `).catch(() => {});
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_presence_answers (
+        id SERIAL PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES ai_presence_runs(id) ON DELETE CASCADE,
+        project_id INTEGER NOT NULL,
+        question TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        model TEXT,
+        answered BOOLEAN DEFAULT FALSE,
+        answer_text TEXT,
+        we_named BOOLEAN DEFAULT FALSE,
+        we_order INTEGER,
+        named JSONB DEFAULT '[]',
+        citations JSONB DEFAULT '[]',
+        has_citations BOOLEAN DEFAULT FALSE,
+        error TEXT,
+        measured_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+
+    // The pages the AI actually read. This is the gap: if the client is missing from the pages the
+    // model quotes, that is a concrete, checkable to-do list rather than a guess about "authority".
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_presence_sources (
+        id SERIAL PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES ai_presence_runs(id) ON DELETE CASCADE,
+        project_id INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT,
+        cited_count INTEGER DEFAULT 1,
+        checked BOOLEAN DEFAULT FALSE,
+        we_present BOOLEAN,
+        competitors_present JSONB DEFAULT '[]',
+        source_type TEXT,
+        error TEXT,
+        checked_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_aip_answers_run ON ai_presence_answers(run_id)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_aip_sources_run ON ai_presence_sources(run_id)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_aip_runs_project ON ai_presence_runs(project_id, measured_at DESC)`).catch(() => {});
+
     // Clarity metrics (Microsoft Clarity user behaviour data)
     await client.query(`
       CREATE TABLE IF NOT EXISTS clarity_metrics (
@@ -9201,6 +9264,67 @@ function lvEligibleSuburbs({ centerLat, centerLng, radiusKm, minPopulation, cent
   return { suburbs: kept, skipped };
 }
 
+// ===================== AI Presence gap helpers =====================
+
+function aipNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+
+// Is this business named in this block of text? Deliberately strict: an exact normalised-name
+// match, or every significant word present. "Plumbing" alone must never count as a mention.
+function aipNamedIn(text, businessName) {
+  const hay = aipNorm(text);
+  const name = aipNorm(businessName);
+  if (!hay || !name) return -1;
+  let idx = hay.indexOf(name);
+  if (idx >= 0) return idx;
+  const generic = new Set(['plumbing', 'plumber', 'gas', 'and', 'the', 'services', 'service', 'group',
+    'electrical', 'electrician', 'pty', 'ltd', 'co', 'company', 'solutions', 'perth', 'wa', 'australia']);
+  const words = name.split(' ').filter(w => w.length > 2);
+  const distinctive = words.filter(w => !generic.has(w));
+  if (!distinctive.length) return -1;                      // nothing but generic words — unmatchable
+  if (!distinctive.every(w => hay.includes(w))) return -1;
+  return hay.indexOf(distinctive[0]);
+}
+
+// Does the client's own domain own this cited page? A competitor's own suburb landing page being
+// cited is the single most actionable finding, so it is labelled rather than lumped in.
+function aipSourceType(url, ourDomain, competitorDomains) {
+  let host = '';
+  try { host = new URL(url).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { return 'unknown'; }
+  if (ourDomain && (host === ourDomain || host.endsWith('.' + ourDomain))) return 'our site';
+  for (const d of (competitorDomains || [])) {
+    if (d && (host === d || host.endsWith('.' + d))) return 'competitor site';
+  }
+  if (/facebook|instagram|reddit|linkedin/.test(host)) return 'social';
+  if (/yellowpages|hipages|oneflare|truelocal|serviceseeking|localsearch|yelp|service\.com\.au|wordofmouth|productreview|airtasker/.test(host)) return 'directory';
+  return 'article or listicle';
+}
+
+// Fetch a cited page and check who is named on it. Free — but blockable, so a fetch failure is
+// recorded as "couldn't check" and never as "not listed".
+async function aipCheckSource(url, ourName, competitorNames) {
+  try {
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0; +https://theseoroom.com.au)' },
+      signal: AbortSignal.timeout(15000),
+      redirect: 'follow',
+    });
+    if (!resp.ok) return { checked: false, error: `Page returned ${resp.status}` };
+    const html = await resp.text();
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ');
+    return {
+      checked: true,
+      we_present: aipNamedIn(text, ourName) >= 0,
+      competitors_present: (competitorNames || []).filter(n => aipNamedIn(text, n) >= 0),
+      error: null,
+    };
+  } catch (e) {
+    return { checked: false, error: e.name === 'TimeoutError' ? 'Page did not respond in time' : e.message };
+  }
+}
+
 // Perth suburb GPS coordinates for distance calculation
 const SUBURB_GPS = {
   'leeming': { lat: -32.0728, lng: 115.8640 }, 'cannington': { lat: -32.0170, lng: 115.9340 },
@@ -11978,6 +12102,97 @@ async function seoditySerpSearch({ query, location, device }) {
 }
 
 // ==================== DATAFORSEO HELPERS ====================
+
+// ===== AI Presence helpers (LOCAL-VISIBILITY-SPEC.md) =====
+// Models are pinned and every one has web search ON. Without web search the model answers from
+// training data, gives no sources, and cannot be checked — which would make the gap analysis a
+// guess. Verified against v3/ai_optimization/{llm}/llm_responses/models on 2 Aug 2026.
+const AI_PRESENCE_ENGINES = {
+  chat_gpt:   { label: 'ChatGPT',    model: 'gpt-5.4-mini' },
+  gemini:     { label: 'Gemini',     model: 'gemini-3.5-flash' },
+  perplexity: { label: 'Perplexity', model: 'sonar' },
+};
+
+// Ask one assistant one question, with web search on, and return the answer plus the pages it read.
+async function dataForSeoLlmResponse({ engine, prompt }) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured');
+  const cfg = AI_PRESENCE_ENGINES[engine];
+  if (!cfg) throw new Error(`Unknown AI engine: ${engine}`);
+  const resp = await fetch(`https://api.dataforseo.com/v3/ai_optimization/${engine}/llm_responses/live`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{ user_prompt: String(prompt).slice(0, 500), model_name: cfg.model, web_search: true }]),
+    signal: AbortSignal.timeout(150000), // live mode is documented at up to 120s
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`DataForSEO LLM error ${resp.status}: ${text.substring(0, 200)}`);
+  }
+  const data = await resp.json();
+  const task = data.tasks?.[0];
+  // Throw rather than return empty. "The API refused" must never be storable as "the AI did not
+  // mention you" — that is the single most expensive class of bug in this dashboard.
+  if (task && task.status_code && task.status_code !== 20000) {
+    throw new Error(`DataForSEO LLM task ${task.status_code}: ${task.status_message}`);
+  }
+  const result = task?.result?.[0];
+  let text = '';
+  const citations = [];
+  for (const item of (result?.items || [])) {
+    for (const section of (item.sections || [])) {
+      if (section.text) text += (text ? '\n\n' : '') + section.text;
+      for (const a of (section.annotations || [])) {
+        if (a && a.url) citations.push({ title: a.title || '', url: a.url });
+      }
+    }
+  }
+  return { text, citations, model: cfg.model, cost: task?.cost || data.cost || 0 };
+}
+
+// Google's own AI answer. Parsed defensively because the AI Mode payload shape is still moving —
+// if nothing can be read out of a 20000 response the caller records it as UNANSWERED, never as
+// "the business was not mentioned".
+async function dataForSeoAiMode({ keyword, location }) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured');
+  const resp = await fetch('https://api.dataforseo.com/v3/serp/google/ai_mode/live/advanced', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{
+      keyword: String(keyword).slice(0, 700),
+      language_code: 'en',
+      location_name: (location || 'Australia').replace(/,\s+/g, ','),
+      device: 'desktop',
+    }]),
+    signal: AbortSignal.timeout(90000),
+  });
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`DataForSEO AI Mode error ${resp.status}: ${t.substring(0, 200)}`);
+  }
+  const data = await resp.json();
+  const task = data.tasks?.[0];
+  if (task && task.status_code && task.status_code !== 20000) {
+    throw new Error(`DataForSEO AI Mode task ${task.status_code}: ${task.status_message}`);
+  }
+  let text = '';
+  const citations = [];
+  const seen = new Set();
+  // Walk the payload rather than assuming a fixed path: collect every text blob and every
+  // {url,title} pair, wherever they sit.
+  const walk = (node, depth) => {
+    if (!node || depth > 8) return;
+    if (Array.isArray(node)) { node.forEach(n => walk(n, depth + 1)); return; }
+    if (typeof node !== 'object') return;
+    if (typeof node.text === 'string' && node.text.length > 20) text += (text ? '\n\n' : '') + node.text;
+    if (typeof node.url === 'string' && /^https?:\/\//.test(node.url) && !seen.has(node.url)) {
+      seen.add(node.url);
+      citations.push({ title: node.title || node.source || '', url: node.url });
+    }
+    for (const v of Object.values(node)) walk(v, depth + 1);
+  };
+  walk(task?.result, 0);
+  return { text, citations, model: 'google_ai_mode', cost: task?.cost || data.cost || 0 };
+}
 
 // DataForSEO Maps SERP — replaces serpApiSearch({ engine: 'google_maps', ... })
 // Returns normalized results matching the shape the dashboard expects
@@ -45522,9 +45737,24 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
       k.points.push({ point_index: p.point_index, measured: p.measured, position: p.position, error: p.error });
       for (const c of (p.top_results || [])) {
         if (!c.title) continue;
-        if (!k.competitors[c.title]) k.competitors[c.title] = { name: c.title, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, best: 99 };
-        k.competitors[c.title].appearances++;
-        if (c.position < k.competitors[c.title].best) k.competitors[c.title].best = c.position;
+        // Key on a normalised name. Google lists the same business twice with different casing
+        // ("Dragon plumbing and gas" / "Dragon Plumbing and Gas") and counting them as two
+        // competitors inflates the field and hides the real pattern.
+        const ck = c.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        if (!ck) continue;
+        if (!k.competitors[ck]) k.competitors[ck] = { name: c.title, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, best: 99, distance_km: null };
+        const rec = k.competitors[ck];
+        rec.appearances++;
+        if (c.position < rec.best) rec.best = c.position;
+        if (c.rating && (!rec.rating || c.rating > rec.rating)) rec.rating = c.rating;
+        if (c.reviews && c.reviews > (rec.reviews || 0)) rec.reviews = c.reviews;
+        if (c.website && !rec.website) rec.website = c.website;
+        // How far this competitor is from the suburb we measured. This is what decides winnable:
+        // losing to someone FURTHER away is fixable, losing to someone closer is geography.
+        // Service-area businesses hide their address, so this is often unknown — say so, never guess.
+        if (rec.distance_km == null && c.lat != null && c.lng != null && p.suburb_lat != null) {
+          rec.distance_km = Math.round(haversineKm(p.suburb_lat, p.suburb_lng, c.lat, c.lng) * 10) / 10;
+        }
       }
     }
 
@@ -45542,7 +45772,13 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
           worst_position: ranked.length ? Math.max(...ranked.map(p => p.position)) : null,
           points_ranked: ranked.length,
           errors: k.points.filter(p => !p.measured).map(p => p.error).filter(Boolean).slice(0, 2),
-          competitors: Object.values(k.competitors).sort((a, b) => b.appearances - a.appearances || a.best - b.best).slice(0, 5),
+          // Sorted by best position first so the list reads like a ranking, because it is one.
+          // points_measured is carried so "#1" can be shown as "#1 at 2 of 3 points" — a business
+          // that took top spot at one point out of three is not the same as one that took all three.
+          competitors: Object.values(k.competitors)
+            .map(c => ({ ...c, points_measured: measured.length }))
+            .sort((a, b) => a.best - b.best || b.appearances - a.appearances)
+            .slice(0, 6),
         };
       }
       return { suburb: s.suburb, state: s.state, postcode: s.postcode, population: s.population, distance_km: s.distance_km, keywords };
@@ -45575,6 +45811,255 @@ app.get('/api/projects/:projectId/local-visibility/runs', async (req, res) => {
       [req.params.projectId]
     )).rows;
     res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== AI PRESENCE (part of Local Visibility) ====================
+// Do the AI assistants name this business, and if not, which pages are they reading instead.
+
+const aiPresenceJobs = {};
+
+// Suggested questions. Conversational on purpose — a bare "plumber" returns a map pack, not an AI
+// answer, so measuring AI presence on bare keywords would produce a confident permanent zero.
+app.get('/api/projects/:projectId/ai-presence/suggest', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const service = (project.smart_service || project.industry || 'plumber').toLowerCase().split(/\s+and\s+|,/)[0].trim();
+    // Suburbs where we are already known to be absent are the ones worth asking about.
+    let subs = [];
+    try {
+      subs = (await pool.query(
+        `SELECT DISTINCT p.suburb, p.state, p.distance_km
+           FROM local_visibility_points p
+           JOIN local_visibility_runs r ON r.id = p.run_id
+          WHERE p.project_id=$1 AND p.measured = TRUE AND p.position IS NULL
+            AND r.measured_at = (SELECT MAX(measured_at) FROM local_visibility_runs WHERE project_id=$1 AND status='complete')
+          ORDER BY p.distance_km LIMIT 3`, [req.params.projectId])).rows;
+    } catch (e) {}
+    if (!subs.length) {
+      const geo = geocodeSuburbText(project.location || project.business_name || '');
+      if (geo) subs = [{ suburb: geo.suburb, state: geo.state }];
+    }
+    const questions = [];
+    for (const s of subs) {
+      questions.push(`Who are the best ${service}s in ${s.suburb}, ${s.state || ''}? List a few businesses.`.replace(/,\s*\?/, '?'));
+      if (questions.length === 1) questions.push(`I need an emergency ${service} in ${s.suburb} right now — which local business should I call?`);
+    }
+    if (!questions.length) questions.push(`Who are the best ${service}s near ${project.location || 'my area'}? List a few businesses.`);
+    res.json({
+      questions: questions.slice(0, 5),
+      based_on: subs.length ? 'suburbs where the last Local Visibility scan found you absent' : 'the project location',
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/ai-presence/status', (req, res) => {
+  const job = aiPresenceJobs[req.params.projectId];
+  if (!job) return res.json({ status: 'none' });
+  res.json({
+    status: job.running ? 'running' : (job.error ? 'error' : 'done'),
+    done: job.done, total: job.total, current: job.current || '',
+    ok: job.ok, failed: job.failed, run_id: job.runId || null, error: job.error || null,
+  });
+});
+
+app.post('/api/projects/:projectId/ai-presence/run', async (req, res) => {
+  try {
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
+    const { projectId } = req.params;
+    const existing = aiPresenceJobs[projectId];
+    if (existing && existing.running) return res.json({ started: false, already_running: true, done: existing.done, total: existing.total });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const questions = (Array.isArray(req.body?.questions) ? req.body.questions : [])
+      .map(q => String(q || '').trim()).filter(Boolean).slice(0, 6);
+    if (!questions.length) return res.status(400).json({ error: 'Add at least one question. Ask it the way a customer would — "who should I call for a burst pipe in Willetton" — not a bare keyword.' });
+
+    const engines = (Array.isArray(req.body?.engines) && req.body.engines.length
+      ? req.body.engines : ['chat_gpt', 'gemini', 'perplexity', 'google_ai_mode'])
+      .filter(e => e === 'google_ai_mode' || AI_PRESENCE_ENGINES[e]);
+    if (!engines.length) return res.status(400).json({ error: 'Pick at least one AI engine' });
+
+    // Competitors come from the latest Local Visibility run, so the two pages are talking about the
+    // same businesses rather than each inventing its own list.
+    let competitorNames = [];
+    try {
+      const rows = (await pool.query(
+        `SELECT p.top_results FROM local_visibility_points p
+           JOIN local_visibility_runs r ON r.id = p.run_id
+          WHERE p.project_id=$1 AND r.status='complete'
+            AND r.measured_at = (SELECT MAX(measured_at) FROM local_visibility_runs WHERE project_id=$1 AND status='complete')
+          LIMIT 500`, [projectId])).rows;
+      const counts = {};
+      for (const r of rows) for (const c of (r.top_results || [])) {
+        if (!c.title) continue;
+        const k = aipNorm(c.title);
+        if (!k) continue;
+        if (!counts[k]) counts[k] = { name: c.title, n: 0, website: c.website || '' };
+        counts[k].n++;
+        if (c.website && !counts[k].website) counts[k].website = c.website;
+      }
+      competitorNames = Object.values(counts).sort((a, b) => b.n - a.n).slice(0, 8);
+    } catch (e) { console.error('[ai-presence] competitor load failed:', e.message); }
+
+    const ourName = project.business_name || project.name || '';
+    const ourDomain = (project.domain || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+    const competitorDomains = competitorNames.map(c => {
+      try { return new URL(c.website).hostname.replace(/^www\./, '').toLowerCase(); } catch (e) { return null; }
+    }).filter(Boolean);
+
+    const runRow = (await pool.query(
+      `INSERT INTO ai_presence_runs (project_id, questions, engines, status) VALUES ($1,$2,$3,'running') RETURNING id`,
+      [projectId, JSON.stringify(questions), JSON.stringify(engines)]
+    )).rows[0];
+
+    const job = {
+      running: true, done: 0, total: questions.length * engines.length, ok: 0, failed: 0,
+      current: 'Asking…', error: null, runId: runRow.id, started_at: new Date().toISOString(),
+    };
+    aiPresenceJobs[projectId] = job;
+    res.json({ started: true, run_id: runRow.id, total: job.total });
+
+    (async () => {
+      let cost = 0, calls = 0;
+      const sourceMap = {};
+      try {
+        for (const question of questions) {
+          for (const engine of engines) {
+            const label = engine === 'google_ai_mode' ? 'Google AI' : AI_PRESENCE_ENGINES[engine].label;
+            job.current = `${label} — "${question.slice(0, 45)}…"`;
+            let row = { answered: false, text: '', citations: [], model: null, error: null };
+            try {
+              const r = engine === 'google_ai_mode'
+                ? await dataForSeoAiMode({ keyword: question, location: project.location || 'Australia' })
+                : await dataForSeoLlmResponse({ engine, prompt: question });
+              calls++;
+              cost += Number(r.cost) || 0;
+              // A 20000 response with no readable text is UNANSWERED, not an absence.
+              if (!r.text || r.text.length < 20) {
+                row.error = 'No AI answer was returned for this question (Google often shows a map pack instead of an AI answer for local searches).';
+              } else {
+                row = { answered: true, text: r.text, citations: r.citations || [], model: r.model, error: null };
+              }
+            } catch (e) {
+              row.error = e.message;
+            }
+
+            let weNamed = false, weOrder = null;
+            const named = [];
+            if (row.answered) {
+              const usIdx = aipNamedIn(row.text, ourName);
+              weNamed = usIdx >= 0;
+              if (weNamed) named.push({ name: ourName, is_us: true, at: usIdx });
+              for (const c of competitorNames) {
+                const i = aipNamedIn(row.text, c.name);
+                if (i >= 0) named.push({ name: c.name, is_us: false, at: i });
+              }
+              named.sort((a, b) => a.at - b.at);
+              if (weNamed) weOrder = named.findIndex(n => n.is_us) + 1;
+              for (const c of (row.citations || [])) {
+                const key = c.url;
+                if (!sourceMap[key]) sourceMap[key] = { url: c.url, title: c.title || '', cited_count: 0 };
+                sourceMap[key].cited_count++;
+                if (!sourceMap[key].title && c.title) sourceMap[key].title = c.title;
+              }
+              job.ok++;
+            } else {
+              job.failed++;
+            }
+
+            await pool.query(
+              `INSERT INTO ai_presence_answers
+                 (run_id, project_id, question, engine, model, answered, answer_text, we_named, we_order, named, citations, has_citations, error)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+              [runRow.id, projectId, question, engine, row.model, row.answered, (row.text || '').slice(0, 8000),
+               weNamed, weOrder, JSON.stringify(named), JSON.stringify(row.citations || []),
+               (row.citations || []).length > 0, row.error]
+            ).catch(e => console.error('[ai-presence] answer insert failed:', e.message));
+
+            job.done++;
+          }
+        }
+
+        // THE GAP: crawl every page the models quoted and see who is on it. Costs nothing.
+        const sources = Object.values(sourceMap).sort((a, b) => b.cited_count - a.cited_count).slice(0, 40);
+        job.current = `Checking the ${sources.length} pages the AI read…`;
+        for (let i = 0; i < sources.length; i += 5) {
+          const batch = sources.slice(i, i + 5);
+          const checked = await Promise.all(batch.map(async (s) => {
+            const r = await aipCheckSource(s.url, ourName, competitorNames.map(c => c.name));
+            return { ...s, ...r, source_type: aipSourceType(s.url, ourDomain, competitorDomains) };
+          }));
+          for (const s of checked) {
+            await pool.query(
+              `INSERT INTO ai_presence_sources (run_id, project_id, url, title, cited_count, checked, we_present, competitors_present, source_type, error)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+              [runRow.id, projectId, s.url, s.title, s.cited_count, s.checked,
+               s.checked ? s.we_present : null, JSON.stringify(s.competitors_present || []), s.source_type, s.error]
+            ).catch(() => {});
+          }
+        }
+      } catch (e) {
+        job.error = e.message;
+        console.error('[ai-presence] Run failed:', e.message);
+      }
+
+      job.running = false;
+      job.current = '';
+      const rounded = +cost.toFixed(4);
+      await pool.query(
+        `UPDATE ai_presence_runs SET status=$1, error=$2, answers_ok=$3, answers_failed=$4, api_calls=$5, cost=$6, finished_at=NOW() WHERE id=$7`,
+        [job.error ? 'failed' : 'complete', job.error, job.ok, job.failed, calls, rounded, runRow.id]
+      ).catch(() => {});
+      if (calls > 0) {
+        try { await logApiCost(parseInt(projectId), 'ai_presence', 'dataforseo', calls, rounded, { questions: questions.length, engines }); } catch (e) {}
+      }
+      console.log(`[ai-presence] Project ${projectId} run ${runRow.id}: ${job.ok} answered, ${job.failed} not answered, $${rounded}`);
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/ai-presence/latest', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const run = (await pool.query(
+      `SELECT * FROM ai_presence_runs WHERE project_id=$1 AND status <> 'running' ORDER BY measured_at DESC LIMIT 1`, [projectId]
+    )).rows[0];
+    if (!run) return res.json({ run: null, answers: [], sources: [] });
+
+    const answers = (await pool.query(
+      `SELECT question, engine, model, answered, answer_text, we_named, we_order, named, citations, has_citations, error
+         FROM ai_presence_answers WHERE run_id=$1 ORDER BY question, engine`, [run.id]
+    )).rows;
+    const sources = (await pool.query(
+      `SELECT url, title, cited_count, checked, we_present, competitors_present, source_type, error
+         FROM ai_presence_sources WHERE run_id=$1 ORDER BY cited_count DESC, url`, [run.id]
+    )).rows;
+
+    const answered = answers.filter(a => a.answered);
+    res.json({
+      run: {
+        id: run.id, measured_at: run.measured_at, status: run.status,
+        questions: run.questions || [], engines: run.engines || [],
+        answers_ok: run.answers_ok, answers_failed: run.answers_failed,
+        api_calls: run.api_calls, cost: run.cost, error: run.error,
+        method: 'DataForSEO AI Optimization · web search on · live',
+      },
+      summary: {
+        // Denominators are always the ANSWERED count, never the attempted count.
+        answered: answered.length,
+        attempted: answers.length,
+        named_in: answered.filter(a => a.we_named).length,
+        // Pages the AI read that a competitor is on and we are not — the actionable list.
+        missing_from: sources.filter(s => s.checked && s.we_present === false && (s.competitors_present || []).length > 0).length,
+        sources_checked: sources.filter(s => s.checked).length,
+        sources_total: sources.length,
+      },
+      answers, sources,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

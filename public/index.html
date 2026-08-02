@@ -33408,6 +33408,277 @@
       );
     }
 
+    // ============ AI PRESENCE (tab inside Local Visibility) ============
+    // Are the AI assistants naming this business, and if not, which pages are they reading instead.
+    function AiPresencePanel({ project }) {
+      const [questions, setQuestions] = useState([]);
+      const [newQ, setNewQ] = useState('');
+      const [engines, setEngines] = useState(['chat_gpt', 'gemini', 'perplexity', 'google_ai_mode']);
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [running, setRunning] = useState(false);
+      const [progress, setProgress] = useState(null);
+      const [error, setError] = useState('');
+      const [openAnswer, setOpenAnswer] = useState(null);
+      const [basedOn, setBasedOn] = useState('');
+
+      const ENGINE_LABELS = { chat_gpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_mode: 'Google AI' };
+
+      const loadLatest = async () => {
+        try {
+          const r = await api(`/projects/${project.id}/ai-presence/latest`);
+          if (r && !r.error) {
+            setData(r);
+            if (r.run && (r.run.questions || []).length) setQuestions(r.run.questions);
+            if (r.run && (r.run.engines || []).length) setEngines(r.run.engines);
+          }
+        } catch (e) {}
+        setLoading(false);
+      };
+
+      useEffect(() => {
+        (async () => {
+          await loadLatest();
+          try {
+            const st = await api(`/projects/${project.id}/ai-presence/status`);
+            if (st && st.status === 'running') { setRunning(true); setProgress(st); poll(); }
+          } catch (e) {}
+        })();
+      }, [project.id]);
+
+      const suggest = async () => {
+        setError('');
+        try {
+          const r = await api(`/projects/${project.id}/ai-presence/suggest`);
+          if (r.error) { setError(r.error); return; }
+          setQuestions(r.questions || []);
+          setBasedOn(r.based_on || '');
+        } catch (e) { setError(e.message); }
+      };
+
+      const poll = () => {
+        const tick = async () => {
+          try {
+            const st = await api(`/projects/${project.id}/ai-presence/status`);
+            if (st.status === 'running') { setProgress(st); setTimeout(tick, 3000); return; }
+            setRunning(false); setProgress(null);
+            if (st.status === 'error') { setError('Run failed: ' + (st.error || 'unknown')); return; }
+            loadLatest();
+          } catch (e) { setTimeout(tick, 5000); }
+        };
+        setTimeout(tick, 3000);
+      };
+
+      const run = async () => {
+        if (!questions.length) { setError('Add at least one question first.'); return; }
+        const calls = questions.length * engines.length;
+        if (!window.confirm(`Ask ${questions.length} question${questions.length > 1 ? 's' : ''} across ${engines.length} AI engine${engines.length > 1 ? 's' : ''} = ${calls} calls.\nEstimated cost: about $${(calls * 0.006).toFixed(2)}.\n\nThe pages each answer cites are then crawled for free.`)) return;
+        setError(''); setRunning(true); setProgress({ done: 0, total: calls });
+        try {
+          const r = await api(`/projects/${project.id}/ai-presence/run`, { method: 'POST', body: { questions, engines } });
+          if (r.error) { setError(r.error); setRunning(false); return; }
+          poll();
+        } catch (e) { setError(e.message); setRunning(false); }
+      };
+
+      const sum = data && data.summary;
+      const sources = (data && data.sources) || [];
+      // The gap: pages the AI read where a rival is named and we are not.
+      const gapSources = sources.filter(s => s.checked && s.we_present === false && (s.competitors_present || []).length > 0);
+
+      return (
+        <div>
+          {/* Setup */}
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, lineHeight: 1.6 }}>
+              Ask the way a customer would — <em>"who should I call for a burst pipe in Willetton"</em>. A bare keyword like "plumber" returns a map pack, not an AI answer, so it would read as a permanent zero.
+            </div>
+
+            {questions.map((q, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                <input className="form-input" value={q} onChange={e => { const n = [...questions]; n[i] = e.target.value; setQuestions(n); }} style={{ flex: 1, height: 34, fontSize: 13 }} />
+                <button className="btn" onClick={() => setQuestions(questions.filter((_, j) => j !== i))} style={{ height: 34, padding: '0 10px' }} title="Remove"><i className="fas fa-trash" style={{ fontSize: 12 }}></i></button>
+              </div>
+            ))}
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, marginBottom: 12 }}>
+              <input className="form-input" value={newQ} onChange={e => setNewQ(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && newQ.trim() && questions.length < 6) { setQuestions([...questions, newQ.trim()]); setNewQ(''); } }}
+                placeholder="Add a question a customer would actually ask…" style={{ flex: 1, height: 34, fontSize: 13 }} />
+              <button className="btn" onClick={() => { if (newQ.trim() && questions.length < 6) { setQuestions([...questions, newQ.trim()]); setNewQ(''); } }} style={{ height: 34 }}>Add</button>
+              <button className="btn" onClick={suggest} style={{ height: 34, borderColor: '#14b8a6', color: '#14b8a6', whiteSpace: 'nowrap' }}>
+                <i className="fas fa-lightbulb" style={{ marginRight: 5 }}></i>Suggest
+              </button>
+            </div>
+            {basedOn && <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>Suggested from {basedOn}.</div>}
+
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+              {Object.keys(ENGINE_LABELS).map(e => (
+                <label key={e} style={{ fontSize: 12.5, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={engines.includes(e)} onChange={() => setEngines(engines.includes(e) ? engines.filter(x => x !== e) : [...engines, e])} />
+                  {ENGINE_LABELS[e]}
+                </label>
+              ))}
+              <button className="btn btn-primary" onClick={run} disabled={running} style={{ height: 34, marginLeft: 'auto' }}>
+                {running ? <span className="spinner"></span> : <i className="fas fa-robot" style={{ marginRight: 6 }}></i>}
+                {running ? 'Asking…' : 'Check AI presence'}
+              </button>
+            </div>
+
+            {error && <div className="alert alert-error" style={{ marginTop: 12 }}><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+            {running && progress && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 6 }}>{progress.current || 'Asking…'} — {progress.done || 0} of {progress.total || 0}</div>
+                <div style={{ height: 6, background: 'var(--bg)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%`, background: '#14b8a6', transition: 'width 0.4s' }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {loading && <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}><span className="spinner" style={{ width: 28, height: 28 }}></span></div>}
+
+          {!loading && (!data || !data.run) && !running && (
+            <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
+              <i className="fas fa-robot" style={{ fontSize: 44, marginBottom: 14, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 15, marginBottom: 6 }}>Not checked yet</div>
+              <div style={{ fontSize: 13 }}>Press Suggest, then Check AI presence.</div>
+            </div>
+          )}
+
+          {!loading && data && data.run && (
+            <>
+              {(() => {
+                const when = new Date(data.run.measured_at);
+                const days = Math.floor((Date.now() - when.getTime()) / 86400000);
+                const col = days > 30 ? '#ef4444' : days > 14 ? '#f59e0b' : 'var(--text3)';
+                return (
+                  <div style={{ fontSize: 11.5, color: col, marginBottom: 14, lineHeight: 1.7 }}>
+                    <i className="fas fa-clock" style={{ marginRight: 5 }} />
+                    Asked {when.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {' '}({days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`})
+                    {' · '}{(data.run.engines || []).map(e => ENGINE_LABELS[e] || e).join(', ')}
+                    {' · '}{data.run.method}
+                    {' · '}{sum.answered} of {sum.attempted} questions got an AI answer
+                    {data.run.cost != null ? ` · cost $${Number(data.run.cost).toFixed(2)}` : ''}
+                  </div>
+                );
+              })()}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+                {[
+                  { label: 'Answers naming you', value: `${sum.named_in} of ${sum.answered}`, color: sum.named_in > 0 ? '#22c55e' : '#ef4444', hint: 'Out of the answers that actually came back — not out of everything attempted' },
+                  { label: 'Pages the AI read', value: sum.sources_total, color: '#14b8a6', hint: 'Unique sources cited across all answers' },
+                  { label: "Pages you're missing from", value: gapSources.length, color: gapSources.length ? '#f59e0b' : 'var(--text3)', hint: 'A competitor is named on these and you are not. This is the to-do list.' },
+                  { label: 'No AI answer', value: sum.attempted - sum.answered, color: 'var(--text3)', hint: 'Google often shows a map pack instead. Recorded as unanswered, never as absence.' },
+                ].map(s => (
+                  <div key={s.label} title={s.hint} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: s.color }}>{s.value}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* THE GAP */}
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#14b8a6', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Why they show and you don't</div>
+              {gapSources.length === 0 ? (
+                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 18, fontSize: 13, color: 'var(--text2)', marginBottom: 24 }}>
+                  {sum.sources_checked === 0
+                    ? 'None of the cited pages could be read (blocked or no sources were given), so no gap can be shown. This is not evidence that there is no gap.'
+                    : 'No page was found where a competitor is named and you are not.'}
+                </div>
+              ) : (
+                <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 24 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 10.5 }}>
+                        <th style={{ padding: '9px 10px' }}>Page the AI read</th>
+                        <th style={{ padding: '9px 10px' }}>Type</th>
+                        <th style={{ padding: '9px 10px', textAlign: 'center' }} title="How many answers quoted this page">Cited</th>
+                        <th style={{ padding: '9px 10px' }}>Rivals on it</th>
+                        <th style={{ padding: '9px 10px', textAlign: 'center' }}>You</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {gapSources.map(s => (
+                        <tr key={s.url} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '8px 10px', maxWidth: 380 }}>
+                            <a href={s.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text)', textDecoration: 'none' }}>
+                              {s.title || s.url}
+                              <i className="fas fa-arrow-up-right-from-square" style={{ fontSize: 9, marginLeft: 6, color: 'var(--text3)' }}></i>
+                            </a>
+                            <div style={{ fontSize: 10.5, color: 'var(--text3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.url}</div>
+                          </td>
+                          <td style={{ padding: '8px 10px', color: s.source_type === 'competitor site' ? '#f59e0b' : 'var(--text3)' }}>{s.source_type}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center', color: 'var(--text3)' }}>{s.cited_count}</td>
+                          <td style={{ padding: '8px 10px', color: 'var(--text2)' }}>{(s.competitors_present || []).join(', ')}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center', color: '#ef4444', fontWeight: 600 }}>not on it</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* All answers */}
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>What each AI said</div>
+              <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 20 }}>
+                {(data.answers || []).map((a, i) => {
+                  const key = a.question + '|' + a.engine;
+                  const isOpen = openAnswer === key;
+                  return (
+                    <div key={key} style={{ borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                      <div onClick={() => setOpenAnswer(isOpen ? null : key)} style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <i className={`fas fa-chevron-${isOpen ? 'down' : 'right'}`} style={{ fontSize: 9, color: 'var(--text3)' }}></i>
+                        <span style={{ fontSize: 11, color: 'var(--text3)', width: 82, flexShrink: 0 }}>{ENGINE_LABELS[a.engine] || a.engine}</span>
+                        <span style={{ fontSize: 12.5, flex: 1, color: 'var(--text2)' }}>{a.question}</span>
+                        {!a.answered
+                          ? <span style={{ fontSize: 11.5, color: 'var(--text3)' }} title={a.error || ''}>no AI answer</span>
+                          : a.we_named
+                            ? <span style={{ fontSize: 11.5, color: '#22c55e', fontWeight: 600 }}>named you{a.we_order ? ` (${a.we_order}${a.we_order === 1 ? 'st' : a.we_order === 2 ? 'nd' : a.we_order === 3 ? 'rd' : 'th'})` : ''}</span>
+                            : <span style={{ fontSize: 11.5, color: '#ef4444', fontWeight: 600 }}>did not name you</span>}
+                      </div>
+                      {isOpen && (
+                        <div style={{ padding: '0 12px 14px 44px', fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.65 }}>
+                          {!a.answered ? (
+                            <div style={{ color: '#f59e0b' }}>{a.error || 'No answer returned.'}</div>
+                          ) : (
+                            <>
+                              <div style={{ whiteSpace: 'pre-wrap', background: 'var(--bg)', padding: 12, borderRadius: 8, maxHeight: 260, overflowY: 'auto' }}>{a.answer_text}</div>
+                              {(a.named || []).length > 0 && (
+                                <div style={{ marginTop: 8, fontSize: 11.5 }}>
+                                  <span style={{ color: 'var(--text3)' }}>Businesses named, in order: </span>
+                                  {(a.named || []).map((n, j) => (
+                                    <span key={n.name} style={{ color: n.is_us ? '#22c55e' : 'var(--text2)', fontWeight: n.is_us ? 700 : 400 }}>
+                                      {j ? ', ' : ''}{n.name}{n.is_us ? ' (you)' : ''}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--text3)' }}>
+                                {a.has_citations ? `${(a.citations || []).length} sources cited` : 'No sources given — we can record who was named, but not why'}
+                                {a.model ? ` · ${a.model}` : ''}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', lineHeight: 1.7 }}>
+                AI answers change between runs, so one reading is noise. Every run is stored with its date, and the trend across weeks is the part worth acting on.
+                {sum.sources_total > sum.sources_checked && <> {sum.sources_total - sum.sources_checked} cited page{sum.sources_total - sum.sources_checked > 1 ? 's' : ''} could not be read (blocked or timed out) and {sum.sources_total - sum.sources_checked > 1 ? 'are' : 'is'} shown as unchecked, not as missing.</>}
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
     // ============ LOCAL VISIBILITY ============
     // New page. Touches nothing on Maps Rankings, Smart Map Ranking or Ranking Orbits.
     // Core rule (LOCAL-VISIBILITY-SPEC.md): every number states its source and its date.
@@ -33427,6 +33698,7 @@
       const [expanded, setExpanded] = useState(null);
       const [sortCol, setSortCol] = useState('distance_km');
       const [sortDir, setSortDir] = useState('asc');
+      const [tab, setTab] = useState('suburbs');
 
       const keywords = [kw1, kw2].map(k => (k || '').trim()).filter(Boolean);
 
@@ -33551,9 +33823,25 @@
         <div>
           <div className="page-header">
             <div className="page-title"><i className="fas fa-location-crosshairs" style={{ marginRight: 8, color: '#14b8a6' }}></i> Local Visibility</div>
-            <div className="page-subtitle">Where you actually show up on Google Maps, suburb by suburb. Measured from GPS points inside each suburb using the bare keyword — the same method as a grid scan.</div>
+            <div className="page-subtitle">Where you actually show up, suburb by suburb on Google Maps and in the AI assistants — and who is showing up instead.</div>
           </div>
 
+          {/* Tabs */}
+          <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border)', marginBottom: 18 }}>
+            {[{ id: 'suburbs', label: 'Suburbs', icon: 'fa-map-location-dot' }, { id: 'ai', label: 'AI Presence', icon: 'fa-robot' }].map(t => (
+              <div key={t.id} onClick={() => setTab(t.id)} style={{
+                padding: '9px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                color: tab === t.id ? '#14b8a6' : 'var(--text3)',
+                borderBottom: tab === t.id ? '2px solid #14b8a6' : '2px solid transparent', marginBottom: -1,
+              }}>
+                <i className={`fas ${t.icon}`} style={{ marginRight: 6 }}></i>{t.label}
+              </div>
+            ))}
+          </div>
+
+          {tab === 'ai' && <AiPresencePanel project={project} />}
+
+          {tab === 'suburbs' && <>
           {/* Controls */}
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -33740,20 +34028,38 @@
                                         {k.competitors && k.competitors.length > 0 && (
                                           <div>
                                             <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Who Google showed here instead</div>
-                                            <table style={{ width: '100%', maxWidth: 620, borderCollapse: 'collapse', fontSize: 12 }}>
+                                            <table style={{ width: '100%', maxWidth: 760, borderCollapse: 'collapse', fontSize: 12 }}>
+                                              <thead>
+                                                <tr style={{ color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase', textAlign: 'left' }}>
+                                                  <th style={{ padding: '3px 8px' }}>Best</th>
+                                                  <th style={{ padding: '3px 8px' }}>Business</th>
+                                                  <th style={{ padding: '3px 8px' }} title="How far this business is from the suburb. Further away than you and still ahead = not a distance problem.">Distance</th>
+                                                  <th style={{ padding: '3px 8px' }}>Reviews</th>
+                                                  <th style={{ padding: '3px 8px' }}>Category</th>
+                                                </tr>
+                                              </thead>
                                               <tbody>
                                                 {k.competitors.map(c => (
                                                   <tr key={c.name} style={{ borderTop: '1px solid var(--border)' }}>
-                                                    <td style={{ padding: '5px 8px', fontWeight: 600, color: posColor(c.best) }}>#{c.best}</td>
+                                                    <td style={{ padding: '5px 8px', fontWeight: 600, color: posColor(c.best), whiteSpace: 'nowrap' }}>
+                                                      #{c.best}
+                                                      {c.points_measured > 1 && <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>at {c.appearances} of {c.points_measured}</span>}
+                                                    </td>
                                                     <td style={{ padding: '5px 8px' }}>{c.name}</td>
-                                                    <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{c.rating ? `${c.rating}★` : '—'} · {c.reviews || 0} reviews</td>
+                                                    <td style={{ padding: '5px 8px', color: c.distance_km != null && c.distance_km > s.distance_km ? '#f59e0b' : 'var(--text3)', whiteSpace: 'nowrap' }}
+                                                        title={c.distance_km == null ? 'This business hides its address (service-area business), so distance cannot be measured' : c.distance_km > s.distance_km ? `Further from ${s.suburb} than you are (${s.distance_km}km) and still ahead — distance is not the reason` : `Closer to ${s.suburb} than you are (${s.distance_km}km)`}>
+                                                      {c.distance_km == null ? 'unknown' : `${c.distance_km} km`}
+                                                    </td>
+                                                    <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{c.rating ? `${c.rating}★` : '—'} · {c.reviews || 0}</td>
                                                     <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{c.type || ''}</td>
                                                   </tr>
                                                 ))}
                                               </tbody>
                                             </table>
                                             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
-                                              From the same searches, {new Date(data.run.measured_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}. Competitor comparison and winnable-gap analysis come next.
+                                              "Best" is the highest position that business reached at any point in this suburb — several can be #1 because each point is a separate search.
+                                              {' '}Amber distance = further from {s.suburb} than you are, and still ahead of you.
+                                              {' '}From the same searches, {new Date(data.run.measured_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}.
                                             </div>
                                           </div>
                                         )}
@@ -33778,6 +34084,7 @@
               </div>
             </>
           )}
+          </>}
         </div>
       );
     }
