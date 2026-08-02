@@ -33933,7 +33933,8 @@
         setDeepBusy(c.name);
         try {
           const r = await api(`/projects/${project.id}/local-visibility/deep-check`, {
-            method: 'POST', body: { name: c.name, website: c.website || '', suburb },
+            method: 'POST',
+            body: { name: c.name, website: c.website || '', suburb, category: c.type || '', lat: c.lat, lng: c.lng },
           });
           if (r.error) setError(r.error);
           else setDeep(prev => ({ ...prev, [c.name]: r }));
@@ -34057,7 +34058,11 @@
             : f.in_service_areas ? true                       // listed — true wherever it was found
             : (fromGoogle ? false : null),                    // absent from a partial list proves nothing
           you: !f ? '—' : f.in_service_areas === null ? 'none set' : f.in_service_areas ? 'yes' : (fromGoogle ? 'no' : 'not in our copy'),
-          them: 'not public',
+          // Google never publishes another business's service-area list. What we CAN tell from their
+          // profile is whether they run as a service-area business at all (no public address).
+          them: !d || !d.profile ? 'not published by Google'
+            : d.profile.address ? `has a shopfront (${d.profile.address.split(',').slice(-2).join(',').trim()})`
+            : 'service-area business, list not published',
           note: !f ? 'Checking…'
             : f.in_service_areas === null ? 'No service areas found on your synced profile or in Project Settings'
             : f.in_service_areas ? `Listed in ${ourF.service_areas_source} (${areaCount} areas)`
@@ -34073,6 +34078,63 @@
           note: !f ? 'Checking…' : f.in_reviews === null ? 'No review text stored for this project yet'
             : f.in_reviews ? 'A customer names this suburb' : 'No review mentions this suburb',
         });
+
+        // Their Google profile, from the deep check. Everything here used to read "not public".
+        const p = d && d.profile ? d.profile : null;
+        const ourF2 = (factors && factors.our) || {};
+
+        rows.push({
+          label: 'GBP description',
+          win: !p ? null : (!!ourF2.gbp_description === !!p.description ? 'same' : !!ourF2.gbp_description),
+          you: ourF2.gbp_description ? `${ourF2.gbp_description.length} chars` : (ourF2.gbp_synced ? 'none' : '—'),
+          them: !p ? 'unknown' : p.description ? `${p.description.length} chars` : 'none',
+          note: !p ? 'Use Check the rest to read their profile'
+            : !p.description && ourF2.gbp_description ? 'They have none and you do'
+            : p.description && !ourF2.gbp_description ? 'They have one and you do not'
+            : p.description ? 'You both have one' : 'Neither has one',
+        });
+
+        rows.push({
+          label: 'GBP categories',
+          win: !p ? null : (ourF2.gbp_all_categories || []).length === (p.all_categories || []).length ? 'same'
+            : (ourF2.gbp_all_categories || []).length > (p.all_categories || []).length,
+          you: (ourF2.gbp_all_categories || []).length || '—',
+          them: !p ? 'unknown' : (p.all_categories || []).length,
+          note: !p ? 'Use Check the rest' : (p.all_categories || []).length > (ourF2.gbp_all_categories || []).length
+            ? `They list ${(p.all_categories || []).join(', ')}` : 'Level or better',
+        });
+
+        rows.push({
+          label: 'GBP services listed',
+          win: !p ? null : (ourF2.gbp_services || []).length === (p.services || []).length ? 'same'
+            : (ourF2.gbp_services || []).length > (p.services || []).length,
+          you: (ourF2.gbp_services || []).length || (ourF2.gbp_synced ? '0' : '—'),
+          them: !p ? 'unknown' : (p.services || []).length,
+          note: !p ? 'Use Check the rest'
+            : (p.services || []).length > (ourF2.gbp_services || []).length
+              ? `They list ${(p.services || []).length} services on their profile, you list ${(ourF2.gbp_services || []).length}`
+              : 'Level or better',
+        });
+
+        rows.push({
+          label: 'GBP photos',
+          win: !p || ourF2.gbp_photos == null || p.photos == null ? null
+            : ourF2.gbp_photos === p.photos ? 'same' : ourF2.gbp_photos > p.photos,
+          you: ourF2.gbp_photos != null ? ourF2.gbp_photos : '—',
+          them: !p ? 'unknown' : p.photos != null ? p.photos : 'not returned',
+          note: !p ? 'Use Check the rest' : ourF2.gbp_photos == null ? 'Your photo count is not stored — sync your profile'
+            : p.photos == null ? 'Not returned for them'
+            : ourF2.gbp_photos > p.photos ? 'More than them' : `${p.photos - ourF2.gbp_photos} behind them`,
+        });
+
+        if (p && p.review_topics && Object.keys(p.review_topics).length) {
+          const tops = Object.entries(p.review_topics).sort((a, b) => b[1] - a[1]).slice(0, 5);
+          rows.push({
+            label: 'What their reviewers say', win: null,
+            you: '—', them: `${Object.keys(p.review_topics).length} themes`,
+            note: tops.map(t => `${t[0]} (${t[1]})`).join(', '),
+          });
+        }
 
         const cit = factors && factors.our ? factors.our.citations : null;
         const theirDirs = d && Array.isArray(d.directories) ? d.directories : null;

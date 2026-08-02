@@ -12423,6 +12423,41 @@ async function dataForSeoAiMode({ keyword, location }) {
   return { text, citations, model: 'google_ai_mode', cost: task?.cost || data.cost || 0 };
 }
 
+// A competitor's full Google Business Profile from DataForSEO's business listings database:
+// description, every category, their services list, photo count, claimed status, and the topics
+// their reviewers keep raising. This is a DATABASE, not a live fetch — it carries last_updated_time
+// and that date must be shown, because a profile crawled months ago is not today's profile.
+async function dataForSeoBusinessListing({ title, category, lat, lng }) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured');
+  if (lat == null || lng == null) throw new Error('No coordinates for this business, so their profile cannot be looked up');
+  const task = {
+    categories: category ? [String(category).toLowerCase().replace(/\s+/g, '_')] : undefined,
+    location_coordinate: `${lat},${lng},1`,
+    limit: 20,
+  };
+  Object.keys(task).forEach(k => task[k] === undefined && delete task[k]);
+  const resp = await fetch('https://api.dataforseo.com/v3/business_data/business_listings/search/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([task]),
+    signal: AbortSignal.timeout(45000),
+  });
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`DataForSEO business listings ${resp.status}: ${t.substring(0, 200)}`);
+  }
+  const data = await resp.json();
+  const dfsTask = data.tasks?.[0];
+  if (dfsTask && dfsTask.status_code && dfsTask.status_code !== 20000) {
+    throw new Error(`DataForSEO business listings task ${dfsTask.status_code}: ${dfsTask.status_message}`);
+  }
+  const items = dfsTask?.result?.[0]?.items || [];
+  const want = aipNorm(title);
+  const hit = items.find(i => aipNorm(i.title) === want)
+    || items.find(i => aipNorm(i.title).includes(want) || want.includes(aipNorm(i.title)));
+  return { listing: hit || null, candidates: items.length, cost: dfsTask?.cost || data.cost || 0 };
+}
+
 // DataForSEO Maps SERP — replaces serpApiSearch({ engine: 'google_maps', ... })
 // Returns normalized results matching the shape the dashboard expects
 async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
@@ -45982,7 +46017,7 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
         // competitors inflates the field and hides the real pattern.
         const ck = c.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
         if (!ck) continue;
-        if (!k.competitors[ck]) k.competitors[ck] = { name: c.title, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, best: 99, distance_km: null };
+        if (!k.competitors[ck]) k.competitors[ck] = { name: c.title, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, best: 99, distance_km: null, lat: c.lat != null ? c.lat : null, lng: c.lng != null ? c.lng : null };
         const rec = k.competitors[ck];
         rec.appearances++;
         if (c.position < rec.best) rec.best = c.position;
@@ -46169,6 +46204,12 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
         gbp_category_source: gbpCategory ? 'Google Business Profile' : (run.our_type ? 'seen in the Maps results' : null),
         gbp_all_categories: gbpAllCategories,
         gbp_synced: !!gbp,
+        // Our own side of the profile comparison, from the synced Google profile.
+        gbp_description: (gbp && gbp.description) || (rcProfile && rcProfile.profile && rcProfile.profile.description) || null,
+        gbp_services: (gbp && Array.isArray(gbp.services) ? gbp.services : []),
+        gbp_service_areas: serviceAreas,
+        gbp_photos: (gbp && gbp.photos_count != null) ? gbp.photos_count : null,
+        gbp_hours_set: !!(gbp && Array.isArray(gbp.hours) && gbp.hours.length),
       },
       rivals, suburbs,
       checked_at: new Date().toISOString(),
@@ -46198,7 +46239,40 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
     let domain = '';
     try { domain = new URL(website.startsWith('http') ? website : 'https://' + website).hostname.replace(/^www\./, ''); } catch (e) {}
 
-    const out = { name, website, suburb, page: null, directories: [], cost: 0, calls: 0, errors: [] };
+    const out = { name, website, suburb, page: null, directories: [], profile: null, cost: 0, calls: 0, errors: [] };
+
+    // 0. Their Google Business Profile — description, all categories, services, photos, claimed
+    // status, and the topics their reviewers keep raising. One call, and it fills most of the
+    // rows that previously read "not public".
+    try {
+      const b = await dataForSeoBusinessListing({
+        title: name, category: req.body?.category, lat: req.body?.lat, lng: req.body?.lng,
+      });
+      out.calls++;
+      out.cost += Number(b.cost) || 0;
+      if (b.listing) {
+        const L = b.listing;
+        out.profile = {
+          title: L.title || name,
+          description: L.description || null,
+          category: L.category || null,
+          all_categories: [L.category, ...(L.additional_categories || [])].filter(Boolean),
+          services: (L.services || []).map(x => x.title).filter(Boolean),
+          photos: L.total_photos != null ? L.total_photos : null,
+          claimed: L.is_claimed === true,
+          rating: L.rating ? L.rating.value : null,
+          reviews: L.rating ? L.rating.votes_count : null,
+          review_topics: L.place_topics || null,
+          hours_set: !!(L.work_time && L.work_time.work_hours),
+          address: L.address || null,
+          updated: L.last_updated_time || null,
+        };
+      } else {
+        out.errors.push(`Their Google profile was not found in the listings database (${b.candidates} nearby businesses checked).`);
+      }
+    } catch (e) {
+      out.errors.push(`Their profile: ${e.message}`);
+    }
 
     // 1. Their page for this suburb — ask Google rather than guessing at their site structure.
     if (domain && suburb) {
@@ -46233,7 +46307,7 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
       }
     }
 
-    out.cost = +(out.calls * API_COST_RATES.dataforseo.serp).toFixed(4);
+    out.cost = +(out.cost + (out.calls - 1) * API_COST_RATES.dataforseo.serp).toFixed(4);
     if (out.calls > 0) {
       try { await logApiCost(parseInt(projectId), 'local_visibility_deep', 'dataforseo', out.calls, out.cost, { competitor: name, suburb }); } catch (e) {}
     }
