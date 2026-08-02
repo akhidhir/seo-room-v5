@@ -46004,9 +46004,24 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
       ...rivalList.map(r => lvFetchSitemapUrls(r.website)),
     ]);
 
-    // Free signals we already hold.
-    const serviceAreas = Array.isArray(project.service_areas) ? project.service_areas
+    // Free signals we already hold. The REAL GBP profile (synced from RatingCaptain) is the source
+    // of truth for category and service areas — deriving them from whether we happened to appear in
+    // a Maps result was fragile and produced "not captured" on a profile we already hold in full.
+    let gbp = null;
+    try {
+      const row = (await pool.query(
+        `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`, [projectId])).rows[0];
+      if (row && row.config) gbp = typeof row.config === 'string' ? JSON.parse(row.config) : row.config;
+    } catch (e) {}
+    const gbpCategory = gbp && Array.isArray(gbp.categories) && gbp.categories.length ? gbp.categories[0] : null;
+    const gbpAllCategories = gbp && Array.isArray(gbp.categories) ? gbp.categories : [];
+
+    const manualAreas = Array.isArray(project.service_areas) ? project.service_areas
       : (typeof project.service_areas === 'string' ? (() => { try { return JSON.parse(project.service_areas); } catch (e) { return []; } })() : []);
+    // Prefer the areas Google actually holds over the manually typed list.
+    const gbpAreas = gbp && Array.isArray(gbp.service_areas) ? gbp.service_areas : [];
+    const serviceAreas = gbpAreas.length ? gbpAreas : manualAreas;
+    const areasSource = gbpAreas.length ? 'your Google Business Profile' : (manualAreas.length ? 'Project Settings' : null);
     let reviewText = '';
     try {
       const rc = (await pool.query(`SELECT reviews FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
@@ -46046,9 +46061,15 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
         sitemap_read: Array.isArray(ourUrls),
         pages_seen: Array.isArray(ourUrls) ? ourUrls.length : 0,
         service_areas_set: serviceAreas.length,
+        service_areas_source: areasSource,
         reviews_cached: !!reviewText && reviewText.length > 10,
         citations: cites,
-        gbp_category: run.our_type || null,
+        // From the synced Google Business Profile. Falls back to whatever the Maps run saw only if
+        // no profile is held — and says which, so a stale figure can't pass as the live one.
+        gbp_category: gbpCategory || run.our_type || null,
+        gbp_category_source: gbpCategory ? 'Google Business Profile' : (run.our_type ? 'seen in the Maps results' : null),
+        gbp_all_categories: gbpAllCategories,
+        gbp_synced: !!gbp,
       },
       rivals, suburbs,
       checked_at: new Date().toISOString(),

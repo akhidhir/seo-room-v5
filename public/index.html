@@ -33998,12 +33998,17 @@
             : run.our_rating >= theirRat ? 'Level or better' : 'Below theirs',
         });
 
+        // Ours comes from the synced Google Business Profile, not from whether we happened to turn
+        // up in this particular search.
+        const ourCat = (factors && factors.our && factors.our.gbp_category) || run.our_type || null;
+        const catSrc = factors && factors.our ? factors.our.gbp_category_source : null;
         rows.push({
           label: 'GBP main category',
-          win: !run.our_type || !c.type ? null : nrm(run.our_type) === nrm(c.type) ? 'same' : false,
-          you: run.our_type || '—', them: c.type || '—',
-          note: !run.our_type ? 'Yours not captured in this run' : !c.type ? 'Theirs not returned'
-            : nrm(run.our_type) === nrm(c.type) ? 'Same category' : 'Different category to theirs',
+          win: !ourCat || !c.type ? null : nrm(ourCat) === nrm(c.type) ? 'same' : false,
+          you: ourCat || '—', them: c.type || '—',
+          note: !ourCat ? 'No Google Business Profile synced for this project yet' : !c.type ? 'Theirs not returned'
+            : nrm(ourCat) === nrm(c.type) ? `Same category${catSrc ? ' — from ' + catSrc : ''}`
+            : `Different category to theirs${catSrc ? ' — yours from ' + catSrc : ''}`,
         });
 
         rows.push({
@@ -34018,13 +34023,15 @@
             : f.our_page ? 'You have one, they do not' : 'They have one for this suburb and you do not',
         });
 
+        const areaSrc = factors && factors.our ? factors.our.service_areas_source : null;
         rows.push({
           label: 'In your GBP service areas',
           win: !f || f.in_service_areas === null ? null : f.in_service_areas ? true : false,
           you: !f ? '—' : f.in_service_areas === null ? 'none set' : f.in_service_areas ? 'yes' : 'no',
           them: 'not public',
-          note: !f ? 'Checking…' : f.in_service_areas === null ? 'No service areas saved in Project Settings'
-            : f.in_service_areas ? 'Listed' : 'Not listed — Google is told you do not serve here',
+          note: !f ? 'Checking…' : f.in_service_areas === null ? 'No service areas found on your profile or in Project Settings'
+            : f.in_service_areas ? `Listed${areaSrc ? ' in ' + areaSrc : ''}`
+            : `Not listed${areaSrc ? ' in ' + areaSrc : ''} — Google is told you do not serve here`,
         });
 
         rows.push({
