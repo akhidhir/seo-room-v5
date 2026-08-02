@@ -405,6 +405,66 @@ async function initDb() {
       )
     `);
 
+    // ===== Local Visibility (LOCAL-VISIBILITY-SPEC.md) =====
+    // Suburb-sampled Maps measurement. Every run is an immutable DATED SNAPSHOT — rows are never
+    // updated in place, because the whole point is being able to say "on 2 Aug we were absent in
+    // Kallangur, on 30 Sep we were #7". History cannot be backfilled, so it is stored from day one
+    // even though nothing reads it yet.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS local_visibility_runs (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keywords JSONB DEFAULT '[]',
+        center_lat DOUBLE PRECISION,
+        center_lng DOUBLE PRECISION,
+        center_label TEXT,
+        center_state TEXT,
+        center_source TEXT,
+        radius_km DOUBLE PRECISION,
+        points_per_suburb INTEGER DEFAULT 3,
+        min_population INTEGER DEFAULT 0,
+        suburbs_total INTEGER DEFAULT 0,
+        lookups_attempted INTEGER DEFAULT 0,
+        lookups_measured INTEGER DEFAULT 0,
+        lookups_failed INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'running',
+        error TEXT,
+        api_calls INTEGER DEFAULT 0,
+        cost NUMERIC(10,4) DEFAULT 0,
+        measured_at TIMESTAMPTZ DEFAULT NOW(),
+        finished_at TIMESTAMPTZ
+      )
+    `).catch(() => {});
+
+    // One row per keyword × suburb × measuring point. measured=false means the lookup did not
+    // complete — that is NOT the same as "not ranking" and must never be rendered as absent.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS local_visibility_points (
+        id SERIAL PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES local_visibility_runs(id) ON DELETE CASCADE,
+        project_id INTEGER NOT NULL,
+        keyword TEXT NOT NULL,
+        suburb TEXT NOT NULL,
+        state TEXT,
+        postcode TEXT,
+        population INTEGER DEFAULT 0,
+        suburb_lat DOUBLE PRECISION,
+        suburb_lng DOUBLE PRECISION,
+        distance_km DOUBLE PRECISION,
+        point_index INTEGER DEFAULT 0,
+        point_lat DOUBLE PRECISION,
+        point_lng DOUBLE PRECISION,
+        measured BOOLEAN DEFAULT FALSE,
+        position INTEGER,
+        top_results JSONB DEFAULT '[]',
+        error TEXT,
+        measured_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_run ON local_visibility_points(run_id)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_history ON local_visibility_points(project_id, keyword, suburb, measured_at)`).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_runs_project ON local_visibility_runs(project_id, measured_at DESC)`).catch(() => {});
+
     // Clarity metrics (Microsoft Clarity user behaviour data)
     await client.query(`
       CREATE TABLE IF NOT EXISTS clarity_metrics (
@@ -9044,6 +9104,101 @@ function rankByOpportunity(suburbs, radius) {
   const highCut = Math.max(1, Math.ceil(n * 0.25)), medCut = Math.max(highCut, Math.ceil(n * 0.6));
   suburbs.forEach((s, i) => { s.rank = i + 1; s.tier = i < highCut ? 'High' : i < medCut ? 'Medium' : 'Low'; });
   return suburbs;
+}
+
+// ===================== Local Visibility helpers (LOCAL-VISIBILITY-SPEC.md) =====================
+// Suburb-sampled Maps measurement. Deliberately NOT wired into Maps Rankings, Smart Map Ranking or
+// Ranking Orbits — this is a separate page and must not change any of their numbers.
+
+// Measuring points inside one suburb. 1 = the suburb centre. 3 = centre + two offsets. 9 = a 3×3.
+// Spread is small on purpose (~1.2km): the point is to sample WITHIN the suburb, not to drift into
+// the next one, which would attribute a neighbour's result to this suburb.
+function lvSuburbPoints(lat, lng, count, spreadKm) {
+  const spread = spreadKm || 1.2;
+  const dLat = spread / 111.32;
+  const dLng = spread / (111.32 * Math.cos(lat * Math.PI / 180) || 1);
+  if (count <= 1) return [{ lat, lng }];
+  if (count <= 3) {
+    return [
+      { lat, lng },
+      { lat: lat + dLat, lng: lng - dLng },
+      { lat: lat - dLat, lng: lng + dLng },
+    ];
+  }
+  const pts = [];
+  for (let r = -1; r <= 1; r++) for (let c = -1; c <= 1; c++) pts.push({ lat: lat + r * dLat, lng: lng + c * dLng });
+  return pts;
+}
+
+// Build the "is this us" matcher once per run. Same name/domain logic the grid scan uses, so the
+// two pages agree about whether a listing is the client.
+function lvBusinessMatcher(project) {
+  const name = (project.business_name || project.name || '').toLowerCase().trim();
+  const nameNoSpaces = name.replace(/\s+/g, '');
+  const nameWords = name.split(/\s+/).filter(w => w.length > 2);
+  const domain = (project.domain || '')
+    .toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').trim();
+  return function isUs(place) {
+    const title = (place.title || '').toLowerCase();
+    if (!title) return false;
+    const titleNoSpaces = title.replace(/\s+/g, '');
+    if (name && (title.includes(name) || titleNoSpaces.includes(nameNoSpaces))) return true;
+    if (nameWords.length >= 2 && nameWords.every(w => title.includes(w))) return true;
+    const site = (place.website || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+    if (domain && site && (site === domain || site.endsWith('.' + domain) || domain.endsWith('.' + site))) return true;
+    return false;
+  };
+}
+
+// GUARD: a Maps response for the wrong city looks exactly like a legitimate one. If the listings we
+// got back are nowhere near the point we searched from, the measurement is wrong — discard it and
+// say so, rather than saving a confident position for a business 900km away.
+const LV_SANITY_KM = 200;
+function lvResultsAreLocal(localResults, lat, lng) {
+  const withCoords = localResults.filter(r => r.gps_coordinates && r.gps_coordinates.latitude != null && r.gps_coordinates.longitude != null);
+  if (withCoords.length < 3) return { ok: true, checked: withCoords.length }; // not enough to judge — don't invent a failure
+  const near = withCoords.filter(r => haversineKm(lat, lng, r.gps_coordinates.latitude, r.gps_coordinates.longitude) <= LV_SANITY_KM);
+  return { ok: near.length >= Math.ceil(withCoords.length / 2), checked: withCoords.length, near: near.length };
+}
+
+// Which state is the business actually in? Everything downstream depends on this — without it a
+// NSW "Richmond" happily joins a Queensland client's suburb list.
+function lvResolveCenterState(project, centerLat, centerLng) {
+  for (const t of [project.smart_center, project.location, project.business_name].filter(Boolean)) {
+    const f = geocodeSuburbText(t);
+    if (f && f.state) return { state: f.state, source: 'project text' };
+  }
+  // Fall back to the state of the nearest suburb in the dataset to the resolved centre.
+  if (Array.isArray(AU_SUBURBS) && AU_SUBURBS.length && centerLat != null) {
+    let best = null, bestD = Infinity;
+    for (const s of AU_SUBURBS) {
+      const d = haversineKm(centerLat, centerLng, s.lat, s.lng);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    if (best && bestD < 60) return { state: best.state, source: `nearest suburb (${best.suburb}, ${bestD.toFixed(1)}km)` };
+  }
+  return { state: null, source: null };
+}
+
+// Suburbs eligible for measurement. Every exclusion is counted and reported — a suburb that silently
+// vanishes from the list is indistinguishable from one that was measured and found nothing.
+function lvEligibleSuburbs({ centerLat, centerLng, radiusKm, minPopulation, centerState }) {
+  const kept = [];
+  const skipped = { wrong_state: 0, outside_radius: 0, no_coordinate: 0, below_min_population: 0 };
+  for (const s of (AU_SUBURBS || [])) {
+    if (s.lat == null || s.lng == null || isNaN(s.lat) || isNaN(s.lng)) { skipped.no_coordinate++; continue; }
+    const d = haversineKm(centerLat, centerLng, s.lat, s.lng);
+    if (d > radiusKm) { skipped.outside_radius++; continue; }
+    if (centerState && s.state && s.state !== centerState) { skipped.wrong_state++; continue; }
+    if ((s.population || 0) < (minPopulation || 0)) { skipped.below_min_population++; continue; }
+    kept.push({
+      suburb: s.suburb, state: s.state, postcode: s.postcode,
+      population: s.population || 0, lat: s.lat, lng: s.lng,
+      distance_km: Math.round(d * 10) / 10,
+    });
+  }
+  kept.sort((a, b) => a.distance_km - b.distance_km);
+  return { suburbs: kept, skipped };
 }
 
 // Perth suburb GPS coordinates for distance calculation
@@ -45127,6 +45282,299 @@ app.get('/api/projects/:projectId/maps/grid-scans', async (req, res) => {
     });
 
     res.json(merged);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== LOCAL VISIBILITY (LOCAL-VISIBILITY-SPEC.md) ====================
+// A NEW page. Reads nothing from and writes nothing to Maps Rankings, Smart Map Ranking or Ranking
+// Orbits. Measures the BARE keyword from GPS points at real suburbs — the same method as a grid
+// scan, so the two can be reconciled rather than quietly disagreeing.
+//
+// Core rule: every number carries its source and its date. A figure that cannot say where it came
+// from is not returned.
+
+const localVisibilityJobs = {};
+
+// Shared setup for both preview and run, so the cost you are quoted is the scan you get.
+async function lvPlanRun(project, body) {
+  const radiusKm = Math.min(100, Math.max(1, parseFloat(body.radius_km) || 25));
+  const pointsPer = [1, 3, 9].includes(parseInt(body.points_per_suburb)) ? parseInt(body.points_per_suburb) : 3;
+  const minPopulation = Math.max(0, parseInt(body.min_population) || 0);
+  const keywords = (Array.isArray(body.keywords) ? body.keywords : [])
+    .map(k => String(k || '').trim()).filter(Boolean).slice(0, 5);
+
+  await loadAuSuburbs();
+  if (!Array.isArray(AU_SUBURBS) || !AU_SUBURBS.length) {
+    return { error: 'The Australian suburb dataset has not loaded yet. Try again in a few seconds.', status: 503 };
+  }
+
+  const center = resolveSmartCenter({ center: body.center, lat: body.lat, lng: body.lng, project });
+  // FAIL LOUDLY. Falling back to a location NAME here would run a nationwide search that returns
+  // confident, plausible, wrong numbers — the exact bug that made every competitor count useless.
+  if (!center) {
+    return { error: 'Could not work out where this business is. Set the suburb in Project Settings (e.g. "Cashmere, QLD"), or pass explicit coordinates. Nothing was measured.', status: 400 };
+  }
+
+  const stateInfo = lvResolveCenterState(project, center.lat, center.lng);
+  const { suburbs, skipped } = lvEligibleSuburbs({
+    centerLat: center.lat, centerLng: center.lng, radiusKm, minPopulation, centerState: stateInfo.state,
+  });
+
+  const lookups = suburbs.length * pointsPer * Math.max(1, keywords.length);
+  return {
+    center, centerState: stateInfo.state, centerStateSource: stateInfo.source,
+    radiusKm, pointsPer, minPopulation, keywords, suburbs, skipped,
+    lookups,
+    estimated_cost: +(lookups * API_COST_RATES.dataforseo.maps).toFixed(4),
+  };
+}
+
+// What would be measured, and what it would cost. Spends nothing.
+app.post('/api/projects/:projectId/local-visibility/preview', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const plan = await lvPlanRun(project, req.body || {});
+    if (plan.error) return res.status(plan.status || 400).json({ error: plan.error });
+    res.json({
+      center: { lat: plan.center.lat, lng: plan.center.lng, label: plan.center.label, source: plan.center.source },
+      state: plan.centerState, state_source: plan.centerStateSource,
+      radius_km: plan.radiusKm, points_per_suburb: plan.pointsPer, min_population: plan.minPopulation,
+      suburbs_total: plan.suburbs.length, skipped: plan.skipped,
+      suburbs: plan.suburbs.slice(0, 200),
+      lookups: plan.lookups, estimated_cost: plan.estimated_cost,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/projects/:projectId/local-visibility/status', (req, res) => {
+  const job = localVisibilityJobs[req.params.projectId];
+  if (!job) return res.json({ status: 'none' });
+  res.json({
+    status: job.running ? 'running' : (job.error ? 'error' : 'done'),
+    done: job.done, total: job.total, current: job.current || '',
+    measured: job.measured, failed: job.failed,
+    run_id: job.runId || null, error: job.error || null,
+  });
+});
+
+app.post('/api/projects/:projectId/local-visibility/run', async (req, res) => {
+  try {
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
+    const { projectId } = req.params;
+    const existing = localVisibilityJobs[projectId];
+    if (existing && existing.running) return res.json({ started: false, already_running: true, total: existing.total, done: existing.done });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const plan = await lvPlanRun(project, req.body || {});
+    if (plan.error) return res.status(plan.status || 400).json({ error: plan.error });
+    if (!plan.keywords.length) return res.status(400).json({ error: 'Add at least one keyword to measure (e.g. "plumber"). Use the bare service word — not "plumber Cashmere".' });
+    if (!plan.suburbs.length) return res.status(400).json({ error: `No suburbs qualified inside ${plan.radiusKm}km of ${plan.center.label}. Widen the radius or lower the minimum population.` });
+
+    const runRow = (await pool.query(
+      `INSERT INTO local_visibility_runs
+        (project_id, keywords, center_lat, center_lng, center_label, center_state, center_source,
+         radius_km, points_per_suburb, min_population, suburbs_total, lookups_attempted, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'running') RETURNING id`,
+      [projectId, JSON.stringify(plan.keywords), plan.center.lat, plan.center.lng, plan.center.label,
+       plan.centerState, plan.center.source, plan.radiusKm, plan.pointsPer, plan.minPopulation,
+       plan.suburbs.length, plan.lookups]
+    )).rows[0];
+
+    const job = {
+      running: true, done: 0, total: plan.lookups, measured: 0, failed: 0,
+      current: 'Starting…', error: null, runId: runRow.id, started_at: new Date().toISOString(),
+    };
+    localVisibilityJobs[projectId] = job;
+    res.json({ started: true, run_id: runRow.id, total: job.total, estimated_cost: plan.estimated_cost });
+
+    (async () => {
+      const isUs = lvBusinessMatcher(project);
+      let billable = 0;
+      try {
+        for (const keyword of plan.keywords) {
+          for (let i = 0; i < plan.suburbs.length; i += 5) {
+            const batch = plan.suburbs.slice(i, i + 5);
+            job.current = `"${keyword}" — ${batch[0].suburb}`;
+            const rows = await Promise.all(batch.map(async (sub) => {
+              const pts = lvSuburbPoints(sub.lat, sub.lng, plan.pointsPer);
+              const out = [];
+              for (let pi = 0; pi < pts.length; pi++) {
+                const pt = pts[pi];
+                const base = {
+                  keyword, suburb: sub.suburb, state: sub.state, postcode: sub.postcode,
+                  population: sub.population, suburb_lat: sub.lat, suburb_lng: sub.lng,
+                  distance_km: sub.distance_km, point_index: pi, point_lat: pt.lat, point_lng: pt.lng,
+                };
+                try {
+                  const data = await dataForSeoMaps({ keyword, lat: pt.lat, lng: pt.lng, depth: 20 });
+                  billable++;
+                  const results = data.local_results || [];
+                  const sanity = lvResultsAreLocal(results, pt.lat, pt.lng);
+                  if (!sanity.ok) {
+                    // Measured, but the answer is for somewhere else. Not a position, not an absence.
+                    out.push({ ...base, measured: false, position: null, top_results: [],
+                      error: `Results were not local — only ${sanity.near}/${sanity.checked} listings fell within ${LV_SANITY_KM}km of the point searched. Discarded.` });
+                    job.failed++;
+                    continue;
+                  }
+                  let position = null;
+                  const top = [];
+                  for (let p = 0; p < results.length && p < 20; p++) {
+                    const place = results[p];
+                    const pos = place.position || (p + 1);
+                    if (pos <= 3) {
+                      top.push({
+                        position: pos, title: place.title || '', rating: place.rating || null,
+                        reviews: place.reviews || 0, type: place.type || '', website: place.website || '',
+                        lat: place.gps_coordinates ? place.gps_coordinates.latitude : null,
+                        lng: place.gps_coordinates ? place.gps_coordinates.longitude : null,
+                      });
+                    }
+                    if (position == null && isUs(place)) position = pos;
+                  }
+                  // position === null here means MEASURED AND ABSENT from the top 20 — a real finding.
+                  out.push({ ...base, measured: true, position, top_results: top, error: null });
+                  job.measured++;
+                } catch (err) {
+                  // A failed lookup is not an absence. It stays unmeasured.
+                  out.push({ ...base, measured: false, position: null, top_results: [], error: err.message });
+                  job.failed++;
+                }
+                job.done++;
+              }
+              return out;
+            }));
+
+            const flat = rows.flat();
+            if (flat.length) {
+              const vals = [];
+              const params = [];
+              flat.forEach((r, n) => {
+                const b = n * 17;
+                vals.push(`($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},$${b+11},$${b+12},$${b+13},$${b+14},$${b+15},$${b+16},$${b+17})`);
+                params.push(runRow.id, projectId, r.keyword, r.suburb, r.state, r.postcode, r.population,
+                  r.suburb_lat, r.suburb_lng, r.distance_km, r.point_index, r.point_lat, r.point_lng,
+                  r.measured, r.position, JSON.stringify(r.top_results || []), r.error);
+              });
+              await pool.query(
+                `INSERT INTO local_visibility_points
+                  (run_id, project_id, keyword, suburb, state, postcode, population, suburb_lat, suburb_lng,
+                   distance_km, point_index, point_lat, point_lng, measured, position, top_results, error)
+                 VALUES ${vals.join(',')}`, params
+              ).catch(e => console.error('[local-visibility] point insert failed:', e.message));
+            }
+          }
+        }
+      } catch (e) {
+        job.error = e.message;
+        console.error('[local-visibility] Run failed:', e.message);
+      }
+
+      job.running = false;
+      job.current = '';
+      const cost = +(billable * API_COST_RATES.dataforseo.maps).toFixed(4);
+      await pool.query(
+        `UPDATE local_visibility_runs
+           SET status=$1, error=$2, lookups_measured=$3, lookups_failed=$4, api_calls=$5, cost=$6, finished_at=NOW()
+         WHERE id=$7`,
+        [job.error ? 'failed' : 'complete', job.error, job.measured, job.failed, billable, cost, runRow.id]
+      ).catch(() => {});
+      if (billable > 0) {
+        try { await logApiCost(parseInt(projectId), 'local_visibility', 'dataforseo', billable, cost, { keywords: plan.keywords, suburbs: plan.suburbs.length, points_per_suburb: plan.pointsPer }); } catch (e) {}
+      }
+      console.log(`[local-visibility] Project ${projectId} run ${runRow.id}: ${job.measured} measured, ${job.failed} failed, $${cost}`);
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Latest completed run, rolled up per suburb. Carries measured_at and the exact method used, because
+// a figure with no date attached reads as current no matter how old it is.
+app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const runQ = req.query.run_id
+      ? await pool.query(`SELECT * FROM local_visibility_runs WHERE id=$1 AND project_id=$2`, [req.query.run_id, projectId])
+      : await pool.query(`SELECT * FROM local_visibility_runs WHERE project_id=$1 AND status <> 'running' ORDER BY measured_at DESC LIMIT 1`, [projectId]);
+    const run = runQ.rows[0];
+    if (!run) return res.json({ run: null, suburbs: [], keywords: [] });
+
+    const pts = (await pool.query(
+      `SELECT keyword, suburb, state, postcode, population, distance_km, point_index,
+              measured, position, top_results, error
+         FROM local_visibility_points WHERE run_id=$1`, [run.id]
+    )).rows;
+
+    const bySuburb = {};
+    for (const p of pts) {
+      const key = p.suburb + '|' + (p.state || '');
+      if (!bySuburb[key]) {
+        bySuburb[key] = {
+          suburb: p.suburb, state: p.state, postcode: p.postcode,
+          population: p.population || 0, distance_km: p.distance_km, keywords: {},
+        };
+      }
+      const s = bySuburb[key];
+      if (!s.keywords[p.keyword]) s.keywords[p.keyword] = { points: [], competitors: {} };
+      const k = s.keywords[p.keyword];
+      k.points.push({ point_index: p.point_index, measured: p.measured, position: p.position, error: p.error });
+      for (const c of (p.top_results || [])) {
+        if (!c.title) continue;
+        if (!k.competitors[c.title]) k.competitors[c.title] = { name: c.title, rating: c.rating, reviews: c.reviews, type: c.type, website: c.website, appearances: 0, best: 99 };
+        k.competitors[c.title].appearances++;
+        if (c.position < k.competitors[c.title].best) k.competitors[c.title].best = c.position;
+      }
+    }
+
+    const suburbs = Object.values(bySuburb).map(s => {
+      const keywords = {};
+      for (const [kw, k] of Object.entries(s.keywords)) {
+        const measured = k.points.filter(p => p.measured);
+        const ranked = measured.filter(p => p.position != null);
+        keywords[kw] = {
+          points_total: k.points.length,
+          points_measured: measured.length,
+          // null best_position with points_measured > 0 means MEASURED AND ABSENT.
+          // points_measured === 0 means we never got an answer. The UI must show these differently.
+          best_position: ranked.length ? Math.min(...ranked.map(p => p.position)) : null,
+          worst_position: ranked.length ? Math.max(...ranked.map(p => p.position)) : null,
+          points_ranked: ranked.length,
+          errors: k.points.filter(p => !p.measured).map(p => p.error).filter(Boolean).slice(0, 2),
+          competitors: Object.values(k.competitors).sort((a, b) => b.appearances - a.appearances || a.best - b.best).slice(0, 5),
+        };
+      }
+      return { suburb: s.suburb, state: s.state, postcode: s.postcode, population: s.population, distance_km: s.distance_km, keywords };
+    }).sort((a, b) => a.distance_km - b.distance_km);
+
+    res.json({
+      run: {
+        id: run.id, measured_at: run.measured_at, finished_at: run.finished_at, status: run.status,
+        keywords: run.keywords || [], center_label: run.center_label, center_state: run.center_state,
+        center_source: run.center_source, radius_km: run.radius_km, points_per_suburb: run.points_per_suburb,
+        min_population: run.min_population, suburbs_total: run.suburbs_total,
+        lookups_attempted: run.lookups_attempted, lookups_measured: run.lookups_measured,
+        lookups_failed: run.lookups_failed, api_calls: run.api_calls, cost: run.cost, error: run.error,
+        method: 'DataForSEO Maps · bare keyword · GPS at suburb · top 20',
+      },
+      keywords: run.keywords || [],
+      suburbs,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Run history — the dated snapshots. Nothing reads this for trends yet; it exists so that in six
+// weeks there is something to read. It cannot be backfilled later.
+app.get('/api/projects/:projectId/local-visibility/runs', async (req, res) => {
+  try {
+    const rows = (await pool.query(
+      `SELECT id, measured_at, finished_at, status, keywords, radius_km, points_per_suburb,
+              suburbs_total, lookups_measured, lookups_failed, cost, error
+         FROM local_visibility_runs WHERE project_id=$1 ORDER BY measured_at DESC LIMIT 50`,
+      [req.params.projectId]
+    )).rows;
+    res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

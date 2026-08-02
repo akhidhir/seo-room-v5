@@ -33408,6 +33408,380 @@
       );
     }
 
+    // ============ LOCAL VISIBILITY ============
+    // New page. Touches nothing on Maps Rankings, Smart Map Ranking or Ranking Orbits.
+    // Core rule (LOCAL-VISIBILITY-SPEC.md): every number states its source and its date.
+    function LocalVisibilityPage({ project }) {
+      const [radius, setRadius] = useState(25);
+      const [pointsPer, setPointsPer] = useState(3);
+      const [minPop, setMinPop] = useState(200);
+      const [kw1, setKw1] = useState('');
+      const [kw2, setKw2] = useState('');
+      const [preview, setPreview] = useState(null);
+      const [previewing, setPreviewing] = useState(false);
+      const [running, setRunning] = useState(false);
+      const [progress, setProgress] = useState(null);
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState('');
+      const [expanded, setExpanded] = useState(null);
+      const [sortCol, setSortCol] = useState('distance_km');
+      const [sortDir, setSortDir] = useState('asc');
+
+      const keywords = [kw1, kw2].map(k => (k || '').trim()).filter(Boolean);
+
+      const loadLatest = async () => {
+        try {
+          const r = await api(`/projects/${project.id}/local-visibility/latest`);
+          if (r && !r.error) {
+            setData(r);
+            if (r.run) {
+              if (r.run.radius_km) setRadius(r.run.radius_km);
+              if (r.run.points_per_suburb) setPointsPer(r.run.points_per_suburb);
+              if (r.run.min_population != null) setMinPop(r.run.min_population);
+              const rk = r.run.keywords || [];
+              if (rk[0] && !kw1) setKw1(rk[0]);
+              if (rk[1] && !kw2) setKw2(rk[1]);
+            }
+          }
+        } catch (e) {}
+        setLoading(false);
+      };
+
+      useEffect(() => { loadLatest(); }, [project.id]);
+
+      // Resume a scan that was already running when the page opened.
+      useEffect(() => {
+        (async () => {
+          try {
+            const st = await api(`/projects/${project.id}/local-visibility/status`);
+            if (st && st.status === 'running') { setRunning(true); setProgress(st); pollStatus(); }
+          } catch (e) {}
+        })();
+      }, [project.id]);
+
+      const pollStatus = () => {
+        const tick = async () => {
+          try {
+            const st = await api(`/projects/${project.id}/local-visibility/status`);
+            if (st.status === 'running') { setProgress(st); setTimeout(tick, 2500); return; }
+            setRunning(false); setProgress(null);
+            if (st.status === 'error') { setError('Scan failed: ' + (st.error || 'unknown')); return; }
+            loadLatest();
+          } catch (e) { setTimeout(tick, 4000); }
+        };
+        setTimeout(tick, 2500);
+      };
+
+      const runPreview = async () => {
+        setError(''); setPreviewing(true); setPreview(null);
+        try {
+          const r = await api(`/projects/${project.id}/local-visibility/preview`, { method: 'POST', body: { radius_km: radius, points_per_suburb: pointsPer, min_population: minPop, keywords } });
+          if (r.error) setError(r.error); else setPreview(r);
+        } catch (e) { setError(e.message || 'Preview failed'); }
+        setPreviewing(false);
+      };
+
+      const runScan = async () => {
+        if (!keywords.length) { setError('Add at least one keyword. Use the bare service word — "plumber", not "plumber Cashmere".'); return; }
+        const p = preview;
+        const msg = p
+          ? `Measure ${p.suburbs_total} suburbs × ${pointsPer} point${pointsPer > 1 ? 's' : ''} × ${keywords.length} keyword${keywords.length > 1 ? 's' : ''} = ${p.lookups} lookups.\nEstimated cost: $${p.estimated_cost.toFixed(2)}.\n\nRuns in the background.`
+          : 'Run the scan? Check the preview first to see the cost.';
+        if (!window.confirm(msg)) return;
+        setError(''); setRunning(true); setProgress({ done: 0, total: p ? p.lookups : 0 });
+        try {
+          const r = await api(`/projects/${project.id}/local-visibility/run`, { method: 'POST', body: { radius_km: radius, points_per_suburb: pointsPer, min_population: minPop, keywords } });
+          if (r.error) { setError(r.error); setRunning(false); return; }
+          if (!r.started && !r.already_running) { setRunning(false); return; }
+          pollStatus();
+        } catch (e) { setError(e.message || 'Scan failed'); setRunning(false); }
+      };
+
+      const toggleSort = (col) => {
+        if (sortCol === col) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+        else { setSortCol(col); setSortDir(col === 'distance_km' || col === 'suburb' ? 'asc' : 'desc'); }
+      };
+      const sortArrow = (col) => sortCol === col ? <i className={`fas fa-caret-${sortDir === 'asc' ? 'up' : 'down'}`} style={{ marginLeft: 4 }} /> : null;
+
+      const runKeywords = (data && data.keywords) || [];
+
+      const sortedSuburbs = React.useMemo(() => {
+        const rows = [...((data && data.suburbs) || [])];
+        const val = (s) => {
+          if (sortCol === 'suburb') return s.suburb || '';
+          if (sortCol === 'population') return s.population || 0;
+          if (sortCol === 'distance_km') return s.distance_km || 0;
+          if (sortCol.startsWith('kw')) {
+            const kw = runKeywords[parseInt(sortCol.slice(2))];
+            const k = kw && s.keywords ? s.keywords[kw] : null;
+            if (!k || !k.points_measured) return 999;      // never measured — always last
+            if (k.best_position == null) return 99;        // measured and absent — after ranked
+            return k.best_position;
+          }
+          return 0;
+        };
+        rows.sort((a, b) => {
+          const av = val(a), bv = val(b);
+          if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+          return sortDir === 'asc' ? av - bv : bv - av;
+        });
+        return rows;
+      }, [data, sortCol, sortDir]);
+
+      // Roll-up counters. Computed ONLY over measured lookups, and the denominator is shown, so a
+      // half-failed scan can never read as a complete one.
+      const summary = React.useMemo(() => {
+        if (!data || !data.suburbs || !runKeywords.length) return null;
+        const kw = runKeywords[0];
+        let top3 = 0, ranked = 0, absent = 0, unmeasured = 0;
+        for (const s of data.suburbs) {
+          const k = s.keywords ? s.keywords[kw] : null;
+          if (!k || !k.points_measured) { unmeasured++; continue; }
+          if (k.best_position == null) { absent++; continue; }
+          ranked++;
+          if (k.best_position <= 3) top3++;
+        }
+        return { kw, top3, ranked, absent, unmeasured, total: data.suburbs.length };
+      }, [data]);
+
+      const posColor = (p) => p <= 3 ? '#22c55e' : p <= 10 ? '#f59e0b' : '#ef4444';
+
+      return (
+        <div>
+          <div className="page-header">
+            <div className="page-title"><i className="fas fa-location-crosshairs" style={{ marginRight: 8, color: '#14b8a6' }}></i> Local Visibility</div>
+            <div className="page-subtitle">Where you actually show up on Google Maps, suburb by suburb. Measured from GPS points inside each suburb using the bare keyword — the same method as a grid scan.</div>
+          </div>
+
+          {/* Controls */}
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Keyword 1</label>
+                <input className="form-input" value={kw1} onChange={e => setKw1(e.target.value)} placeholder="plumber" style={{ width: 170, height: 36 }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Keyword 2 (optional)</label>
+                <input className="form-input" value={kw2} onChange={e => setKw2(e.target.value)} placeholder="emergency plumber" style={{ width: 190, height: 36 }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Radius</label>
+                <select className="form-select" value={radius} onChange={e => setRadius(parseInt(e.target.value))} style={{ width: 100, height: 36 }}>
+                  {[5, 10, 15, 20, 25, 30, 40, 50].map(r => <option key={r} value={r}>{r} km</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }} title="How many GPS points are searched inside each suburb. More points = more reliable, more cost.">Points / suburb</label>
+                <select className="form-select" value={pointsPer} onChange={e => setPointsPer(parseInt(e.target.value))} style={{ width: 90, height: 36 }}>
+                  <option value={1}>1</option><option value={3}>3</option><option value={9}>9</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }} title="Excludes industrial estates, parks and airports that have almost no residents.">Min population</label>
+                <input className="form-input" type="number" value={minPop} onChange={e => setMinPop(parseInt(e.target.value) || 0)} style={{ width: 100, height: 36 }} />
+              </div>
+              <button className="btn" onClick={runPreview} disabled={previewing || running} style={{ height: 36, borderColor: '#14b8a6', color: '#14b8a6' }}>
+                {previewing ? <span className="spinner"></span> : <i className="fas fa-list-check" style={{ marginRight: 6 }}></i>}
+                Preview &amp; cost
+              </button>
+              <button className="btn btn-primary" onClick={runScan} disabled={running} style={{ height: 36 }}>
+                {running ? <span className="spinner"></span> : <i className="fas fa-location-crosshairs" style={{ marginRight: 6 }}></i>}
+                {running ? 'Measuring…' : 'Measure now'}
+              </button>
+            </div>
+
+            {error && <div className="alert alert-error" style={{ marginTop: 12 }}><i className="fas fa-exclamation-circle"></i> {error}</div>}
+
+            {preview && !running && (
+              <div style={{ marginTop: 12, background: 'rgba(20,184,166,0.08)', borderLeft: '3px solid #14b8a6', borderRadius: 8, padding: '12px 16px', fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.6 }}>
+                <div><strong style={{ color: '#14b8a6' }}>{preview.suburbs_total} suburbs</strong> within {preview.radius_km}km of <strong>{preview.center.label}</strong>{preview.state ? ` (${preview.state})` : ''} — centre resolved from {preview.center.source === 'coords' ? 'explicit coordinates' : preview.center.source === 'dataset' ? 'the suburb dataset' : 'the fallback coordinate list'}{preview.state_source ? `, state from ${preview.state_source}` : ''}.</div>
+                <div>{preview.lookups} lookups on DataForSEO Maps = <strong style={{ color: '#14b8a6' }}>${preview.estimated_cost.toFixed(2)}</strong> estimated. Rate-card estimate, not a billed amount.</div>
+                <div style={{ color: 'var(--text3)', fontSize: 11.5, marginTop: 4 }}>
+                  Excluded: {preview.skipped.outside_radius} outside the radius, {preview.skipped.wrong_state} in another state, {preview.skipped.below_min_population} under the population floor{preview.skipped.no_coordinate ? `, ${preview.skipped.no_coordinate} with no coordinate` : ''}.
+                </div>
+              </div>
+            )}
+
+            {running && progress && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 6 }}>
+                  {progress.current || 'Measuring…'} — {progress.done || 0} of {progress.total || 0}
+                  {progress.failed ? <span style={{ color: '#f59e0b', marginLeft: 8 }}>{progress.failed} lookup{progress.failed > 1 ? 's' : ''} failed (left unmeasured, not counted as absent)</span> : null}
+                </div>
+                <div style={{ height: 6, background: 'var(--bg)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%`, background: '#14b8a6', transition: 'width 0.4s' }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {loading && <div style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}><span className="spinner" style={{ width: 28, height: 28 }}></span><div style={{ marginTop: 10 }}>Loading…</div></div>}
+
+          {!loading && (!data || !data.run) && !running && (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+              <i className="fas fa-location-crosshairs" style={{ fontSize: 48, marginBottom: 16, display: 'block', opacity: 0.3 }} />
+              <div style={{ fontSize: 16, marginBottom: 8 }}>Nothing measured yet</div>
+              <div style={{ fontSize: 13 }}>Enter a keyword above, check the preview, then measure.</div>
+            </div>
+          )}
+
+          {!loading && data && data.run && (
+            <>
+              {/* SOURCE AND DATE. Every figure below is only as current as this line. */}
+              {(() => {
+                const when = new Date(data.run.measured_at);
+                const days = Math.floor((Date.now() - when.getTime()) / 86400000);
+                const col = days > 30 ? '#ef4444' : days > 14 ? '#f59e0b' : 'var(--text3)';
+                const attempted = data.run.lookups_attempted || 0;
+                const measured = data.run.lookups_measured || 0;
+                const failed = data.run.lookups_failed || 0;
+                return (
+                  <div style={{ fontSize: 11.5, color: col, marginBottom: 14, lineHeight: 1.7 }} title="Where these numbers came from and when. A figure with no date reads as current no matter how old it is.">
+                    <div>
+                      <i className="fas fa-clock" style={{ marginRight: 5 }} />
+                      Measured {when.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {' '}({days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`})
+                      {' · '}{(data.run.keywords || []).map(k => `"${k}"`).join(', ')}
+                      {' · '}{data.run.method}
+                      {' · '}{data.run.points_per_suburb} point{data.run.points_per_suburb > 1 ? 's' : ''} per suburb
+                      {' · '}{data.run.radius_km}km of {data.run.center_label}{data.run.center_state ? `, ${data.run.center_state}` : ''}
+                    </div>
+                    <div style={{ color: failed > 0 ? '#f59e0b' : 'var(--text3)' }}>
+                      {measured} of {attempted} lookups returned an answer
+                      {failed > 0 ? ` · ${failed} failed and are shown as not measured, never as absent` : ''}
+                      {data.run.cost != null ? ` · cost $${Number(data.run.cost).toFixed(2)}` : ''}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {summary && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+                  {[
+                    { label: `Top 3 for "${summary.kw}"`, value: summary.top3, color: '#22c55e', hint: 'Suburbs where your best measured position was 1–3' },
+                    { label: 'Ranked but below 3', value: summary.ranked - summary.top3, color: '#f59e0b', hint: 'In the top 20, but not the local pack' },
+                    { label: 'Measured and absent', value: summary.absent, color: '#ef4444', hint: 'We searched and you were not in the top 20 — a real finding' },
+                    { label: 'Not measured', value: summary.unmeasured, color: 'var(--text3)', hint: 'No answer came back. This is NOT the same as absent.' },
+                  ].map(s => (
+                    <div key={s.label} title={s.hint} style={{ background: 'var(--card)', borderRadius: 10, padding: 14, textAlign: 'center', border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 11, cursor: 'pointer', userSelect: 'none' }}>
+                        <th style={{ padding: '10px 10px' }} onClick={() => toggleSort('suburb')}>Suburb{sortArrow('suburb')}</th>
+                        <th style={{ padding: '10px 10px' }}>State</th>
+                        <th style={{ padding: '10px 10px', textAlign: 'right' }} onClick={() => toggleSort('population')}>Population{sortArrow('population')}</th>
+                        <th style={{ padding: '10px 10px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={() => toggleSort('distance_km')} title="Straight-line distance from the business to this suburb">km away{sortArrow('distance_km')}</th>
+                        {runKeywords.map((kw, ki) => (
+                          <th key={kw} style={{ padding: '10px 10px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={() => toggleSort('kw' + ki)} title={`Best position measured for "${kw}" across the points in this suburb`}>
+                            "{kw}"{sortArrow('kw' + ki)}
+                          </th>
+                        ))}
+                        <th style={{ padding: '10px 10px', textAlign: 'right', whiteSpace: 'nowrap' }} title="How many of this suburb's measuring points returned an answer">Points</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedSuburbs.map((s) => {
+                        const key = s.suburb + '|' + s.state;
+                        const isOpen = expanded === key;
+                        const firstKw = runKeywords[0] ? s.keywords[runKeywords[0]] : null;
+                        return (
+                          <React.Fragment key={key}>
+                            <tr onClick={() => setExpanded(isOpen ? null : key)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: isOpen ? 'rgba(20,184,166,0.06)' : 'transparent' }}>
+                              <td style={{ padding: '8px 10px', fontWeight: 600 }}>
+                                <i className={`fas fa-chevron-${isOpen ? 'down' : 'right'}`} style={{ fontSize: 9, marginRight: 8, color: 'var(--text3)' }}></i>
+                                {s.suburb}
+                              </td>
+                              <td style={{ padding: '8px 10px', color: 'var(--text3)' }}>{s.state}</td>
+                              <td style={{ padding: '8px 10px', textAlign: 'right' }}>{(s.population || 0).toLocaleString()}</td>
+                              <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{s.distance_km} km</td>
+                              {runKeywords.map(kw => {
+                                const k = s.keywords[kw];
+                                // Three states, never collapsed: ranked / measured-and-absent / not measured.
+                                if (!k || !k.points_measured) return <td key={kw} title="No answer came back for this suburb. Not the same as absent." style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text3)' }}>—</td>;
+                                if (k.best_position == null) return <td key={kw} title={`Measured at ${k.points_measured} point${k.points_measured > 1 ? 's' : ''} — not in the top 20`} style={{ padding: '8px 10px', textAlign: 'right', color: '#ef4444', fontWeight: 600 }}>absent</td>;
+                                return (
+                                  <td key={kw} title={`Best #${k.best_position}, worst #${k.worst_position}, ranked at ${k.points_ranked} of ${k.points_measured} measured point${k.points_measured > 1 ? 's' : ''}`} style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: posColor(k.best_position) }}>
+                                    #{k.best_position}
+                                    {k.points_measured > 1 && k.points_ranked < k.points_measured && <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>{k.points_ranked}/{k.points_measured}</span>}
+                                  </td>
+                                );
+                              })}
+                              <td style={{ padding: '8px 10px', textAlign: 'right', color: firstKw && firstKw.points_measured < firstKw.points_total ? '#f59e0b' : 'var(--text3)', fontSize: 12 }}>
+                                {firstKw ? `${firstKw.points_measured}/${firstKw.points_total}` : '—'}
+                              </td>
+                            </tr>
+                            {isOpen && (
+                              <tr style={{ background: 'rgba(20,184,166,0.04)' }}>
+                                <td colSpan={5 + runKeywords.length} style={{ padding: '14px 18px' }}>
+                                  {runKeywords.map(kw => {
+                                    const k = s.keywords[kw];
+                                    if (!k) return null;
+                                    return (
+                                      <div key={kw} style={{ marginBottom: 14 }}>
+                                        <div style={{ fontSize: 12, fontWeight: 700, color: '#14b8a6', marginBottom: 6 }}>"{kw}" in {s.suburb}</div>
+                                        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
+                                          {k.points_measured === 0
+                                            ? <span style={{ color: '#f59e0b' }}>Not measured — {(k.errors[0] || 'no answer came back')}</span>
+                                            : k.best_position == null
+                                              ? <span>Searched from {k.points_measured} point{k.points_measured > 1 ? 's' : ''} in this suburb. Not in the top 20 at any of them.</span>
+                                              : <span>Best #{k.best_position}, worst #{k.worst_position}. Appeared at {k.points_ranked} of {k.points_measured} measured point{k.points_measured > 1 ? 's' : ''}.</span>}
+                                          {k.points_measured < k.points_total && <span style={{ color: '#f59e0b' }}> {k.points_total - k.points_measured} point{k.points_total - k.points_measured > 1 ? 's' : ''} failed and {k.points_total - k.points_measured > 1 ? 'were' : 'was'} excluded.</span>}
+                                        </div>
+                                        {k.competitors && k.competitors.length > 0 && (
+                                          <div>
+                                            <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Who Google showed here instead</div>
+                                            <table style={{ width: '100%', maxWidth: 620, borderCollapse: 'collapse', fontSize: 12 }}>
+                                              <tbody>
+                                                {k.competitors.map(c => (
+                                                  <tr key={c.name} style={{ borderTop: '1px solid var(--border)' }}>
+                                                    <td style={{ padding: '5px 8px', fontWeight: 600, color: posColor(c.best) }}>#{c.best}</td>
+                                                    <td style={{ padding: '5px 8px' }}>{c.name}</td>
+                                                    <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{c.rating ? `${c.rating}★` : '—'} · {c.reviews || 0} reviews</td>
+                                                    <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{c.type || ''}</td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                                              From the same searches, {new Date(data.run.measured_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}. Competitor comparison and winnable-gap analysis come next.
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 12, lineHeight: 1.7 }}>
+                <strong>absent</strong> means we searched and you were not in the top 20 — that is a finding.
+                <strong style={{ marginLeft: 8 }}>—</strong> means no answer came back, so nothing is known. The two are never merged.
+                <div>Every run is kept as a dated snapshot, so a change made today can be checked against the position in a few weeks' time.</div>
+              </div>
+            </>
+          )}
+        </div>
+      );
+    }
+
     function MapsRankingsPage({ project, setPage }) {
       const { keywords, rankings, merged, addKeyword, bulkAddKeywords, removeKeyword, loadData } = useRankData(project);
       const [mapsBulkOpen, setMapsBulkOpen] = useState(false);
@@ -41753,6 +42127,8 @@
             return <MapsRankingsPage project={project} setPage={setActiveTab} />;
           case 'smart-map':
             return <SmartMapRankingPage project={project} />;
+          case 'local-visibility':
+            return <LocalVisibilityPage project={project} />;
           case 'serp-rankings':
             return <SERPRankingsPage project={project} setPage={setActiveTab} />;
           case 'ai-search':
@@ -41831,6 +42207,7 @@
           { id: 'maps-rankings', label: 'Maps Rankings', icon: 'fas fa-map', localOnly: true },
           { id: 'smart-map', label: 'Smart Map Ranking', icon: 'fas fa-wand-magic-sparkles', localOnly: true },
           { id: 'ranking-orbits', label: 'Ranking Orbits', icon: 'fas fa-satellite', localOnly: true },
+          { id: 'local-visibility', label: 'Local Visibility', icon: 'fas fa-location-crosshairs', localOnly: true },
           { id: 'serp-rankings', label: 'SERP Rankings', icon: 'fas fa-search' },
           { id: 'ai-search', label: 'AI Search', icon: 'fas fa-robot' },
           { id: 'discover-local', label: 'Discover Local Keywords', icon: 'fas fa-magnifying-glass-chart' },
