@@ -524,6 +524,30 @@ async function initDb() {
         checked_at TIMESTAMPTZ DEFAULT NOW()
       )
     `).catch(() => {});
+    // No-citation fallback. Everything in here is INFERRED — we learn where a rival is listed, not
+    // that being listed there is why the AI named them. Kept in its own table so it can never be
+    // silently mixed with cited evidence.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_presence_rivals (
+        id SERIAL PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES ai_presence_runs(id) ON DELETE CASCADE,
+        project_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        named_by JSONB DEFAULT '[]',
+        resolved BOOLEAN DEFAULT FALSE,
+        matched_title TEXT,
+        website TEXT,
+        rating DOUBLE PRECISION,
+        reviews INTEGER,
+        suburb_page_checked BOOLEAN DEFAULT FALSE,
+        has_suburb_page BOOLEAN,
+        suburb_page_url TEXT,
+        pages_present JSONB DEFAULT '[]',
+        error TEXT,
+        checked_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `).catch(() => {});
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_aip_rivals_run ON ai_presence_rivals(run_id)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_aip_answers_run ON ai_presence_answers(run_id)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_aip_sources_run ON ai_presence_sources(run_id)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_aip_runs_project ON ai_presence_runs(project_id, measured_at DESC)`).catch(() => {});
@@ -9323,6 +9347,79 @@ async function aipCheckSource(url, ourName, competitorNames) {
   } catch (e) {
     return { checked: false, error: e.name === 'TimeoutError' ? 'Page did not respond in time' : e.message };
   }
+}
+
+// ===== No-citation fallback =====
+// When an AI names businesses but cites nothing, there is no source list to check. Instead we take
+// the names it gave and investigate them. Findings from this path are INFERRED, not evidence: we
+// learn that a rival is listed somewhere, not that this is why the model named them. Everything
+// derived here is labelled as such and must never be presented alongside cited findings unlabelled.
+
+// Pull business names out of an answer. Deliberately conservative — bold text and list-item leads
+// only. A loose extractor would turn "24/7 emergency service" into a competitor and poison the
+// whole analysis.
+function aipExtractNamedBusinesses(text) {
+  const out = [];
+  const seen = new Set();
+  const reject = /\d|rating|reviews?|star|24\/7|emergency|best|top\b|google|call|quote|free|licen[cs]ed|available/i;
+  const add = (raw) => {
+    let n = String(raw || '').replace(/[\s"'`.,;:—–-]+$/, '').replace(/^[\s"'`*]+/, '').trim();
+    if (n.length < 4 || n.length > 60) return;
+    if (reject.test(n)) return;
+    if (n.split(/\s+/).length > 6) return;
+    if (n === n.toLowerCase()) return;                 // real names are capitalised
+    if (!/^[A-Z]/.test(n)) return;
+    const key = aipNorm(n);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(n);
+  };
+  let m;
+  const bold = /\*\*([^*\n]{4,60})\*\*/g;
+  while ((m = bold.exec(text)) !== null) add(m[1]);
+  const listLead = /^[\s]*(?:[-*•]|\d+[.)])\s+([A-Z][^\n—–:|(]{3,50}?)\s*(?:[—–:|(]|$)/gm;
+  while ((m = listLead.exec(text)) !== null) add(m[1]);
+  return out.slice(0, 12);
+}
+
+// Does this business have a page for this suburb? Reads their sitemap, falls back to guessing
+// nothing — a sitemap we cannot read is reported as unknown, not as "no page".
+async function aipFindSuburbPage(website, suburbs) {
+  if (!website) return { checked: false, error: 'No website listed on their Google profile' };
+  let origin;
+  try { origin = new URL(website.startsWith('http') ? website : 'https://' + website).origin; }
+  catch (e) { return { checked: false, error: 'Their website address could not be read' }; }
+  const slugs = (suburbs || []).map(s => aipNorm(s).replace(/\s+/g, '-')).filter(Boolean);
+  if (!slugs.length) return { checked: false, error: 'No suburb to look for' };
+  const tryFetch = async (u) => {
+    try {
+      const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(12000), redirect: 'follow' });
+      return r.ok ? await r.text() : null;
+    } catch (e) { return null; }
+  };
+  let urls = [];
+  for (const path of ['/sitemap_index.xml', '/sitemap.xml', '/wp-sitemap.xml']) {
+    const xml = await tryFetch(origin + path);
+    if (!xml) continue;
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(x => x[1]);
+    // A sitemap index points at more sitemaps — follow a few.
+    const subs = locs.filter(l => /\.xml($|\?)/i.test(l)).slice(0, 6);
+    if (subs.length && subs.length === locs.length) {
+      for (const s of subs) {
+        const inner = await tryFetch(s);
+        if (inner) urls.push(...[...inner.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(x => x[1]));
+      }
+    } else {
+      urls.push(...locs);
+    }
+    if (urls.length) break;
+  }
+  if (!urls.length) return { checked: false, error: 'Their sitemap could not be read' };
+  for (const slug of slugs) {
+    const hit = urls.find(u => aipNorm(u).replace(/\s+/g, '-').includes(slug));
+    if (hit) return { checked: true, has_page: true, page_url: hit };
+  }
+  return { checked: true, has_page: false, page_url: null, pages_seen: urls.length };
 }
 
 // Perth suburb GPS coordinates for distance calculation
@@ -46022,6 +46119,123 @@ app.post('/api/projects/:projectId/ai-presence/run', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// NO-CITATION FALLBACK. Runs only over answers that named businesses but gave no sources.
+// Resolves each name against Google Maps ($0.002 each), then checks — for free — whether they have
+// a page for the suburb and whether they appear on the pages other answers in this run DID cite.
+app.post('/api/projects/:projectId/ai-presence/investigate', async (req, res) => {
+  try {
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
+    const { projectId } = req.params;
+    const existing = aiPresenceJobs[projectId];
+    if (existing && existing.running) return res.status(409).json({ error: 'An AI presence run is already in progress on this project.' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const run = (await pool.query(
+      `SELECT * FROM ai_presence_runs WHERE project_id=$1 AND status <> 'running' ORDER BY measured_at DESC LIMIT 1`, [projectId]
+    )).rows[0];
+    if (!run) return res.status(400).json({ error: 'Run an AI presence check first.' });
+
+    const answers = (await pool.query(
+      `SELECT question, engine, answered, answer_text, has_citations FROM ai_presence_answers WHERE run_id=$1`, [run.id]
+    )).rows;
+    const uncited = answers.filter(a => a.answered && !a.has_citations && a.answer_text);
+    if (!uncited.length) return res.status(400).json({ error: 'Every answer in the last run gave its sources, so there is nothing to infer — use the cited gap table above.' });
+
+    // Which suburbs are we asking about? Taken from the questions themselves.
+    const suburbSet = new Set();
+    for (const q of (run.questions || [])) {
+      for (const s of (AU_SUBURBS || [])) {
+        if (s.suburb && s.suburb.length > 3 && aipNorm(q).includes(aipNorm(s.suburb))) suburbSet.add(s.suburb);
+      }
+    }
+    const suburbs = [...suburbSet].slice(0, 4);
+
+    // Names the AI gave, and which engines gave them.
+    const byName = {};
+    for (const a of uncited) {
+      for (const n of aipExtractNamedBusinesses(a.answer_text)) {
+        const k = aipNorm(n);
+        if (!byName[k]) byName[k] = { name: n, named_by: [] };
+        if (!byName[k].named_by.includes(a.engine)) byName[k].named_by.push(a.engine);
+      }
+    }
+    const ourName = project.business_name || project.name || '';
+    const rivals = Object.values(byName).filter(r => aipNamedIn(r.name, ourName) < 0).slice(0, 8);
+    if (!rivals.length) return res.status(400).json({ error: 'No business names could be read out of the answers that gave no sources.' });
+
+    const job = { running: true, done: 0, total: rivals.length, ok: 0, failed: 0, current: 'Looking them up…', error: null, runId: run.id, mode: 'investigate' };
+    aiPresenceJobs[projectId] = job;
+    res.json({ started: true, rivals: rivals.length, estimated_cost: +(rivals.length * API_COST_RATES.dataforseo.maps).toFixed(4) });
+
+    (async () => {
+      let calls = 0, cost = 0;
+      // Pages any answer in this run cited — free to reuse for everybody.
+      const citedPages = (await pool.query(`SELECT url, title FROM ai_presence_sources WHERE run_id=$1 LIMIT 25`, [run.id])).rows;
+      await pool.query(`DELETE FROM ai_presence_rivals WHERE run_id=$1`, [run.id]).catch(() => {});
+      const geo = suburbs[0] ? geocodeSuburbText(suburbs[0] + ' ' + (project.location || '')) : null;
+
+      for (const r of rivals) {
+        job.current = r.name;
+        const row = { ...r, resolved: false, matched_title: null, website: null, rating: null, reviews: null,
+          suburb_page_checked: false, has_suburb_page: null, suburb_page_url: null, pages_present: [], error: null };
+        try {
+          const maps = geo
+            ? await dataForSeoMaps({ keyword: r.name, lat: geo.lat, lng: geo.lng, depth: 5 })
+            : await dataForSeoMaps({ keyword: r.name, location: project.location || 'Australia', depth: 5 });
+          calls++; cost += Number(maps.cost) || 0;
+          const hit = (maps.local_results || []).find(x => aipNamedIn(x.title, r.name) >= 0);
+          if (hit) {
+            row.resolved = true;
+            row.matched_title = hit.title;
+            row.website = hit.website || null;
+            row.rating = hit.rating || null;
+            row.reviews = hit.reviews || 0;
+          } else {
+            row.error = 'No Google Business Profile found under this name — the AI may have named a business that does not exist locally.';
+          }
+        } catch (e) { row.error = e.message; }
+
+        if (row.website) {
+          const sp = await aipFindSuburbPage(row.website, suburbs);
+          row.suburb_page_checked = !!sp.checked;
+          row.has_suburb_page = sp.checked ? sp.has_page : null;
+          row.suburb_page_url = sp.page_url || null;
+          if (!sp.checked && !row.error) row.error = sp.error;
+        }
+
+        // Which of the pages other answers cited actually name this rival?
+        for (const p of citedPages) {
+          const c = await aipCheckSource(p.url, r.name, []);
+          if (c.checked && c.we_present) row.pages_present.push({ url: p.url, title: p.title || '' });
+        }
+
+        await pool.query(
+          `INSERT INTO ai_presence_rivals
+             (run_id, project_id, name, named_by, resolved, matched_title, website, rating, reviews,
+              suburb_page_checked, has_suburb_page, suburb_page_url, pages_present, error)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          [run.id, projectId, row.name, JSON.stringify(row.named_by), row.resolved, row.matched_title,
+           row.website, row.rating, row.reviews, row.suburb_page_checked, row.has_suburb_page,
+           row.suburb_page_url, JSON.stringify(row.pages_present), row.error]
+        ).catch(e => console.error('[ai-presence] rival insert failed:', e.message));
+
+        row.resolved ? job.ok++ : job.failed++;
+        job.done++;
+      }
+
+      job.running = false;
+      job.current = '';
+      const rounded = +cost.toFixed(4);
+      if (calls > 0) {
+        try { await logApiCost(parseInt(projectId), 'ai_presence_investigate', 'dataforseo', calls, rounded, { rivals: rivals.length }); } catch (e) {}
+      }
+      console.log(`[ai-presence] Investigate project ${projectId} run ${run.id}: ${job.ok} resolved, ${job.failed} not, $${rounded}`);
+    })();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/projects/:projectId/ai-presence/latest', async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -46038,6 +46252,24 @@ app.get('/api/projects/:projectId/ai-presence/latest', async (req, res) => {
       `SELECT url, title, cited_count, checked, we_present, competitors_present, source_type, error
          FROM ai_presence_sources WHERE run_id=$1 ORDER BY cited_count DESC, url`, [run.id]
     )).rows;
+    const rivals = (await pool.query(
+      `SELECT name, named_by, resolved, matched_title, website, rating, reviews,
+              suburb_page_checked, has_suburb_page, suburb_page_url, pages_present, error
+         FROM ai_presence_rivals WHERE run_id=$1 ORDER BY reviews DESC NULLS LAST`, [run.id]
+    )).rows;
+
+    // Our own side of the same comparison, so the inferred table is a comparison and not a list of
+    // facts about other people.
+    let ourSide = null;
+    try {
+      const proj = (await pool.query('SELECT business_name, name, domain FROM projects WHERE id=$1', [projectId])).rows[0];
+      const gbp = (await pool.query(`SELECT reviews, total_count FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
+      ourSide = {
+        name: proj ? (proj.business_name || proj.name) : '',
+        website: proj ? proj.domain : '',
+        reviews: gbp ? gbp.total_count : null,
+      };
+    } catch (e) {}
 
     const answered = answers.filter(a => a.answered);
     res.json({
@@ -46057,8 +46289,10 @@ app.get('/api/projects/:projectId/ai-presence/latest', async (req, res) => {
         missing_from: sources.filter(s => s.checked && s.we_present === false && (s.competitors_present || []).length > 0).length,
         sources_checked: sources.filter(s => s.checked).length,
         sources_total: sources.length,
+        // Answers that named businesses but gave no sources — the fallback's input.
+        uncited_answers: answered.filter(a => !a.has_citations).length,
       },
-      answers, sources,
+      answers, sources, rivals, our_side: ourSide,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
