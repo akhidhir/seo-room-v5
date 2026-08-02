@@ -427,6 +427,9 @@ async function initDb() {
         lookups_attempted INTEGER DEFAULT 0,
         lookups_measured INTEGER DEFAULT 0,
         lookups_failed INTEGER DEFAULT 0,
+        our_title TEXT,
+        our_rating DOUBLE PRECISION,
+        our_reviews INTEGER,
         status TEXT DEFAULT 'running',
         error TEXT,
         api_calls INTEGER DEFAULT 0,
@@ -461,6 +464,10 @@ async function initDb() {
         measured_at TIMESTAMPTZ DEFAULT NOW()
       )
     `).catch(() => {});
+    // Added after the table shipped — CREATE TABLE IF NOT EXISTS will not backfill columns.
+    await client.query(`ALTER TABLE local_visibility_runs ADD COLUMN IF NOT EXISTS our_title TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE local_visibility_runs ADD COLUMN IF NOT EXISTS our_rating DOUBLE PRECISION`).catch(() => {});
+    await client.query(`ALTER TABLE local_visibility_runs ADD COLUMN IF NOT EXISTS our_reviews INTEGER`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_run ON local_visibility_points(run_id)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_history ON local_visibility_points(project_id, keyword, suburb, measured_at)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_runs_project ON local_visibility_runs(project_id, measured_at DESC)`).catch(() => {});
@@ -45705,6 +45712,9 @@ app.post('/api/projects/:projectId/local-visibility/run', async (req, res) => {
     (async () => {
       const isUs = lvBusinessMatcher(project);
       let billable = 0;
+      // Our own profile, captured the first time we appear in any result. Without this the
+      // competitor tables list their review counts with nothing to compare them against.
+      let ourProfile = null;
       try {
         for (const keyword of plan.keywords) {
           for (let i = 0; i < plan.suburbs.length; i += 5) {
@@ -45745,7 +45755,10 @@ app.post('/api/projects/:projectId/local-visibility/run', async (req, res) => {
                         lng: place.gps_coordinates ? place.gps_coordinates.longitude : null,
                       });
                     }
-                    if (position == null && isUs(place)) position = pos;
+                    if (position == null && isUs(place)) {
+                      position = pos;
+                      if (!ourProfile) ourProfile = { title: place.title || '', rating: place.rating || null, reviews: place.reviews || 0 };
+                    }
                   }
                   // position === null here means MEASURED AND ABSENT from the top 20 — a real finding.
                   out.push({ ...base, measured: true, position, top_results: top, error: null });
@@ -45790,9 +45803,12 @@ app.post('/api/projects/:projectId/local-visibility/run', async (req, res) => {
       const cost = +(billable * API_COST_RATES.dataforseo.maps).toFixed(4);
       await pool.query(
         `UPDATE local_visibility_runs
-           SET status=$1, error=$2, lookups_measured=$3, lookups_failed=$4, api_calls=$5, cost=$6, finished_at=NOW()
-         WHERE id=$7`,
-        [job.error ? 'failed' : 'complete', job.error, job.measured, job.failed, billable, cost, runRow.id]
+           SET status=$1, error=$2, lookups_measured=$3, lookups_failed=$4, api_calls=$5, cost=$6,
+               our_title=$7, our_rating=$8, our_reviews=$9, finished_at=NOW()
+         WHERE id=$10`,
+        [job.error ? 'failed' : 'complete', job.error, job.measured, job.failed, billable, cost,
+         ourProfile ? ourProfile.title : null, ourProfile ? ourProfile.rating : null,
+         ourProfile ? ourProfile.reviews : null, runRow.id]
       ).catch(() => {});
       if (billable > 0) {
         try { await logApiCost(parseInt(projectId), 'local_visibility', 'dataforseo', billable, cost, { keywords: plan.keywords, suburbs: plan.suburbs.length, points_per_suburb: plan.pointsPer }); } catch (e) {}
@@ -45814,8 +45830,10 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
     if (!run) return res.json({ run: null, suburbs: [], keywords: [] });
 
     const pts = (await pool.query(
+      // suburb_lat/lng are REQUIRED here — without them every competitor distance comes back null
+      // and the whole winnable-vs-geography distinction silently disappears behind "unknown".
       `SELECT keyword, suburb, state, postcode, population, distance_km, point_index,
-              measured, position, top_results, error
+              suburb_lat, suburb_lng, measured, position, top_results, error
          FROM local_visibility_points WHERE run_id=$1`, [run.id]
     )).rows;
 
@@ -45889,6 +45907,7 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
         min_population: run.min_population, suburbs_total: run.suburbs_total,
         lookups_attempted: run.lookups_attempted, lookups_measured: run.lookups_measured,
         lookups_failed: run.lookups_failed, api_calls: run.api_calls, cost: run.cost, error: run.error,
+        our_title: run.our_title, our_rating: run.our_rating, our_reviews: run.our_reviews,
         method: 'DataForSEO Maps · bare keyword · GPS at suburb · top 20',
       },
       keywords: run.keywords || [],

@@ -34117,6 +34117,45 @@
                                               : <span>Best #{k.best_position}, worst #{k.worst_position}. Appeared at {k.points_ranked} of {k.points_measured} measured point{k.points_measured > 1 ? 's' : ''}.</span>}
                                           {k.points_measured < k.points_total && <span style={{ color: '#f59e0b' }}> {k.points_total - k.points_measured} point{k.points_total - k.points_measured > 1 ? 's' : ''} failed and {k.points_total - k.points_measured > 1 ? 'were' : 'was'} excluded.</span>}
                                         </div>
+                                        {/* THE ANALYSIS. A list of who beat you is not analysis —
+                                            this says whether it is fixable and what the difference is. */}
+                                        {k.competitors && k.competitors.length > 0 && (() => {
+                                          const ourPos = k.best_position;
+                                          const ahead = k.competitors.filter(c => ourPos == null || c.best < ourPos);
+                                          const known = ahead.filter(c => c.distance_km != null);
+                                          const further = known.filter(c => c.distance_km >= s.distance_km);
+                                          const ourRev = data.run.our_reviews;
+                                          const topRev = Math.max(0, ...k.competitors.map(c => c.reviews || 0));
+                                          const revGap = (ourRev != null && topRev > ourRev) ? topRev - ourRev : null;
+                                          return (
+                                            <div style={{ background: 'var(--bg)', borderLeft: `3px solid ${further.length ? '#f59e0b' : 'var(--border)'}`, borderRadius: 6, padding: '10px 12px', marginBottom: 10, fontSize: 12.5, lineHeight: 1.65 }}>
+                                              {known.length === 0 ? (
+                                                <div style={{ color: 'var(--text3)' }}>
+                                                  None of the businesses ahead of you publish an address (service-area businesses), so it can't be told whether distance is the reason here.
+                                                </div>
+                                              ) : further.length > 0 ? (
+                                                <div>
+                                                  <strong style={{ color: '#f59e0b' }}>Winnable.</strong>{' '}
+                                                  {further.length} of the {known.length} businesses ahead of you {further.length === 1 ? 'is' : 'are'} as far or further from {s.suburb} than you are ({s.distance_km}km) — {further.slice(0, 3).map(c => `${c.name} ${c.distance_km}km`).join(', ')}. Distance is not why they are ahead.
+                                                </div>
+                                              ) : (
+                                                <div style={{ color: 'var(--text2)' }}>
+                                                  Every business ahead of you here is closer to {s.suburb} than you are. That part is geography, not something to fix on the site.
+                                                </div>
+                                              )}
+                                              {revGap != null && (
+                                                <div style={{ color: 'var(--text2)', marginTop: 4 }}>
+                                                  Reviews: you {ourRev} · best here {topRev} — a gap of <strong style={{ color: '#f59e0b' }}>{revGap}</strong>.
+                                                </div>
+                                              )}
+                                              {ourRev == null && (
+                                                <div style={{ color: 'var(--text3)', marginTop: 4, fontSize: 11.5 }}>
+                                                  Your own review count wasn't captured in this run (you weren't found at any point), so no comparison can be shown. Re-run after appearing somewhere, or read it from Local Intel.
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })()}
                                         {k.competitors && k.competitors.length > 0 && (
                                           <div>
                                             <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Who Google showed here instead</div>
@@ -34131,6 +34170,17 @@
                                                 </tr>
                                               </thead>
                                               <tbody>
+                                                {/* Our own row, in position order, so the table is a comparison and not a list of other people. */}
+                                                <tr style={{ borderTop: '1px solid var(--border)', background: 'rgba(20,184,166,0.07)' }}>
+                                                  <td style={{ padding: '5px 8px', fontWeight: 700, color: k.best_position ? posColor(k.best_position) : '#ef4444', whiteSpace: 'nowrap' }}>
+                                                    {k.best_position ? `#${k.best_position}` : 'absent'}
+                                                    {k.best_position && k.points_measured > 1 && <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>at {k.points_ranked} of {k.points_measured}</span>}
+                                                  </td>
+                                                  <td style={{ padding: '5px 8px', fontWeight: 700, color: '#14b8a6' }}>{data.run.our_title || project.business_name || 'You'} (you)</td>
+                                                  <td style={{ padding: '5px 8px', color: 'var(--text3)', whiteSpace: 'nowrap' }}>{s.distance_km} km</td>
+                                                  <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{data.run.our_rating ? `${data.run.our_rating}★` : '—'} · {data.run.our_reviews != null ? data.run.our_reviews : '—'}</td>
+                                                  <td style={{ padding: '5px 8px', color: 'var(--text3)' }}></td>
+                                                </tr>
                                                 {k.competitors.map(c => (
                                                   <tr key={c.name} style={{ borderTop: '1px solid var(--border)' }}>
                                                     <td style={{ padding: '5px 8px', fontWeight: 600, color: posColor(c.best), whiteSpace: 'nowrap' }}>
