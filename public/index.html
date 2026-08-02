@@ -34079,6 +34079,39 @@
             : f.in_reviews ? 'A customer names this suburb' : 'No review mentions this suburb',
         });
 
+        // PAGE QUALITY. Having a page for the suburb is not the signal — what is on it is.
+        const q = d && d.quality ? d.quality : null;
+        const qo = q && q.ours && q.ours.checked ? q.ours : null;
+        const qt = q && q.theirs && q.theirs.checked ? q.theirs : null;
+        if (qo || qt) {
+          rows.push({
+            label: 'Suburb page — words',
+            win: !qo || !qt ? null : qo.words === qt.words ? 'same' : qo.words > qt.words,
+            you: qo ? qo.words : (theirKnown && f && f.our_page ? 'page not read' : '—'),
+            them: qt ? qt.words : 'page not read',
+            note: !qo || !qt ? 'One of the pages could not be read'
+              : qo.words >= qt.words ? 'Deeper than theirs' : `${qt.words - qo.words} words less than theirs`,
+          });
+          rows.push({
+            label: `${s.suburb} in title / H1 / opening`,
+            win: !qo ? null : (qo.suburb_in_title && qo.suburb_in_h1 && qo.suburb_in_opening) ? true : false,
+            you: qo ? `${qo.suburb_in_title ? 'title' : ''}${qo.suburb_in_h1 ? (qo.suburb_in_title ? ', ' : '') + 'H1' : ''}${qo.suburb_in_opening ? ((qo.suburb_in_title || qo.suburb_in_h1) ? ', ' : '') + 'opening' : ''}` || 'none of them' : '—',
+            them: qt ? `${qt.suburb_in_title ? 'title' : ''}${qt.suburb_in_h1 ? (qt.suburb_in_title ? ', ' : '') + 'H1' : ''}${qt.suburb_in_opening ? ((qt.suburb_in_title || qt.suburb_in_h1) ? ', ' : '') + 'opening' : ''}` || 'none of them' : '—',
+            note: !qo ? 'Your page could not be read'
+              : (qo.suburb_in_title && qo.suburb_in_h1 && qo.suburb_in_opening) ? `Named ${qo.mentions}× on the page`
+              : `The page does not name ${s.suburb} where it counts — Google cannot tell who it is for`,
+          });
+          rows.push({
+            label: 'Suburb page — templated?',
+            win: !qo || qo.templated === null ? null : qo.templated ? false : true,
+            you: !qo ? '—' : qo.templated === null ? 'no other page to compare' : `${qo.similarity}% same as your other suburb page`,
+            them: !qt || qt.templated === null ? '—' : `${qt.similarity}%`,
+            note: !qo || qo.templated === null ? 'Needs a second suburb page to compare against'
+              : qo.templated ? 'Near-identical to your other suburb pages — the same text with the name swapped'
+              : 'Genuinely different from your other suburb pages',
+          });
+        }
+
         // Their Google profile, from the deep check. Everything here used to read "not public".
         const p = d && d.profile ? d.profile : null;
         const ourF2 = (factors && factors.our) || {};

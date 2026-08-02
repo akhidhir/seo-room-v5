@@ -9343,6 +9343,70 @@ async function lvFetchSitemapUrls(website) {
   return result;
 }
 
+// ===== Suburb page QUALITY =====
+// Having a page for the suburb is not the signal. HouseWorks has ~100 suburb pages, including
+// Canning Vale and Willetton, and ranks in neither. What is on the page is the signal — so this
+// reads the page and reports depth, whether the suburb is actually targeted, and whether it is a
+// template with the name swapped.
+async function lvPageQuality(url, suburb, siblingUrl) {
+  const fetchText = async (u) => {
+    try {
+      const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(15000), redirect: 'follow' });
+      return r.ok ? await r.text() : null;
+    } catch (e) { return null; }
+  };
+  const html = await fetchText(url);
+  if (!html) return { checked: false, error: 'The page could not be loaded' };
+
+  const pick = (re) => { const m = html.match(re); return m ? m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : ''; };
+  const title = pick(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const h1 = pick(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+
+  const body = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const words = body ? body.split(/\s+/) : [];
+  const sub = aipNorm(suburb);
+  const nBody = aipNorm(body);
+  const mentions = sub ? (nBody.match(new RegExp('\\b' + sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g')) || []).length : 0;
+  const first = aipNorm(words.slice(0, 120).join(' '));
+
+  // Templated? Compare against another suburb page on the same site. High word overlap with a
+  // different suburb's page means the same text with the name swapped — which is what Google
+  // discounts, and what page-exists checks cannot see.
+  let templated = null, similarity = null;
+  if (siblingUrl && siblingUrl !== url) {
+    const sib = await fetchText(siblingUrl);
+    if (sib) {
+      const sibBody = sib.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+      const setOf = (t) => new Set(aipNorm(t).split(' ').filter(w => w.length > 3));
+      similarity = Math.round(_jaccard(setOf(body), setOf(sibBody)) * 100);
+      templated = similarity >= 80;
+    }
+  }
+
+  return {
+    checked: true, url,
+    words: words.length,
+    suburb_in_title: sub ? aipNorm(title).includes(sub) : null,
+    suburb_in_h1: sub ? aipNorm(h1).includes(sub) : null,
+    suburb_in_opening: sub ? first.includes(sub) : null,
+    mentions,
+    title, h1,
+    has_faq: /<details|itemtype=["'][^"']*FAQPage|faq/i.test(html),
+    has_schema: /application\/ld\+json/i.test(html),
+    images: (html.match(/<img[\s>]/gi) || []).length,
+    templated, similarity, compared_with: siblingUrl || null,
+  };
+}
+
 // A site's own homepage links. One request, cached, and it usually contains the whole
 // "areas we serve" menu — so a missing sitemap no longer means an unknown answer.
 const lvHomeCache = {};
@@ -46290,6 +46354,29 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
     } else {
       out.page = { found: null, error: domain ? 'No suburb given' : 'They have no website on their Google profile' };
     }
+
+    // 1b. PAGE QUALITY, both sides. Having a page is not the signal — HouseWorks has a Canning Vale
+    // page and ranks nowhere near the top there. Free: both pages are just HTTP fetches.
+    out.quality = { ours: null, theirs: null };
+    try {
+      const project = (await pool.query('SELECT domain FROM projects WHERE id=$1', [projectId])).rows[0];
+      const pickSibling = (urls, thisUrl) => {
+        if (!Array.isArray(urls)) return null;
+        const slug = aipNorm(suburb).replace(/\s+/g, '-');
+        // Another page that looks like a suburb page but is a DIFFERENT suburb.
+        return urls.find(u => u !== thisUrl && /\/(plumb|location|area|service-area|suburb)/i.test(u)
+          && !aipNorm(u).replace(/\s+/g, '-').includes(slug)) || null;
+      };
+      if (out.page && out.page.found && out.page.url) {
+        const theirUrls = (await lvFetchSitemapUrls(website)) || (await lvFetchHomepageLinks(website));
+        out.quality.theirs = await lvPageQuality(out.page.url, suburb, pickSibling(theirUrls, out.page.url));
+      }
+      if (project && project.domain) {
+        const ourUrls = (await lvFetchSitemapUrls(project.domain)) || (await lvFetchHomepageLinks(project.domain));
+        const ourHit = lvSitemapHasSuburb(ourUrls, suburb);
+        if (ourHit) out.quality.ours = await lvPageQuality(ourHit, suburb, pickSibling(ourUrls, ourHit));
+      }
+    } catch (e) { out.errors.push(`Page quality: ${e.message}`); }
 
     // 2. Directory listings. A control query first — if a bare site: search returns nothing for a
     // directory, that directory is unsearchable right now and every business would look unlisted.
