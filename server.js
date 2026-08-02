@@ -46197,10 +46197,19 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
         rcProfile = cfg && (cfg.profile || cfg);
       } catch (e) {}
     }
-    const rcAreas = (rcProfile && rcProfile.serviceArea && rcProfile.serviceArea.places && Array.isArray(rcProfile.serviceArea.places.placeInfos))
-      ? rcProfile.serviceArea.places.placeInfos.map(p => p.placeName).filter(Boolean) : [];
-    const rcCategory = rcProfile && rcProfile.categories && rcProfile.categories.primaryCategory
-      ? rcProfile.categories.primaryCategory.displayName : null;
+    // The RC payload is nested inconsistently — the description sits at profile.profile.description
+    // while serviceArea sits at the top. Try every shape rather than silently ending up with the
+    // 3-item copy in gbp_profile and then asserting Google only knows 3 suburbs.
+    const rcCandidates = [rcProfile, rcProfile && rcProfile.profile, rcProfile && rcProfile.location].filter(Boolean);
+    let rcAreas = [], rcCategory = null;
+    for (const cand of rcCandidates) {
+      if (!rcAreas.length && cand.serviceArea && cand.serviceArea.places && Array.isArray(cand.serviceArea.places.placeInfos)) {
+        rcAreas = cand.serviceArea.places.placeInfos.map(p => p.placeName || p.place_name).filter(Boolean);
+      }
+      if (!rcCategory && cand.categories && cand.categories.primaryCategory) {
+        rcCategory = cand.categories.primaryCategory.displayName || cand.categories.primaryCategory.display_name || null;
+      }
+    }
 
     const gbpCategory = rcCategory || (gbp && Array.isArray(gbp.categories) && gbp.categories.length ? gbp.categories[0] : null);
     const gbpAllCategories = gbp && Array.isArray(gbp.categories) ? gbp.categories : (rcCategory ? [rcCategory] : []);
@@ -46212,6 +46221,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
     const gbpAreas = rcAreas.length ? rcAreas : (gbp && Array.isArray(gbp.service_areas) ? gbp.service_areas : []);
     const serviceAreas = gbpAreas.length ? gbpAreas : manualAreas;
     const areasSource = gbpAreas.length ? 'your Google Business Profile' : (manualAreas.length ? 'Project Settings' : null);
+    console.log(`[local-visibility] factors p${projectId}: rcAreas=${rcAreas.length} gbpCopy=${(gbp && gbp.service_areas || []).length} manual=${manualAreas.length} using=${areasSource} cat=${gbpCategory || 'none'}`);
     let reviewText = '';
     try {
       const rc = (await pool.query(`SELECT reviews FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
@@ -46345,8 +46355,11 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
         out.calls++;
         const items = Array.isArray(r) ? r : (r && r.organic_results) || [];
         const slug = aipNorm(suburb).replace(/\s+/g, '-');
-        const hit = items.find(i => i && i.url && aipNorm(i.url).replace(/\s+/g, '-').includes(slug));
-        out.page = hit ? { found: true, url: hit.url, title: hit.title || '' } : { found: false };
+        // dataForSeoSerp returns `link`, not `url`. Reading `.url` meant this find ALWAYS failed and
+        // every competitor came back "no page" — a confident wrong answer, the worst kind.
+        const urlOf = (i) => i && (i.link || i.url || '');
+        const hit = items.find(i => aipNorm(urlOf(i)).replace(/\s+/g, '-').includes(slug));
+        out.page = hit ? { found: true, url: urlOf(hit), title: hit.title || '' } : { found: false, searched: items.length };
       } catch (e) {
         out.page = { found: null, error: e.message };
         out.errors.push(`Suburb page: ${e.message}`);
@@ -46380,19 +46393,30 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
 
     // 2. Directory listings. A control query first — if a bare site: search returns nothing for a
     // directory, that directory is unsearchable right now and every business would look unlisted.
+    // Run in parallel batches. Sequentially this was 26 DataForSEO calls at a few seconds each —
+    // well over a minute for one button press, long enough for the proxy to drop the request, which
+    // is why pressing it appeared to do nothing at all.
     const dirs = (typeof AUSTRALIAN_DIRECTORIES !== 'undefined' ? AUSTRALIAN_DIRECTORIES : []).slice(0, 25);
-    for (const d of dirs) {
-      let host = '';
-      try { host = new URL(d.url.startsWith('http') ? d.url : 'https://' + d.url).hostname.replace(/^www\./, ''); } catch (e) { continue; }
-      try {
-        const r = await dataForSeoSerp({ keyword: `site:${host} "${name}"`, location: 'Australia', depth: 5 });
-        out.calls++;
-        const items = Array.isArray(r) ? r : (r && r.organic_results) || [];
-        out.directories.push({ name: d.name, host, listed: items.length > 0, url: items[0] ? items[0].url : null });
-      } catch (e) {
-        out.directories.push({ name: d.name, host, listed: null, error: e.message });
-      }
+    const prepared = dirs.map(d => {
+      try { return { d, host: new URL(d.url.startsWith('http') ? d.url : 'https://' + d.url).hostname.replace(/^www\./, '') }; }
+      catch (e) { return null; }
+    }).filter(Boolean);
+
+    for (let i = 0; i < prepared.length; i += 8) {
+      const batch = prepared.slice(i, i + 8);
+      const results = await Promise.all(batch.map(async ({ d, host }) => {
+        try {
+          const r = await dataForSeoSerp({ keyword: `site:${host} "${name}"`, location: 'Australia', depth: 3 });
+          const items = Array.isArray(r) ? r : (r && r.organic_results) || [];
+          return { name: d.name, host, listed: items.length > 0, url: items[0] ? (items[0].link || items[0].url || null) : null };
+        } catch (e) {
+          return { name: d.name, host, listed: null, error: e.message };
+        }
+      }));
+      out.calls += batch.length;
+      out.directories.push(...results);
     }
+    console.log(`[local-visibility] deep-check "${name}" / ${suburb}: ${out.calls} calls, page=${out.page && out.page.found}, dirs=${out.directories.filter(x => x.listed).length}, errors=${out.errors.length}`);
 
     out.cost = +(out.cost + (out.calls - 1) * API_COST_RATES.dataforseo.serp).toFixed(4);
     if (out.calls > 0) {
