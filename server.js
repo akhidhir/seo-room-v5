@@ -46013,13 +46013,35 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
         `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='gbp_profile'`, [projectId])).rows[0];
       if (row && row.config) gbp = typeof row.config === 'string' ? JSON.parse(row.config) : row.config;
     } catch (e) {}
-    const gbpCategory = gbp && Array.isArray(gbp.categories) && gbp.categories.length ? gbp.categories[0] : null;
-    const gbpAllCategories = gbp && Array.isArray(gbp.categories) ? gbp.categories : [];
+
+    // The raw RatingCaptain profile is the primary source — the flattened gbp_profile copy can be
+    // older or missing fields. Read serviceArea straight off it before falling back.
+    let rcProfile = null;
+    try {
+      const row = (await pool.query(`SELECT profile FROM rc_profile_cache WHERE project_id=$1`, [projectId])).rows[0];
+      if (row && row.profile) rcProfile = typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile;
+    } catch (e) {}
+    if (!rcProfile) {
+      try {
+        const row = (await pool.query(
+          `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId])).rows[0];
+        const cfg = row && row.config ? (typeof row.config === 'string' ? JSON.parse(row.config) : row.config) : null;
+        rcProfile = cfg && (cfg.profile || cfg);
+      } catch (e) {}
+    }
+    const rcAreas = (rcProfile && rcProfile.serviceArea && rcProfile.serviceArea.places && Array.isArray(rcProfile.serviceArea.places.placeInfos))
+      ? rcProfile.serviceArea.places.placeInfos.map(p => p.placeName).filter(Boolean) : [];
+    const rcCategory = rcProfile && rcProfile.categories && rcProfile.categories.primaryCategory
+      ? rcProfile.categories.primaryCategory.displayName : null;
+
+    const gbpCategory = rcCategory || (gbp && Array.isArray(gbp.categories) && gbp.categories.length ? gbp.categories[0] : null);
+    const gbpAllCategories = gbp && Array.isArray(gbp.categories) ? gbp.categories : (rcCategory ? [rcCategory] : []);
 
     const manualAreas = Array.isArray(project.service_areas) ? project.service_areas
       : (typeof project.service_areas === 'string' ? (() => { try { return JSON.parse(project.service_areas); } catch (e) { return []; } })() : []);
-    // Prefer the areas Google actually holds over the manually typed list.
-    const gbpAreas = gbp && Array.isArray(gbp.service_areas) ? gbp.service_areas : [];
+    // Google's own list wins. The manual Project Settings list is a local note, not Google's record,
+    // and must never be used to claim what Google was told.
+    const gbpAreas = rcAreas.length ? rcAreas : (gbp && Array.isArray(gbp.service_areas) ? gbp.service_areas : []);
     const serviceAreas = gbpAreas.length ? gbpAreas : manualAreas;
     const areasSource = gbpAreas.length ? 'your Google Business Profile' : (manualAreas.length ? 'Project Settings' : null);
     let reviewText = '';
