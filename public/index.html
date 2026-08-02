@@ -33925,25 +33925,42 @@
       const posColor = (p) => p <= 3 ? '#22c55e' : p <= 10 ? '#f59e0b' : '#ef4444';
       const nrm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
-      // OPPORTUNITY: somebody as far or further from this suburb than we are is beating us there.
-      // Distance is ruled out, so whatever is keeping us down is something we can change.
-      // Returns null when nobody ahead publishes an address — unknown is not the same as "no".
-      const suburbOpportunity = (s) => {
-        let anyKnown = false;
-        const wins = [];
-        for (const kw of runKeywords) {
-          const k = s.keywords[kw];
-          if (!k || !k.points_measured) continue;
-          const ourPos = k.best_position;
-          const ahead = (k.competitors || []).filter(c => ourPos == null || c.best < ourPos);
-          const known = ahead.filter(c => c.distance_km != null);
-          if (known.length) anyKnown = true;
-          const further = known.filter(c => c.distance_km >= s.distance_km);
-          if (further.length) wins.push({ kw, count: further.length, of: known.length, best: further[0] });
+      // TARGETS. The first version starred 48 of 59 suburbs, which told you nothing — one distant
+      // rival anywhere in the top 20 was enough to trigger it. A suburb only qualifies now when:
+      //   1. you are NOT already in the top 3 there (no point chasing a place you're winning),
+      //   2. at least TWO businesses ahead of you are as far or further from that suburb, and
+      //   3. those make up at least half of the ones ahead whose distance we actually know.
+      // Qualifying suburbs are then ranked by population × how badly you're losing, and only the
+      // top 10 carry a number — a list of 48 "priorities" is not a list of priorities.
+      const targets = React.useMemo(() => {
+        const scored = [];
+        for (const s of ((data && data.suburbs) || [])) {
+          let best = null;
+          for (const kw of runKeywords) {
+            const k = s.keywords[kw];
+            if (!k || !k.points_measured) continue;
+            const pos = k.best_position;
+            if (pos != null && pos <= 3) continue;                    // already winning here
+            const ahead = (k.competitors || []).filter(c => pos == null || c.best < pos);
+            const known = ahead.filter(c => c.distance_km != null);
+            if (known.length < 2) continue;                           // not enough to judge
+            const further = known.filter(c => c.distance_km >= s.distance_km);
+            if (further.length < 2) continue;                         // one outlier is not a pattern
+            if (further.length / known.length < 0.5) continue;        // must be the majority
+            // How much is being lost: absent is worse than #12, which is worse than #5.
+            const severity = pos == null ? 1 : pos > 10 ? 0.6 : 0.35;
+            const score = (s.population || 0) * severity;
+            if (!best || score > best.score) best = { kw, score, severity, pos, further: further.length, known: known.length };
+          }
+          if (best) scored.push({ key: s.suburb + '|' + s.state, ...best });
         }
-        if (wins.length) return { winnable: true, wins };
-        return anyKnown ? { winnable: false, wins: [] } : null;
-      };
+        scored.sort((a, b) => b.score - a.score);
+        const map = {};
+        scored.forEach((t, i) => { map[t.key] = { ...t, rank: i + 1 }; });
+        return { map, count: scored.length, top: Math.min(10, scored.length) };
+      }, [data, factors]);
+
+      const targetFor = (s) => targets.map[s.suburb + '|' + s.state] || null;
 
       // Build the per-suburb factor list. ok:true = no gap, false = gap, null = NOT CHECKED.
       // Nothing may return true just because we failed to look — an unchecked box is never a pass.
@@ -34179,24 +34196,40 @@
                 </div>
               )}
 
-              {/* Opportunity filter — the starred suburbs are the ones worth the effort. */}
-              {(() => {
-                const oppCount = sortedSuburbs.filter(s => (suburbOpportunity(s) || {}).winnable).length;
-                if (!oppCount) return null;
-                return (
-                  <div onClick={() => setOppOnly(!oppOnly)} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 12,
-                    background: oppOnly ? 'rgba(245,158,11,0.12)' : 'var(--card)', border: `1px solid ${oppOnly ? '#f59e0b' : 'var(--border)'}`,
-                    borderRadius: 8, padding: '7px 12px', fontSize: 12.5,
-                  }} title="A rival as far or further from that suburb than you is beating you there — so distance is not the reason and it can be fixed">
-                    <input type="checkbox" checked={oppOnly} readOnly style={{ pointerEvents: 'none' }} />
-                    <i className="fas fa-star" style={{ color: '#f59e0b', fontSize: 11 }}></i>
-                    <span style={{ color: 'var(--text2)' }}>Opportunities only</span>
-                    <span style={{ color: '#f59e0b', fontWeight: 700 }}>{oppCount}</span>
-                    <span style={{ color: 'var(--text3)', fontSize: 11 }}>of {sortedSuburbs.length} suburbs</span>
+              {/* Where to start. Numbered, ordered, and short — a list of 48 priorities is not one. */}
+              {targets.top > 0 && (
+                <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '3px solid #f59e0b', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.8 }}>Start here</span>
+                    <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+                      Biggest suburbs where you're outside the top 3 and beaten by businesses further away than you
+                    </span>
+                    <label onClick={() => setOppOnly(!oppOnly)} style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text2)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="checkbox" checked={oppOnly} readOnly style={{ pointerEvents: 'none' }} />
+                      Show only these
+                    </label>
                   </div>
-                );
-              })()}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {Object.values(targets.map).filter(t => t.rank <= targets.top).sort((a, b) => a.rank - b.rank).map(t => {
+                      const nm = t.key.split('|')[0];
+                      const sub = (data.suburbs || []).find(x => x.suburb === nm);
+                      return (
+                        <div key={t.key} onClick={() => setExpanded(t.key)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 7, padding: '5px 9px', cursor: 'pointer', fontSize: 12 }}
+                             title={`${t.pos == null ? 'Absent' : '#' + t.pos} for "${t.kw}". ${t.further} of ${t.known} ahead of you are further away.`}>
+                          <span style={{ background: '#f59e0b', color: '#1a1a1a', borderRadius: 4, fontSize: 10.5, fontWeight: 800, padding: '1px 5px' }}>{t.rank}</span>
+                          <span style={{ fontWeight: 600 }}>{nm}</span>
+                          <span style={{ color: 'var(--text3)', fontSize: 11 }}>{sub ? (sub.population || 0).toLocaleString() : ''} · {t.pos == null ? 'absent' : '#' + t.pos}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {targets.count > targets.top && (
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+                      {targets.count - targets.top} more suburbs also qualify but are smaller — do these first.
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div style={{ background: 'var(--card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto' }}>
@@ -34216,19 +34249,24 @@
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedSuburbs.filter(s => !oppOnly || (suburbOpportunity(s) || {}).winnable).map((s) => {
+                      {sortedSuburbs.filter(s => !oppOnly || (targetFor(s) && targetFor(s).rank <= targets.top)).map((s) => {
                         const key = s.suburb + '|' + s.state;
                         const isOpen = expanded === key;
                         const firstKw = runKeywords[0] ? s.keywords[runKeywords[0]] : null;
-                        const opp = suburbOpportunity(s);
+                        const t = targetFor(s);
+                        const isTop = t && t.rank <= targets.top;
                         return (
                           <React.Fragment key={key}>
-                            <tr onClick={() => setExpanded(isOpen ? null : key)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: isOpen ? 'rgba(20,184,166,0.06)' : opp && opp.winnable ? 'rgba(245,158,11,0.05)' : 'transparent' }}>
+                            <tr onClick={() => setExpanded(isOpen ? null : key)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: isOpen ? 'rgba(20,184,166,0.06)' : isTop ? 'rgba(245,158,11,0.06)' : 'transparent' }}>
                               <td style={{ padding: '8px 10px', fontWeight: 600 }}>
                                 <i className={`fas fa-chevron-${isOpen ? 'down' : 'right'}`} style={{ fontSize: 9, marginRight: 8, color: 'var(--text3)' }}></i>
-                                {opp && opp.winnable && (
-                                  <i className="fas fa-star" style={{ color: '#f59e0b', fontSize: 11, marginRight: 6 }}
-                                     title={`Opportunity — ${opp.wins.map(w => `${w.count} of ${w.of} ahead of you on "${w.kw}" are as far or further from ${s.suburb} and still winning`).join('; ')}. Distance is not the reason.`}></i>
+                                {isTop && (
+                                  <span style={{
+                                    display: 'inline-block', minWidth: 18, textAlign: 'center', marginRight: 7,
+                                    background: '#f59e0b', color: '#1a1a1a', borderRadius: 4, fontSize: 10.5, fontWeight: 800, padding: '1px 4px',
+                                  }} title={`Target #${t.rank} of your top ${targets.top}. ${(s.population || 0).toLocaleString()} people, and you are ${t.pos == null ? 'absent' : '#' + t.pos} for "${t.kw}" while ${t.further} of the ${t.known} businesses ahead of you are as far or further from ${s.suburb}. Distance is not the reason.`}>
+                                    {t.rank}
+                                  </span>
                                 )}
                                 {s.suburb}
                               </td>
@@ -34368,7 +34406,7 @@
               </div>
 
               <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 12, lineHeight: 1.7 }}>
-                <i className="fas fa-star" style={{ color: '#f59e0b', fontSize: 10, marginRight: 4 }}></i> marks a suburb where someone as far or further away is beating you — distance is ruled out, so it is fixable.
+                The amber number is your target order — biggest suburbs where you're outside the top 3 and at least two businesses further away than you are beating you there, so distance is not the reason.
                 <div><strong>absent</strong> means we searched and you were not in the top 20 — that is a finding.
                 <strong style={{ marginLeft: 8 }}>—</strong> means no answer came back, so nothing is known. The two are never merged.</div>
                 <div>Every run is kept as a dated snapshot, so a change made today can be checked against the position in a few weeks' time.</div>
