@@ -9343,6 +9343,75 @@ async function lvFetchSitemapUrls(website) {
   return result;
 }
 
+// A site's own homepage links. One request, cached, and it usually contains the whole
+// "areas we serve" menu — so a missing sitemap no longer means an unknown answer.
+const lvHomeCache = {};
+async function lvFetchHomepageLinks(website) {
+  if (!website) return null;
+  let origin;
+  try { origin = new URL(website.startsWith('http') ? website : 'https://' + website).origin; }
+  catch (e) { return null; }
+  const c = lvHomeCache[origin];
+  if (c && (Date.now() - c.at) < LV_SITEMAP_TTL) return c.urls;
+  let urls = null;
+  try {
+    const r = await fetch(origin, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(12000), redirect: 'follow' });
+    if (r.ok) {
+      const html = await r.text();
+      const links = [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]).filter(u => !u.startsWith('#') && !u.startsWith('mailto') && !u.startsWith('tel'));
+      if (links.length) urls = links.map(u => u.startsWith('http') ? u : origin + (u.startsWith('/') ? u : '/' + u));
+    }
+  } catch (e) {}
+  lvHomeCache[origin] = { urls, at: Date.now() };
+  return urls;
+}
+
+// When the sitemap cannot be read, do not give up and report "unknown". Probe the URL patterns
+// tradie sites actually use, and read the homepage's own links. Both are free.
+const LV_SUBURB_PATTERNS = [
+  '/plumber-{s}/', '/{s}/', '/location/{s}/', '/locations/{s}/', '/areas/{s}/',
+  '/service-area/{s}/', '/service-areas/{s}/', '/areas-we-serve/{s}/', '/suburbs/{s}/',
+  '/plumbing-{s}/', '/plumber-in-{s}/', '/{s}-plumber/',
+];
+async function lvProbeSuburbPage(website, suburb) {
+  let origin;
+  try { origin = new URL(website.startsWith('http') ? website : 'https://' + website).origin; }
+  catch (e) { return { checked: false, error: 'Their website address could not be read' }; }
+  const slug = aipNorm(suburb).replace(/\s+/g, '-');
+  if (!slug) return { checked: false, error: 'No suburb slug' };
+
+  // 1. Their homepage links — one request, catches almost every "areas we serve" menu.
+  try {
+    const r = await fetch(origin, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(12000), redirect: 'follow' });
+    if (r.ok) {
+      const html = await r.text();
+      const links = [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]);
+      const hit = links.find(u => {
+        const n = aipNorm(u).replace(/\s+/g, '-');
+        return n.includes('-' + slug) || n.includes('/' + slug) || n.endsWith(slug);
+      });
+      if (hit) return { checked: true, has_page: true, page_url: hit.startsWith('http') ? hit : origin + (hit.startsWith('/') ? hit : '/' + hit), how: 'linked from their homepage' };
+    }
+  } catch (e) {}
+
+  // 2. Probe the common patterns. HEAD first, GET only if the server rejects HEAD.
+  for (const pat of LV_SUBURB_PATTERNS) {
+    const url = origin + pat.replace('{s}', slug);
+    try {
+      let r = await fetch(url, { method: 'HEAD', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(7000), redirect: 'follow' });
+      if (r.status === 405 || r.status === 501) {
+        r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(9000), redirect: 'follow' });
+      }
+      // Many WordPress sites answer 200 for everything, so a 200 on the URL alone is not proof —
+      // but combined with the exact slug in the final URL it is good enough to report.
+      if (r.ok && aipNorm(r.url).replace(/\s+/g, '-').includes(slug)) {
+        return { checked: true, has_page: true, page_url: r.url, how: 'found at the usual address' };
+      }
+    } catch (e) {}
+  }
+  return { checked: true, has_page: false, page_url: null, how: 'not in their sitemap, not linked from their homepage, and not at any of the usual addresses' };
+}
+
 // Does any URL in this sitemap look like a page for this suburb?
 function lvSitemapHasSuburb(urls, suburb) {
   if (!Array.isArray(urls)) return null;                 // unknown, not "no"
@@ -46060,12 +46129,20 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
       rivals[aipNorm(r.name)] = { name: r.name, website: r.website, sitemap_read: Array.isArray(rivalUrlSets[i]), urls: null };
     });
 
+    // Where a sitemap could not be read, fall back to that site's own homepage links — one request
+    // per site, and it catches the "areas we serve" menu that most tradie sites use. Turns "unknown"
+    // into a real yes/no without a per-suburb request.
+    const needHome = rivalList.map((r, i) => (Array.isArray(rivalUrlSets[i]) ? null : r.website)).map((w, i) => ({ w, i }));
+    const homeSets = await Promise.all(needHome.map(x => x.w ? lvFetchHomepageLinks(x.w) : Promise.resolve(null)));
+    const rivalUrlsFinal = rivalUrlSets.map((u, i) => (Array.isArray(u) ? u : homeSets[i]));
+    const ourFinal = Array.isArray(ourUrls) ? ourUrls : await lvFetchHomepageLinks(project.domain);
+
     const suburbs = {};
     for (const sub of pts) {
-      const ourPage = lvSitemapHasSuburb(ourUrls, sub);
+      const ourPage = lvSitemapHasSuburb(ourFinal, sub);
       const rivalPages = {};
       rivalList.forEach((r, i) => {
-        const hit = lvSitemapHasSuburb(rivalUrlSets[i], sub);
+        const hit = lvSitemapHasSuburb(rivalUrlsFinal[i], sub);
         rivalPages[aipNorm(r.name)] = hit === null ? null : (hit ? true : false);
       });
       suburbs[sub] = {
@@ -46096,6 +46173,72 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
       rivals, suburbs,
       checked_at: new Date().toISOString(),
     });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DEEP CHECK on one competitor. Everything the free checks could not settle: their suburb page
+// (via a site: search rather than guessing at their sitemap) and which of the 25 Australian
+// directories list them. Costs are quoted before it runs.
+const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
+app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res) => {
+  try {
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
+    const { projectId } = req.params;
+    const name = String(req.body?.name || '').trim();
+    const website = String(req.body?.website || '').trim();
+    const suburb = String(req.body?.suburb || '').trim();
+    if (!name) return res.status(400).json({ error: 'Which competitor?' });
+
+    const key = `${projectId}|${aipNorm(name)}|${aipNorm(suburb)}`;
+    const cached = lvDeepCache[key];
+    if (cached && (Date.now() - cached.at) < 24 * 60 * 60 * 1000 && !req.body?.force) {
+      return res.json({ ...cached.result, cached: true, checked_at: new Date(cached.at).toISOString() });
+    }
+
+    let domain = '';
+    try { domain = new URL(website.startsWith('http') ? website : 'https://' + website).hostname.replace(/^www\./, ''); } catch (e) {}
+
+    const out = { name, website, suburb, page: null, directories: [], cost: 0, calls: 0, errors: [] };
+
+    // 1. Their page for this suburb — ask Google rather than guessing at their site structure.
+    if (domain && suburb) {
+      try {
+        const r = await dataForSeoSerp({ keyword: `site:${domain} ${suburb}`, location: 'Australia', depth: 10 });
+        out.calls++;
+        const items = Array.isArray(r) ? r : (r && r.organic_results) || [];
+        const slug = aipNorm(suburb).replace(/\s+/g, '-');
+        const hit = items.find(i => i && i.url && aipNorm(i.url).replace(/\s+/g, '-').includes(slug));
+        out.page = hit ? { found: true, url: hit.url, title: hit.title || '' } : { found: false };
+      } catch (e) {
+        out.page = { found: null, error: e.message };
+        out.errors.push(`Suburb page: ${e.message}`);
+      }
+    } else {
+      out.page = { found: null, error: domain ? 'No suburb given' : 'They have no website on their Google profile' };
+    }
+
+    // 2. Directory listings. A control query first — if a bare site: search returns nothing for a
+    // directory, that directory is unsearchable right now and every business would look unlisted.
+    const dirs = (typeof AUSTRALIAN_DIRECTORIES !== 'undefined' ? AUSTRALIAN_DIRECTORIES : []).slice(0, 25);
+    for (const d of dirs) {
+      let host = '';
+      try { host = new URL(d.url.startsWith('http') ? d.url : 'https://' + d.url).hostname.replace(/^www\./, ''); } catch (e) { continue; }
+      try {
+        const r = await dataForSeoSerp({ keyword: `site:${host} "${name}"`, location: 'Australia', depth: 5 });
+        out.calls++;
+        const items = Array.isArray(r) ? r : (r && r.organic_results) || [];
+        out.directories.push({ name: d.name, host, listed: items.length > 0, url: items[0] ? items[0].url : null });
+      } catch (e) {
+        out.directories.push({ name: d.name, host, listed: null, error: e.message });
+      }
+    }
+
+    out.cost = +(out.calls * API_COST_RATES.dataforseo.serp).toFixed(4);
+    if (out.calls > 0) {
+      try { await logApiCost(parseInt(projectId), 'local_visibility_deep', 'dataforseo', out.calls, out.cost, { competitor: name, suburb }); } catch (e) {}
+    }
+    lvDeepCache[key] = { result: out, at: Date.now() };
+    res.json({ ...out, cached: false, checked_at: new Date().toISOString() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

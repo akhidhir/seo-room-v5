@@ -33793,6 +33793,8 @@
       const [tab, setTab] = useState('suburbs');
       const [factors, setFactors] = useState(null);
       const [oppOnly, setOppOnly] = useState(false);
+      const [deep, setDeep] = useState({});
+      const [deepBusy, setDeepBusy] = useState(null);
 
       const keywords = [kw1, kw2].map(k => (k || '').trim()).filter(Boolean);
 
@@ -33925,6 +33927,20 @@
       const posColor = (p) => p <= 3 ? '#22c55e' : p <= 10 ? '#f59e0b' : '#ef4444';
       const nrm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
+      // Fills in what the free checks could not settle for one competitor: their page for this
+      // suburb (asked of Google, not guessed from their site) and all 25 directories.
+      const deepCheck = async (c, suburb) => {
+        setDeepBusy(c.name);
+        try {
+          const r = await api(`/projects/${project.id}/local-visibility/deep-check`, {
+            method: 'POST', body: { name: c.name, website: c.website || '', suburb },
+          });
+          if (r.error) setError(r.error);
+          else setDeep(prev => ({ ...prev, [c.name]: r }));
+        } catch (e) { setError(e.message); }
+        setDeepBusy(null);
+      };
+
       // TARGETS. The first version starred 48 of 59 suburbs, which told you nothing — one distant
       // rival anywhere in the top 20 was enough to trigger it. A suburb only qualifies now when:
       //   1. you are NOT already in the top 3 there (no point chasing a place you're winning),
@@ -34011,15 +34027,20 @@
             : `Different category to theirs${catSrc ? ' — yours from ' + catSrc : ''}`,
         });
 
+        // A deep check answers this outright, so it wins over anything inferred from their sitemap.
+        const d = deep[c.name];
+        const theirPageFinal = d && d.page && d.page.found !== null && d.page.found !== undefined
+          ? d.page.found : theirPage;
+        const theirKnown = theirPageFinal === true || theirPageFinal === false;
         rows.push({
           label: `Page for ${s.suburb}`,
-          win: !f || f.our_page === null || theirPage === null || theirPage === undefined ? null
-            : (!!f.our_page === !!theirPage ? 'same' : !!f.our_page),
-          you: !f ? '—' : f.our_page === null ? 'sitemap unreadable' : f.our_page ? 'yes' : 'none',
-          them: theirPage === undefined ? '—' : theirPage === null ? 'sitemap unreadable' : theirPage ? 'yes' : 'none',
-          note: !f || f.our_page === null ? 'Your sitemap could not be read'
-            : theirPage === null || theirPage === undefined ? 'Their sitemap could not be read, so this is unknown'
-            : (!!f.our_page === !!theirPage) ? (f.our_page ? 'You both have one' : 'Neither of you has one')
+          win: !f || f.our_page === null || !theirKnown ? null
+            : (!!f.our_page === !!theirPageFinal ? 'same' : !!f.our_page),
+          you: !f ? '—' : f.our_page === null ? 'site unreadable' : f.our_page ? 'yes' : 'none',
+          them: !theirKnown ? 'unknown' : theirPageFinal ? 'yes' : 'none',
+          note: !f || f.our_page === null ? 'Your sitemap and homepage could not be read'
+            : !theirKnown ? 'Their sitemap and homepage could not be read — use Check the rest to ask Google directly'
+            : (!!f.our_page === !!theirPageFinal) ? (f.our_page ? 'You both have one' : 'Neither of you has one')
             : f.our_page ? 'You have one, they do not' : 'They have one for this suburb and you do not',
         });
 
@@ -34054,12 +34075,19 @@
         });
 
         const cit = factors && factors.our ? factors.our.citations : null;
+        const theirDirs = d && Array.isArray(d.directories) ? d.directories : null;
+        const theirListed = theirDirs ? theirDirs.filter(x => x.listed === true).length : null;
+        const theirChecked = theirDirs ? theirDirs.filter(x => x.listed !== null).length : null;
         rows.push({
           label: 'Directory listings (NAP)',
-          win: !cit || !cit.checked ? null : cit.listed >= Math.ceil(cit.total * 0.6),
-          you: cit && cit.checked ? `${cit.listed} of ${cit.total}` : '—', them: 'not checked',
-          note: !cit || !cit.checked ? 'Run Citations & NAP to fill this in'
-            : cit.listed >= Math.ceil(cit.total * 0.6) ? 'Reasonable coverage' : 'Thin — most directories do not list you',
+          win: !cit || !cit.checked ? null : theirListed == null ? null : cit.listed === theirListed ? 'same' : cit.listed > theirListed,
+          you: cit && cit.checked ? `${cit.listed} of ${cit.total}` : '—',
+          them: theirListed != null ? `${theirListed} of ${theirChecked}` : 'unknown',
+          note: !cit || !cit.checked ? 'Run Citations & NAP to fill in your side'
+            : theirListed == null ? 'Use Check the rest to search all 25 directories for them'
+            : cit.listed > theirListed ? `You are on ${cit.listed - theirListed} more than them`
+            : cit.listed === theirListed ? 'Level'
+            : `They are on ${theirListed - cit.listed} more than you`,
         });
 
         return rows;
@@ -34393,11 +34421,61 @@
                                                         ))}
                                                       </tbody>
                                                     </table>
-                                                    <div style={{ fontSize: 11.5, color: losses ? '#f59e0b' : 'var(--text3)', marginTop: 8, lineHeight: 1.6 }}>
-                                                      {losses > 0
-                                                        ? `${losses} thing${losses > 1 ? 's' : ''} to close against this one business.`
-                                                        : `You are level or ahead on everything measured here and still behind them. Whatever is doing the work is not in this list — likely their GBP itself (services, photos, posts, review recency) or something we do not measure yet.`}
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                                                      <div style={{ fontSize: 11.5, color: losses ? '#f59e0b' : 'var(--text3)', lineHeight: 1.6, flex: 1 }}>
+                                                        {losses > 0
+                                                          ? `${losses} thing${losses > 1 ? 's' : ''} to close against this one business.`
+                                                          : `You are level or ahead on everything measured here and still behind them. Whatever is doing the work is not in this list — likely their GBP itself (services, photos, posts, review recency) or something we do not measure yet.`}
+                                                      </div>
+                                                      {/* Fills in every row that the free checks could not settle. */}
+                                                      {rows.some(r => r.win === null) && (
+                                                        <button className="btn" disabled={deepBusy === c.name}
+                                                          onClick={(e) => { e.stopPropagation(); deepCheck(c, s.suburb); }}
+                                                          style={{ height: 28, fontSize: 11.5, borderColor: '#14b8a6', color: '#14b8a6', whiteSpace: 'nowrap' }}>
+                                                          {deepBusy === c.name ? <span className="spinner"></span> : <i className="fas fa-magnifying-glass-plus" style={{ marginRight: 5 }}></i>}
+                                                          Check the rest (~$0.10)
+                                                        </button>
+                                                      )}
                                                     </div>
+                                                    {deep[c.name] && (
+                                                      <div style={{ marginTop: 10, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', fontSize: 12 }}>
+                                                        <div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>
+                                                          Their directory listings — checked {new Date(deep[c.name].checked_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}{deep[c.name].cached ? ' (cached)' : ''}
+                                                        </div>
+                                                        {(() => {
+                                                          const ds = deep[c.name].directories || [];
+                                                          const listed = ds.filter(d => d.listed === true);
+                                                          const failed = ds.filter(d => d.listed === null);
+                                                          const ourCit = factors && factors.our ? factors.our.citations : null;
+                                                          return (
+                                                            <>
+                                                              <div style={{ marginBottom: 6 }}>
+                                                                <strong style={{ color: listed.length > (ourCit ? ourCit.listed : 0) ? '#f59e0b' : 'var(--text)' }}>{listed.length} of {ds.length - failed.length}</strong>
+                                                                <span style={{ color: 'var(--text3)' }}> directories list them</span>
+                                                                {ourCit && ourCit.checked && <span style={{ color: 'var(--text3)' }}> · you are on {ourCit.listed} of {ourCit.total}</span>}
+                                                                {failed.length > 0 && <span style={{ color: 'var(--text3)' }}> · {failed.length} could not be checked</span>}
+                                                              </div>
+                                                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                                                                {listed.map(d => (
+                                                                  <a key={d.name} href={d.url || '#'} target="_blank" rel="noopener noreferrer"
+                                                                     style={{ fontSize: 11, background: 'rgba(245,158,11,0.12)', color: '#f59e0b', borderRadius: 4, padding: '2px 7px', textDecoration: 'none' }}>{d.name}</a>
+                                                                ))}
+                                                                {listed.length === 0 && <span style={{ color: 'var(--text3)' }}>None of the 25 list them</span>}
+                                                              </div>
+                                                              {deep[c.name].page && (
+                                                                <div style={{ marginTop: 8, color: 'var(--text2)' }}>
+                                                                  Page for {s.suburb}: {deep[c.name].page.found === true
+                                                                    ? <a href={deep[c.name].page.url} target="_blank" rel="noopener noreferrer" style={{ color: '#f59e0b' }}>yes — {deep[c.name].page.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60)}</a>
+                                                                    : deep[c.name].page.found === false ? <span style={{ color: 'var(--text3)' }}>no page found on their site</span>
+                                                                    : <span style={{ color: 'var(--text3)' }}>could not check — {deep[c.name].page.error}</span>}
+                                                                </div>
+                                                              )}
+                                                              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text3)' }}>Cost ${Number(deep[c.name].cost || 0).toFixed(2)}</div>
+                                                            </>
+                                                          );
+                                                        })()}
+                                                      </div>
+                                                    )}
                                                   </div>
                                                 );
                                               })}
