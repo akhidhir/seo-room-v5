@@ -34184,6 +34184,21 @@
               <button className="btn btn-primary" onClick={handleCheckRankings} disabled={syncing || mapsKeywordsRaw.length === 0} style={{ fontSize: 13 }}>
                 {syncing ? <><i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} />{scanProgress || 'Scanning...'}</> : <><i className="fa-solid fa-th" style={{ marginRight: 4 }} />Grid Scan</>}
               </button>
+              {/* How old the grid data is. Every reach figure and orbit distance is built on this, and
+                  with no date on screen a months-old scan reads exactly like one from this morning. */}
+              {(() => {
+                const dates = Object.values(gridScans || {}).map(g => g && g.scanned_at).filter(Boolean).sort();
+                if (!dates.length) return <span style={{ fontSize: 11.5, color: 'var(--text3)', alignSelf: 'center' }}>No grid scan yet</span>;
+                const last = new Date(dates[dates.length - 1]);
+                const days = Math.floor((Date.now() - last.getTime()) / 86400000);
+                const col = days > 30 ? '#ef4444' : days > 14 ? '#f59e0b' : 'var(--text3)';
+                return (
+                  <span style={{ fontSize: 11.5, color: col, alignSelf: 'center' }} title="Grid scans age. Reach and coverage figures elsewhere are only as current as this.">
+                    Last grid scan: {last.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    {' '}({days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`})
+                  </span>
+                );
+              })()}
             </div>
           </div>
 
