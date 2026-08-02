@@ -468,6 +468,7 @@ async function initDb() {
     await client.query(`ALTER TABLE local_visibility_runs ADD COLUMN IF NOT EXISTS our_title TEXT`).catch(() => {});
     await client.query(`ALTER TABLE local_visibility_runs ADD COLUMN IF NOT EXISTS our_rating DOUBLE PRECISION`).catch(() => {});
     await client.query(`ALTER TABLE local_visibility_runs ADD COLUMN IF NOT EXISTS our_reviews INTEGER`).catch(() => {});
+    await client.query(`ALTER TABLE local_visibility_runs ADD COLUMN IF NOT EXISTS our_type TEXT`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_run ON local_visibility_points(run_id)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_history ON local_visibility_points(project_id, keyword, suburb, measured_at)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_runs_project ON local_visibility_runs(project_id, measured_at DESC)`).catch(() => {});
@@ -9298,6 +9299,61 @@ function lvEligibleSuburbs({ centerLat, centerLng, radiusKm, minPopulation, cent
 // ===================== AI Presence gap helpers =====================
 
 function aipNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+
+// ===================== Local Visibility factor checks =====================
+// All free: our own sitemap, our GBP service areas, our review text, our citation record, and the
+// rivals' sitemaps. No API spend, so these can run on demand without a cost warning.
+
+const lvSitemapCache = {};      // origin -> { urls, at }
+const LV_SITEMAP_TTL = 6 * 60 * 60 * 1000;
+
+async function lvFetchSitemapUrls(website) {
+  if (!website) return null;
+  let origin;
+  try { origin = new URL(website.startsWith('http') ? website : 'https://' + website).origin; }
+  catch (e) { return null; }
+  const cached = lvSitemapCache[origin];
+  if (cached && (Date.now() - cached.at) < LV_SITEMAP_TTL) return cached.urls;
+  const get = async (u) => {
+    try {
+      const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEORoomBot/1.0)' }, signal: AbortSignal.timeout(10000), redirect: 'follow' });
+      return r.ok ? await r.text() : null;
+    } catch (e) { return null; }
+  };
+  let urls = [];
+  for (const path of ['/sitemap_index.xml', '/sitemap.xml', '/wp-sitemap.xml']) {
+    const xml = await get(origin + path);
+    if (!xml) continue;
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(x => x[1]);
+    const subs = locs.filter(l => /\.xml($|\?)/i.test(l)).slice(0, 8);
+    if (subs.length && subs.length === locs.length) {
+      const inners = await Promise.all(subs.map(get));
+      for (const inner of inners) {
+        if (inner) urls.push(...[...inner.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(x => x[1]));
+      }
+    } else {
+      urls.push(...locs);
+    }
+    if (urls.length) break;
+  }
+  // null means "could not be read" — which is not the same as "has no pages", and the two must
+  // never collapse into the same tick box.
+  const result = urls.length ? urls : null;
+  lvSitemapCache[origin] = { urls: result, at: Date.now() };
+  return result;
+}
+
+// Does any URL in this sitemap look like a page for this suburb?
+function lvSitemapHasSuburb(urls, suburb) {
+  if (!Array.isArray(urls)) return null;                 // unknown, not "no"
+  const slug = aipNorm(suburb).replace(/\s+/g, '-');
+  if (!slug) return null;
+  const hit = urls.find(u => {
+    const n = aipNorm(u).replace(/\s+/g, '-');
+    return n.includes('-' + slug) || n.endsWith(slug) || n.includes('/' + slug);
+  });
+  return hit || false;
+}
 
 // Is this business named in this block of text? Deliberately strict: an exact normalised-name
 // match, or every significant word present. "Plumbing" alone must never count as a mention.
@@ -45757,7 +45813,7 @@ app.post('/api/projects/:projectId/local-visibility/run', async (req, res) => {
                     }
                     if (position == null && isUs(place)) {
                       position = pos;
-                      if (!ourProfile) ourProfile = { title: place.title || '', rating: place.rating || null, reviews: place.reviews || 0 };
+                      if (!ourProfile) ourProfile = { title: place.title || '', rating: place.rating || null, reviews: place.reviews || 0, type: place.type || '' };
                     }
                   }
                   // position === null here means MEASURED AND ABSENT from the top 20 — a real finding.
@@ -45804,11 +45860,11 @@ app.post('/api/projects/:projectId/local-visibility/run', async (req, res) => {
       await pool.query(
         `UPDATE local_visibility_runs
            SET status=$1, error=$2, lookups_measured=$3, lookups_failed=$4, api_calls=$5, cost=$6,
-               our_title=$7, our_rating=$8, our_reviews=$9, finished_at=NOW()
-         WHERE id=$10`,
+               our_title=$7, our_rating=$8, our_reviews=$9, our_type=$10, finished_at=NOW()
+         WHERE id=$11`,
         [job.error ? 'failed' : 'complete', job.error, job.measured, job.failed, billable, cost,
          ourProfile ? ourProfile.title : null, ourProfile ? ourProfile.rating : null,
-         ourProfile ? ourProfile.reviews : null, runRow.id]
+         ourProfile ? ourProfile.reviews : null, ourProfile ? ourProfile.type : null, runRow.id]
       ).catch(() => {});
       if (billable > 0) {
         try { await logApiCost(parseInt(projectId), 'local_visibility', 'dataforseo', billable, cost, { keywords: plan.keywords, suburbs: plan.suburbs.length, points_per_suburb: plan.pointsPer }); } catch (e) {}
@@ -45907,11 +45963,95 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
         min_population: run.min_population, suburbs_total: run.suburbs_total,
         lookups_attempted: run.lookups_attempted, lookups_measured: run.lookups_measured,
         lookups_failed: run.lookups_failed, api_calls: run.api_calls, cost: run.cost, error: run.error,
-        our_title: run.our_title, our_rating: run.our_rating, our_reviews: run.our_reviews,
+        our_title: run.our_title, our_rating: run.our_rating, our_reviews: run.our_reviews, our_type: run.our_type,
         method: 'DataForSEO Maps · bare keyword · GPS at suburb · top 20',
       },
       keywords: run.keywords || [],
       suburbs,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// The factor checklist behind each suburb. Costs nothing — our own sitemap, our GBP service areas,
+// our review text, our citation record, and the rivals' sitemaps. Loaded separately from /latest so
+// a slow rival server never holds up the table.
+app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const run = (await pool.query(
+      `SELECT * FROM local_visibility_runs WHERE project_id=$1 AND status <> 'running' ORDER BY measured_at DESC LIMIT 1`, [projectId]
+    )).rows[0];
+    if (!run) return res.json({ suburbs: {}, rivals: {}, our: null });
+
+    const pts = (await pool.query(
+      `SELECT DISTINCT suburb FROM local_visibility_points WHERE run_id=$1`, [run.id])).rows.map(r => r.suburb);
+
+    // Distinct rival websites across the whole run — each sitemap fetched once, not once per suburb.
+    const rows = (await pool.query(`SELECT top_results FROM local_visibility_points WHERE run_id=$1`, [run.id])).rows;
+    const rivalSites = {};
+    for (const r of rows) for (const c of (r.top_results || [])) {
+      if (!c.title || !c.website) continue;
+      const k = aipNorm(c.title);
+      if (k && !rivalSites[k]) rivalSites[k] = { name: c.title, website: c.website };
+    }
+    const rivalList = Object.values(rivalSites).slice(0, 14);
+
+    const [ourUrls, ...rivalUrlSets] = await Promise.all([
+      lvFetchSitemapUrls(project.domain),
+      ...rivalList.map(r => lvFetchSitemapUrls(r.website)),
+    ]);
+
+    // Free signals we already hold.
+    const serviceAreas = Array.isArray(project.service_areas) ? project.service_areas
+      : (typeof project.service_areas === 'string' ? (() => { try { return JSON.parse(project.service_areas); } catch (e) { return []; } })() : []);
+    let reviewText = '';
+    try {
+      const rc = (await pool.query(`SELECT reviews FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
+      reviewText = JSON.stringify((rc && rc.reviews) || []);
+    } catch (e) {}
+    let cites = { listed: 0, total: 0, checked: false };
+    try {
+      const c = (await pool.query(`SELECT status FROM citations WHERE project_id=$1`, [projectId])).rows;
+      if (c.length) cites = { listed: c.filter(x => x.status === 'listed').length, total: c.length, checked: true };
+    } catch (e) {}
+
+    const rivals = {};
+    rivalList.forEach((r, i) => {
+      rivals[aipNorm(r.name)] = { name: r.name, website: r.website, sitemap_read: Array.isArray(rivalUrlSets[i]), urls: null };
+    });
+
+    const suburbs = {};
+    for (const sub of pts) {
+      const ourPage = lvSitemapHasSuburb(ourUrls, sub);
+      const rivalPages = {};
+      rivalList.forEach((r, i) => {
+        const hit = lvSitemapHasSuburb(rivalUrlSets[i], sub);
+        rivalPages[aipNorm(r.name)] = hit === null ? null : (hit ? true : false);
+      });
+      suburbs[sub] = {
+        our_page: ourPage === null ? null : (ourPage ? { url: ourPage } : false),
+        in_service_areas: serviceAreas.length
+          ? serviceAreas.some(a => aipNorm(a) === aipNorm(sub) || aipNorm(a).includes(aipNorm(sub)))
+          : null,
+        in_reviews: reviewText ? aipNorm(reviewText).includes(aipNorm(sub)) : null,
+        rival_pages: rivalPages,
+      };
+    }
+
+    res.json({
+      our: {
+        sitemap_read: Array.isArray(ourUrls),
+        pages_seen: Array.isArray(ourUrls) ? ourUrls.length : 0,
+        service_areas_set: serviceAreas.length,
+        reviews_cached: !!reviewText && reviewText.length > 10,
+        citations: cites,
+        gbp_category: run.our_type || null,
+      },
+      rivals, suburbs,
+      checked_at: new Date().toISOString(),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
