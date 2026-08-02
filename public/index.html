@@ -34050,13 +34050,15 @@
         // and a suburb missing from THAT proves nothing — it is an incomplete local note, not
         // Google's record. Reporting "Google is told you do not serve here" from it was wrong.
         const ourF = (factors && factors.our) || {};
-        const fromGoogle = ourF.service_areas_source === 'your Google Business Profile';
+        // "Trustworthy" means: it came from Google AND the stored copy does not look out of date.
+        const fromGoogle = ourF.service_areas_source === 'your Google Business Profile' && !ourF.service_areas_suspect;
         const areaCount = ourF.service_areas_set || 0;
+        const syncedTxt = ourF.gbp_synced_at ? new Date(ourF.gbp_synced_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
         rows.push({
           label: 'In your GBP service areas',
           win: !f || f.in_service_areas === null ? null
             : f.in_service_areas ? true                       // listed — true wherever it was found
-            : (fromGoogle ? false : null),                    // absent from a partial list proves nothing
+            : (fromGoogle ? false : null),                    // absent from a partial or stale list proves nothing
           you: !f ? '—' : f.in_service_areas === null ? 'none set' : f.in_service_areas ? 'yes' : (fromGoogle ? 'no' : 'not in our copy'),
           // Google never publishes another business's service-area list. What we CAN tell from their
           // profile is whether they run as a service-area business at all (no public address).
@@ -34065,8 +34067,9 @@
             : 'service-area business, list not published',
           note: !f ? 'Checking…'
             : f.in_service_areas === null ? 'No service areas found on your synced profile or in Project Settings'
-            : f.in_service_areas ? `Listed in ${ourF.service_areas_source} (${areaCount} areas)`
-            : fromGoogle ? `Not one of the ${areaCount} areas on your Google profile — Google is told you do not serve here`
+            : f.in_service_areas ? `Listed in ${ourF.service_areas_source} (${areaCount} areas${syncedTxt ? ', synced ' + syncedTxt : ''})`
+            : fromGoogle ? `Not one of the ${areaCount} areas on your Google profile${syncedTxt ? ', synced ' + syncedTxt : ''} — Google is told you do not serve here`
+            : ourF.service_areas_suspect ? `Unknown. Our copy of your Google profile lists only ${areaCount} service area${areaCount === 1 ? '' : 's'}${syncedTxt ? ' (synced ' + syncedTxt + ')' : ''} while ${ourF.service_areas_manual_count} are set in Project Settings — the copy is out of date, so a suburb missing from it proves nothing. Re-sync the profile.`
             : `Unknown. Your Google profile has no service-area list synced, and the ${areaCount} areas in Project Settings are a manual list — a suburb missing from it proves nothing. Sync the profile to check this properly.`,
         });
 

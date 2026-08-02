@@ -46184,10 +46184,10 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 
     // The raw RatingCaptain profile is the primary source — the flattened gbp_profile copy can be
     // older or missing fields. Read serviceArea straight off it before falling back.
-    let rcProfile = null;
+    let rcProfile = null, gbpSyncedAt = null;
     try {
-      const row = (await pool.query(`SELECT profile FROM rc_profile_cache WHERE project_id=$1`, [projectId])).rows[0];
-      if (row && row.profile) rcProfile = typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile;
+      const row = (await pool.query(`SELECT profile, synced_at FROM rc_profile_cache WHERE project_id=$1`, [projectId])).rows[0];
+      if (row && row.profile) { rcProfile = typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile; gbpSyncedAt = row.synced_at; }
     } catch (e) {}
     if (!rcProfile) {
       try {
@@ -46282,6 +46282,12 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
         gbp_description: (gbp && gbp.description) || (rcProfile && rcProfile.profile && rcProfile.profile.description) || null,
         gbp_services: (gbp && Array.isArray(gbp.services) ? gbp.services : []),
         gbp_service_areas: serviceAreas,
+        gbp_synced_at: gbpSyncedAt,
+        // A stored profile listing 3 service areas while 138 are set locally is not a profile that
+        // says "we serve 3 suburbs" — it is an out-of-date copy. Asserting "Google is told you do
+        // not serve here" from it is a false claim, so it is flagged and the row goes Unknown.
+        service_areas_suspect: gbpAreas.length > 0 && manualAreas.length >= Math.max(5, gbpAreas.length * 3),
+        service_areas_manual_count: manualAreas.length,
         gbp_photos: (gbp && gbp.photos_count != null) ? gbp.photos_count : null,
         gbp_hours_set: !!(gbp && Array.isArray(gbp.hours) && gbp.hours.length),
       },
