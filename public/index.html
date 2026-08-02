@@ -33941,12 +33941,13 @@
             if (!k || !k.points_measured) continue;
             const pos = k.best_position;
             if (pos != null && pos <= 3) continue;                    // already winning here
-            const ahead = (k.competitors || []).filter(c => pos == null || c.best < pos);
-            const known = ahead.filter(c => c.distance_km != null);
-            if (known.length < 2) continue;                           // not enough to judge
+            // Only the TOP 3 matter in Maps, and only the ones standing at the same distance or
+            // further can be beaten on merit rather than on geography.
+            const top3 = (k.competitors || []).filter(c => c.best <= 3);
+            const known = top3.filter(c => c.distance_km != null);
+            if (!known.length) continue;                              // all hide their address — unknown, not an opportunity
             const further = known.filter(c => c.distance_km >= s.distance_km);
-            if (further.length < 2) continue;                         // one outlier is not a pattern
-            if (further.length / known.length < 0.5) continue;        // must be the majority
+            if (!further.length) continue;                            // the whole top 3 is closer — geography
             // How much is being lost: absent is worse than #12, which is worse than #5.
             const severity = pos == null ? 1 : pos > 10 ? 0.6 : 0.35;
             const score = (s.population || 0) * severity;
@@ -33962,94 +33963,86 @@
 
       const targetFor = (s) => targets.map[s.suburb + '|' + s.state] || null;
 
-      // Build the per-suburb factor list. ok:true = no gap, false = gap, null = NOT CHECKED.
-      // Nothing may return true just because we failed to look — an unchecked box is never a pass.
-      const buildChecklist = (s, k, kw) => {
+      // ONE competitor at a time. Every row compares us to the SAME business — comparing our reviews
+      // to one rival and our category to a different one proves nothing about either.
+      // win: true = we're ahead · false = they're ahead (a gap) · 'same' = level · null = NOT CHECKED.
+      const buildHeadToHead = (s, k, c) => {
         const run = data.run || {};
         const f = factors && factors.suburbs ? factors.suburbs[s.suburb] : null;
-        const ourPos = k.best_position;
-        const ahead = (k.competitors || []).filter(c => ourPos == null || c.best < ourPos);
+        const theirPage = f && f.rival_pages ? f.rival_pages[nrm(c.name)] : undefined;
         const rows = [];
 
-        // 1. Distance — the one that decides whether the rest is worth doing.
-        const known = ahead.filter(c => c.distance_km != null);
-        const further = known.filter(c => c.distance_km >= s.distance_km);
         rows.push({
-          label: 'Distance', ok: known.length === 0 ? null : further.length > 0,
-          you: `${s.distance_km} km`,
-          them: known.length ? `${Math.min(...known.map(c => c.distance_km))}–${Math.max(...known.map(c => c.distance_km))} km` : 'not published',
-          note: known.length === 0
-            ? 'None ahead of you publish an address, so distance cannot be ruled in or out'
-            : further.length > 0
-              ? `${further.length} of ${known.length} ahead are as far or further and still winning — fixable`
-              : 'All ahead of you are closer. That part is geography',
+          label: 'Distance to suburb', win: true,
+          you: `${s.distance_km} km`, them: `${c.distance_km} km`,
+          note: `You are ${Math.round((c.distance_km - s.distance_km) * 10) / 10} km closer and still behind them`,
         });
 
-        // 2 & 3. Reviews and rating.
-        const topRev = Math.max(0, ...ahead.map(c => c.reviews || 0));
+        const theirRev = c.reviews || 0;
         rows.push({
-          label: 'Google reviews', ok: run.our_reviews == null ? null : run.our_reviews >= topRev,
-          you: run.our_reviews != null ? run.our_reviews : '—',
-          them: ahead.length ? topRev : '—',
-          note: run.our_reviews == null ? 'Not captured — you were not found at any point in this run'
-            : run.our_reviews >= topRev ? 'Ahead on volume' : `Behind by ${topRev - run.our_reviews}`,
-        });
-        const topRat = Math.max(0, ...ahead.map(c => c.rating || 0));
-        rows.push({
-          label: 'Star rating', ok: run.our_rating == null ? null : run.our_rating >= topRat,
-          you: run.our_rating != null ? `${run.our_rating}★` : '—',
-          them: topRat ? `${topRat}★` : '—',
-          note: run.our_rating == null ? 'Not captured in this run' : run.our_rating >= topRat ? 'Level or better' : 'Slightly behind the best here',
+          label: 'Google reviews',
+          win: run.our_reviews == null ? null : run.our_reviews === theirRev ? 'same' : run.our_reviews > theirRev,
+          you: run.our_reviews != null ? run.our_reviews : '—', them: theirRev,
+          note: run.our_reviews == null ? 'Not captured — you were not found in this run'
+            : run.our_reviews > theirRev ? `${run.our_reviews - theirRev} more than them`
+            : run.our_reviews === theirRev ? 'Level'
+            : `${theirRev - run.our_reviews} behind them`,
         });
 
-        // 4. A page for this suburb on your own site.
-        const rivalsWithPage = f ? Object.values(f.rival_pages || {}).filter(v => v === true).length : 0;
-        const rivalsChecked = f ? Object.values(f.rival_pages || {}).filter(v => v !== null).length : 0;
+        const theirRat = c.rating || 0;
         rows.push({
-          label: 'Page for this suburb', ok: !f || f.our_page === null ? null : !!f.our_page,
+          label: 'Star rating',
+          win: run.our_rating == null ? null : run.our_rating === theirRat ? 'same' : run.our_rating > theirRat,
+          you: run.our_rating != null ? `${run.our_rating}★` : '—', them: theirRat ? `${theirRat}★` : '—',
+          note: run.our_rating == null ? 'Not captured in this run'
+            : run.our_rating >= theirRat ? 'Level or better' : 'Below theirs',
+        });
+
+        rows.push({
+          label: 'GBP main category',
+          win: !run.our_type || !c.type ? null : nrm(run.our_type) === nrm(c.type) ? 'same' : false,
+          you: run.our_type || '—', them: c.type || '—',
+          note: !run.our_type ? 'Yours not captured in this run' : !c.type ? 'Theirs not returned'
+            : nrm(run.our_type) === nrm(c.type) ? 'Same category' : 'Different category to theirs',
+        });
+
+        rows.push({
+          label: `Page for ${s.suburb}`,
+          win: !f || f.our_page === null || theirPage === null || theirPage === undefined ? null
+            : (!!f.our_page === !!theirPage ? 'same' : !!f.our_page),
           you: !f ? '—' : f.our_page === null ? 'sitemap unreadable' : f.our_page ? 'yes' : 'none',
-          them: rivalsChecked ? `${rivalsWithPage} of ${rivalsChecked} have one` : '—',
-          note: !f ? 'Checking…' : f.our_page === null ? 'Your sitemap could not be read, so this is unknown'
-            : f.our_page ? 'You have one' : rivalsWithPage ? 'They have one for this suburb and you do not' : 'Nobody here has one',
+          them: theirPage === undefined ? '—' : theirPage === null ? 'sitemap unreadable' : theirPage ? 'yes' : 'none',
+          note: !f || f.our_page === null ? 'Your sitemap could not be read'
+            : theirPage === null || theirPage === undefined ? 'Their sitemap could not be read, so this is unknown'
+            : (!!f.our_page === !!theirPage) ? (f.our_page ? 'You both have one' : 'Neither of you has one')
+            : f.our_page ? 'You have one, they do not' : 'They have one for this suburb and you do not',
         });
 
-        // 5. GBP primary category.
-        const theirCats = {};
-        for (const c of ahead) if (c.type) theirCats[c.type] = (theirCats[c.type] || 0) + 1;
-        const topCat = Object.entries(theirCats).sort((a, b) => b[1] - a[1])[0];
         rows.push({
-          label: 'GBP main category', ok: !run.our_type ? null : (!topCat || nrm(run.our_type) === nrm(topCat[0])),
-          you: run.our_type || '—',
-          them: topCat ? topCat[0] : '—',
-          note: !run.our_type ? 'Not captured — you were not found in this run'
-            : (!topCat || nrm(run.our_type) === nrm(topCat[0])) ? 'Same category as the ones winning here' : 'Different category to the ones winning here',
-        });
-
-        // 6. Suburb listed in your GBP service areas.
-        rows.push({
-          label: 'In your GBP service areas', ok: !f || f.in_service_areas === null ? null : f.in_service_areas,
+          label: 'In your GBP service areas',
+          win: !f || f.in_service_areas === null ? null : f.in_service_areas ? true : false,
           you: !f ? '—' : f.in_service_areas === null ? 'none set' : f.in_service_areas ? 'yes' : 'no',
-          them: '—',
-          note: !f ? 'Checking…' : f.in_service_areas === null ? 'No service areas saved in Project Settings, so this cannot be checked'
+          them: 'not public',
+          note: !f ? 'Checking…' : f.in_service_areas === null ? 'No service areas saved in Project Settings'
             : f.in_service_areas ? 'Listed' : 'Not listed — Google is told you do not serve here',
         });
 
-        // 7. Suburb named in your reviews.
         rows.push({
-          label: 'Named in your reviews', ok: !f || f.in_reviews === null ? null : f.in_reviews,
+          label: `${s.suburb} named in your reviews`,
+          win: !f || f.in_reviews === null ? null : f.in_reviews ? true : false,
           you: !f ? '—' : f.in_reviews === null ? 'no reviews cached' : f.in_reviews ? 'yes' : 'no',
-          them: '—',
+          them: 'not compared',
           note: !f ? 'Checking…' : f.in_reviews === null ? 'No review text stored for this project yet'
             : f.in_reviews ? 'A customer names this suburb' : 'No review mentions this suburb',
         });
 
-        // 8. Citations / NAP — from the Citations & NAP page, not re-checked here.
         const cit = factors && factors.our ? factors.our.citations : null;
         rows.push({
-          label: 'Directory listings (NAP)', ok: !cit || !cit.checked ? null : cit.listed >= Math.ceil(cit.total * 0.6),
-          you: cit && cit.checked ? `${cit.listed} of ${cit.total}` : '—',
-          them: '—',
-          note: !cit || !cit.checked ? 'Not checked — run Citations & NAP' : cit.listed >= Math.ceil(cit.total * 0.6) ? 'Reasonable coverage' : 'Thin — most directories do not list you',
+          label: 'Directory listings (NAP)',
+          win: !cit || !cit.checked ? null : cit.listed >= Math.ceil(cit.total * 0.6),
+          you: cit && cit.checked ? `${cit.listed} of ${cit.total}` : '—', them: 'not checked',
+          note: !cit || !cit.checked ? 'Run Citations & NAP to fill this in'
+            : cit.listed >= Math.ceil(cit.total * 0.6) ? 'Reasonable coverage' : 'Thin — most directories do not list you',
         });
 
         return rows;
@@ -34306,91 +34299,97 @@
                                               : <span>Best #{k.best_position}, worst #{k.worst_position}. Appeared at {k.points_ranked} of {k.points_measured} measured point{k.points_measured > 1 ? 's' : ''}.</span>}
                                           {k.points_measured < k.points_total && <span style={{ color: '#f59e0b' }}> {k.points_total - k.points_measured} point{k.points_total - k.points_measured > 1 ? 's' : ''} failed and {k.points_total - k.points_measured > 1 ? 'were' : 'was'} excluded.</span>}
                                         </div>
-                                        {/* THE CHECKLIST. Every factor, ticked or not, with your value
-                                            against the rivals ahead of you. A tick means no gap here.
-                                            A dash means it hasn't been checked — never a silent pass. */}
+                                        {/* HEAD TO HEAD. Only the top 3 matter in Maps, and only the ones
+                                            standing at the same distance or further can be beaten on merit.
+                                            Each of those gets its own comparison — comparing reviews to one
+                                            business and category to a different one proves nothing. */}
                                         {k.competitors && k.competitors.length > 0 && (() => {
-                                          const rows = buildChecklist(s, k, kw);
+                                          const top3 = k.competitors.filter(c => c.best <= 3);
+                                          const beatable = top3.filter(c => c.distance_km != null && c.distance_km >= s.distance_km);
+                                          const closer = top3.filter(c => c.distance_km != null && c.distance_km < s.distance_km);
+                                          const noAddr = top3.filter(c => c.distance_km == null);
                                           return (
-                                            <div style={{ background: 'var(--bg)', borderRadius: 8, padding: '4px 0 2px', marginBottom: 12, border: '1px solid var(--border)' }}>
-                                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                                                <thead>
-                                                  <tr style={{ color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase', textAlign: 'left' }}>
-                                                    <th style={{ padding: '6px 8px', width: 26 }}></th>
-                                                    <th style={{ padding: '6px 8px' }}>Factor</th>
-                                                    <th style={{ padding: '6px 8px' }}>You</th>
-                                                    <th style={{ padding: '6px 8px' }}>Ahead of you</th>
-                                                    <th style={{ padding: '6px 8px' }}>Note</th>
-                                                  </tr>
-                                                </thead>
+                                            <div>
+                                              <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>The top 3 here</div>
+                                              <table style={{ width: '100%', maxWidth: 700, borderCollapse: 'collapse', fontSize: 12, marginBottom: 14 }}>
                                                 <tbody>
-                                                  {rows.map(r => (
-                                                    <tr key={r.label} style={{ borderTop: '1px solid var(--border)' }}>
-                                                      <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                                        {r.ok === true && <i className="fas fa-square-check" style={{ color: '#22c55e' }} title="No gap here"></i>}
-                                                        {r.ok === false && <i className="fas fa-square-xmark" style={{ color: '#ef4444' }} title="Gap — worth acting on"></i>}
-                                                        {r.ok === null && <i className="far fa-square" style={{ color: 'var(--text3)' }} title="Not checked — this is not a pass"></i>}
-                                                      </td>
-                                                      <td style={{ padding: '6px 8px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{r.label}</td>
-                                                      <td style={{ padding: '6px 8px', fontWeight: r.ok === false ? 600 : 400, color: r.ok === false ? '#ef4444' : 'var(--text)' }}>{r.you}</td>
-                                                      <td style={{ padding: '6px 8px', color: 'var(--text2)' }}>{r.them}</td>
-                                                      <td style={{ padding: '6px 8px', color: r.ok === null ? 'var(--text3)' : 'var(--text3)', fontSize: 11.5 }}>{r.note}</td>
-                                                    </tr>
-                                                  ))}
+                                                  {top3.map(c => {
+                                                    const isBeatable = c.distance_km != null && c.distance_km >= s.distance_km;
+                                                    return (
+                                                      <tr key={c.name} style={{ borderTop: '1px solid var(--border)' }}>
+                                                        <td style={{ padding: '5px 8px', fontWeight: 700, color: posColor(c.best), whiteSpace: 'nowrap', width: 44 }}>#{c.best}</td>
+                                                        <td style={{ padding: '5px 8px' }}>{c.name}</td>
+                                                        <td style={{ padding: '5px 8px', whiteSpace: 'nowrap', color: isBeatable ? '#f59e0b' : 'var(--text3)', fontWeight: isBeatable ? 600 : 400, width: 90 }}>
+                                                          {c.distance_km == null ? 'no address' : `${c.distance_km} km`}
+                                                        </td>
+                                                        <td style={{ padding: '5px 8px', fontSize: 11.5, color: 'var(--text3)' }}>
+                                                          {c.distance_km == null ? 'hides its address, so distance cannot be ruled out'
+                                                            : isBeatable ? `further from ${s.suburb} than you — beatable`
+                                                            : `closer to ${s.suburb} than you (${s.distance_km} km) — geography`}
+                                                        </td>
+                                                      </tr>
+                                                    );
+                                                  })}
                                                 </tbody>
                                               </table>
+
+                                              {beatable.length === 0 ? (
+                                                <div style={{ fontSize: 12.5, color: 'var(--text2)', background: 'var(--bg)', borderRadius: 8, padding: '10px 12px', border: '1px solid var(--border)' }}>
+                                                  {closer.length === top3.length
+                                                    ? `Every business in the top 3 here is closer to ${s.suburb} than you are. That is geography — nothing on this list will change it.`
+                                                    : `None of the top 3 here can be compared on merit: ${noAddr.length} of them hide their address, so it cannot be told whether distance is doing the work.`}
+                                                </div>
+                                              ) : beatable.map(c => {
+                                                const rows = buildHeadToHead(s, k, c);
+                                                const losses = rows.filter(r => r.win === false).length;
+                                                const wins = rows.filter(r => r.win === true).length;
+                                                return (
+                                                  <div key={c.name} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderLeft: '3px solid #f59e0b', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+                                                    <div style={{ fontSize: 12.5, marginBottom: 8 }}>
+                                                      <strong style={{ color: 'var(--text)' }}>You vs {c.name}</strong>
+                                                      <span style={{ color: 'var(--text3)' }}> — they are #{c.best} at {c.distance_km} km, you are {k.best_position ? `#${k.best_position}` : 'absent'} at {s.distance_km} km</span>
+                                                    </div>
+                                                    <table style={{ width: '100%', maxWidth: 720, borderCollapse: 'collapse', fontSize: 12.5 }}>
+                                                      <thead>
+                                                        <tr style={{ color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase', textAlign: 'left' }}>
+                                                          <th style={{ padding: '4px 8px', width: 26 }}></th>
+                                                          <th style={{ padding: '4px 8px' }}>Factor</th>
+                                                          <th style={{ padding: '4px 8px' }}>You</th>
+                                                          <th style={{ padding: '4px 8px' }}>Them</th>
+                                                          <th style={{ padding: '4px 8px' }}>Note</th>
+                                                        </tr>
+                                                      </thead>
+                                                      <tbody>
+                                                        {rows.map(r => (
+                                                          <tr key={r.label} style={{ borderTop: '1px solid var(--border)' }}>
+                                                            <td style={{ padding: '5px 8px', textAlign: 'center' }}>
+                                                              {r.win === true && <i className="fas fa-square-check" style={{ color: '#22c55e' }} title="You are ahead on this"></i>}
+                                                              {r.win === false && <i className="fas fa-square-xmark" style={{ color: '#ef4444' }} title="They are ahead — this is a gap you can close"></i>}
+                                                              {r.win === 'same' && <i className="fas fa-square-minus" style={{ color: 'var(--text3)' }} title="Level"></i>}
+                                                              {r.win === null && <i className="far fa-square" style={{ color: 'var(--text3)' }} title="Not checked — this is not a pass"></i>}
+                                                            </td>
+                                                            <td style={{ padding: '5px 8px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{r.label}</td>
+                                                            <td style={{ padding: '5px 8px', color: r.win === false ? '#ef4444' : 'var(--text)', fontWeight: r.win === false ? 600 : 400 }}>{r.you}</td>
+                                                            <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{r.them}</td>
+                                                            <td style={{ padding: '5px 8px', color: 'var(--text3)', fontSize: 11.5 }}>{r.note}</td>
+                                                          </tr>
+                                                        ))}
+                                                      </tbody>
+                                                    </table>
+                                                    <div style={{ fontSize: 11.5, color: losses ? '#f59e0b' : 'var(--text3)', marginTop: 8, lineHeight: 1.6 }}>
+                                                      {losses > 0
+                                                        ? `${losses} thing${losses > 1 ? 's' : ''} to close against this one business.`
+                                                        : `You are level or ahead on everything measured here and still behind them. Whatever is doing the work is not in this list — likely their GBP itself (services, photos, posts, review recency) or something we do not measure yet.`}
+                                                    </div>
+                                                  </div>
+                                                );
+                                              })}
+                                              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+                                                Position is the best each business reached across the {k.points_measured} measured point{k.points_measured > 1 ? 's' : ''} in this suburb — several can be #1 because each point is a separate search. From the same searches, {new Date(data.run.measured_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}.
+                                              </div>
                                             </div>
                                           );
                                         })()}
-                                        {k.competitors && k.competitors.length > 0 && (
-                                          <div>
-                                            <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>Who Google showed here instead</div>
-                                            <table style={{ width: '100%', maxWidth: 760, borderCollapse: 'collapse', fontSize: 12 }}>
-                                              <thead>
-                                                <tr style={{ color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase', textAlign: 'left' }}>
-                                                  <th style={{ padding: '3px 8px' }}>Best</th>
-                                                  <th style={{ padding: '3px 8px' }}>Business</th>
-                                                  <th style={{ padding: '3px 8px' }} title="How far this business is from the suburb. Further away than you and still ahead = not a distance problem.">Distance</th>
-                                                  <th style={{ padding: '3px 8px' }}>Reviews</th>
-                                                  <th style={{ padding: '3px 8px' }}>Category</th>
-                                                </tr>
-                                              </thead>
-                                              <tbody>
-                                                {/* Our own row, in position order, so the table is a comparison and not a list of other people. */}
-                                                <tr style={{ borderTop: '1px solid var(--border)', background: 'rgba(20,184,166,0.07)' }}>
-                                                  <td style={{ padding: '5px 8px', fontWeight: 700, color: k.best_position ? posColor(k.best_position) : '#ef4444', whiteSpace: 'nowrap' }}>
-                                                    {k.best_position ? `#${k.best_position}` : 'absent'}
-                                                    {k.best_position && k.points_measured > 1 && <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>at {k.points_ranked} of {k.points_measured}</span>}
-                                                  </td>
-                                                  <td style={{ padding: '5px 8px', fontWeight: 700, color: '#14b8a6' }}>{data.run.our_title || project.business_name || 'You'} (you)</td>
-                                                  <td style={{ padding: '5px 8px', color: 'var(--text3)', whiteSpace: 'nowrap' }}>{s.distance_km} km</td>
-                                                  <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{data.run.our_rating ? `${data.run.our_rating}★` : '—'} · {data.run.our_reviews != null ? data.run.our_reviews : '—'}</td>
-                                                  <td style={{ padding: '5px 8px', color: 'var(--text3)' }}></td>
-                                                </tr>
-                                                {k.competitors.map(c => (
-                                                  <tr key={c.name} style={{ borderTop: '1px solid var(--border)' }}>
-                                                    <td style={{ padding: '5px 8px', fontWeight: 600, color: posColor(c.best), whiteSpace: 'nowrap' }}>
-                                                      #{c.best}
-                                                      {c.points_measured > 1 && <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400, marginLeft: 4 }}>at {c.appearances} of {c.points_measured}</span>}
-                                                    </td>
-                                                    <td style={{ padding: '5px 8px' }}>{c.name}</td>
-                                                    <td style={{ padding: '5px 8px', color: c.distance_km != null && c.distance_km > s.distance_km ? '#f59e0b' : 'var(--text3)', whiteSpace: 'nowrap' }}
-                                                        title={c.distance_km == null ? 'This business hides its address (service-area business), so distance cannot be measured' : c.distance_km > s.distance_km ? `Further from ${s.suburb} than you are (${s.distance_km}km) and still ahead — distance is not the reason` : `Closer to ${s.suburb} than you are (${s.distance_km}km)`}>
-                                                      {c.distance_km == null ? 'unknown' : `${c.distance_km} km`}
-                                                    </td>
-                                                    <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{c.rating ? `${c.rating}★` : '—'} · {c.reviews || 0}</td>
-                                                    <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{c.type || ''}</td>
-                                                  </tr>
-                                                ))}
-                                              </tbody>
-                                            </table>
-                                            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
-                                              "Best" is the highest position that business reached at any point in this suburb — several can be #1 because each point is a separate search.
-                                              {' '}Amber distance = further from {s.suburb} than you are, and still ahead of you.
-                                              {' '}From the same searches, {new Date(data.run.measured_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}.
-                                            </div>
-                                          </div>
-                                        )}
                                       </div>
                                     );
                                   })}
