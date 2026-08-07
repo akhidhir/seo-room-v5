@@ -46416,7 +46416,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 4;
+const LV_EXPLAIN_VERSION = 5;
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 // Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
@@ -47028,13 +47028,25 @@ HARD RULES — output breaking these is discarded:
           const a = num(g.you), b = num(g.them);
           return (a != null && b != null && a > 0 && b / a >= 3) ? { g, ratio: b / a } : null;
         }).filter(Boolean).sort((x, y) => y.ratio - x.ratio)[0];
-        if (!scaled) return '';
+        if (!scaled) {
+          // Say when there were outcome gaps but none large enough, so silence is never mistaken
+          // for "there is nothing bigger going on".
+          return outcomeGaps.length
+            ? `Outcome measures also favour them (${outcomeGaps.map(g => `${g.label}: you ${g.you}, them ${g.them}`).join('; ')}), though none by a wide enough margin to single out.`
+            : '';
+        }
         return `The largest measured difference is not on that list: ${scaled.g.label} — you ${scaled.g.you}, them ${scaled.g.them}, roughly ${Math.round(scaled.ratio)} times. That is the difference closest in size to the position gap, and it is not something the items above would change.`;
       })(),
       unknown.length ? `${unknown.length} factor${unknown.length === 1 ? '' : 's'} could not be measured and ${unknown.length === 1 ? 'is' : 'are'} ruled neither in nor out: ${unknown.map(u => u.label).join(', ')}.` : '',
-      gathered.suburb_in_our_service_areas === false
+      // Only say this when the stored list is credible. RatingCaptain's REST endpoint returns a
+      // truncated service-area list (3) while the profile actually holds 20, and asserting from the
+      // short copy produced "Willetton is not one of your service areas" about a profile that lists
+      // it. A list this short is a broken read, not a business fact.
+      (gathered.suburb_in_our_service_areas === false && gathered.our_service_areas >= 10)
         ? `Separately: ${suburb} is not one of the ${gathered.our_service_areas} service areas on your own Google profile. Google does not publish another business's service areas, so this is not a comparison.`
-        : '',
+        : (gathered.suburb_in_our_service_areas === false
+          ? `Your service-area list could not be read reliably — the stored copy holds only ${gathered.our_service_areas}, so nothing is concluded from it.`
+          : ''),
     ].filter(Boolean);
     parsed.why = whyParts.join(' ');
 
@@ -47088,7 +47100,7 @@ HARD RULES — output breaking these is discarded:
        JSON.stringify(rows), out.prompt, out.model, dropped.length, cost, LV_EXPLAIN_VERSION]
     ).catch(e => console.error('[local-visibility] explain save failed:', e.message));
 
-    console.log(`[local-visibility] explain p${projectId} ${suburb}/"${keyword}" vs ${rival.name}: ${rows.length} facts, ${gaps.length} gaps, ${unknown.length} unmeasured, ${kept.length} actions kept, ${dropped.length} dropped, sufficiency=${sufficiency}, rc=${gathered.rc_synced}, theirProfile=${gathered.their_profile_found}`);
+    console.log(`[local-visibility] explain p${projectId} ${suburb}/"${keyword}" vs ${rival.name}: ${rows.length} facts, ${gaps.length} gaps, ${outcomeGaps.length} outcome gaps [${outcomeGaps.map(g => `${g.label}=${g.you}/${g.them}`).join(', ')}], ${unknown.length} unmeasured, ${kept.length} actions kept, ${dropped.length} dropped, sufficiency=${sufficiency}, rc=${gathered.rc_synced}, theirProfile=${gathered.their_profile_found}, ourAreas=${gathered.our_service_areas}`);
     try { await logApiCost(parseInt(projectId), 'local_visibility_explain', 'anthropic', 1, cost, { suburb, keyword, rival: rival.name }); } catch (e) {}
     return { ...out, cached: false, created_at: new Date().toISOString() };
   }
