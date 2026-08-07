@@ -46544,21 +46544,22 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
     'Google Business Profile',
     ourHours != null && theirHours != null && ourHours < theirHours ? 'Searches made outside our opening hours show us as closed' : '');
 
+  // Service areas are NOT included as a head-to-head fact. Google does not publish another
+  // business's service-area list, so there is no "them" value — and offering a one-sided row
+  // invited a fabricated comparison. It is reported separately as our own setting only.
   const ourAreas = rc && rc.serviceArea && rc.serviceArea.places && Array.isArray(rc.serviceArea.places.placeInfos)
     ? rc.serviceArea.places.placeInfos.map(p => p.placeName).filter(Boolean) : null;
   const inAreas = ourAreas ? ourAreas.some(a => aipNorm(a).includes(aipNorm(suburb))) : null;
-  add('gbp_service_area', `${suburb} in our GBP service areas`,
-    inAreas === null ? null : (inAreas ? 'yes' : 'no'), 'not published by Google for any business',
-    inAreas === null ? null : (inAreas ? false : true),
-    'Google Business Profile (ours via RatingCaptain)',
-    ourAreas ? `${ourAreas.length} areas listed` : '');
 
-  add('gbp_reviews', 'Google reviews', rival.our_reviews != null ? rival.our_reviews : null, theirs && theirs.rating ? theirs.rating.votes_count : (rival.reviews != null ? rival.reviews : null),
-    null, 'Google Maps results', 'Comparison shown in the table above');
+  const ourRev = rival.our_reviews != null ? rival.our_reviews : null;
+  const theirRev = theirs && theirs.rating ? theirs.rating.votes_count : (rival.reviews != null ? rival.reviews : null);
+  add('gbp_reviews', 'Google reviews', ourRev, theirRev,
+    (ourRev != null && theirRev != null) ? (ourRev === theirRev ? 'same' : ourRev < theirRev) : null,
+    'Google Maps results');
 
-  const ourPhotos = null; // not returned by the RC profile endpoint
+  // Only theirs is available, so there is nothing to compare. Recorded, never scored.
   const theirPhotos = theirs && theirs.total_photos != null ? theirs.total_photos : null;
-  add('gbp_photos', 'GBP photos', ourPhotos, theirPhotos, null,
+  add('gbp_photos', 'GBP photos', null, theirPhotos, null,
     'DataForSEO (theirs only)', 'Our photo count is not returned by the RatingCaptain profile endpoint, so this cannot be compared');
 
   // ---------- Websites ----------
@@ -46627,7 +46628,11 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
     }
   } catch (e) { errors.push(`Link profiles: ${e.message}`); }
 
-  return { facts, errors, rc_synced: !!rc, their_profile_found: !!theirs };
+  return {
+    facts, errors, rc_synced: !!rc, their_profile_found: !!theirs,
+    our_service_areas: ourAreas ? ourAreas.length : null,
+    suburb_in_our_service_areas: inAreas,
+  };
 }
 
 // Small wrapper so the bulk backlinks endpoints can be called by name.
@@ -46724,34 +46729,39 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
       `- ${r.label} | us: ${r.you} | them: ${r.them} | verdict: ${r.win === true ? 'WE ARE AHEAD' : r.win === false ? 'THEY ARE AHEAD (measured gap)' : r.win === 'same' ? 'LEVEL' : 'NOT MEASURED'} | source: ${r.source || 'measured'} | note: ${r.note || ''}`
     ).join('\n');
 
-    const prompt = `You are analysing why one local business outranks another on Google Maps for a specific search in a specific suburb.
+    // The model is NOT allowed to write prose. Free text was where a fabricated claim got through —
+    // it invented a competitor's service areas, which Google publishes for nobody. It now returns
+    // only a fixed-vocabulary judgement plus actions, and the explanation is composed in code from
+    // the measured numbers.
+    const prompt = `Analysing why one local business outranks another on Google Maps.
 
 SEARCH: "${keyword}" measured from GPS points inside ${suburb}
-US: ${ourName} — position ${us.position != null ? '#' + us.position : 'absent from the top 20'}, ${us.distance_km} km from ${suburb}
+US: ${ourName} — ${us.position != null ? 'position #' + us.position : 'absent from the top 20'}, ${us.distance_km} km from ${suburb}
 THEM: ${rival.name} — position #${rival.position}, ${rival.distance_km} km from ${suburb}
 
-They are FURTHER from ${suburb} than we are, so distance does not explain their position.
-
-MEASURED FACTORS — this is the complete set of evidence. Nothing else is known:
+MEASURED FACTS — the complete set of evidence. Nothing else is known:
 ${factLines}
 
-Write a JSON object with exactly these keys:
+Return raw JSON only:
 
 {
-  "why": "2-4 sentences. Explain what the measured gaps most plausibly account for. Quote the actual numbers from the factors above. If the gaps are small or unlikely to fully account for the position difference, SAY SO explicitly.",
+  "sufficiency": one of "likely" | "partly" | "unlikely",
   "actions": [
-    { "factor": "must be copied EXACTLY from a factor label above that is marked THEY ARE AHEAD", "action": "one concrete thing to do", "evidence": "the measured numbers that justify it, quoted from above", "effort": "minutes|hours|weeks", "verify": "what number should change if this worked" }
+    { "factor": "copied EXACTLY from a fact label marked THEY ARE AHEAD", "action": "one concrete thing to do, no numbers", "effort": "minutes|hours|weeks", "verify": "which measured fact should change, no numbers" }
   ]
 }
 
-HARD RULES — output that breaks these is discarded:
-- Use ONLY the factors listed above. Do not introduce any ranking factor that is not in that list.
+"sufficiency" = how far the measured gaps go towards accounting for the position difference:
+  "likely"   — the gaps are large and directly relevant
+  "partly"   — the gaps are real but modest
+  "unlikely" — the gaps are small and probably do not account for it
+
+HARD RULES — output breaking these is discarded:
 - Every action's "factor" must be the exact text of a label marked THEY ARE AHEAD.
 - Never propose an action for a factor marked NOT MEASURED, LEVEL, or WE ARE AHEAD.
-- Do not speculate about anything not measured — no guesses about their backlinks, review recency, spam, proximity tricks, or Google's weighting.
-- Do not claim certainty about cause. These are correlations in measured data, and the wording must reflect that.
-- If the measured gaps are weak, the "why" must say the data does not fully explain it.
-- Return raw JSON only. No markdown fence, no commentary.`;
+- Do not introduce any ranking factor that is not in the list above.
+- Do not put numbers, statistics or quoted values in "action" or "verify" — those are added afterwards from the measured data.
+- No prose, no commentary, no markdown fence.`;
 
     const aiResp = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -46770,21 +46780,50 @@ HARD RULES — output that breaks these is discarded:
     // VALIDATION. Every action must trace to a measured gap. Anything that does not is deleted.
     const gapLabels = new Map(gaps.map(g => [aipNorm(g.label), g]));
     const kept = [], dropped = [];
+    // Any number in the model's text is a number it invented — every real figure is added below
+    // from the measured facts. Text containing digits is stripped rather than shown.
+    const stripNumbers = (t, what) => {
+      const s = String(t || '').trim();
+      if (!s) return '';
+      if (/\d/.test(s)) { console.warn(`[local-visibility] explain: dropped a ${what} containing numbers: "${s}"`); return ''; }
+      return s;
+    };
     for (const a of (Array.isArray(parsed.actions) ? parsed.actions : [])) {
       const g = gapLabels.get(aipNorm(a && a.factor));
       if (!g) { dropped.push(a); continue; }
+      const action = stripNumbers(a.action, 'action');
+      if (!action) { dropped.push(a); continue; }
       kept.push({
         factor: g.label,
-        action: String(a.action || '').trim(),
-        evidence: `You: ${g.you} · Them: ${g.them}${a.evidence ? ' — ' + String(a.evidence).trim() : ''}`,
+        action,
+        evidence: `You: ${g.you} · Them: ${g.them}${g.source ? ' · ' + g.source : ''}`,
         effort: ['minutes', 'hours', 'weeks'].includes(String(a.effort)) ? a.effort : 'unknown',
-        verify: String(a.verify || '').trim() || `Re-measure "${g.label}" after the change`,
+        verify: stripNumbers(a.verify, 'verify') || `Re-measure "${g.label}" after the change`,
         measured_you: g.you, measured_them: g.them,
       });
     }
     if (dropped.length) {
-      console.warn(`[local-visibility] explain: dropped ${dropped.length} claim(s) not traceable to a measured gap:`, dropped.map(d => d && d.factor));
+      console.warn(`[local-visibility] explain: dropped ${dropped.length} claim(s):`, dropped.map(d => d && d.factor));
     }
+
+    // THE EXPLANATION IS BUILT HERE, from the measured numbers. The model contributed one word.
+    const sufficiency = ['likely', 'partly', 'unlikely'].includes(String(parsed.sufficiency)) ? parsed.sufficiency : 'partly';
+    const gapSentences = gaps.map(g => `${g.label}: you ${g.you}, them ${g.them}`);
+    const whyParts = [
+      `${rival.name} is #${rival.position} at ${rival.distance_km} km from ${suburb}; ${ourName} is ${us.position != null ? '#' + us.position : 'absent from the top 20'} at ${us.distance_km} km. They are further away, so distance is not the reason.`,
+      `Of the ${rows.length} factors measured, ${gaps.length} favour them — ${gapSentences.join('; ')}.`,
+      strengths.length ? `${ourName} is ahead on ${strengths.length} (${strengths.map(s2 => s2.label).join(', ')})${level.length ? ` and level on ${level.length}` : ''}.` : (level.length ? `Level on ${level.length}.` : ''),
+      sufficiency === 'likely'
+        ? `Those gaps are large and directly relevant, so they plausibly account for a good part of the difference.`
+        : sufficiency === 'unlikely'
+          ? `Those gaps are small, and on the measured evidence they probably do not account for the difference. Something not measured here is likely doing the work.`
+          : `Those gaps are real but modest, so they may only partly account for the difference.`,
+      unknown.length ? `${unknown.length} factor${unknown.length === 1 ? '' : 's'} could not be measured and ${unknown.length === 1 ? 'is' : 'are'} ruled neither in nor out: ${unknown.map(u => u.label).join(', ')}.` : '',
+      gathered.suburb_in_our_service_areas === false
+        ? `Separately: ${suburb} is not one of the ${gathered.our_service_areas} service areas on your own Google profile. Google does not publish another business's service areas, so this is not a comparison.`
+        : '',
+    ].filter(Boolean);
+    parsed.why = whyParts.join(' ');
 
     // The Claude prompt is built from the VALIDATED actions, deterministically. The model never
     // writes it, so it cannot smuggle an instruction that failed validation.
@@ -46828,6 +46867,7 @@ HARD RULES — output that breaks these is discarded:
        JSON.stringify(rows), out.prompt, out.model, dropped.length, cost]
     ).catch(e => console.error('[local-visibility] explain save failed:', e.message));
 
+    console.log(`[local-visibility] explain p${projectId} ${suburb}/"${keyword}" vs ${rival.name}: ${rows.length} facts, ${gaps.length} gaps, ${unknown.length} unmeasured, ${kept.length} actions kept, ${dropped.length} dropped, sufficiency=${sufficiency}, rc=${gathered.rc_synced}, theirProfile=${gathered.their_profile_found}`);
     try { await logApiCost(parseInt(projectId), 'local_visibility_explain', 'anthropic', 1, cost, { suburb, keyword, rival: rival.name }); } catch (e) {}
     res.json({ ...out, cached: false, created_at: new Date().toISOString() });
   } catch (e) { res.status(500).json({ error: e.message }); }
