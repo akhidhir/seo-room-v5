@@ -34436,10 +34436,18 @@
                     <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
                       Biggest suburbs where you're outside the top 3 and beaten by businesses further away than you
                     </span>
-                    <label onClick={() => setOppOnly(!oppOnly)} style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text2)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input type="checkbox" checked={oppOnly} readOnly style={{ pointerEvents: 'none' }} />
+                    {/* A <label> wrapping a checkbox fires the handler twice — once for the label and
+                        once for the click the label forwards to the input — so it toggled straight
+                        back off. No native input, no forwarding. */}
+                    <div onClick={() => setOppOnly(v => !v)} style={{
+                      marginLeft: 'auto', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
+                      color: oppOnly ? '#f59e0b' : 'var(--text2)', userSelect: 'none',
+                      border: `1px solid ${oppOnly ? '#f59e0b' : 'var(--border)'}`, borderRadius: 6, padding: '5px 10px',
+                      background: oppOnly ? 'rgba(245,158,11,0.12)' : 'transparent', whiteSpace: 'nowrap',
+                    }}>
+                      <i className={`fas fa-${oppOnly ? 'square-check' : 'square'}`} style={{ fontSize: 13, color: oppOnly ? '#f59e0b' : 'var(--text3)' }}></i>
                       Show only these
-                    </label>
+                    </div>
                     <button className="btn" onClick={analyseAll} disabled={!!batch}
                       style={{ height: 30, fontSize: 12, borderColor: '#f59e0b', color: '#f59e0b', whiteSpace: 'nowrap' }}
                       title="Measures every beatable competitor across these suburbs in one run, sharing the per-competitor work instead of repeating it.">
