@@ -12514,13 +12514,20 @@ async function dataForSeoAiMode({ keyword, location }) {
 // description, every category, their services list, photo count, claimed status, and the topics
 // their reviewers keep raising. This is a DATABASE, not a live fetch — it carries last_updated_time
 // and that date must be shown, because a profile crawled months ago is not today's profile.
-async function dataForSeoBusinessListing({ title, category, lat, lng }) {
+async function dataForSeoBusinessListing({ title, category, lat, lng, fallbackLat, fallbackLng, radiusKm }) {
   if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured');
-  if (lat == null || lng == null) throw new Error('No coordinates for this business, so their profile cannot be looked up');
+  // Scans run before competitor coordinates were stored have no lat/lng. Rather than giving up —
+  // which made every comparison read "not measured" — fall back to a wider search around the
+  // business and filter by name.
+  const useLat = lat != null ? lat : fallbackLat;
+  const useLng = lng != null ? lng : fallbackLng;
+  if (useLat == null || useLng == null) throw new Error('No coordinates available to search from, so their profile cannot be looked up');
+  const radius = lat != null ? 1 : (radiusKm || 25);
   const task = {
     categories: category ? [String(category).toLowerCase().replace(/\s+/g, '_')] : undefined,
-    location_coordinate: `${lat},${lng},1`,
-    limit: 20,
+    location_coordinate: `${useLat},${useLng},${radius}`,
+    limit: lat != null ? 20 : 100,
+    filters: lat != null ? undefined : [['title', 'like', `%${String(title).replace(/[%_]/g, '').trim()}%`]],
   };
   Object.keys(task).forEach(k => task[k] === undefined && delete task[k]);
   const resp = await fetch('https://api.dataforseo.com/v3/business_data/business_listings/search/live', {
@@ -46512,10 +46519,18 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
   // ---------- THEIR Google profile, from DataForSEO ----------
   let theirs = null;
   try {
-    const b = await dataForSeoBusinessListing({ title: rival.name, category: rival.type, lat: rival.lat, lng: rival.lng });
+    // Centre the fallback search on our own business, which we always have coordinates for.
+    const centre = resolveSmartCenter({ center: null, lat: null, lng: null, project });
+    const b = await dataForSeoBusinessListing({
+      title: rival.name, category: rival.type, lat: rival.lat, lng: rival.lng,
+      fallbackLat: centre ? centre.lat : null, fallbackLng: centre ? centre.lng : null, radiusKm: 30,
+    });
     theirs = b.listing;
-    if (!theirs) errors.push(`Their Google profile was not found in the listings database.`);
+    if (!theirs) errors.push(`${rival.name} was not found in the Google listings database (${b.candidates} nearby businesses checked), so nothing about their profile could be compared.`);
   } catch (e) { errors.push(`Their Google profile: ${e.message}`); }
+  if (!theirs) {
+    console.warn(`[local-visibility] explain: no listing for "${rival.name}" (lat=${rival.lat} lng=${rival.lng} type=${rival.type})`);
+  }
 
   const ourCats = rc ? [rc.categories?.primaryCategory?.displayName, ...((rc.categories?.additionalCategories || []).map(c => c.displayName))].filter(Boolean) : null;
   const theirCats = theirs ? [theirs.category, ...(theirs.additional_categories || [])].filter(Boolean) : null;
@@ -46841,6 +46856,7 @@ HARD RULES — output breaking these is discarded:
       `- Every change must be reversible and recorded.`,
       `- If a change cannot be verified as applied, report it as failed rather than done.`,
       unknown.length ? `\nNot measured, so do NOT act on these — they may or may not be problems: ${unknown.map(u => u.label).join(', ')}.` : '',
+      gathered.errors.length ? `\nThese could not be measured at all: ${gathered.errors.join(' · ')}` : '',
     ].filter(Boolean).join('\n');
 
     const cost = 0.003;

@@ -33948,7 +33948,7 @@
       // Why a further-away rival is ahead, and how to close it. The answer is derived only from the
       // measured rows below — the server deletes anything the model returns that cannot be traced
       // back to one of them.
-      const explain = async (s, k, c, rows) => {
+      const explain = async (s, k, c, rows, force) => {
         const key = s.suburb + '|' + c.name;
         setWhyBusy(key);
         try {
@@ -33965,6 +33965,7 @@
                 reviews: c.reviews, our_reviews: (data.run || {}).our_reviews,
               },
               us: { position: k.best_position, distance_km: s.distance_km },
+              force: !!force,
             },
           });
           if (r.error) setError(r.error);
@@ -34574,11 +34575,11 @@
                                                         </button>
                                                       )}
                                                       <button className="btn" disabled={whyBusy === (s.suburb + '|' + c.name)}
-                                                        onClick={(e) => { e.stopPropagation(); const rr = rows.slice(); rr.__kw = kw; explain(s, k, c, rr); }}
+                                                        onClick={(e) => { e.stopPropagation(); const rr = rows.slice(); rr.__kw = kw; explain(s, k, c, rr, !!why[s.suburb + '|' + c.name]); }}
                                                         style={{ height: 28, fontSize: 11.5, borderColor: '#a855f7', color: '#a855f7', whiteSpace: 'nowrap' }}
-                                                        title="Explains the position using only the measured rows above. Anything that cannot be traced to one of them is discarded before it reaches you.">
+                                                        title="Measures our Google profile live from RatingCaptain, theirs from DataForSEO, both websites and both link profiles, then explains the position from those figures only.">
                                                         {whyBusy === (s.suburb + '|' + c.name) ? <span className="spinner"></span> : <i className="fas fa-lightbulb" style={{ marginRight: 5 }}></i>}
-                                                        Why &amp; how to close it
+                                                        {why[s.suburb + '|' + c.name] ? 'Re-measure' : 'Why & how to close it'}
                                                       </button>
                                                     </div>
 
