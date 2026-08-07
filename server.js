@@ -12526,12 +12526,18 @@ async function dataForSeoBusinessListing({ title, category, lat, lng, fallbackLa
   const useLat = lat != null ? lat : fallbackLat;
   const useLng = lng != null ? lng : fallbackLng;
   if (useLat == null || useLng == null) throw new Error('No coordinates available to search from, so their profile cannot be looked up');
-  const radius = lat != null ? 1 : (radiusKm || 25);
+  // ALWAYS filter by name and search a real radius. A 1km unfiltered search capped at 20 results
+  // silently missed businesses that were sitting right there — "not found" then read as "nothing
+  // about their profile could be compared", which is a measurement failure disguised as a finding.
+  // The distinctive part of the name is used, so "Silver Plumbing & Gas" still matches a listing
+  // titled "Silver Plumbing and Gas".
+  const clean = String(title).replace(/[%_]/g, ' ').replace(/\b(pty|ltd|the)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+  const firstWords = clean.split(' ').slice(0, 2).join(' ');
   const task = {
     categories: category ? [String(category).toLowerCase().replace(/\s+/g, '_')] : undefined,
-    location_coordinate: `${useLat},${useLng},${radius}`,
-    limit: lat != null ? 20 : 100,
-    filters: lat != null ? undefined : [['title', 'like', `%${String(title).replace(/[%_]/g, '').trim()}%`]],
+    location_coordinate: `${useLat},${useLng},${radiusKm || 25}`,
+    limit: 100,
+    filters: [['title', 'like', `%${firstWords}%`]],
   };
   Object.keys(task).forEach(k => task[k] === undefined && delete task[k]);
   const resp = await fetch('https://api.dataforseo.com/v3/business_data/business_listings/search/live', {
@@ -12550,10 +12556,14 @@ async function dataForSeoBusinessListing({ title, category, lat, lng, fallbackLa
     throw new Error(`DataForSEO business listings task ${dfsTask.status_code}: ${dfsTask.status_message}`);
   }
   const items = dfsTask?.result?.[0]?.items || [];
-  const want = aipNorm(title);
-  const hit = items.find(i => aipNorm(i.title) === want)
-    || items.find(i => aipNorm(i.title).includes(want) || want.includes(aipNorm(i.title)));
-  return { listing: hit || null, candidates: items.length, cost: dfsTask?.cost || data.cost || 0 };
+  // Match on the distinctive words, so "&" vs "and", "Pty Ltd", and suburb suffixes do not block it.
+  const norm = (s) => aipNorm(s).replace(/\b(and|pty|ltd|the)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const want = norm(title);
+  const wantWords = want.split(' ').filter(w => w.length > 2);
+  const hit = items.find(i => norm(i.title) === want)
+    || items.find(i => norm(i.title).includes(want) || want.includes(norm(i.title)))
+    || (wantWords.length >= 2 ? items.find(i => wantWords.every(w => norm(i.title).includes(w))) : null);
+  return { listing: hit || null, candidates: items.length, searched: task.location_coordinate, cost: dfsTask?.cost || data.cost || 0 };
 }
 
 // DataForSEO Maps SERP — replaces serpApiSearch({ engine: 'google_maps', ... })
@@ -46547,7 +46557,7 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
       fallbackLat: centre ? centre.lat : null, fallbackLng: centre ? centre.lng : null, radiusKm: 30,
     });
     theirs = b.listing;
-    if (!theirs) errors.push(`${rival.name} was not found in the Google listings database (${b.candidates} nearby businesses checked), so nothing about their profile could be compared.`);
+    if (!theirs) errors.push(`${rival.name} was not found in the Google listings database (searched ${b.searched}, ${b.candidates} name matches), so nothing about their profile could be compared.`);
   } catch (e) { errors.push(`Their Google profile: ${e.message}`); }
   if (!theirs) {
     console.warn(`[local-visibility] explain: no listing for "${rival.name}" (lat=${rival.lat} lng=${rival.lng} type=${rival.type})`);
