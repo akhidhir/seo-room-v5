@@ -495,6 +495,10 @@ async function initDb() {
         UNIQUE(project_id, suburb, keyword, rival)
       )
     `).catch(() => {});
+    // Bumped whenever the fact set or the validation changes. A cached answer produced by older
+    // logic is not served — the first version compared service areas one-sidedly and that stale row
+    // kept resurfacing after the bug was fixed.
+    await client.query(`ALTER TABLE lv_explanations ADD COLUMN IF NOT EXISTS facts_version INTEGER DEFAULT 0`).catch(() => {});
 
     // ===== AI Presence (part of Local Visibility) =====
     // Do the AI assistants name this business when someone asks who to call, and if not, which
@@ -46343,6 +46347,10 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // DEEP CHECK on one competitor. Everything the free checks could not settle: their suburb page
 // (via a site: search rather than guessing at their sitemap) and which of the 25 Australian
 // directories list them. Costs are quoted before it runs.
+// Bump this whenever the facts gathered or the validation rules change, so answers written by the
+// older logic are never served again.
+const LV_EXPLAIN_VERSION = 2;
+
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res) => {
   try {
@@ -46702,8 +46710,8 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
 
     if (!req.body?.force) {
       const cached = (await pool.query(
-        `SELECT * FROM lv_explanations WHERE project_id=$1 AND suburb=$2 AND keyword=$3 AND rival=$4`,
-        [projectId, suburb, keyword, rival.name])).rows[0];
+        `SELECT * FROM lv_explanations WHERE project_id=$1 AND suburb=$2 AND keyword=$3 AND rival=$4 AND facts_version=$5`,
+        [projectId, suburb, keyword, rival.name, LV_EXPLAIN_VERSION])).rows[0];
       if (cached) return res.json({ ...cached, cached: true });
     }
 
@@ -46742,10 +46750,10 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
         gather_errors: gathered.errors, rc_synced: gathered.rc_synced, their_profile_found: gathered.their_profile_found,
       };
       await pool.query(
-        `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,NULL,0,0)
-         ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=NULL, model=NULL, dropped_claims=0, cost=0, created_at=NOW()`,
-        [projectId, suburb, keyword, rival.name, out.why, JSON.stringify([]), JSON.stringify(out.unmeasured), JSON.stringify(rows)]
+        `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost, facts_version)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,NULL,0,0,$9)
+         ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=NULL, model=NULL, dropped_claims=0, cost=0, facts_version=$9, created_at=NOW()`,
+        [projectId, suburb, keyword, rival.name, out.why, JSON.stringify([]), JSON.stringify(out.unmeasured), JSON.stringify(rows), LV_EXPLAIN_VERSION]
       ).catch(() => {});
       return res.json({ ...out, cached: false });
     }
@@ -46888,12 +46896,12 @@ HARD RULES — output breaking these is discarded:
     };
 
     await pool.query(
-      `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost, facts_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET
-         why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=$9, model=$10, dropped_claims=$11, cost=$12, created_at=NOW()`,
+         why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=$9, model=$10, dropped_claims=$11, cost=$12, facts_version=$13, created_at=NOW()`,
       [projectId, suburb, keyword, rival.name, out.why, JSON.stringify(kept), JSON.stringify(out.unmeasured),
-       JSON.stringify(rows), out.prompt, out.model, dropped.length, cost]
+       JSON.stringify(rows), out.prompt, out.model, dropped.length, cost, LV_EXPLAIN_VERSION]
     ).catch(e => console.error('[local-visibility] explain save failed:', e.message));
 
     console.log(`[local-visibility] explain p${projectId} ${suburb}/"${keyword}" vs ${rival.name}: ${rows.length} facts, ${gaps.length} gaps, ${unknown.length} unmeasured, ${kept.length} actions kept, ${dropped.length} dropped, sufficiency=${sufficiency}, rc=${gathered.rc_synced}, theirProfile=${gathered.their_profile_found}`);
