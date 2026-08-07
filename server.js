@@ -46416,7 +46416,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 6;
+const LV_EXPLAIN_VERSION = 7;
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 // Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
@@ -47052,15 +47052,13 @@ HARD RULES — output breaking these is discarded:
         return `The largest measured difference is not on that list: ${scaled.g.label} — you ${scaled.g.you}, them ${scaled.g.them}, ${times}. That is the difference closest in size to the position gap, and it is not something the items above would change.`;
       })(),
       unknown.length ? `${unknown.length} factor${unknown.length === 1 ? '' : 's'} could not be measured and ${unknown.length === 1 ? 'is' : 'are'} ruled neither in nor out: ${unknown.map(u => u.label).join(', ')}.` : '',
-      // Only say this when the stored list is credible. RatingCaptain's REST endpoint returns a
-      // truncated service-area list (3) while the profile actually holds 20, and asserting from the
-      // short copy produced "Willetton is not one of your service areas" about a profile that lists
-      // it. A list this short is a broken read, not a business fact.
-      (gathered.suburb_in_our_service_areas === false && gathered.our_service_areas >= 10)
-        ? `Separately: ${suburb} is not one of the ${gathered.our_service_areas} service areas on your own Google profile. Google does not publish another business's service areas, so this is not a comparison.`
-        : (gathered.suburb_in_our_service_areas === false
-          ? `Your service-area list could not be read reliably — the stored copy holds only ${gathered.our_service_areas}, so nothing is concluded from it.`
-          : ''),
+      // A SHORT LIST IS NOT A BROKEN READ. I previously suppressed this whenever fewer than ten
+      // areas were stored, assuming the API was truncating. Google's own dashboard confirmed the
+      // profile really does list three — so the suppression was hiding a true and important
+      // finding. If a suburb is missing from the profile, say so, however short the list is.
+      gathered.suburb_in_our_service_areas === false
+        ? `This may be the whole answer: ${suburb} is not one of the ${gathered.our_service_areas} service area${gathered.our_service_areas === 1 ? '' : 's'} on your own Google profile, so Google has been told you do not serve there. Google does not publish another business's service areas, so this is not a comparison — it is a setting on your side.`
+        : '',
     ].filter(Boolean);
     parsed.why = whyParts.join(' ');
 

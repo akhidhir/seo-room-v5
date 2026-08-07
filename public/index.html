@@ -34146,8 +34146,9 @@
         // and a suburb missing from THAT proves nothing — it is an incomplete local note, not
         // Google's record. Reporting "Google is told you do not serve here" from it was wrong.
         const ourF = (factors && factors.our) || {};
-        // "Trustworthy" means: it came from Google AND the stored copy does not look out of date.
-        const fromGoogle = ourF.service_areas_source === 'your Google Business Profile' && !ourF.service_areas_suspect;
+        // A short list is a real setting, not a broken read — verified against Google's own
+        // dashboard. Only the manually typed Project Settings list is untrustworthy for this.
+        const fromGoogle = ourF.service_areas_source === 'your Google Business Profile';
         const areaCount = ourF.service_areas_set || 0;
         const syncedTxt = ourF.gbp_synced_at ? new Date(ourF.gbp_synced_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
         rows.push({
