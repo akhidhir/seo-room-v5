@@ -46214,19 +46214,32 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 
     // The raw RatingCaptain profile is the primary source — the flattened gbp_profile copy can be
     // older or missing fields. Read serviceArea straight off it before falling back.
+    // TWO stores hold a copy of the Google profile and they disagree: rc_profile_cache had 3 service
+    // areas while RatingCaptain itself returns 20. Read both, take the NEWER, and refresh from
+    // RatingCaptain when the newest is over a day old — a stale copy produced a false "Canning Vale
+    // is not one of your service areas" on a profile that lists it.
     let rcProfile = null, gbpSyncedAt = null;
-    try {
-      const row = (await pool.query(`SELECT profile, synced_at FROM rc_profile_cache WHERE project_id=$1`, [projectId])).rows[0];
-      if (row && row.profile) { rcProfile = typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile; gbpSyncedAt = row.synced_at; }
-    } catch (e) {}
-    if (!rcProfile) {
+    const readBoth = async () => {
+      const out = [];
+      try {
+        const row = (await pool.query(`SELECT profile, synced_at FROM rc_profile_cache WHERE project_id=$1`, [projectId])).rows[0];
+        if (row && row.profile) out.push({ p: typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile, at: row.synced_at ? new Date(row.synced_at).getTime() : 0, src: 'rc_profile_cache' });
+      } catch (e) {}
       try {
         const row = (await pool.query(
-          `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId])).rows[0];
+          `SELECT config, updated_at FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId])).rows[0];
         const cfg = row && row.config ? (typeof row.config === 'string' ? JSON.parse(row.config) : row.config) : null;
-        rcProfile = cfg && (cfg.profile || cfg);
+        const p = cfg && (cfg.profile || cfg);
+        if (p) out.push({ p, at: row.updated_at ? new Date(row.updated_at).getTime() : 0, src: 'rc_profile' });
       } catch (e) {}
+      return out.sort((a, b) => b.at - a.at);
+    };
+    let picks = await readBoth();
+    const DAY = 24 * 60 * 60 * 1000;
+    if (!picks.length || (Date.now() - picks[0].at) > DAY) {
+      try { await syncRcProfileFromApi(projectId); picks = await readBoth(); } catch (e) {}
     }
+    if (picks.length) { rcProfile = picks[0].p; gbpSyncedAt = picks[0].at ? new Date(picks[0].at).toISOString() : null; }
     // The RC payload is nested inconsistently — the description sits at profile.profile.description
     // while serviceArea sits at the top. Try every shape rather than silently ending up with the
     // 3-item copy in gbp_profile and then asserting Google only knows 3 suburbs.
@@ -46251,7 +46264,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
     const gbpAreas = rcAreas.length ? rcAreas : (gbp && Array.isArray(gbp.service_areas) ? gbp.service_areas : []);
     const serviceAreas = gbpAreas.length ? gbpAreas : manualAreas;
     const areasSource = gbpAreas.length ? 'your Google Business Profile' : (manualAreas.length ? 'Project Settings' : null);
-    console.log(`[local-visibility] factors p${projectId}: rcAreas=${rcAreas.length} gbpCopy=${(gbp && gbp.service_areas || []).length} manual=${manualAreas.length} using=${areasSource} cat=${gbpCategory || 'none'}`);
+    console.log(`[local-visibility] factors p${projectId}: rcAreas=${rcAreas.length} (src=${picks.length ? picks[0].src : 'none'}) gbpCopy=${(gbp && gbp.service_areas || []).length} manual=${manualAreas.length} using=${areasSource} cat=${gbpCategory || 'none'}`);
     let reviewText = '';
     try {
       const rc = (await pool.query(`SELECT reviews FROM reviews_cache WHERE project_id=$1`, [projectId])).rows[0];
