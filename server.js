@@ -46603,6 +46603,15 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
     (ourRev != null && theirRev != null) ? (ourRev === theirRev ? 'same' : ourRev < theirRev) : null,
     'Google Maps results');
 
+  // Star rating was missing from this set while the table above showed it, so one panel said
+  // "behind on none" while the other said "1 thing to close". One fact set now, not two.
+  const ourRat = rival.our_rating != null ? rival.our_rating : null;
+  const theirRat = theirs && theirs.rating ? theirs.rating.value : (rival.rating != null ? rival.rating : null);
+  add('gbp_rating', 'Star rating',
+    ourRat != null ? `${ourRat}★` : null, theirRat != null ? `${theirRat}★` : null,
+    (ourRat != null && theirRat != null) ? (ourRat === theirRat ? 'same' : ourRat < theirRat) : null,
+    'Google Maps results');
+
   // Only theirs is available, so there is nothing to compare. Recorded, never scored.
   const theirPhotos = theirs && theirs.total_photos != null ? theirs.total_photos : null;
   add('gbp_photos', 'GBP photos', null, theirPhotos, null,

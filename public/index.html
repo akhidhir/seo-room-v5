@@ -33962,7 +33962,8 @@
               rival: {
                 name: c.name, position: c.best, distance_km: c.distance_km,
                 website: c.website || '', type: c.type || '', lat: c.lat, lng: c.lng,
-                reviews: c.reviews, our_reviews: (data.run || {}).our_reviews,
+                reviews: c.reviews, rating: c.rating,
+                our_reviews: (data.run || {}).our_reviews, our_rating: (data.run || {}).our_rating,
               },
               us: { position: k.best_position, distance_km: s.distance_km },
               force: !!force,
@@ -34523,7 +34524,12 @@
                                                     : `None of the top 3 here can be compared on merit: ${noAddr.length} of them hide their address, so it cannot be told whether distance is doing the work.`}
                                                 </div>
                                               ) : beatable.map(c => {
-                                                const rows = buildHeadToHead(s, k, c);
+                                                // Once the facts have been measured server-side they REPLACE the
+                                                // inferred table. Two fact sets on one card produced "1 thing to
+                                                // close" next to "behind on none".
+                                                const measured = why[s.suburb + '|' + c.name];
+                                                const rows = (measured && Array.isArray(measured.evidence_rows) && measured.evidence_rows.length)
+                                                  ? measured.evidence_rows : buildHeadToHead(s, k, c);
                                                 const losses = rows.filter(r => r.win === false).length;
                                                 const wins = rows.filter(r => r.win === true).length;
                                                 return (
@@ -34554,7 +34560,7 @@
                                                             <td style={{ padding: '5px 8px', color: 'var(--text2)', whiteSpace: 'nowrap' }}>{r.label}</td>
                                                             <td style={{ padding: '5px 8px', color: r.win === false ? '#ef4444' : 'var(--text)', fontWeight: r.win === false ? 600 : 400 }}>{r.you}</td>
                                                             <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{r.them}</td>
-                                                            <td style={{ padding: '5px 8px', color: 'var(--text3)', fontSize: 11.5 }}>{r.note}</td>
+                                                            <td style={{ padding: '5px 8px', color: 'var(--text3)', fontSize: 11.5 }}>{r.note}{r.source ? <span style={{ opacity: 0.7 }}>{r.note ? ' · ' : ''}{r.source}</span> : null}</td>
                                                           </tr>
                                                         ))}
                                                       </tbody>
@@ -34633,31 +34639,6 @@
                                                             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
                                                               <strong>Not measured, so ruled neither in nor out:</strong> {w.unmeasured.map(u => u.factor).join(', ')}. No action is proposed for these.
                                                             </div>
-                                                          )}
-
-                                                          {/* What was actually measured, and from where. */}
-                                                          {w.evidence_rows && w.evidence_rows.length > 0 && (
-                                                            <details style={{ marginTop: 10 }}>
-                                                              <summary style={{ fontSize: 11.5, color: 'var(--text3)', cursor: 'pointer' }}>Show the {w.evidence_rows.length} facts this is based on</summary>
-                                                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, marginTop: 6 }}>
-                                                                <tbody>
-                                                                  {w.evidence_rows.map((r2, ri) => (
-                                                                    <tr key={ri} style={{ borderTop: '1px solid var(--border)' }}>
-                                                                      <td style={{ padding: '4px 6px', width: 18, textAlign: 'center' }}>
-                                                                        {r2.win === true && <i className="fas fa-square-check" style={{ color: '#22c55e' }}></i>}
-                                                                        {r2.win === false && <i className="fas fa-square-xmark" style={{ color: '#ef4444' }}></i>}
-                                                                        {r2.win === 'same' && <i className="fas fa-square-minus" style={{ color: 'var(--text3)' }}></i>}
-                                                                        {(r2.win === null || r2.win === undefined) && <i className="far fa-square" style={{ color: 'var(--text3)' }}></i>}
-                                                                      </td>
-                                                                      <td style={{ padding: '4px 6px', color: 'var(--text2)' }}>{r2.label}</td>
-                                                                      <td style={{ padding: '4px 6px' }}>{r2.you}</td>
-                                                                      <td style={{ padding: '4px 6px', color: 'var(--text2)' }}>{r2.them}</td>
-                                                                      <td style={{ padding: '4px 6px', color: 'var(--text3)' }}>{r2.source}</td>
-                                                                    </tr>
-                                                                  ))}
-                                                                </tbody>
-                                                              </table>
-                                                            </details>
                                                           )}
 
                                                           {w.gather_errors && w.gather_errors.length > 0 && (
