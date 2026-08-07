@@ -12566,6 +12566,57 @@ async function dataForSeoBusinessListing({ title, category, lat, lng, fallbackLa
   return { listing: hit || null, candidates: items.length, searched: task.location_coordinate, cost: dfsTask?.cost || data.cost || 0 };
 }
 
+// Every Google profile a brand runs, and their combined review count.
+//
+// This is the factor that was invisible. Comparing against "Plumbdog Plumbing Canning Vale" — one
+// satellite with 22 reviews — missed that the brand runs ten profiles carrying 1,537 reviews
+// between them. Google's prominence signal works at business level, so the satellite inherits it.
+// Without this the analysis blamed a short profile description for an absent-versus-#1 gap.
+async function dataForSeoBrandProfiles({ name, category, lat, lng, radiusKm }) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured');
+  if (lat == null || lng == null) throw new Error('No coordinates to search from');
+  // Match on the brand words only — "Plumbdog Plumbing Canning Vale" and "Plumbdog Plumbing
+  // Midland" share "Plumbdog". Suburb suffixes are exactly what we are trying to find.
+  const clean = String(name).replace(/[%_]/g, ' ').replace(/\b(pty|ltd|the|and)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+  const brand = clean.split(' ')[0];
+  if (!brand || brand.length < 3) throw new Error(`"${name}" has no distinctive brand word to search on`);
+  const resp = await fetch('https://api.dataforseo.com/v3/business_data/business_listings/search/live', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{
+      categories: category ? [String(category).toLowerCase().replace(/\s+/g, '_')] : undefined,
+      location_coordinate: `${lat},${lng},${radiusKm || 50}`,
+      filters: [['title', 'like', `%${brand}%`]],
+      limit: 100,
+    }]),
+    signal: AbortSignal.timeout(45000),
+  });
+  if (!resp.ok) throw new Error(`DataForSEO business listings ${resp.status}`);
+  const data = await resp.json();
+  const task = data.tasks?.[0];
+  if (task && task.status_code && task.status_code !== 20000) throw new Error(`DataForSEO task ${task.status_code}: ${task.status_message}`);
+  const items = (task?.result?.[0]?.items || []).filter(i => aipNorm(i.title).startsWith(aipNorm(brand)));
+  // Same business listed twice under one cid is one profile.
+  const seen = new Set();
+  const profiles = [];
+  for (const i of items) {
+    const id = i.cid || i.place_id || aipNorm(i.title);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    profiles.push({
+      title: i.title, reviews: i.rating ? i.rating.votes_count || 0 : 0, rating: i.rating ? i.rating.value : null,
+      lat: i.latitude, lng: i.longitude, address: i.address || null,
+    });
+  }
+  return {
+    brand, profiles,
+    count: profiles.length,
+    total_reviews: profiles.reduce((s, p) => s + (p.reviews || 0), 0),
+    matched_on: `profiles whose name begins with "${brand}" within ${radiusKm || 50}km`,
+    cost: task?.cost || data.cost || 0,
+  };
+}
+
 // DataForSEO Maps SERP — replaces serpApiSearch({ engine: 'google_maps', ... })
 // Returns normalized results matching the shape the dashboard expects
 async function dataForSeoMaps({ keyword, lat, lng, location, depth }) {
@@ -46365,7 +46416,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 2;
+const LV_EXPLAIN_VERSION = 3;
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 // Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
@@ -46558,7 +46609,11 @@ function lvHoursPerWeek(source) {
 async function lvGatherFacts({ projectId, project, suburb, rival }) {
   const facts = [];
   const errors = [];
-  const add = (key, label, us, them, gap, source, note, caution) => facts.push({ key, label, us, them, gap, source, note: note || '', caution: caution || '' });
+  // outcome:true marks a fact that is a RESULT, not a setting. It is still shown and still compared,
+  // but no action is generated for it — "target at least 5 stars" and "target at least 203 domain
+  // rank" are not tasks anybody can do, and putting them in a work list buries the ones that are.
+  const add = (key, label, us, them, gap, source, note, caution, outcome) =>
+    facts.push({ key, label, us, them, gap, source, note: note || '', caution: caution || '', outcome: !!outcome });
 
   // ---------- OUR Google profile, live from RatingCaptain ----------
   let rc = null;
@@ -46634,15 +46689,61 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
   // "behind on none" while the other said "1 thing to close". One fact set now, not two.
   const ourRat = rival.our_rating != null ? rival.our_rating : null;
   const theirRat = theirs && theirs.rating ? theirs.rating.value : (rival.rating != null ? rival.rating : null);
+  // A rating is the result of the work, not a field to edit, and a gap under 0.2 across different
+  // review counts is noise. 4.9 from 115 reviews against 5.0 from 22 is not a weakness.
+  const ratGap = (ourRat != null && theirRat != null) ? theirRat - ourRat : null;
   add('gbp_rating', 'Star rating',
     ourRat != null ? `${ourRat}★` : null, theirRat != null ? `${theirRat}★` : null,
-    (ourRat != null && theirRat != null) ? (ourRat === theirRat ? 'same' : ourRat < theirRat) : null,
-    'Google Maps results');
+    ratGap == null ? null : (ratGap < 0.2 ? 'same' : true),
+    'Google Maps results',
+    ratGap != null && ratGap > 0 && ratGap < 0.2 ? 'Within rounding of theirs, and on a different number of reviews' : '',
+    '', true);
 
   // Only theirs is available, so there is nothing to compare. Recorded, never scored.
   const theirPhotos = theirs && theirs.total_photos != null ? theirs.total_photos : null;
   add('gbp_photos', 'GBP photos', null, theirPhotos, null,
     'DataForSEO (theirs only)', 'Our photo count is not returned by the RatingCaptain profile endpoint, so this cannot be compared');
+
+  // ---------- How many Google profiles each brand runs ----------
+  // Prominence is a business-level signal, so a satellite profile inherits the brand's weight.
+  // Measuring only the satellite is what made a 22-review pin look beatable on description length.
+  let brandInfo = null;
+  try {
+    const centre2 = resolveSmartCenter({ center: null, lat: null, lng: null, project });
+    brandInfo = await dataForSeoBrandProfiles({
+      name: rival.name, category: rival.type,
+      lat: rival.lat != null ? rival.lat : (centre2 ? centre2.lat : null),
+      lng: rival.lng != null ? rival.lng : (centre2 ? centre2.lng : null),
+      radiusKm: 50,
+    });
+  } catch (e) { errors.push(`Their other profiles: ${e.message}`); }
+
+  // Ours, counted the same way so the comparison is like for like.
+  let ourBrand = null;
+  try {
+    const centre3 = resolveSmartCenter({ center: null, lat: null, lng: null, project });
+    ourBrand = await dataForSeoBrandProfiles({
+      name: project.business_name || project.name, category: rc && rc.categories && rc.categories.primaryCategory ? rc.categories.primaryCategory.displayName : rival.type,
+      lat: centre3 ? centre3.lat : null, lng: centre3 ? centre3.lng : null, radiusKm: 50,
+    });
+  } catch (e) { errors.push(`Our other profiles: ${e.message}`); }
+
+  add('brand_profiles', 'Google profiles this brand runs',
+    ourBrand ? ourBrand.count : null, brandInfo ? brandInfo.count : null,
+    (ourBrand && brandInfo) ? (ourBrand.count === brandInfo.count ? 'same' : ourBrand.count < brandInfo.count) : null,
+    'DataForSEO business listings, 50km',
+    brandInfo && brandInfo.count > 1 ? `Theirs: ${brandInfo.profiles.map(p => p.title).slice(0, 10).join(', ')}` : '',
+    brandInfo && ourBrand && brandInfo.count > ourBrand.count
+      ? 'More profiles means a pin closer to more suburbs, and every pin inherits the brand\'s review base. Google requires a staffed address per profile, so this is not something to copy — it is context for how large the gap really is.'
+      : '',
+    true);
+
+  add('brand_reviews', 'Reviews across all their profiles',
+    ourBrand ? ourBrand.total_reviews : null, brandInfo ? brandInfo.total_reviews : null,
+    (ourBrand && brandInfo) ? (ourBrand.total_reviews === brandInfo.total_reviews ? 'same' : ourBrand.total_reviews < brandInfo.total_reviews) : null,
+    'DataForSEO business listings, 50km',
+    'Prominence is measured at business level, so the profile ranking here carries the whole brand\'s weight',
+    '', true);
 
   // ---------- Websites ----------
   const ourUrls = (await lvFetchSitemapUrls(project.domain)) || (await lvFetchHomepageLinks(project.domain));
@@ -46698,10 +46799,12 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
       ]);
       const pick = (arr, t) => (arr || []).find(x => x.target === t) || null;
       const orank = pick(ranks, ourDom), trank = pick(ranks, theirDom);
+      // Domain rank is computed FROM the referring domains below. Listing both as separate jobs
+      // produces two tasks for one piece of work.
       add('domain_rank', 'Domain rank (0–1000)',
         orank ? orank.rank : null, trank ? trank.rank : null,
         (orank && trank) ? (orank.rank === trank.rank ? 'same' : orank.rank < trank.rank) : null,
-        'DataForSEO Backlinks');
+        'DataForSEO Backlinks', 'Derived from referring domains — it moves when those do', '', true);
       const oref = pick(refs, ourDom), tref = pick(refs, theirDom);
       const df = (x) => x ? (x.referring_domains - (x.referring_domains_nofollow || 0)) : null;
       add('dofollow_domains', 'Dofollow referring domains', df(oref), df(tref),
@@ -46771,11 +46874,13 @@ async function lvExplainOne({ projectId, suburb, keyword, rival, us, force }) {
       win: f.gap === null || f.gap === undefined ? null : (f.gap === 'same' ? 'same' : !f.gap),
       you: f.us == null ? 'not measured' : String(f.us),
       them: f.them == null ? 'not measured' : String(f.them),
-      note: f.note, source: f.source, key: f.key, caution: f.caution,
+      note: f.note, source: f.source, key: f.key, caution: f.caution, outcome: f.outcome,
     }));
 
     const isDistance = (r) => /^distance/i.test(r.label || '');
-    const gaps = rows.filter(r => r.win === false && !isDistance(r));
+    // Outcome facts stay in the comparison but never become tasks.
+    const gaps = rows.filter(r => r.win === false && !isDistance(r) && !r.outcome);
+    const outcomeGaps = rows.filter(r => r.win === false && r.outcome);
     const strengths = rows.filter(r => r.win === true && !isDistance(r));
     const level = rows.filter(r => r.win === 'same');
     const unknown = rows.filter(r => r.win === null || r.win === undefined);
@@ -46887,6 +46992,10 @@ HARD RULES — output breaking these is discarded:
     if (dropped.length) {
       console.warn(`[local-visibility] explain: dropped ${dropped.length} claim(s):`, dropped.map(d => d && d.factor));
     }
+    // Cheapest first. Months of link building above a ten-minute description edit is not an order
+    // anybody would work in.
+    const effortRank = { minutes: 0, hours: 1, weeks: 2, unknown: 3 };
+    kept.sort((a, b) => (effortRank[a.effort] ?? 3) - (effortRank[b.effort] ?? 3));
 
     // THE EXPLANATION IS BUILT HERE, from the measured numbers. The model contributed one word.
     const sufficiency = ['likely', 'partly', 'unlikely'].includes(String(parsed.sufficiency)) ? parsed.sufficiency : 'partly';
@@ -46900,6 +47009,19 @@ HARD RULES — output breaking these is discarded:
         : sufficiency === 'unlikely'
           ? `Those gaps are small, and on the measured evidence they probably do not account for the difference. Something not measured here is likely doing the work.`
           : `Those gaps are real but modest, so they may only partly account for the difference.`,
+      // Name the largest measured difference, even when it is not something to act on. A
+      // ten-profile brand with thirteen times the reviews is the difference that matches an
+      // absent-versus-#1 gap; a shorter profile description is not, and listing only the small
+      // fixable gaps invited exactly that wrong conclusion.
+      (() => {
+        const num = (v) => { const m = String(v).match(/-?\d[\d,.]*/); return m ? parseFloat(m[0].replace(/,/g, '')) : null; };
+        const scaled = outcomeGaps.map(g => {
+          const a = num(g.you), b = num(g.them);
+          return (a != null && b != null && a > 0 && b / a >= 3) ? { g, ratio: b / a } : null;
+        }).filter(Boolean).sort((x, y) => y.ratio - x.ratio)[0];
+        if (!scaled) return '';
+        return `The largest measured difference is not on that list: ${scaled.g.label} — you ${scaled.g.you}, them ${scaled.g.them}, roughly ${Math.round(scaled.ratio)} times. That is the difference closest in size to the position gap, and it is not something the items above would change.`;
+      })(),
       unknown.length ? `${unknown.length} factor${unknown.length === 1 ? '' : 's'} could not be measured and ${unknown.length === 1 ? 'is' : 'are'} ruled neither in nor out: ${unknown.map(u => u.label).join(', ')}.` : '',
       gathered.suburb_in_our_service_areas === false
         ? `Separately: ${suburb} is not one of the ${gathered.our_service_areas} service areas on your own Google profile. Google does not publish another business's service areas, so this is not a comparison.`
