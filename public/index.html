@@ -33957,9 +33957,14 @@
             body: {
               suburb: s.suburb,
               keyword: rows.__kw,
-              rival: { name: c.name, position: c.best, distance_km: c.distance_km },
+              // The server re-measures everything itself — our Google profile live from
+              // RatingCaptain, theirs from DataForSEO, both websites, both link profiles.
+              rival: {
+                name: c.name, position: c.best, distance_km: c.distance_km,
+                website: c.website || '', type: c.type || '', lat: c.lat, lng: c.lng,
+                reviews: c.reviews, our_reviews: (data.run || {}).our_reviews,
+              },
               us: { position: k.best_position, distance_km: s.distance_km },
-              rows: rows.map(r2 => ({ label: r2.label, win: r2.win, you: String(r2.you), them: String(r2.them), note: r2.note })),
             },
           });
           if (r.error) setError(r.error);
@@ -34629,8 +34634,40 @@
                                                             </div>
                                                           )}
 
+                                                          {/* What was actually measured, and from where. */}
+                                                          {w.evidence_rows && w.evidence_rows.length > 0 && (
+                                                            <details style={{ marginTop: 10 }}>
+                                                              <summary style={{ fontSize: 11.5, color: 'var(--text3)', cursor: 'pointer' }}>Show the {w.evidence_rows.length} facts this is based on</summary>
+                                                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, marginTop: 6 }}>
+                                                                <tbody>
+                                                                  {w.evidence_rows.map((r2, ri) => (
+                                                                    <tr key={ri} style={{ borderTop: '1px solid var(--border)' }}>
+                                                                      <td style={{ padding: '4px 6px', width: 18, textAlign: 'center' }}>
+                                                                        {r2.win === true && <i className="fas fa-square-check" style={{ color: '#22c55e' }}></i>}
+                                                                        {r2.win === false && <i className="fas fa-square-xmark" style={{ color: '#ef4444' }}></i>}
+                                                                        {r2.win === 'same' && <i className="fas fa-square-minus" style={{ color: 'var(--text3)' }}></i>}
+                                                                        {(r2.win === null || r2.win === undefined) && <i className="far fa-square" style={{ color: 'var(--text3)' }}></i>}
+                                                                      </td>
+                                                                      <td style={{ padding: '4px 6px', color: 'var(--text2)' }}>{r2.label}</td>
+                                                                      <td style={{ padding: '4px 6px' }}>{r2.you}</td>
+                                                                      <td style={{ padding: '4px 6px', color: 'var(--text2)' }}>{r2.them}</td>
+                                                                      <td style={{ padding: '4px 6px', color: 'var(--text3)' }}>{r2.source}</td>
+                                                                    </tr>
+                                                                  ))}
+                                                                </tbody>
+                                                              </table>
+                                                            </details>
+                                                          )}
+
+                                                          {w.gather_errors && w.gather_errors.length > 0 && (
+                                                            <div style={{ fontSize: 11.5, color: '#f59e0b', marginTop: 8, lineHeight: 1.6 }}>
+                                                              Could not measure: {w.gather_errors.join(' · ')}
+                                                            </div>
+                                                          )}
+
                                                           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8, lineHeight: 1.6 }}>
-                                                            Derived only from the {w.evidence_rows ? w.evidence_rows.length : rows.length} measured rows above — every claim is checked against them and anything untraceable is discarded.
+                                                            Measured fresh: our Google profile live from RatingCaptain{w.rc_synced === false ? ' (failed)' : ''}, theirs from DataForSEO{w.their_profile_found === false ? ' (not found)' : ''}, both websites crawled, both link profiles fetched.
+                                                            {' '}Every claim is checked against those {w.evidence_rows ? w.evidence_rows.length : 0} facts and anything untraceable is discarded.
                                                             {w.dropped_claims > 0 && <span style={{ color: '#f59e0b' }}> {w.dropped_claims} suggestion{w.dropped_claims > 1 ? 's were' : ' was'} discarded for not matching a measured gap.</span>}
                                                             {w.no_gaps && <span> No AI was used — there were no measured gaps to explain.</span>}
                                                             {w.cached && <span> Cached from {w.created_at ? new Date(w.created_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : 'an earlier run'}.</span>}

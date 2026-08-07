@@ -46456,6 +46456,197 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Hours open per week, from either shape. Returns null when the source says nothing — an unknown
+// schedule must never be scored as "closed".
+function lvHoursPerWeek(source) {
+  if (!source) return null;
+  if (Array.isArray(source.periods)) {              // RatingCaptain / Google shape
+    if (!source.periods.length) return null;
+    let h = 0;
+    for (const p of source.periods) {
+      const o = (p.openTime && p.openTime.hours != null) ? p.openTime.hours + (p.openTime.minutes || 0) / 60 : null;
+      const c = (p.closeTime && p.closeTime.hours != null) ? p.closeTime.hours + (p.closeTime.minutes || 0) / 60 : null;
+      if (o == null || c == null) continue;
+      h += (c >= o ? c - o : (24 - o) + c);
+    }
+    return Math.round(h);
+  }
+  if (source.timetable) {                            // DataForSEO shape
+    let h = 0, days = 0;
+    for (const day of Object.values(source.timetable)) {
+      if (!Array.isArray(day) || !day.length) continue;
+      days++;
+      for (const slot of day) {
+        const o = slot.open && slot.open.hour != null ? slot.open.hour + (slot.open.minute || 0) / 60 : null;
+        const c = slot.close && slot.close.hour != null ? slot.close.hour + (slot.close.minute || 0) / 60 : null;
+        if (o == null && c === 24) { h += 24; continue; }   // open 24 hours
+        if (o == null || c == null) continue;
+        h += (c >= o ? c - o : (24 - o) + c);
+      }
+    }
+    return days ? Math.round(h) : null;
+  }
+  return null;
+}
+
+// Gather the ROOT-CAUSE facts from the actual sources — our Google profile live from RatingCaptain,
+// our website, their Google profile from DataForSEO, their website, and both link profiles.
+// Every fact records where it came from. A fact that could not be measured is marked gap:null and
+// can never be presented as a cause or a pass.
+async function lvGatherFacts({ projectId, project, suburb, rival }) {
+  const facts = [];
+  const errors = [];
+  const add = (key, label, us, them, gap, source, note) => facts.push({ key, label, us, them, gap, source, note: note || '' });
+
+  // ---------- OUR Google profile, live from RatingCaptain ----------
+  let rc = null;
+  try {
+    const synced = await syncRcProfileFromApi(projectId);
+    if (synced && synced.ok === false) errors.push(`Google profile: ${synced.error}`);
+    const row = (await pool.query(
+      `SELECT config FROM project_integrations WHERE project_id=$1 AND kind='rc_profile'`, [projectId])).rows[0];
+    const cfg = row && row.config ? (typeof row.config === 'string' ? JSON.parse(row.config) : row.config) : null;
+    rc = cfg && cfg.profile ? cfg.profile : null;
+  } catch (e) { errors.push(`Google profile: ${e.message}`); }
+
+  // ---------- THEIR Google profile, from DataForSEO ----------
+  let theirs = null;
+  try {
+    const b = await dataForSeoBusinessListing({ title: rival.name, category: rival.type, lat: rival.lat, lng: rival.lng });
+    theirs = b.listing;
+    if (!theirs) errors.push(`Their Google profile was not found in the listings database.`);
+  } catch (e) { errors.push(`Their Google profile: ${e.message}`); }
+
+  const ourCats = rc ? [rc.categories?.primaryCategory?.displayName, ...((rc.categories?.additionalCategories || []).map(c => c.displayName))].filter(Boolean) : null;
+  const theirCats = theirs ? [theirs.category, ...(theirs.additional_categories || [])].filter(Boolean) : null;
+  add('gbp_categories', 'GBP categories',
+    ourCats ? ourCats.length : null, theirCats ? theirCats.length : null,
+    (ourCats && theirCats) ? (ourCats.length === theirCats.length ? 'same' : ourCats.length < theirCats.length) : null,
+    'Google Business Profile (ours via RatingCaptain, theirs via DataForSEO)',
+    ourCats && theirCats ? `Ours: ${ourCats.join(', ')} · Theirs: ${theirCats.join(', ')}` : '');
+
+  const ourSvc = rc && Array.isArray(rc.serviceItems) ? rc.serviceItems.length : null;
+  const theirSvc = theirs && Array.isArray(theirs.services) ? theirs.services.length : null;
+  add('gbp_services', 'GBP services listed', ourSvc, theirSvc,
+    (ourSvc != null && theirSvc != null) ? (ourSvc === theirSvc ? 'same' : ourSvc < theirSvc) : null,
+    'Google Business Profile');
+
+  const ourDesc = rc && rc.profile && rc.profile.description ? rc.profile.description.length : (rc ? 0 : null);
+  const theirDesc = theirs ? (theirs.description ? theirs.description.length : 0) : null;
+  add('gbp_description', 'GBP description length', ourDesc, theirDesc,
+    (ourDesc != null && theirDesc != null) ? (ourDesc === theirDesc ? 'same' : ourDesc < theirDesc) : null,
+    'Google Business Profile');
+
+  const ourHours = rc ? lvHoursPerWeek(rc.regularHours) : null;
+  const theirHours = theirs && theirs.work_time ? lvHoursPerWeek(theirs.work_time.work_hours) : null;
+  add('gbp_hours', 'Hours open per week', ourHours, theirHours,
+    (ourHours != null && theirHours != null) ? (ourHours === theirHours ? 'same' : ourHours < theirHours) : null,
+    'Google Business Profile',
+    ourHours != null && theirHours != null && ourHours < theirHours ? 'Searches made outside our opening hours show us as closed' : '');
+
+  const ourAreas = rc && rc.serviceArea && rc.serviceArea.places && Array.isArray(rc.serviceArea.places.placeInfos)
+    ? rc.serviceArea.places.placeInfos.map(p => p.placeName).filter(Boolean) : null;
+  const inAreas = ourAreas ? ourAreas.some(a => aipNorm(a).includes(aipNorm(suburb))) : null;
+  add('gbp_service_area', `${suburb} in our GBP service areas`,
+    inAreas === null ? null : (inAreas ? 'yes' : 'no'), 'not published by Google for any business',
+    inAreas === null ? null : (inAreas ? false : true),
+    'Google Business Profile (ours via RatingCaptain)',
+    ourAreas ? `${ourAreas.length} areas listed` : '');
+
+  add('gbp_reviews', 'Google reviews', rival.our_reviews != null ? rival.our_reviews : null, theirs && theirs.rating ? theirs.rating.votes_count : (rival.reviews != null ? rival.reviews : null),
+    null, 'Google Maps results', 'Comparison shown in the table above');
+
+  const ourPhotos = null; // not returned by the RC profile endpoint
+  const theirPhotos = theirs && theirs.total_photos != null ? theirs.total_photos : null;
+  add('gbp_photos', 'GBP photos', ourPhotos, theirPhotos, null,
+    'DataForSEO (theirs only)', 'Our photo count is not returned by the RatingCaptain profile endpoint, so this cannot be compared');
+
+  // ---------- Websites ----------
+  const ourUrls = (await lvFetchSitemapUrls(project.domain)) || (await lvFetchHomepageLinks(project.domain));
+  const theirUrls = rival.website ? ((await lvFetchSitemapUrls(rival.website)) || (await lvFetchHomepageLinks(rival.website))) : null;
+  const ourHit = lvSitemapHasSuburb(ourUrls, suburb);
+  const theirHit = lvSitemapHasSuburb(theirUrls, suburb);
+
+  add('page_exists', `Page for ${suburb} on the website`,
+    ourHit === null ? null : (ourHit ? 'yes' : 'none'),
+    theirHit === null ? null : (theirHit ? 'yes' : 'none'),
+    (ourHit === null || theirHit === null) ? null : (!!ourHit === !!theirHit ? 'same' : !ourHit),
+    'Sitemap or homepage links');
+
+  const pickSibling = (urls, thisUrl) => {
+    if (!Array.isArray(urls)) return null;
+    const slug = aipNorm(suburb).replace(/\s+/g, '-');
+    return urls.find(u => u !== thisUrl && /\/(plumb|location|area|service-area|suburb)/i.test(u)
+      && !aipNorm(u).replace(/\s+/g, '-').includes(slug)) || null;
+  };
+  let qo = null, qt = null;
+  if (ourHit) { try { qo = await lvPageQuality(ourHit, suburb, pickSibling(ourUrls, ourHit)); } catch (e) { errors.push(`Our page: ${e.message}`); } }
+  if (theirHit) { try { qt = await lvPageQuality(theirHit, suburb, pickSibling(theirUrls, theirHit)); } catch (e) { errors.push(`Their page: ${e.message}`); } }
+
+  add('page_words', 'Suburb page word count',
+    qo && qo.checked ? qo.words : null, qt && qt.checked ? qt.words : null,
+    (qo && qo.checked && qt && qt.checked) ? (qo.words === qt.words ? 'same' : qo.words < qt.words) : null,
+    'Page content');
+
+  const targeting = (q) => q && q.checked ? [q.suburb_in_title && 'title', q.suburb_in_h1 && 'H1', q.suburb_in_opening && 'opening'].filter(Boolean).join(', ') || 'none of them' : null;
+  const targetScore = (q) => q && q.checked ? (!!q.suburb_in_title + !!q.suburb_in_h1 + !!q.suburb_in_opening) : null;
+  add('page_targeting', `${suburb} in the page title / H1 / opening`,
+    targeting(qo), targeting(qt),
+    (targetScore(qo) != null && targetScore(qt) != null) ? (targetScore(qo) === targetScore(qt) ? 'same' : targetScore(qo) < targetScore(qt)) : (targetScore(qo) != null ? targetScore(qo) < 3 : null),
+    'Page content',
+    qo && qo.checked ? `Named ${qo.mentions}× on our page` : '');
+
+  add('page_templated', 'Suburb page is templated',
+    qo && qo.templated !== null && qo.templated !== undefined ? `${qo.similarity}% same as another of our suburb pages` : null,
+    qt && qt.templated !== null && qt.templated !== undefined ? `${qt.similarity}%` : null,
+    qo && qo.templated !== null && qo.templated !== undefined ? !!qo.templated : null,
+    'Word overlap against another suburb page on the same site',
+    'Above about 80% the page is the same text with the suburb name swapped');
+
+  // ---------- Link profiles ----------
+  try {
+    const ourDom = (project.domain || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+    let theirDom = '';
+    try { theirDom = new URL(rival.website.startsWith('http') ? rival.website : 'https://' + rival.website).hostname.replace(/^www\./, ''); } catch (e) {}
+    if (ourDom && theirDom) {
+      const [ranks, refs] = await Promise.all([
+        dataForSeoBacklinksBulk('ranks', [ourDom, theirDom]).catch(() => null),
+        dataForSeoBacklinksBulk('referring_domains', [ourDom, theirDom]).catch(() => null),
+      ]);
+      const pick = (arr, t) => (arr || []).find(x => x.target === t) || null;
+      const orank = pick(ranks, ourDom), trank = pick(ranks, theirDom);
+      add('domain_rank', 'Domain rank (0–1000)',
+        orank ? orank.rank : null, trank ? trank.rank : null,
+        (orank && trank) ? (orank.rank === trank.rank ? 'same' : orank.rank < trank.rank) : null,
+        'DataForSEO Backlinks');
+      const oref = pick(refs, ourDom), tref = pick(refs, theirDom);
+      const df = (x) => x ? (x.referring_domains - (x.referring_domains_nofollow || 0)) : null;
+      add('dofollow_domains', 'Dofollow referring domains', df(oref), df(tref),
+        (df(oref) != null && df(tref) != null) ? (df(oref) === df(tref) ? 'same' : df(oref) < df(tref)) : null,
+        'DataForSEO Backlinks');
+    }
+  } catch (e) { errors.push(`Link profiles: ${e.message}`); }
+
+  return { facts, errors, rc_synced: !!rc, their_profile_found: !!theirs };
+}
+
+// Small wrapper so the bulk backlinks endpoints can be called by name.
+async function dataForSeoBacklinksBulk(kind, targets) {
+  if (!DATAFORSEO_AUTH) throw new Error('DataForSEO not configured');
+  const path = kind === 'ranks' ? 'bulk_ranks' : 'bulk_referring_domains';
+  const resp = await fetch(`https://api.dataforseo.com/v3/backlinks/${path}/live`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH },
+    body: JSON.stringify([{ targets }]),
+    signal: AbortSignal.timeout(45000),
+  });
+  if (!resp.ok) throw new Error(`DataForSEO backlinks ${resp.status}`);
+  const data = await resp.json();
+  const task = data.tasks?.[0];
+  if (task && task.status_code && task.status_code !== 20000) throw new Error(`DataForSEO backlinks task ${task.status_code}: ${task.status_message}`);
+  return task?.result?.[0]?.items || [];
+}
+
 // WHY a further-away rival outranks us, and HOW to close it.
 //
 // Zero tolerance for assumption. The guarantee is structural, not a promise in a prompt:
@@ -46474,9 +46665,7 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
     const keyword = String(req.body?.keyword || '').trim();
     const rival = req.body?.rival || {};
     const us = req.body?.us || {};
-    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (!suburb || !keyword || !rival.name) return res.status(400).json({ error: 'suburb, keyword and rival are required' });
-    if (!rows.length) return res.status(400).json({ error: 'No measured factors were supplied, so there is nothing to explain from.' });
 
     if (!req.body?.force) {
       const cached = (await pool.query(
@@ -46485,16 +46674,27 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
       if (cached) return res.json({ ...cached, cached: true });
     }
 
-    // Split the measured rows. 'distance' is excluded from gaps — it is the premise of the question
-    // (they are further away), not a thing to fix.
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const ourName = project.business_name || project.name || 'our business';
+
+    // Go and MEASURE, rather than trusting whatever the table happened to be showing. Our Google
+    // profile is pulled live from RatingCaptain, theirs from DataForSEO, both websites are crawled,
+    // and both link profiles are fetched.
+    const gathered = await lvGatherFacts({ projectId, project, suburb, rival });
+    const rows = gathered.facts.map(f => ({
+      label: f.label,
+      win: f.gap === null || f.gap === undefined ? null : (f.gap === 'same' ? 'same' : !f.gap),
+      you: f.us == null ? 'not measured' : String(f.us),
+      them: f.them == null ? 'not measured' : String(f.them),
+      note: f.note, source: f.source, key: f.key,
+    }));
+
     const isDistance = (r) => /^distance/i.test(r.label || '');
     const gaps = rows.filter(r => r.win === false && !isDistance(r));
     const strengths = rows.filter(r => r.win === true && !isDistance(r));
     const level = rows.filter(r => r.win === 'same');
     const unknown = rows.filter(r => r.win === null || r.win === undefined);
-
-    const project = (await pool.query('SELECT business_name, name, domain FROM projects WHERE id=$1', [projectId])).rows[0];
-    const ourName = project ? (project.business_name || project.name) : 'our business';
 
     // NO GAPS → NO AI. There is nothing in the measured data that explains the loss, and inventing
     // one is exactly what this endpoint exists to prevent.
@@ -46506,6 +46706,7 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
         actions: [],
         unmeasured: unknown.map(u => ({ factor: u.label, why_unknown: u.note || 'Not measured' })),
         evidence_rows: rows, prompt: null, model: null, dropped_claims: 0, cost: 0, no_gaps: true,
+        gather_errors: gathered.errors, rc_synced: gathered.rc_synced, their_profile_found: gathered.their_profile_found,
       };
       await pool.query(
         `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost)
@@ -46518,9 +46719,9 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
 
     if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'Anthropic API key not configured' });
 
-    // The model sees the measured rows and nothing else.
+    // The model sees the measured facts and nothing else — each one with the source it came from.
     const factLines = rows.map(r =>
-      `- ${r.label} | us: ${r.you} | them: ${r.them} | verdict: ${r.win === true ? 'WE ARE AHEAD' : r.win === false ? 'THEY ARE AHEAD (measured gap)' : r.win === 'same' ? 'LEVEL' : 'NOT MEASURED'} | note: ${r.note || ''}`
+      `- ${r.label} | us: ${r.you} | them: ${r.them} | verdict: ${r.win === true ? 'WE ARE AHEAD' : r.win === false ? 'THEY ARE AHEAD (measured gap)' : r.win === 'same' ? 'LEVEL' : 'NOT MEASURED'} | source: ${r.source || 'measured'} | note: ${r.note || ''}`
     ).join('\n');
 
     const prompt = `You are analysing why one local business outranks another on Google Maps for a specific search in a specific suburb.
@@ -46613,6 +46814,9 @@ HARD RULES — output that breaks these is discarded:
       model: 'claude-haiku-4-5-20251001',
       dropped_claims: dropped.length,
       cost,
+      gather_errors: gathered.errors,
+      rc_synced: gathered.rc_synced,
+      their_profile_found: gathered.their_profile_found,
     };
 
     await pool.query(
