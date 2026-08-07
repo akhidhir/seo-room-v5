@@ -34030,10 +34030,13 @@
         const theirPage = f && f.rival_pages ? f.rival_pages[nrm(c.name)] : undefined;
         const rows = [];
 
+        const closerBy = Math.round((c.distance_km - s.distance_km) * 10) / 10;
         rows.push({
-          label: 'Distance to suburb', win: true,
+          label: 'Distance to suburb', win: closerBy > 0 ? true : 'same',
           you: `${s.distance_km} km`, them: `${c.distance_km} km`,
-          note: `You are ${Math.round((c.distance_km - s.distance_km) * 10) / 10} km closer and still behind them`,
+          note: closerBy > 0
+            ? `You are ${closerBy} km closer and still behind them`
+            : `Same distance, so neither of you has a proximity advantage here`,
         });
 
         const theirRev = c.reviews || 0;
@@ -34508,6 +34511,7 @@
                                                         </td>
                                                         <td style={{ padding: '5px 8px', fontSize: 11.5, color: 'var(--text3)' }}>
                                                           {c.distance_km == null ? 'hides its address, so distance cannot be ruled out'
+                                                            : c.distance_km === s.distance_km ? `same distance as you — no proximity advantage either way`
                                                             : isBeatable ? `further from ${s.suburb} than you — beatable`
                                                             : `closer to ${s.suburb} than you (${s.distance_km} km) — geography`}
                                                         </td>

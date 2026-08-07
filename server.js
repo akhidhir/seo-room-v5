@@ -46105,6 +46105,11 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
          FROM local_visibility_points WHERE run_id=$1`, [run.id]
     )).rows;
 
+    // Our own listing appears in top_results like anyone else. Without this the page compared
+    // HouseWorks against HouseWorks and called it a beatable competitor.
+    const projRow = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    const isUsListing = projRow ? lvBusinessMatcher(projRow) : (() => false);
+
     const bySuburb = {};
     for (const p of pts) {
       const key = p.suburb + '|' + (p.state || '');
@@ -46120,6 +46125,7 @@ app.get('/api/projects/:projectId/local-visibility/latest', async (req, res) => 
       k.points.push({ point_index: p.point_index, measured: p.measured, position: p.position, error: p.error });
       for (const c of (p.top_results || [])) {
         if (!c.title) continue;
+        if (isUsListing({ title: c.title, website: c.website })) continue;   // that is us, not a rival
         // Key on a normalised name. Google lists the same business twice with different casing
         // ("Dragon plumbing and gas" / "Dragon Plumbing and Gas") and counting them as two
         // competitors inflates the field and hides the real pattern.
