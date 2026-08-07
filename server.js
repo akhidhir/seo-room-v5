@@ -46416,7 +46416,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 5;
+const LV_EXPLAIN_VERSION = 6;
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 // Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
@@ -46728,20 +46728,30 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
     });
   } catch (e) { errors.push(`Our other profiles: ${e.message}`); }
 
+  // A count of ZERO for our own business is not a measurement, it is a failed lookup — we hold the
+  // profile in RatingCaptain. Service-area businesses with no public address are missing from the
+  // listings database, and reporting "you 0" both stated a falsehood and hid a 13x difference
+  // behind a divide-by-zero guard.
+  const ourProfileCount = (ourBrand && ourBrand.count > 0) ? ourBrand.count : (rc ? 1 : null);
+  const ourProfileSrc = (ourBrand && ourBrand.count > 0)
+    ? 'DataForSEO business listings, 50km'
+    : 'Your RatingCaptain profile — the listings database returned nothing for you, which is normal for a business with no public address';
+  const ourBrandReviews = (ourBrand && ourBrand.total_reviews > 0) ? ourBrand.total_reviews : (ourRev != null ? ourRev : null);
+
   add('brand_profiles', 'Google profiles this brand runs',
-    ourBrand ? ourBrand.count : null, brandInfo ? brandInfo.count : null,
-    (ourBrand && brandInfo) ? (ourBrand.count === brandInfo.count ? 'same' : ourBrand.count < brandInfo.count) : null,
-    'DataForSEO business listings, 50km',
+    ourProfileCount, brandInfo ? brandInfo.count : null,
+    (ourProfileCount != null && brandInfo) ? (ourProfileCount === brandInfo.count ? 'same' : ourProfileCount < brandInfo.count) : null,
+    ourProfileSrc,
     brandInfo && brandInfo.count > 1 ? `Theirs: ${brandInfo.profiles.map(p => p.title).slice(0, 10).join(', ')}` : '',
-    brandInfo && ourBrand && brandInfo.count > ourBrand.count
+    brandInfo && ourProfileCount != null && brandInfo.count > ourProfileCount
       ? 'More profiles means a pin closer to more suburbs, and every pin inherits the brand\'s review base. Google requires a staffed address per profile, so this is not something to copy — it is context for how large the gap really is.'
       : '',
     true);
 
   add('brand_reviews', 'Reviews across all their profiles',
-    ourBrand ? ourBrand.total_reviews : null, brandInfo ? brandInfo.total_reviews : null,
-    (ourBrand && brandInfo) ? (ourBrand.total_reviews === brandInfo.total_reviews ? 'same' : ourBrand.total_reviews < brandInfo.total_reviews) : null,
-    'DataForSEO business listings, 50km',
+    ourBrandReviews, brandInfo ? brandInfo.total_reviews : null,
+    (ourBrandReviews != null && brandInfo) ? (ourBrandReviews === brandInfo.total_reviews ? 'same' : ourBrandReviews < brandInfo.total_reviews) : null,
+    (ourBrand && ourBrand.total_reviews > 0) ? 'DataForSEO business listings, 50km' : 'Your own profile only',
     'Prominence is measured at business level, so the profile ranking here carries the whole brand\'s weight',
     '', true);
 
@@ -47026,7 +47036,10 @@ HARD RULES — output breaking these is discarded:
         const num = (v) => { const m = String(v).match(/-?\d[\d,.]*/); return m ? parseFloat(m[0].replace(/,/g, '')) : null; };
         const scaled = outcomeGaps.map(g => {
           const a = num(g.you), b = num(g.them);
-          return (a != null && b != null && a > 0 && b / a >= 3) ? { g, ratio: b / a } : null;
+          if (a == null || b == null || b <= 0) return null;
+          // A zero on our side means the gap is total, not undefined. Guarding with a > 0 hid it.
+          const ratio = a > 0 ? b / a : Infinity;
+          return ratio >= 3 ? { g, ratio } : null;
         }).filter(Boolean).sort((x, y) => y.ratio - x.ratio)[0];
         if (!scaled) {
           // Say when there were outcome gaps but none large enough, so silence is never mistaken
@@ -47035,7 +47048,8 @@ HARD RULES — output breaking these is discarded:
             ? `Outcome measures also favour them (${outcomeGaps.map(g => `${g.label}: you ${g.you}, them ${g.them}`).join('; ')}), though none by a wide enough margin to single out.`
             : '';
         }
-        return `The largest measured difference is not on that list: ${scaled.g.label} — you ${scaled.g.you}, them ${scaled.g.them}, roughly ${Math.round(scaled.ratio)} times. That is the difference closest in size to the position gap, and it is not something the items above would change.`;
+        const times = Number.isFinite(scaled.ratio) ? `roughly ${Math.round(scaled.ratio)} times` : 'against none on our side';
+        return `The largest measured difference is not on that list: ${scaled.g.label} — you ${scaled.g.you}, them ${scaled.g.them}, ${times}. That is the difference closest in size to the position gap, and it is not something the items above would change.`;
       })(),
       unknown.length ? `${unknown.length} factor${unknown.length === 1 ? '' : 's'} could not be measured and ${unknown.length === 1 ? 'is' : 'are'} ruled neither in nor out: ${unknown.map(u => u.label).join(', ')}.` : '',
       // Only say this when the stored list is credible. RatingCaptain's REST endpoint returns a
