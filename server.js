@@ -46416,7 +46416,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 3;
+const LV_EXPLAIN_VERSION = 4;
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 // Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
@@ -46983,8 +46983,17 @@ HARD RULES — output breaking these is discarded:
         evidence: `You: ${g.you} · Them: ${g.them}${g.source ? ' · ' + g.source : ''}`,
         effort: ['minutes', 'hours', 'weeks'].includes(String(a.effort)) ? a.effort : 'unknown',
         // Built here, not by the model. Its version was the factor label repeated back, which told
-        // nobody when the job was done.
-        verify: `Re-measure "${g.label}" — now ${g.you}, target at least ${g.them}`,
+        // nobody when the job was done. Where the competitor's figure is many times ours it is not
+        // a target — 17 dofollow domains to 101 describes a different-sized business, and writing
+        // it as a goal makes the whole list look unachievable.
+        verify: (() => {
+          const n = (v) => { const m = String(v).match(/-?\d[\d,.]*/); return m ? parseFloat(m[0].replace(/,/g, '')) : null; };
+          const a = n(g.you), b = n(g.them);
+          if (a != null && b != null && a > 0 && b / a >= 3) {
+            return `Re-measure "${g.label}" — now ${g.you}. Theirs is ${g.them}, which is ${Math.round(b / a)}× ours and not a realistic target; any measured increase counts as progress.`;
+          }
+          return `Re-measure "${g.label}" — now ${g.you}, target at least ${g.them}`;
+        })(),
         caution: g.caution || '',
         measured_you: g.you, measured_them: g.them,
       });
@@ -47035,6 +47044,12 @@ HARD RULES — output breaking these is discarded:
       `Work on ${ourName} (${project && project.domain ? project.domain : 'website'}).`,
       ``,
       `Context: for the search "${keyword}" measured from inside ${suburb}, ${ourName} is ${us.position != null ? '#' + us.position : 'absent from the top 20'} at ${us.distance_km} km, while ${rival.name} is #${rival.position} at ${rival.distance_km} km — further away and still ahead.`,
+      ``,
+      // The analysis travels with the task list. Without it, someone closes four small gaps, sees no
+      // movement, and concludes the measurement was wrong — when the measurement had already said
+      // these gaps were unlikely to be the reason.
+      `READ THIS BEFORE STARTING — what the measurements actually say:`,
+      parsed.why,
       ``,
       `These are the measured gaps against that one competitor. Do them in order. Do not do anything not on this list.`,
       ``,
