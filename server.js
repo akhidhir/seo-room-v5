@@ -473,6 +473,29 @@ async function initDb() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_points_history ON local_visibility_points(project_id, keyword, suburb, measured_at)`).catch(() => {});
     await client.query(`CREATE INDEX IF NOT EXISTS idx_lv_runs_project ON local_visibility_runs(project_id, measured_at DESC)`).catch(() => {});
 
+    // Why a further-away rival outranks us, and how to close it. Cached per project+suburb+keyword
+    // +rival so the same question is never paid for twice. evidence_rows stores the exact measured
+    // rows the answer was derived from, so any claim can be traced back afterwards.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS lv_explanations (
+        id SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        suburb TEXT NOT NULL,
+        keyword TEXT NOT NULL,
+        rival TEXT NOT NULL,
+        why TEXT,
+        actions JSONB DEFAULT '[]',
+        unmeasured JSONB DEFAULT '[]',
+        evidence_rows JSONB DEFAULT '[]',
+        prompt TEXT,
+        model TEXT,
+        dropped_claims INTEGER DEFAULT 0,
+        cost NUMERIC(10,4) DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(project_id, suburb, keyword, rival)
+      )
+    `).catch(() => {});
+
     // ===== AI Presence (part of Local Visibility) =====
     // Do the AI assistants name this business when someone asks who to call, and if not, which
     // pages are they reading instead. Also a dated snapshot — AI answers are unstable between runs,
@@ -46430,6 +46453,179 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
     }
     lvDeepCache[key] = { result: out, at: Date.now() };
     res.json({ ...out, cached: false, checked_at: new Date().toISOString() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// WHY a further-away rival outranks us, and HOW to close it.
+//
+// Zero tolerance for assumption. The guarantee is structural, not a promise in a prompt:
+//   1. The model is given ONLY the measured rows — nothing from its own knowledge of the business.
+//   2. Every action it returns must name a factor that exists in those rows AND is a measured gap.
+//   3. Anything it returns that fails that check is DELETED server-side before the user sees it,
+//      and the number of deletions is recorded.
+//   4. If there are no measured gaps, no AI call is made at all — the honest answer is returned
+//      directly, because there is nothing in the data to explain the loss.
+//   5. Factors we could not measure are listed separately as unknown. They are never presented as
+//      causes, and never as passes.
+app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const suburb = String(req.body?.suburb || '').trim();
+    const keyword = String(req.body?.keyword || '').trim();
+    const rival = req.body?.rival || {};
+    const us = req.body?.us || {};
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!suburb || !keyword || !rival.name) return res.status(400).json({ error: 'suburb, keyword and rival are required' });
+    if (!rows.length) return res.status(400).json({ error: 'No measured factors were supplied, so there is nothing to explain from.' });
+
+    if (!req.body?.force) {
+      const cached = (await pool.query(
+        `SELECT * FROM lv_explanations WHERE project_id=$1 AND suburb=$2 AND keyword=$3 AND rival=$4`,
+        [projectId, suburb, keyword, rival.name])).rows[0];
+      if (cached) return res.json({ ...cached, cached: true });
+    }
+
+    // Split the measured rows. 'distance' is excluded from gaps — it is the premise of the question
+    // (they are further away), not a thing to fix.
+    const isDistance = (r) => /^distance/i.test(r.label || '');
+    const gaps = rows.filter(r => r.win === false && !isDistance(r));
+    const strengths = rows.filter(r => r.win === true && !isDistance(r));
+    const level = rows.filter(r => r.win === 'same');
+    const unknown = rows.filter(r => r.win === null || r.win === undefined);
+
+    const project = (await pool.query('SELECT business_name, name, domain FROM projects WHERE id=$1', [projectId])).rows[0];
+    const ourName = project ? (project.business_name || project.name) : 'our business';
+
+    // NO GAPS → NO AI. There is nothing in the measured data that explains the loss, and inventing
+    // one is exactly what this endpoint exists to prevent.
+    if (!gaps.length) {
+      const out = {
+        why: `Nothing in the measured data explains this. ${rival.name} is ${rival.distance_km} km from ${suburb} and ${ourName} is ${us.distance_km} km, and across the ${rows.length - 1} other factors measured, ${ourName} is level or ahead on ${strengths.length + level.length} of them and behind on none.`
+          + (unknown.length ? ` ${unknown.length} factor${unknown.length === 1 ? ' was' : 's were'} not measured and cannot be ruled in or out: ${unknown.map(u => u.label).join(', ')}.` : '')
+          + ` Whatever is producing their position is not in this list.`,
+        actions: [],
+        unmeasured: unknown.map(u => ({ factor: u.label, why_unknown: u.note || 'Not measured' })),
+        evidence_rows: rows, prompt: null, model: null, dropped_claims: 0, cost: 0, no_gaps: true,
+      };
+      await pool.query(
+        `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,NULL,0,0)
+         ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=NULL, model=NULL, dropped_claims=0, cost=0, created_at=NOW()`,
+        [projectId, suburb, keyword, rival.name, out.why, JSON.stringify([]), JSON.stringify(out.unmeasured), JSON.stringify(rows)]
+      ).catch(() => {});
+      return res.json({ ...out, cached: false });
+    }
+
+    if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'Anthropic API key not configured' });
+
+    // The model sees the measured rows and nothing else.
+    const factLines = rows.map(r =>
+      `- ${r.label} | us: ${r.you} | them: ${r.them} | verdict: ${r.win === true ? 'WE ARE AHEAD' : r.win === false ? 'THEY ARE AHEAD (measured gap)' : r.win === 'same' ? 'LEVEL' : 'NOT MEASURED'} | note: ${r.note || ''}`
+    ).join('\n');
+
+    const prompt = `You are analysing why one local business outranks another on Google Maps for a specific search in a specific suburb.
+
+SEARCH: "${keyword}" measured from GPS points inside ${suburb}
+US: ${ourName} — position ${us.position != null ? '#' + us.position : 'absent from the top 20'}, ${us.distance_km} km from ${suburb}
+THEM: ${rival.name} — position #${rival.position}, ${rival.distance_km} km from ${suburb}
+
+They are FURTHER from ${suburb} than we are, so distance does not explain their position.
+
+MEASURED FACTORS — this is the complete set of evidence. Nothing else is known:
+${factLines}
+
+Write a JSON object with exactly these keys:
+
+{
+  "why": "2-4 sentences. Explain what the measured gaps most plausibly account for. Quote the actual numbers from the factors above. If the gaps are small or unlikely to fully account for the position difference, SAY SO explicitly.",
+  "actions": [
+    { "factor": "must be copied EXACTLY from a factor label above that is marked THEY ARE AHEAD", "action": "one concrete thing to do", "evidence": "the measured numbers that justify it, quoted from above", "effort": "minutes|hours|weeks", "verify": "what number should change if this worked" }
+  ]
+}
+
+HARD RULES — output that breaks these is discarded:
+- Use ONLY the factors listed above. Do not introduce any ranking factor that is not in that list.
+- Every action's "factor" must be the exact text of a label marked THEY ARE AHEAD.
+- Never propose an action for a factor marked NOT MEASURED, LEVEL, or WE ARE AHEAD.
+- Do not speculate about anything not measured — no guesses about their backlinks, review recency, spam, proximity tricks, or Google's weighting.
+- Do not claim certainty about cause. These are correlations in measured data, and the wording must reflect that.
+- If the measured gaps are weak, the "why" must say the data does not fully explain it.
+- Return raw JSON only. No markdown fence, no commentary.`;
+
+    const aiResp = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1600,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    let parsed = null;
+    try {
+      const txt = (aiResp.content?.[0]?.text || '').replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+      parsed = JSON.parse(txt);
+    } catch (e) {
+      return res.status(502).json({ error: 'The analysis came back unreadable and was discarded rather than shown. Try again.' });
+    }
+
+    // VALIDATION. Every action must trace to a measured gap. Anything that does not is deleted.
+    const gapLabels = new Map(gaps.map(g => [aipNorm(g.label), g]));
+    const kept = [], dropped = [];
+    for (const a of (Array.isArray(parsed.actions) ? parsed.actions : [])) {
+      const g = gapLabels.get(aipNorm(a && a.factor));
+      if (!g) { dropped.push(a); continue; }
+      kept.push({
+        factor: g.label,
+        action: String(a.action || '').trim(),
+        evidence: `You: ${g.you} · Them: ${g.them}${a.evidence ? ' — ' + String(a.evidence).trim() : ''}`,
+        effort: ['minutes', 'hours', 'weeks'].includes(String(a.effort)) ? a.effort : 'unknown',
+        verify: String(a.verify || '').trim() || `Re-measure "${g.label}" after the change`,
+        measured_you: g.you, measured_them: g.them,
+      });
+    }
+    if (dropped.length) {
+      console.warn(`[local-visibility] explain: dropped ${dropped.length} claim(s) not traceable to a measured gap:`, dropped.map(d => d && d.factor));
+    }
+
+    // The Claude prompt is built from the VALIDATED actions, deterministically. The model never
+    // writes it, so it cannot smuggle an instruction that failed validation.
+    const claudePrompt = [
+      `Work on ${ourName} (${project && project.domain ? project.domain : 'website'}).`,
+      ``,
+      `Context: for the search "${keyword}" measured from inside ${suburb}, ${ourName} is ${us.position != null ? '#' + us.position : 'absent from the top 20'} at ${us.distance_km} km, while ${rival.name} is #${rival.position} at ${rival.distance_km} km — further away and still ahead.`,
+      ``,
+      `These are the measured gaps against that one competitor. Do them in order. Do not do anything not on this list.`,
+      ``,
+      ...kept.map((a, i) => `${i + 1}. ${a.factor}\n   Now: ${a.measured_you}   ·   Them: ${a.measured_them}\n   Do: ${a.action}\n   Done when: ${a.verify}`),
+      ``,
+      `Rules:`,
+      `- Change nothing about the site design or theme, desktop or mobile.`,
+      `- Every change must be reversible and recorded.`,
+      `- If a change cannot be verified as applied, report it as failed rather than done.`,
+      unknown.length ? `\nNot measured, so do NOT act on these — they may or may not be problems: ${unknown.map(u => u.label).join(', ')}.` : '',
+    ].filter(Boolean).join('\n');
+
+    const cost = 0.003;
+    const out = {
+      why: String(parsed.why || '').trim(),
+      actions: kept,
+      unmeasured: unknown.map(u => ({ factor: u.label, why_unknown: u.note || 'Not measured' })),
+      evidence_rows: rows,
+      prompt: kept.length ? claudePrompt : null,
+      model: 'claude-haiku-4-5-20251001',
+      dropped_claims: dropped.length,
+      cost,
+    };
+
+    await pool.query(
+      `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET
+         why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=$9, model=$10, dropped_claims=$11, cost=$12, created_at=NOW()`,
+      [projectId, suburb, keyword, rival.name, out.why, JSON.stringify(kept), JSON.stringify(out.unmeasured),
+       JSON.stringify(rows), out.prompt, out.model, dropped.length, cost]
+    ).catch(e => console.error('[local-visibility] explain save failed:', e.message));
+
+    try { await logApiCost(parseInt(projectId), 'local_visibility_explain', 'anthropic', 1, cost, { suburb, keyword, rival: rival.name }); } catch (e) {}
+    res.json({ ...out, cached: false, created_at: new Date().toISOString() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

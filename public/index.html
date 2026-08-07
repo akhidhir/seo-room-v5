@@ -33795,6 +33795,9 @@
       const [oppOnly, setOppOnly] = useState(false);
       const [deep, setDeep] = useState({});
       const [deepBusy, setDeepBusy] = useState(null);
+      const [why, setWhy] = useState({});
+      const [whyBusy, setWhyBusy] = useState(null);
+      const [copied, setCopied] = useState(null);
 
       const keywords = [kw1, kw2].map(k => (k || '').trim()).filter(Boolean);
 
@@ -33940,6 +33943,37 @@
           else setDeep(prev => ({ ...prev, [c.name]: r }));
         } catch (e) { setError(e.message); }
         setDeepBusy(null);
+      };
+
+      // Why a further-away rival is ahead, and how to close it. The answer is derived only from the
+      // measured rows below — the server deletes anything the model returns that cannot be traced
+      // back to one of them.
+      const explain = async (s, k, c, rows) => {
+        const key = s.suburb + '|' + c.name;
+        setWhyBusy(key);
+        try {
+          const r = await api(`/projects/${project.id}/local-visibility/explain`, {
+            method: 'POST',
+            body: {
+              suburb: s.suburb,
+              keyword: rows.__kw,
+              rival: { name: c.name, position: c.best, distance_km: c.distance_km },
+              us: { position: k.best_position, distance_km: s.distance_km },
+              rows: rows.map(r2 => ({ label: r2.label, win: r2.win, you: String(r2.you), them: String(r2.them), note: r2.note })),
+            },
+          });
+          if (r.error) setError(r.error);
+          else setWhy(prev => ({ ...prev, [key]: r }));
+        } catch (e) { setError(e.message); }
+        setWhyBusy(null);
+      };
+
+      const copyPrompt = (key, text) => {
+        try {
+          navigator.clipboard.writeText(text);
+          setCopied(key);
+          setTimeout(() => setCopied(null), 2000);
+        } catch (e) { setError('Could not copy — select the text and copy it manually.'); }
       };
 
       // TARGETS. The first version starred 48 of 59 suburbs, which told you nothing — one distant
@@ -34534,7 +34568,76 @@
                                                           Check the rest (~$0.10)
                                                         </button>
                                                       )}
+                                                      <button className="btn" disabled={whyBusy === (s.suburb + '|' + c.name)}
+                                                        onClick={(e) => { e.stopPropagation(); const rr = rows.slice(); rr.__kw = kw; explain(s, k, c, rr); }}
+                                                        style={{ height: 28, fontSize: 11.5, borderColor: '#a855f7', color: '#a855f7', whiteSpace: 'nowrap' }}
+                                                        title="Explains the position using only the measured rows above. Anything that cannot be traced to one of them is discarded before it reaches you.">
+                                                        {whyBusy === (s.suburb + '|' + c.name) ? <span className="spinner"></span> : <i className="fas fa-lightbulb" style={{ marginRight: 5 }}></i>}
+                                                        Why &amp; how to close it
+                                                      </button>
                                                     </div>
+
+                                                    {/* WHY + HOW + PROMPT */}
+                                                    {why[s.suburb + '|' + c.name] && (() => {
+                                                      const w = why[s.suburb + '|' + c.name];
+                                                      const pkey = s.suburb + '|' + c.name;
+                                                      return (
+                                                        <div style={{ marginTop: 10, background: 'var(--card)', border: '1px solid var(--border)', borderLeft: '3px solid #a855f7', borderRadius: 8, padding: '12px 14px' }}>
+                                                          <div style={{ fontSize: 10.5, color: '#a855f7', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700, marginBottom: 6 }}>
+                                                            Why they're ahead
+                                                          </div>
+                                                          <div style={{ fontSize: 12.5, color: 'var(--text2)', lineHeight: 1.65, marginBottom: w.actions.length ? 12 : 6 }}>{w.why}</div>
+
+                                                          {w.actions.length > 0 && (
+                                                            <>
+                                                              <div style={{ fontSize: 10.5, color: '#a855f7', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700, marginBottom: 6 }}>How to close it</div>
+                                                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 10 }}>
+                                                                <tbody>
+                                                                  {w.actions.map((a, ai) => (
+                                                                    <tr key={ai} style={{ borderTop: '1px solid var(--border)' }}>
+                                                                      <td style={{ padding: '7px 8px', width: 22, color: 'var(--text3)', verticalAlign: 'top' }}>{ai + 1}</td>
+                                                                      <td style={{ padding: '7px 8px' }}>
+                                                                        <div style={{ fontWeight: 600, color: 'var(--text)' }}>{a.action}</div>
+                                                                        <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2 }}>{a.factor} — {a.evidence}</div>
+                                                                        <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>Done when: {a.verify}</div>
+                                                                      </td>
+                                                                      <td style={{ padding: '7px 8px', width: 60, textAlign: 'right', color: 'var(--text3)', fontSize: 11.5, verticalAlign: 'top' }}>{a.effort}</td>
+                                                                    </tr>
+                                                                  ))}
+                                                                </tbody>
+                                                              </table>
+
+                                                              {w.prompt && (
+                                                                <div>
+                                                                  <button className="btn" onClick={(e) => { e.stopPropagation(); copyPrompt(pkey, w.prompt); }}
+                                                                    style={{ height: 30, fontSize: 12, borderColor: '#a855f7', color: '#a855f7' }}>
+                                                                    <i className={`fas fa-${copied === pkey ? 'check' : 'clipboard'}`} style={{ marginRight: 6 }}></i>
+                                                                    {copied === pkey ? 'Copied' : 'Copy prompt for Claude'}
+                                                                  </button>
+                                                                  <details style={{ marginTop: 8 }}>
+                                                                    <summary style={{ fontSize: 11.5, color: 'var(--text3)', cursor: 'pointer' }}>Show the prompt</summary>
+                                                                    <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11.5, color: 'var(--text2)', background: 'var(--bg)', padding: 10, borderRadius: 6, marginTop: 6, maxHeight: 260, overflowY: 'auto' }}>{w.prompt}</pre>
+                                                                  </details>
+                                                                </div>
+                                                              )}
+                                                            </>
+                                                          )}
+
+                                                          {w.unmeasured && w.unmeasured.length > 0 && (
+                                                            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
+                                                              <strong>Not measured, so ruled neither in nor out:</strong> {w.unmeasured.map(u => u.factor).join(', ')}. No action is proposed for these.
+                                                            </div>
+                                                          )}
+
+                                                          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8, lineHeight: 1.6 }}>
+                                                            Derived only from the {w.evidence_rows ? w.evidence_rows.length : rows.length} measured rows above — every claim is checked against them and anything untraceable is discarded.
+                                                            {w.dropped_claims > 0 && <span style={{ color: '#f59e0b' }}> {w.dropped_claims} suggestion{w.dropped_claims > 1 ? 's were' : ' was'} discarded for not matching a measured gap.</span>}
+                                                            {w.no_gaps && <span> No AI was used — there were no measured gaps to explain.</span>}
+                                                            {w.cached && <span> Cached from {w.created_at ? new Date(w.created_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) : 'an earlier run'}.</span>}
+                                                          </div>
+                                                        </div>
+                                                      );
+                                                    })()}
                                                     {deep[c.name] && (
                                                       <div style={{ marginTop: 10, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', fontSize: 12 }}>
                                                         <div style={{ fontSize: 10.5, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 6 }}>
