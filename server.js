@@ -46368,6 +46368,11 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 const LV_EXPLAIN_VERSION = 2;
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
+// Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
+// searched across all 25 directories again for every suburb they appear in — the single biggest
+// waste in the whole feature.
+const lvDirCache = {};    // `${projectId}|${rivalKey}` -> { dirs, at }
+const LV_DIR_TTL = 7 * 24 * 60 * 60 * 1000;
 app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res) => {
   try {
     if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO not configured' });
@@ -46475,6 +46480,18 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
       catch (e) { return null; }
     }).filter(Boolean);
 
+    // Directories belong to the business, not the suburb — reuse the result across every suburb
+    // this competitor appears in.
+    const dirKey = `${projectId}|${aipNorm(name)}`;
+    const dirCached = lvDirCache[dirKey];
+    if (dirCached && (Date.now() - dirCached.at) < LV_DIR_TTL) {
+      out.directories = dirCached.dirs;
+      out.cost = +(out.cost).toFixed(4);
+      lvDeepCache[key] = { result: out, at: Date.now() };
+      console.log(`[local-visibility] deep-check "${name}" / ${suburb}: directories reused from cache`);
+      return res.json({ ...out, cached: false, dirs_cached: true, checked_at: new Date().toISOString() });
+    }
+
     for (let i = 0; i < prepared.length; i += 8) {
       const batch = prepared.slice(i, i + 8);
       const results = await Promise.all(batch.map(async ({ d, host }) => {
@@ -46489,6 +46506,7 @@ app.post('/api/projects/:projectId/local-visibility/deep-check', async (req, res
       out.calls += batch.length;
       out.directories.push(...results);
     }
+    lvDirCache[dirKey] = { dirs: out.directories, at: Date.now() };
     console.log(`[local-visibility] deep-check "${name}" / ${suburb}: ${out.calls} calls, page=${out.page && out.page.found}, dirs=${out.directories.filter(x => x.listed).length}, errors=${out.errors.length}`);
 
     out.cost = +(out.cost + (out.calls - 1) * API_COST_RATES.dataforseo.serp).toFixed(4);
@@ -46727,24 +46745,21 @@ async function dataForSeoBacklinksBulk(kind, targets) {
 //      directly, because there is nothing in the data to explain the loss.
 //   5. Factors we could not measure are listed separately as unknown. They are never presented as
 //      causes, and never as passes.
-app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    const suburb = String(req.body?.suburb || '').trim();
-    const keyword = String(req.body?.keyword || '').trim();
-    const rival = req.body?.rival || {};
-    const us = req.body?.us || {};
-    if (!suburb || !keyword || !rival.name) return res.status(400).json({ error: 'suburb, keyword and rival are required' });
+// One implementation, used by the single card and by the run-everything job — so a batch run and a
+// button press can never produce different answers.
+async function lvExplainOne({ projectId, suburb, keyword, rival, us, force }) {
+  {
+    if (!suburb || !keyword || !rival.name) return { error: 'suburb, keyword and rival are required', status: 400 };
 
-    if (!req.body?.force) {
+    if (!force) {
       const cached = (await pool.query(
         `SELECT * FROM lv_explanations WHERE project_id=$1 AND suburb=$2 AND keyword=$3 AND rival=$4 AND facts_version=$5`,
         [projectId, suburb, keyword, rival.name, LV_EXPLAIN_VERSION])).rows[0];
-      if (cached) return res.json({ ...cached, cached: true });
+      if (cached) return { ...cached, cached: true };
     }
 
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
-    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!project) return { error: 'Project not found', status: 404 };
     const ourName = project.business_name || project.name || 'our business';
 
     // Go and MEASURE, rather than trusting whatever the table happened to be showing. Our Google
@@ -46783,10 +46798,10 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
          ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=NULL, model=NULL, dropped_claims=0, cost=0, facts_version=$9, created_at=NOW()`,
         [projectId, suburb, keyword, rival.name, out.why, JSON.stringify([]), JSON.stringify(out.unmeasured), JSON.stringify(rows), LV_EXPLAIN_VERSION]
       ).catch(() => {});
-      return res.json({ ...out, cached: false });
+      return { ...out, cached: false };
     }
 
-    if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'Anthropic API key not configured' });
+    if (!ANTHROPIC_API_KEY) return { error: 'Anthropic API key not configured', status: 503 };
 
     // The model sees the measured facts and nothing else — each one with the source it came from.
     const factLines = rows.map(r =>
@@ -46838,7 +46853,7 @@ HARD RULES — output breaking these is discarded:
       const txt = (aiResp.content?.[0]?.text || '').replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
       parsed = JSON.parse(txt);
     } catch (e) {
-      return res.status(502).json({ error: 'The analysis came back unreadable and was discarded rather than shown. Try again.' });
+      return { error: 'The analysis came back unreadable and was discarded rather than shown. Try again.', status: 502 };
     }
 
     // VALIDATION. Every action must trace to a measured gap. Anything that does not is deleted.
@@ -46938,7 +46953,83 @@ HARD RULES — output breaking these is discarded:
 
     console.log(`[local-visibility] explain p${projectId} ${suburb}/"${keyword}" vs ${rival.name}: ${rows.length} facts, ${gaps.length} gaps, ${unknown.length} unmeasured, ${kept.length} actions kept, ${dropped.length} dropped, sufficiency=${sufficiency}, rc=${gathered.rc_synced}, theirProfile=${gathered.their_profile_found}`);
     try { await logApiCost(parseInt(projectId), 'local_visibility_explain', 'anthropic', 1, cost, { suburb, keyword, rival: rival.name }); } catch (e) {}
-    res.json({ ...out, cached: false, created_at: new Date().toISOString() });
+    return { ...out, cached: false, created_at: new Date().toISOString() };
+  }
+}
+
+app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) => {
+  try {
+    const out = await lvExplainOne({
+      projectId: req.params.projectId,
+      suburb: String(req.body?.suburb || '').trim(),
+      keyword: String(req.body?.keyword || '').trim(),
+      rival: req.body?.rival || {},
+      us: req.body?.us || {},
+      force: !!req.body?.force,
+    });
+    if (out && out.error) return res.status(out.status || 400).json({ error: out.error });
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ONE RUN for every opportunity. The frontend sends the exact pairs it has decided are targets, so
+// the selection on screen and the work done can never drift apart. Competitor-level work is done
+// once per competitor, not once per suburb — the same rival appearing in eight suburbs used to mean
+// eight identical 25-directory searches.
+const lvAnalyseJobs = {};
+
+app.get('/api/projects/:projectId/local-visibility/analyse-all/status', (req, res) => {
+  const job = lvAnalyseJobs[req.params.projectId];
+  if (!job) return res.json({ status: 'none' });
+  res.json({
+    status: job.running ? 'running' : (job.error ? 'error' : 'done'),
+    done: job.done, total: job.total, current: job.current || '',
+    analysed: job.analysed, failed: job.failed, cost: +job.cost.toFixed(3), error: job.error || null,
+  });
+});
+
+app.post('/api/projects/:projectId/local-visibility/analyse-all', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const existing = lvAnalyseJobs[projectId];
+    if (existing && existing.running) return res.json({ started: false, already_running: true, done: existing.done, total: existing.total });
+
+    const pairs = (Array.isArray(req.body?.pairs) ? req.body.pairs : []).slice(0, 80);
+    if (!pairs.length) return res.status(400).json({ error: 'No target suburbs were supplied.' });
+
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const job = { running: true, done: 0, total: pairs.length, analysed: 0, failed: 0, cost: 0, current: 'Starting…', error: null };
+    lvAnalyseJobs[projectId] = job;
+    res.json({ started: true, total: pairs.length });
+
+    (async () => {
+      try {
+        for (const p of pairs) {
+          const suburb = String(p.suburb || '').trim();
+          const keyword = String(p.keyword || '').trim();
+          const rival = p.rival || {};
+          job.current = `${suburb} — ${rival.name}`;
+          if (!suburb || !keyword || !rival.name) { job.failed++; job.done++; continue; }
+          try {
+            // Exactly what the button does, so a batch answer and a click answer are the same thing.
+            const out = await lvExplainOne({ projectId, suburb, keyword, rival, us: p.us || {}, force: !!p.force });
+            if (out && out.error) { job.failed++; console.error(`[local-visibility] analyse-all ${suburb}/${rival.name}: ${out.error}`); }
+            else { job.analysed++; if (!out.cached) job.cost += 0.02; }
+          } catch (e) {
+            job.failed++;
+            console.error(`[local-visibility] analyse-all ${suburb}/${rival.name}: ${e.message}`);
+          }
+          job.done++;
+        }
+      } catch (e) {
+        job.error = e.message;
+      }
+      job.running = false;
+      job.current = '';
+      console.log(`[local-visibility] analyse-all p${projectId}: ${job.analysed} analysed, ${job.failed} failed, ~$${job.cost.toFixed(2)}`);
+    })();
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

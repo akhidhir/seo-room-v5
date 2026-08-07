@@ -33797,6 +33797,7 @@
       const [deepBusy, setDeepBusy] = useState(null);
       const [why, setWhy] = useState({});
       const [whyBusy, setWhyBusy] = useState(null);
+      const [batch, setBatch] = useState(null);
       const [copied, setCopied] = useState(null);
 
       const keywords = [kw1, kw2].map(k => (k || '').trim()).filter(Boolean);
@@ -33973,6 +33974,57 @@
           else setWhy(prev => ({ ...prev, [key]: r }));
         } catch (e) { setError(e.message); }
         setWhyBusy(null);
+      };
+
+      // One run for every target suburb. The pairs are built from exactly what is on screen, so the
+      // work done and the list shown can never drift apart.
+      const analyseAll = async () => {
+        const pairs = [];
+        for (const s of ((data && data.suburbs) || [])) {
+          const t = targetFor(s);
+          if (!t || t.rank > targets.top) continue;
+          for (const kw of runKeywords) {
+            const k = s.keywords[kw];
+            if (!k || !k.points_measured) continue;
+            const pos = k.best_position;
+            if (pos != null && pos <= 3) continue;
+            for (const c of (k.competitors || [])) {
+              if (c.best > 3) continue;
+              if (c.distance_km == null || c.distance_km < s.distance_km) continue;
+              pairs.push({
+                suburb: s.suburb, keyword: kw,
+                rival: { name: c.name, position: c.best, distance_km: c.distance_km, website: c.website || '', type: c.type || '', lat: c.lat, lng: c.lng, reviews: c.reviews, rating: c.rating, our_reviews: (data.run || {}).our_reviews, our_rating: (data.run || {}).our_rating },
+                us: { position: pos, distance_km: s.distance_km },
+              });
+            }
+          }
+        }
+        if (!pairs.length) { setError('No beatable competitors found across the target suburbs.'); return; }
+        if (!window.confirm(`Analyse ${pairs.length} competitor comparison${pairs.length > 1 ? 's' : ''} across your top ${targets.top} target suburbs.\nEstimated cost: about $${(pairs.length * 0.02).toFixed(2)} — less if some were already measured.\n\nRuns in the background.`)) return;
+        setError('');
+        try {
+          const r = await api(`/projects/${project.id}/local-visibility/analyse-all`, { method: 'POST', body: { pairs } });
+          if (r.error) { setError(r.error); return; }
+          setBatch({ done: 0, total: r.total || pairs.length });
+          const tick = async () => {
+            try {
+              const st = await api(`/projects/${project.id}/local-visibility/analyse-all/status`);
+              if (st.status === 'running') { setBatch(st); setTimeout(tick, 3000); return; }
+              setBatch(null);
+              if (st.status === 'error') setError('Run failed: ' + (st.error || 'unknown'));
+              // Pull every finished analysis into the open cards.
+              for (const p of pairs) {
+                try {
+                  const one = await api(`/projects/${project.id}/local-visibility/explain`, {
+                    method: 'POST', body: { suburb: p.suburb, keyword: p.keyword, rival: p.rival, us: p.us },
+                  });
+                  if (one && !one.error) setWhy(prev => ({ ...prev, [p.suburb + '|' + p.rival.name]: one }));
+                } catch (e) {}
+              }
+            } catch (e) { setTimeout(tick, 5000); }
+          };
+          setTimeout(tick, 3000);
+        } catch (e) { setError(e.message); }
       };
 
       const copyPrompt = (key, text) => {
@@ -34388,6 +34440,12 @@
                       <input type="checkbox" checked={oppOnly} readOnly style={{ pointerEvents: 'none' }} />
                       Show only these
                     </label>
+                    <button className="btn" onClick={analyseAll} disabled={!!batch}
+                      style={{ height: 30, fontSize: 12, borderColor: '#f59e0b', color: '#f59e0b', whiteSpace: 'nowrap' }}
+                      title="Measures every beatable competitor across these suburbs in one run, sharing the per-competitor work instead of repeating it.">
+                      {batch ? <span className="spinner"></span> : <i className="fas fa-bolt" style={{ marginRight: 6 }}></i>}
+                      {batch ? 'Analysing…' : 'Analyse all targets'}
+                    </button>
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {Object.values(targets.map).filter(t => t.rank <= targets.top).sort((a, b) => a.rank - b.rank).map(t => {
@@ -34403,6 +34461,18 @@
                       );
                     })}
                   </div>
+                  {batch && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 5 }}>
+                        {batch.current || 'Measuring…'} — {batch.done || 0} of {batch.total || 0}
+                        {batch.failed ? <span style={{ color: '#f59e0b', marginLeft: 8 }}>{batch.failed} failed</span> : null}
+                        {batch.cost != null ? <span style={{ color: 'var(--text3)', marginLeft: 8 }}>${Number(batch.cost).toFixed(2)} so far</span> : null}
+                      </div>
+                      <div style={{ height: 5, background: 'var(--bg)', borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${batch.total ? Math.round((batch.done / batch.total) * 100) : 0}%`, background: '#f59e0b', transition: 'width 0.4s' }} />
+                      </div>
+                    </div>
+                  )}
                   {targets.count > targets.top && (
                     <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
                       {targets.count - targets.top} more suburbs also qualify but are smaller — do these first.
