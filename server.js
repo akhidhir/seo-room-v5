@@ -46534,7 +46534,7 @@ function lvHoursPerWeek(source) {
 async function lvGatherFacts({ projectId, project, suburb, rival }) {
   const facts = [];
   const errors = [];
-  const add = (key, label, us, them, gap, source, note) => facts.push({ key, label, us, them, gap, source, note: note || '' });
+  const add = (key, label, us, them, gap, source, note, caution) => facts.push({ key, label, us, them, gap, source, note: note || '', caution: caution || '' });
 
   // ---------- OUR Google profile, live from RatingCaptain ----------
   let rc = null;
@@ -46588,7 +46588,10 @@ async function lvGatherFacts({ projectId, project, suburb, rival }) {
   add('gbp_hours', 'Hours open per week', ourHours, theirHours,
     (ourHours != null && theirHours != null) ? (ourHours === theirHours ? 'same' : ourHours < theirHours) : null,
     'Google Business Profile',
-    ourHours != null && theirHours != null && ourHours < theirHours ? 'Searches made outside our opening hours show us as closed' : '');
+    ourHours != null && theirHours != null && ourHours < theirHours ? 'Searches made outside our opening hours show us as closed' : '',
+    // Hours are a fact about the business, not a setting to be maximised. Publishing hours the
+    // business does not keep produces missed calls at 10pm and the one-star reviews that follow.
+    'This is a decision for the owner, not a setting to raise. Only widen the published hours if calls are genuinely answered then. If they are not, the honest fix is the opposite — remove the emergency services from the profile, because advertising emergency work while showing closed loses the click either way.');
 
   // Service areas are NOT included as a head-to-head fact. Google does not publish another
   // business's service-area list, so there is no "them" value — and offering a one-sided row
@@ -46747,7 +46750,7 @@ app.post('/api/projects/:projectId/local-visibility/explain', async (req, res) =
       win: f.gap === null || f.gap === undefined ? null : (f.gap === 'same' ? 'same' : !f.gap),
       you: f.us == null ? 'not measured' : String(f.us),
       them: f.them == null ? 'not measured' : String(f.them),
-      note: f.note, source: f.source, key: f.key,
+      note: f.note, source: f.source, key: f.key, caution: f.caution,
     }));
 
     const isDistance = (r) => /^distance/i.test(r.label || '');
@@ -46853,7 +46856,10 @@ HARD RULES — output breaking these is discarded:
         action,
         evidence: `You: ${g.you} · Them: ${g.them}${g.source ? ' · ' + g.source : ''}`,
         effort: ['minutes', 'hours', 'weeks'].includes(String(a.effort)) ? a.effort : 'unknown',
-        verify: stripNumbers(a.verify, 'verify') || `Re-measure "${g.label}" after the change`,
+        // Built here, not by the model. Its version was the factor label repeated back, which told
+        // nobody when the job was done.
+        verify: `Re-measure "${g.label}" — now ${g.you}, target at least ${g.them}`,
+        caution: g.caution || '',
         measured_you: g.you, measured_them: g.them,
       });
     }
@@ -46889,7 +46895,8 @@ HARD RULES — output breaking these is discarded:
       ``,
       `These are the measured gaps against that one competitor. Do them in order. Do not do anything not on this list.`,
       ``,
-      ...kept.map((a, i) => `${i + 1}. ${a.factor}\n   Now: ${a.measured_you}   ·   Them: ${a.measured_them}\n   Do: ${a.action}\n   Done when: ${a.verify}`),
+      ...kept.map((a, i) => `${i + 1}. ${a.factor}\n   Now: ${a.measured_you}   ·   Them: ${a.measured_them}\n   Do: ${a.action}\n   Done when: ${a.verify}`
+        + (a.caution ? `\n   CHECK FIRST: ${a.caution}` : '')),
       ``,
       `Rules:`,
       `- Change nothing about the site design or theme, desktop or mobile.`,

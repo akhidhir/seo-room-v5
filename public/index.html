@@ -34612,6 +34612,7 @@
                                                                         <div style={{ fontWeight: 600, color: 'var(--text)' }}>{a.action}</div>
                                                                         <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2 }}>{a.factor} — {a.evidence}</div>
                                                                         <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>Done when: {a.verify}</div>
+                                                                        {a.caution && <div style={{ fontSize: 11.5, color: '#f59e0b', marginTop: 3, lineHeight: 1.5 }}><i className="fas fa-triangle-exclamation" style={{ marginRight: 5 }}></i>{a.caution}</div>}
                                                                       </td>
                                                                       <td style={{ padding: '7px 8px', width: 60, textAlign: 'right', color: 'var(--text3)', fontSize: 11.5, verticalAlign: 'top' }}>{a.effort}</td>
                                                                     </tr>
