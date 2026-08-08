@@ -46416,7 +46416,35 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 7;
+const LV_EXPLAIN_VERSION = 8;
+
+// Which tool actually does the work for a given measured factor. The copied prompt used to be a
+// flat list, which left whoever ran it to work out the method for themselves — and the method is
+// now written down in the skills, so pointing at the right one is most of the value.
+// Keyed by fact key so it cannot drift from the labels the model sees.
+const LV_ACTION_TOOL = {
+  gbp_categories: 'gbp', gbp_services: 'gbp', gbp_description: 'gbp', gbp_hours: 'gbp',
+  gbp_reviews: 'gbp', gbp_photos: 'gbp', service_areas: 'gbp',
+  page_exists: 'website', page_words: 'website', page_targeting: 'website', page_templated: 'website',
+  dofollow_domains: 'links',
+};
+const LV_TOOL_META = {
+  gbp: {
+    name: 'Google Business Profile',
+    // Named rather than described, so the agent running this loads the playbook instead of
+    // improvising against a live client profile.
+    how: 'Use the /gbp-optimiser skill. It reads the profile through RatingCaptain, shows a before/after table, waits for approval, then writes — and it knows the payload shapes and the traps.',
+  },
+  website: {
+    name: 'Website',
+    how: 'Edit the live WordPress site. Record every change so it can be rolled back, and change nothing about the design or theme.',
+  },
+  links: {
+    name: 'Citations & links',
+    how: 'Directory listings and outreach. Keep the business name, phone and website byte-identical to the Google profile on every listing.',
+  },
+  other: { name: 'Other', how: '' },
+};
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 // Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
@@ -46895,23 +46923,102 @@ async function lvExplainOne({ projectId, suburb, keyword, rival, us, force }) {
     const level = rows.filter(r => r.win === 'same');
     const unknown = rows.filter(r => r.win === null || r.win === undefined);
 
-    // NO GAPS → NO AI. There is nothing in the measured data that explains the loss, and inventing
-    // one is exactly what this endpoint exists to prevent.
+    // SERVICE AREAS ARE A GAP, EVEN WITHOUT A COMPETITOR VALUE.
+    // Google publishes nobody else's service-area list, so this can never be a head-to-head fact and
+    // is deliberately absent from `rows`. But `gaps` is built from `rows`, so the finding only ever
+    // reached the prose — never the task list, and never the copied prompt. On a real profile that
+    // meant the single change that mattered most (three service areas covering twenty suburbs) was
+    // explained and then quietly left out of the work. It is our own setting, we can read it, and we
+    // can fix it, so it belongs in the list. No model involved: there is nothing to infer.
+    const svcAreaAction = gathered.suburb_in_our_service_areas === false ? {
+      factor: `${suburb} in your Google service areas`,
+      action: `Add ${suburb} to the service-area list on your own Google Business Profile.`,
+      evidence: `You: not listed · Your profile lists ${gathered.our_service_areas} area${gathered.our_service_areas === 1 ? '' : 's'} · Your Google Business Profile`,
+      effort: 'minutes',
+      verify: `Re-measure "${suburb} in your Google service areas" — now not listed, target listed. Google reviews service-area edits before they go live, usually within minutes.`,
+      caution: `Google caps the list at 20 areas. If the profile is already at 20, adding ${suburb} means removing one — rank the candidates by distance from base, then by which already have a landing page. Only add areas the business genuinely services.`,
+      measured_you: 'not listed', measured_them: 'not published by Google',
+      tool: 'gbp',
+      one_sided: true,
+    } : null;
+
+    // One prompt builder for both branches. A run with only a service-area finding used to produce
+    // no prompt at all, so the most actionable case of the lot gave the user nothing to copy.
+    // Actions are grouped by the tool that does the work and the relevant skill is named, because
+    // the method is written down now and re-deriving it per run is how live profiles get damaged.
+    const buildPrompt = (whyText, actions) => {
+      if (!actions.length) return null;
+      const groups = new Map();
+      for (const a of actions) {
+        const t = a.tool || LV_ACTION_TOOL[a.key] || 'other';
+        if (!groups.has(t)) groups.set(t, []);
+        groups.get(t).push(a);
+      }
+      // Cheapest-first ordering already applied within the list; keep GBP first because it is the
+      // only surface where a change can be live in minutes.
+      const order = ['gbp', 'website', 'links', 'other'].filter(t => groups.has(t));
+      let n = 0;
+      const sections = order.map(t => {
+        const meta = LV_TOOL_META[t] || LV_TOOL_META.other;
+        const lines = groups.get(t).map(a => {
+          n += 1;
+          return `${n}. ${a.factor}\n   Now: ${a.measured_you}   ·   Them: ${a.measured_them}\n   Do: ${a.action}\n   Done when: ${a.verify}`
+            + (a.caution ? `\n   CHECK FIRST: ${a.caution}` : '');
+        });
+        return `--- ${meta.name} ---${meta.how ? `\n${meta.how}` : ''}\n\n${lines.join('\n')}`;
+      });
+      return [
+        `Work on ${ourName} (${project && project.domain ? project.domain : 'website'}).`,
+        ``,
+        `Context: for the search "${keyword}" measured from inside ${suburb}, ${ourName} is ${us.position != null ? '#' + us.position : 'absent from the top 20'} at ${us.distance_km} km, while ${rival.name} is #${rival.position} at ${rival.distance_km} km — further away and still ahead.`,
+        ``,
+        // The analysis travels with the task list. Without it, someone closes four small gaps, sees no
+        // movement, and concludes the measurement was wrong — when the measurement had already said
+        // these gaps were unlikely to be the reason.
+        `READ THIS BEFORE STARTING — what the measurements actually say:`,
+        whyText,
+        ``,
+        `These are the measured gaps. Do them in order. Do not do anything not on this list.`,
+        ``,
+        ...sections,
+        ``,
+        `Rules:`,
+        `- Change nothing about the site design or theme, desktop or mobile.`,
+        `- Every change must be reversible and recorded.`,
+        `- If a change cannot be verified as applied, report it as failed rather than done.`,
+        `- Anything that makes a public claim about the business — hours, licences, guarantees, availability — must be confirmed with the owner first, not inferred.`,
+        unknown.length ? `\nNot measured, so do NOT act on these — they may or may not be problems: ${unknown.map(u => u.label).join(', ')}.` : '',
+        gathered.errors.length ? `\nThese could not be measured at all: ${gathered.errors.join(' · ')}` : '',
+      ].filter(Boolean).join('\n');
+    };
+
+    // NO HEAD-TO-HEAD GAPS → NO AI. There is nothing in the compared data that explains the loss, and
+    // inventing one is exactly what this endpoint exists to prevent. The service-area finding is not
+    // a comparison, so it still stands on its own here.
     if (!gaps.length) {
+      const noGapWhy = [
+        `Nothing in the compared data explains this. ${rival.name} is ${rival.distance_km} km from ${suburb} and ${ourName} is ${us.distance_km} km, and across the ${rows.length - 1} other factors measured, ${ourName} is level or ahead on ${strengths.length + level.length} of them and behind on none.`,
+        unknown.length ? `${unknown.length} factor${unknown.length === 1 ? ' was' : 's were'} not measured and cannot be ruled in or out: ${unknown.map(u => u.label).join(', ')}.` : '',
+        svcAreaAction
+          // With no head-to-head gap at all, an unlisted service area stops being one possible
+          // explanation and becomes the only one on the table.
+          ? `One thing on your own side does stand out: ${suburb} is not among the ${gathered.our_service_areas} service area${gathered.our_service_areas === 1 ? '' : 's'} on your Google profile, so Google has been told you do not serve there. That is a setting, not a comparison — Google does not publish anyone else's service areas.`
+          : `Whatever is producing their position is not in this list.`,
+      ].filter(Boolean).join(' ');
+      const noGapActions = svcAreaAction ? [svcAreaAction] : [];
       const out = {
-        why: `Nothing in the measured data explains this. ${rival.name} is ${rival.distance_km} km from ${suburb} and ${ourName} is ${us.distance_km} km, and across the ${rows.length - 1} other factors measured, ${ourName} is level or ahead on ${strengths.length + level.length} of them and behind on none.`
-          + (unknown.length ? ` ${unknown.length} factor${unknown.length === 1 ? ' was' : 's were'} not measured and cannot be ruled in or out: ${unknown.map(u => u.label).join(', ')}.` : '')
-          + ` Whatever is producing their position is not in this list.`,
-        actions: [],
+        why: noGapWhy,
+        actions: noGapActions,
         unmeasured: unknown.map(u => ({ factor: u.label, why_unknown: u.note || 'Not measured' })),
-        evidence_rows: rows, prompt: null, model: null, dropped_claims: 0, cost: 0, no_gaps: true,
+        evidence_rows: rows, prompt: buildPrompt(noGapWhy, noGapActions), model: null,
+        dropped_claims: 0, cost: 0, no_gaps: !noGapActions.length,
         gather_errors: gathered.errors, rc_synced: gathered.rc_synced, their_profile_found: gathered.their_profile_found,
       };
       await pool.query(
         `INSERT INTO lv_explanations (project_id, suburb, keyword, rival, why, actions, unmeasured, evidence_rows, prompt, model, dropped_claims, cost, facts_version)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,NULL,0,0,$9)
-         ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=NULL, model=NULL, dropped_claims=0, cost=0, facts_version=$9, created_at=NOW()`,
-        [projectId, suburb, keyword, rival.name, out.why, JSON.stringify([]), JSON.stringify(out.unmeasured), JSON.stringify(rows), LV_EXPLAIN_VERSION]
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,0,0,$10)
+         ON CONFLICT (project_id, suburb, keyword, rival) DO UPDATE SET why=$5, actions=$6, unmeasured=$7, evidence_rows=$8, prompt=$9, model=NULL, dropped_claims=0, cost=0, facts_version=$10, created_at=NOW()`,
+        [projectId, suburb, keyword, rival.name, out.why, JSON.stringify(noGapActions), JSON.stringify(out.unmeasured), JSON.stringify(rows), out.prompt, LV_EXPLAIN_VERSION]
       ).catch(() => {});
       return { ...out, cached: false };
     }
@@ -47006,6 +47113,10 @@ HARD RULES — output breaking these is discarded:
         })(),
         caution: g.caution || '',
         measured_you: g.you, measured_them: g.them,
+        // Carried through so the prompt can group by surface. Keyed off the fact key rather than
+        // the label, because labels are interpolated with the suburb name and would not match.
+        key: g.key,
+        tool: LV_ACTION_TOOL[g.key] || 'other',
       });
     }
     if (dropped.length) {
@@ -47015,6 +47126,11 @@ HARD RULES — output breaking these is discarded:
     // anybody would work in.
     const effortRank = { minutes: 0, hours: 1, weeks: 2, unknown: 3 };
     kept.sort((a, b) => (effortRank[a.effort] ?? 3) - (effortRank[b.effort] ?? 3));
+
+    // An unlisted service area goes to the top regardless of what else was found. It is minutes of
+    // work, it is entirely on our side, and until it is fixed Google has been told we do not serve
+    // the suburb — which makes every other item on the list conditional on it.
+    if (svcAreaAction) kept.unshift(svcAreaAction);
 
     // THE EXPLANATION IS BUILT HERE, from the measured numbers. The model contributed one word.
     const sufficiency = ['likely', 'partly', 'unlikely'].includes(String(parsed.sufficiency)) ? parsed.sufficiency : 'partly';
@@ -47064,29 +47180,7 @@ HARD RULES — output breaking these is discarded:
 
     // The Claude prompt is built from the VALIDATED actions, deterministically. The model never
     // writes it, so it cannot smuggle an instruction that failed validation.
-    const claudePrompt = [
-      `Work on ${ourName} (${project && project.domain ? project.domain : 'website'}).`,
-      ``,
-      `Context: for the search "${keyword}" measured from inside ${suburb}, ${ourName} is ${us.position != null ? '#' + us.position : 'absent from the top 20'} at ${us.distance_km} km, while ${rival.name} is #${rival.position} at ${rival.distance_km} km — further away and still ahead.`,
-      ``,
-      // The analysis travels with the task list. Without it, someone closes four small gaps, sees no
-      // movement, and concludes the measurement was wrong — when the measurement had already said
-      // these gaps were unlikely to be the reason.
-      `READ THIS BEFORE STARTING — what the measurements actually say:`,
-      parsed.why,
-      ``,
-      `These are the measured gaps against that one competitor. Do them in order. Do not do anything not on this list.`,
-      ``,
-      ...kept.map((a, i) => `${i + 1}. ${a.factor}\n   Now: ${a.measured_you}   ·   Them: ${a.measured_them}\n   Do: ${a.action}\n   Done when: ${a.verify}`
-        + (a.caution ? `\n   CHECK FIRST: ${a.caution}` : '')),
-      ``,
-      `Rules:`,
-      `- Change nothing about the site design or theme, desktop or mobile.`,
-      `- Every change must be reversible and recorded.`,
-      `- If a change cannot be verified as applied, report it as failed rather than done.`,
-      unknown.length ? `\nNot measured, so do NOT act on these — they may or may not be problems: ${unknown.map(u => u.label).join(', ')}.` : '',
-      gathered.errors.length ? `\nThese could not be measured at all: ${gathered.errors.join(' · ')}` : '',
-    ].filter(Boolean).join('\n');
+    const claudePrompt = buildPrompt(parsed.why, kept);
 
     const cost = 0.003;
     const out = {
