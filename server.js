@@ -46416,7 +46416,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 8;
+const LV_EXPLAIN_VERSION = 9;
 
 // Which tool actually does the work for a given measured factor. The copied prompt used to be a
 // flat list, which left whoever ran it to work out the method for themselves — and the method is
@@ -46445,6 +46445,27 @@ const LV_TOOL_META = {
   },
   other: { name: 'Other', how: '' },
 };
+
+// Where the work gets recorded. Notion IDs are pinned rather than searched for by name, because a
+// name search that misses silently creates a second Projects database and the board quietly splits.
+const LV_NOTION = {
+  projects_ds: 'collection://3af518b9-e2ce-8032-ae94-000b63c3879a',
+  tasks_ds: 'collection://3af518b9-e2ce-809d-9e8f-000b9922d80f',
+};
+
+// Who does it. Only two owners exist by design: work an agent can carry out unattended, and work
+// that needs a person. A task carrying a CHECK FIRST caution is a decision about the business —
+// hours, licences, guarantees — and those belong to a human even though an agent could technically
+// perform the edit. Assigning them to AI is how a profile ends up advertising hours nobody keeps.
+const lvOwnerFor = (a) => (a.caution ? 'SEO Admin' : (a.tool === 'links' ? 'SEO Admin' : 'AI'));
+
+// Priority is sequencing, not importance — the list is already sorted cheapest-first, and effort is
+// the only dimension actually measured. Saying so on the page is better than implying an impact
+// score that was never calculated. A missing service area is pinned High regardless: until it is
+// fixed Google has been told we do not serve the suburb, which makes everything else conditional.
+const lvPriorityFor = (a) => a.one_sided ? 'High'
+  : a.effort === 'minutes' ? 'High'
+  : a.effort === 'hours' ? 'Medium' : 'Low';
 
 const lvDeepCache = {};   // `${projectId}|${rivalKey}|${suburb}` -> result
 // Directory listings belong to the BUSINESS, not the suburb. Without this the same competitor was
@@ -46936,7 +46957,11 @@ async function lvExplainOne({ projectId, suburb, keyword, rival, us, force }) {
       evidence: `You: not listed · Your profile lists ${gathered.our_service_areas} area${gathered.our_service_areas === 1 ? '' : 's'} · Your Google Business Profile`,
       effort: 'minutes',
       verify: `Re-measure "${suburb} in your Google service areas" — now not listed, target listed. Google reviews service-area edits before they go live, usually within minutes.`,
-      caution: `Google caps the list at 20 areas. If the profile is already at 20, adding ${suburb} means removing one — rank the candidates by distance from base, then by which already have a landing page. Only add areas the business genuinely services.`,
+      // Deliberately NOT a caution. Cautions route a task to a human, and adding a service area the
+      // business already serves is a setting an agent can apply and verify. The cap is a rule to
+      // follow while doing it, so it belongs in the action text.
+      caution: '',
+      note: `Google caps the list at 20 areas. If the profile is already at 20, adding ${suburb} means removing one — rank the candidates by distance from base, then by which already have a landing page. Only add areas the business genuinely services.`,
       measured_you: 'not listed', measured_them: 'not published by Google',
       tool: 'gbp',
       one_sided: true,
@@ -46962,7 +46987,8 @@ async function lvExplainOne({ projectId, suburb, keyword, rival, us, force }) {
         const meta = LV_TOOL_META[t] || LV_TOOL_META.other;
         const lines = groups.get(t).map(a => {
           n += 1;
-          return `${n}. ${a.factor}\n   Now: ${a.measured_you}   ·   Them: ${a.measured_them}\n   Do: ${a.action}\n   Done when: ${a.verify}`
+          return `${n}. ${a.factor}   [${lvPriorityFor(a)} · ${lvOwnerFor(a)}]\n   Now: ${a.measured_you}   ·   Them: ${a.measured_them}\n   Do: ${a.action}\n   Done when: ${a.verify}`
+            + (a.note ? `\n   NOTE: ${a.note}` : '')
             + (a.caution ? `\n   CHECK FIRST: ${a.caution}` : '');
         });
         return `--- ${meta.name} ---${meta.how ? `\n${meta.how}` : ''}\n\n${lines.join('\n')}`;
@@ -46989,6 +47015,25 @@ async function lvExplainOne({ projectId, suburb, keyword, rival, us, force }) {
         `- Anything that makes a public claim about the business — hours, licences, guarantees, availability — must be confirmed with the owner first, not inferred.`,
         unknown.length ? `\nNot measured, so do NOT act on these — they may or may not be problems: ${unknown.map(u => u.label).join(', ')}.` : '',
         gathered.errors.length ? `\nThese could not be measured at all: ${gathered.errors.join(' · ')}` : '',
+        ``,
+        `--- Record it in Notion first ---`,
+        `Do this before starting the work, so the record exists even if a task stalls halfway.`,
+        ``,
+        `1. Look in the Projects database (${LV_NOTION.projects_ds}) for a project named exactly "${ourName}". Use it if it exists. Only create one if it genuinely is not there — do not create a second Projects database, and do not create a near-duplicate project under a different spelling.`,
+        `2. Under that project, create a page titled "${suburb} — ${keyword} — ${new Date().toISOString().slice(0, 10)}". Put the analysis above on it verbatim, so whoever picks this up months from now can see what was measured rather than just what was asked for.`,
+        `3. Create one row per task below in the Tasks database (${LV_NOTION.tasks_ds}), related to that project, Status "Not started".`,
+        ``,
+        `| Task | Priority | Owner |`,
+        `|---|---|---|`,
+        ...actions.map(a => `| ${a.factor} | ${lvPriorityFor(a)} | ${lvOwnerFor(a)} |`),
+        ``,
+        `Set Source on every row to "Local Visibility · ${suburb} · ${keyword}".`,
+        ``,
+        `Owner means: AI = an agent can carry it out unattended. SEO Admin = it needs a person, either because it is a decision about the business rather than a setting, or because it needs a relationship with someone outside.`,
+        `Priority is sequencing by effort, cheapest first — it is not an impact score, and nothing here measures impact.`,
+        actions.some(a => a.caution)
+          ? `\nThese are assigned to SEO Admin because they need the client's answer before anyone touches them — do NOT perform them, just record them: ${actions.filter(a => a.caution).map(a => a.factor).join(', ')}.`
+          : '',
       ].filter(Boolean).join('\n');
     };
 
@@ -47136,7 +47181,16 @@ HARD RULES — output breaking these is discarded:
     const sufficiency = ['likely', 'partly', 'unlikely'].includes(String(parsed.sufficiency)) ? parsed.sufficiency : 'partly';
     const gapSentences = gaps.map(g => `${g.label}: you ${g.you}, them ${g.them}`);
     const whyParts = [
-      `${rival.name} is #${rival.position} at ${rival.distance_km} km from ${suburb}; ${ourName} is ${us.position != null ? '#' + us.position : 'absent from the top 20'} at ${us.distance_km} km. They are further away, so distance is not the reason.`,
+      // "They are further away" was hardcoded, but the winnable filter admits rivals at equal OR
+      // greater distance — so on a tie this opened every prompt with a false statement. Say what the
+      // two numbers actually show. Either way the conclusion holds: distance does not explain it.
+      (() => {
+        const head = `${rival.name} is #${rival.position} at ${rival.distance_km} km from ${suburb}; ${ourName} is ${us.position != null ? '#' + us.position : 'absent from the top 20'} at ${us.distance_km} km.`;
+        const a = parseFloat(us.distance_km), b = parseFloat(rival.distance_km);
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return `${head} Distance does not explain the difference.`;
+        if (Math.abs(b - a) < 0.1) return `${head} They are the same distance away, so distance is not the reason.`;
+        return `${head} They are further away, so distance is not the reason.`;
+      })(),
       `Of the ${rows.length} factors measured, ${gaps.length} favour them — ${gapSentences.join('; ')}.`,
       strengths.length ? `${ourName} is ahead on ${strengths.length} (${strengths.map(s2 => s2.label).join(', ')})${level.length ? ` and level on ${level.length}` : ''}.` : (level.length ? `Level on ${level.length}.` : ''),
       sufficiency === 'likely'
