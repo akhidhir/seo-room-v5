@@ -46416,7 +46416,7 @@ app.get('/api/projects/:projectId/local-visibility/factors', async (req, res) =>
 // directories list them. Costs are quoted before it runs.
 // Bump this whenever the facts gathered or the validation rules change, so answers written by the
 // older logic are never served again.
-const LV_EXPLAIN_VERSION = 9;
+const LV_EXPLAIN_VERSION = 10;
 
 // Which tool actually does the work for a given measured factor. The copied prompt used to be a
 // flat list, which left whoever ran it to work out the method for themselves — and the method is
@@ -46446,12 +46446,10 @@ const LV_TOOL_META = {
   other: { name: 'Other', how: '' },
 };
 
-// Where the work gets recorded. Notion IDs are pinned rather than searched for by name, because a
-// name search that misses silently creates a second Projects database and the board quietly splits.
-const LV_NOTION = {
-  projects_ds: 'collection://3af518b9-e2ce-8032-ae94-000b63c3879a',
-  tasks_ds: 'collection://3af518b9-e2ce-809d-9e8f-000b9922d80f',
-};
+// Where the work gets recorded: one Notion database per client, named "<Client> — Local Visibility
+// Plan". Deliberately NOT a pinned database id — there is one per client and new clients arrive, so
+// an id hardcoded here would send a new client's tickets into someone else's board.
+const LV_NOTION_DB_SUFFIX = '— Local Visibility Plan';
 
 // Who does it. Only two owners exist by design: work an agent can carry out unattended, and work
 // that needs a person. A task carrying a CHECK FIRST caution is a decision about the business —
@@ -47016,23 +47014,26 @@ async function lvExplainOne({ projectId, suburb, keyword, rival, us, force }) {
         unknown.length ? `\nNot measured, so do NOT act on these — they may or may not be problems: ${unknown.map(u => u.label).join(', ')}.` : '',
         gathered.errors.length ? `\nThese could not be measured at all: ${gathered.errors.join(' · ')}` : '',
         ``,
-        `--- Record it in Notion first ---`,
-        `Do this before starting the work, so the record exists even if a task stalls halfway.`,
+        `--- Record it as tickets in Notion first ---`,
+        `Do this before starting the work, so the record exists even if a task stalls halfway. Use the tickets skill if it is available; the rules below are the same either way.`,
         ``,
-        `1. Look in the Projects database (${LV_NOTION.projects_ds}) for a project named exactly "${ourName}". Use it if it exists. Only create one if it genuinely is not there — do not create a second Projects database, and do not create a near-duplicate project under a different spelling.`,
-        `2. Under that project, create a page titled "${suburb} — ${keyword} — ${new Date().toISOString().slice(0, 10)}". Put the analysis above on it verbatim, so whoever picks this up months from now can see what was measured rather than just what was asked for.`,
-        `3. Create one row per task below in the Tasks database (${LV_NOTION.tasks_ds}), related to that project, Status "Not started".`,
+        `1. Find the Notion database named "${ourName} ${LV_NOTION_DB_SUFFIX}". Search for "Local Visibility Plan" rather than guessing an id. If it does not exist, create it — one database per client, with a Ticket unique-id property using a short prefix taken from the business name, and the properties listed below.`,
+        `2. Add one row per task. Title each "NN — what to do", numbered in the order they should be done, so the title says the action rather than naming a topic.`,
+        `3. Put the analysis above into the body of the FIRST row you create, verbatim, so whoever picks this up months from now sees what was measured rather than only what was asked for.`,
+        `4. Report the ticket IDs back in your summary. They are how this work is handed over next time, and a summary without them leaves the tickets orphaned.`,
         ``,
-        `| Task | Priority | Owner |`,
-        `|---|---|---|`,
-        ...actions.map(a => `| ${a.factor} | ${lvPriorityFor(a)} | ${lvOwnerFor(a)} |`),
+        `| Task | Priority | Owner | Type |`,
+        `|---|---|---|---|`,
+        ...actions.map(a => `| ${a.factor} | ${lvPriorityFor(a)} | ${lvOwnerFor(a)} | ${(LV_TOOL_META[a.tool || 'other'] || LV_TOOL_META.other).name} |`),
         ``,
-        `Set Source on every row to "Local Visibility · ${suburb} · ${keyword}".`,
+        `On every row set: Status "1 Not started" · Now and Them to the measured values above · Done when to the measurement that has to change · Data pulled ${new Date().toISOString().slice(0, 10)} · Source "Local Visibility · ${suburb} · ${keyword}" · Suburb "${suburb}" · Target keyword "${keyword}". Leave Answer blank.`,
         ``,
         `Owner means: AI = an agent can carry it out unattended. SEO Admin = it needs a person, either because it is a decision about the business rather than a setting, or because it needs a relationship with someone outside.`,
         `Priority is sequencing by effort, cheapest first — it is not an impact score, and nothing here measures impact.`,
+        `"Done when" must name the measurement that has to move. Never "the client replied" — a ticket that closes on an answer leaves the actual change undone.`,
         actions.some(a => a.caution)
-          ? `\nThese are assigned to SEO Admin because they need the client's answer before anyone touches them — do NOT perform them, just record them: ${actions.filter(a => a.caution).map(a => a.factor).join(', ')}.`
+          ? `\nThese need the client's answer before anyone touches them, so they go to SEO Admin — record them, do NOT perform them: ${actions.filter(a => a.caution).map(a => a.factor).join(', ')}.`
+            + `\nFor each of those, write an if/then table into the row body: every plausible answer and what it means in practice. Once someone gets the answer they put it in the Answer field and switch Owner to AI, and that table is what the agent follows. Without it the handback arrives knowing the client said yes but not what yes implies.`
           : '',
       ].filter(Boolean).join('\n');
     };
