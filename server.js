@@ -18938,7 +18938,20 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           const site = dirUrlByName[r.name];
           if (!site) continue;
           try {
-            const sr = await dataForSeoSerp({ keyword: `site:${site} "${businessName}"`, location: 'Australia', depth: 5 });
+            // DataForSEO throws two very different things here and they must not be treated alike:
+            //   40101 Internal SE Server Error — transient, Google refused that fetch. Retry.
+            //   40102 No Search Results       — a real answer: nothing is indexed. That IS "not listed".
+            // Before this, both were caught below and left the directory stuck on "Not checked"
+            // forever, which is why a scan could finish with 11 unresolved directories.
+            let sr = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try { sr = await dataForSeoSerp({ keyword: `site:${site} "${businessName}"`, location: 'Australia', depth: 5 }); break; }
+              catch (err) {
+                if (/40102|No Search Results/i.test(err.message)) { sr = { organic_results: [] }; break; }
+                if (!/40101|Internal SE Server Error|timeout/i.test(err.message) || attempt === 2) throw err;
+                await new Promise(rs => setTimeout(rs, 1500 * (attempt + 1)));   // transient — back off and retry
+              }
+            }
             const org = sr.organic_results || [];
             const hits = org.filter(o => (o.link || '').includes(site) && htmlContainsBiz((o.title || '') + ' ' + (o.snippet || '')));
             // For PRESENCE, a snippet match is fine. For DUPLICATES it is not: directories print
@@ -18965,8 +18978,10 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
               r.listing_url = null;
             }
           } catch (e) {
-            console.log(`[citations] Google verify failed for ${r.name}: ${e.message}`);
+            console.log(`[citations] Google verify failed for ${r.name} after retries: ${e.message}`);
             // Leave the HTTP-derived status as-is when the lookup errors — never demote on an error.
+            // The row stays "Not checked", which is honest: we could not determine anything.
+            if (r.status === 'not_checked') r.notes = `Could not verify — ${r.notes || 'directory blocked our fetch'}; Google lookup also failed (${(e.message || '').slice(0, 60)})`;
           }
         }
       }
