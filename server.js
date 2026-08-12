@@ -18649,15 +18649,29 @@ function compareNAP(canonical, found) {
 // and counting those as duplicates would cry wolf on every client. So: strip query/hash/trailing
 // slash, drop known sub-tabs, and discard any URL whose path is a prefix of one we already kept.
 function distinctListingPages(hits) {
-  const SUBPAGE = /\/(reviews?|photos?|gallery|contact|about|map|directions|hours|services|jobs|quotes?|enquir\w*)\/?$/i;
+  const SUBPAGE = /\/(reviews?|photos?|gallery|contact|about|map|directions|hours|services|quotes?|enquir\w*)\/?$/i;
+  // Sections that are never a business listing. A `site:` search for a business name also returns
+  // staff profiles, job ads, posts and articles that merely MENTION it — counting those as duplicate
+  // listings produced "LinkedIn: 5 listings found" for a business with one company page.
+  const NOT_A_LISTING = new Set([
+    'in', 'pub', 'people', 'profile', 'profiles', 'jobs', 'job', 'posts', 'post', 'pulse', 'feed',
+    'groups', 'group', 'events', 'event', 'school', 'showcase', 'learning', 'hashtag', 'help',
+    'search', 'find', 'browse', 'blog', 'news', 'article', 'articles', 'story', 'stories',
+    'category', 'categories', 'tag', 'tags', 'directory', 'login', 'signup', 'register',
+    'about', 'careers', 'press', 'media', 'watch', 'video', 'videos', 'photo', 'photos', 'marketplace',
+  ]);
   const kept = [];
   const seen = new Set();
   for (const h of hits || []) {
-    let path;
+    let path, segs;
     try {
       const u = new URL(h.link);
       path = (u.host + u.pathname).replace(/\/+$/, '').toLowerCase();   // no query, no hash
+      segs = u.pathname.toLowerCase().split('/').filter(Boolean);
     } catch { continue; }
+    if (!segs.length) continue;                       // platform home page, not a listing
+    if (NOT_A_LISTING.has(segs[0])) continue;         // /in/…, /jobs/…, /posts/…
+    if (segs.some(s => s === 'search')) continue;     // a search results page
     path = path.replace(SUBPAGE, '');
     if (!path || seen.has(path)) continue;
     // Same listing viewed at a deeper path (…/abc and …/abc/anything) — not a second listing.
