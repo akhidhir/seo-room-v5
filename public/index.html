@@ -11924,6 +11924,11 @@
         return m;
       }, [napReport]);
 
+      // Extra listing pages found for this business on the same directory. Two profiles on one
+      // platform split your reviews and local signals, so they're worth surfacing — but a directory
+      // can legitimately hold several pages for one business, so this is "possible", never asserted.
+      const dupeListings = (dir) => (Array.isArray(dir.duplicates) ? dir.duplicates : []);
+
       // Which NAP fields on this directory disagree with GBP. Prefers the live NAP report,
       // falls back to whatever the directory scan stored.
       const napMismatchFields = (dir) => {
@@ -12064,13 +12069,14 @@
           )}
 
           {/* Stats */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
             {[
               { id: 'all', label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
               { id: 'listed', label: 'Listed', value: stats.listed, color: '#22c55e', icon: 'fas fa-check-circle' },
               { id: 'not_listed', label: 'Not Listed', value: stats.not_listed, color: '#ef4444', icon: 'fas fa-times-circle' },
               // Counted live from the same rule that paints the red rows below, so the number always agrees with the list.
               { id: 'nap_issues', label: 'NAP Issues', value: directories.filter(d => napMismatchFields(d).length > 0).length || stats.nap_issues || 0, color: '#ef4444', icon: 'fas fa-exclamation-triangle' },
+              { id: 'duplicates', label: 'Duplicates', value: directories.filter(d => dupeListings(d).length > 0).length, color: '#f59e0b', icon: 'fas fa-clone' },
             ].map(s => (
               <div key={s.id} onClick={() => setFilter(s.id)} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: filter === s.id ? `2px solid ${s.color}` : '1px solid var(--border)', cursor: 'pointer', opacity: filter === 'all' || filter === s.id ? 1 : 0.5, transition: 'all 0.2s' }}>
                 <i className={s.icon} style={{ fontSize: 20, color: s.color, marginBottom: 8, display: 'block' }} />
@@ -12329,7 +12335,7 @@
           {/* Directory tiers */}
           {filter !== 'all' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontSize: 13, color: 'var(--text3)' }}>
-              <span>Showing: <strong style={{ color: 'var(--text1)' }}>{filter === 'listed' ? 'Listed' : filter === 'pending' ? 'Pending' : filter === 'not_checked' ? 'Not Checked' : filter === 'nap_issues' ? 'NAP Issues' : 'Not Listed'}</strong></span>
+              <span>Showing: <strong style={{ color: 'var(--text1)' }}>{filter === 'listed' ? 'Listed' : filter === 'pending' ? 'Pending' : filter === 'not_checked' ? 'Not Checked' : filter === 'nap_issues' ? 'NAP Issues' : filter === 'duplicates' ? 'Possible Duplicate Listings' : 'Not Listed'}</strong></span>
               <button onClick={() => setFilter('all')} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}>Clear filter</button>
             </div>
           )}
@@ -12351,7 +12357,11 @@
 
           {tiers.map(tier => {
             const allTierDirs = directories.filter(d => d.type === tier.key).length;
-            const tierDirsRaw = directories.filter(d => d.type === tier.key && (filter === 'all' || (filter === 'nap_issues' ? napMismatchFields(d).length > 0 : d.status === filter)));
+            const tierDirsRaw = directories.filter(d => d.type === tier.key && (
+              filter === 'all' ? true
+                : filter === 'nap_issues' ? napMismatchFields(d).length > 0
+                  : filter === 'duplicates' ? dupeListings(d).length > 0
+                    : d.status === filter));
             const tierDirs = sortDirs(tierDirsRaw);
             if (tierDirs.length === 0) return null;
             const tierListed = directories.filter(d => d.type === tier.key && d.status === 'listed').length;
@@ -12372,11 +12382,13 @@
                     // so wrong listings jump out of the list without opening anything.
                     const wrongNap = napMismatchFields(dir);
                     const hasNapIssue = wrongNap.length > 0;
+                    const dupes = dupeListings(dir);
+                    const hasDupes = dupes.length > 0;
                     return (
                       <div key={dir.name} style={{
                         borderBottom: idx < tierDirs.length - 1 ? '1px solid var(--border)' : 'none',
-                        background: hasNapIssue ? 'rgba(239,68,68,0.06)' : 'transparent',
-                        boxShadow: hasNapIssue ? 'inset 3px 0 0 #ef4444' : 'none',
+                        background: hasNapIssue ? 'rgba(239,68,68,0.06)' : hasDupes ? 'rgba(245,158,11,0.06)' : 'transparent',
+                        boxShadow: hasNapIssue ? 'inset 3px 0 0 #ef4444' : hasDupes ? 'inset 3px 0 0 #f59e0b' : 'none',
                       }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.5fr', padding: '12px 16px', alignItems: 'center', gap: 12, cursor: 'pointer' }}
                           onClick={() => (dir.status === 'listed' || hasNapIssue) && setExpandedNAP(prev => ({ ...prev, [dir.name]: !prev[dir.name] }))}
@@ -12394,6 +12406,12 @@
                                 <span title={`This listing's ${wrongNap.join(' and ')} don't match your Google Business Profile`}
                                   style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'rgba(239,68,68,0.18)', color: '#ef4444', fontWeight: 700, border: '1px solid rgba(239,68,68,0.4)' }}>
                                   <i className="fas fa-triangle-exclamation" style={{ marginRight: 4 }} />NAP: {wrongNap.join(' + ')} ≠ GBP
+                                </span>
+                              )}
+                              {hasDupes && (
+                                <span title={`${dupes.length + 1} separate listing pages for this business were found on ${dir.name} — duplicates split your reviews and local signals`}
+                                  style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'rgba(245,158,11,0.18)', color: '#f59e0b', fontWeight: 700, border: '1px solid rgba(245,158,11,0.4)' }}>
+                                  <i className="fas fa-clone" style={{ marginRight: 4 }} />{dupes.length + 1} listings found
                                 </span>
                               )}
                             </div>
@@ -12485,6 +12503,36 @@
                         </div>
 
                         {/* Expanded NAP details — GBP value vs what the listing actually says */}
+                        {/* Possible duplicate listings on this same platform */}
+                        {hasDupes && (
+                          <div style={{ padding: '10px 16px 12px', background: 'rgba(245,158,11,0.06)', borderTop: '1px dashed rgba(245,158,11,0.4)' }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 700, color: '#f59e0b', marginBottom: 6 }}>
+                              <i className="fas fa-clone" style={{ marginRight: 6 }} />
+                              Possible duplicate listing{dupes.length > 1 ? 's' : ''} on {dir.name}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8, lineHeight: 1.5 }}>
+                              {dupes.length + 1} separate pages for this business were found. Duplicates split reviews and
+                              local ranking signals — keep the strongest one and ask {dir.name} to remove or merge the rest.
+                            </div>
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              {[{ url: dir.listing_url, title: dir.found_name || dir.name, primary: true }].concat(dupes).map((d, di) => (
+                                <div key={di} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11.5, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px' }}>
+                                  <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, flexShrink: 0, marginTop: 1, background: d.primary ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)', color: d.primary ? '#22c55e' : '#f59e0b' }}>
+                                    {d.primary ? 'KEEP' : 'DUPLICATE'}
+                                  </span>
+                                  <div style={{ minWidth: 0 }}>
+                                    {d.title ? <div style={{ color: 'var(--text2)', fontWeight: 600 }}>{d.title}</div> : null}
+                                    {d.url ? (
+                                      <a href={d.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ color: '#a78bfa', fontSize: 11, wordBreak: 'break-all' }}>{d.url}</a>
+                                    ) : <span style={{ color: 'var(--text3)', fontSize: 11 }}>no URL saved</span>}
+                                    {d.snippet ? <div style={{ color: 'var(--text3)', fontSize: 10.5, marginTop: 2 }}>{d.snippet}</div> : null}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {expandedNAP[dir.name] && (dir.status === 'listed' || hasNapIssue) && (() => {
                           const nd = napByDir[dir.name] || null;                 // live NAP report row, if we have one
                           const gbpNap = (regNap && regNap.canonical) || {};

@@ -1406,6 +1406,8 @@ async function initDb() {
     await client.query(`ALTER TABLE citations ADD COLUMN IF NOT EXISTS found_address TEXT`).catch(() => {});
     await client.query(`ALTER TABLE citations ADD COLUMN IF NOT EXISTS found_phone TEXT`).catch(() => {});
     await client.query(`ALTER TABLE citations ADD COLUMN IF NOT EXISTS nap_match JSONB`).catch(() => {});
+    // Extra listing pages found for the same business on the same directory = possible duplicate listings.
+    await client.query(`ALTER TABLE citations ADD COLUMN IF NOT EXISTS duplicates JSONB DEFAULT '[]'`).catch(() => {});
 
     // RC Local profile cache — stores synced GBP data from RC
     await client.query(`
@@ -18055,7 +18057,7 @@ app.get('/api/projects/:projectId/rc-sync', async (req, res) => {
 app.get('/api/projects/:projectId/citations', async (req, res) => {
   try {
     const saved = await pool.query(
-      'SELECT directory_name, status, listing_url, notes, found_name, found_phone, found_address, nap_match, updated_at FROM citations WHERE project_id=$1',
+      'SELECT directory_name, status, listing_url, notes, found_name, found_phone, found_address, nap_match, duplicates, updated_at FROM citations WHERE project_id=$1',
       [req.params.projectId]
     );
     const proj = await pool.query('SELECT business_name, name, phone, location FROM projects WHERE id=$1', [req.params.projectId]);
@@ -18067,7 +18069,7 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
       statusMap[row.directory_name] = {
         status: row.status, listing_url: row.listing_url, notes: row.notes, updated_at: row.updated_at,
         found_name: row.found_name, found_phone: row.found_phone, found_address: row.found_address,
-        nap_match: row.nap_match,
+        nap_match: row.nap_match, duplicates: row.duplicates,
       };
     }
     const directories = AUSTRALIAN_DIRECTORIES.map(d => ({
@@ -18080,13 +18082,15 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
       found_phone: statusMap[d.name]?.found_phone || null,
       found_address: statusMap[d.name]?.found_address || null,
       nap_match: statusMap[d.name]?.nap_match || null,
+      duplicates: statusMap[d.name]?.duplicates || [],
     }));
     const listed = directories.filter(d => d.status === 'listed').length;
     const pending = directories.filter(d => d.status === 'pending').length;
     const notChecked = directories.filter(d => d.status === 'not_checked').length;
     const notListed = directories.filter(d => d.status === 'not_listed').length;
     const napIssues = directories.filter(d => d.nap_match && (d.nap_match.name === 'mismatch' || d.nap_match.phone === 'mismatch' || d.nap_match.address === 'mismatch')).length;
-    res.json({ directories, stats: { total: directories.length, listed, pending, not_listed: notListed, not_checked: notChecked, nap_issues: napIssues }, canonical_nap: canonicalNAP });
+    const dupes = directories.filter(d => Array.isArray(d.duplicates) && d.duplicates.length > 0).length;
+    res.json({ directories, stats: { total: directories.length, listed, pending, not_listed: notListed, not_checked: notChecked, nap_issues: napIssues, duplicates: dupes }, canonical_nap: canonicalNAP });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -18640,6 +18644,30 @@ function compareNAP(canonical, found) {
   return result;
 }
 
+// Reduce a set of search hits on one directory to genuinely DISTINCT listing pages.
+// A single listing usually surfaces several URLs (…/profile, …/profile/reviews, ?utm=…, #map),
+// and counting those as duplicates would cry wolf on every client. So: strip query/hash/trailing
+// slash, drop known sub-tabs, and discard any URL whose path is a prefix of one we already kept.
+function distinctListingPages(hits) {
+  const SUBPAGE = /\/(reviews?|photos?|gallery|contact|about|map|directions|hours|services|jobs|quotes?|enquir\w*)\/?$/i;
+  const kept = [];
+  const seen = new Set();
+  for (const h of hits || []) {
+    let path;
+    try {
+      const u = new URL(h.link);
+      path = (u.host + u.pathname).replace(/\/+$/, '').toLowerCase();   // no query, no hash
+    } catch { continue; }
+    path = path.replace(SUBPAGE, '');
+    if (!path || seen.has(path)) continue;
+    // Same listing viewed at a deeper path (…/abc and …/abc/anything) — not a second listing.
+    if (kept.some(k => path.startsWith(k.path + '/') || k.path.startsWith(path + '/'))) continue;
+    seen.add(path);
+    kept.push({ path, ...h });
+  }
+  return kept;
+}
+
 // Scan all directories to check if business is listed (NO SerpAPI — direct HTTP only)
 app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
   const { projectId } = req.params;
@@ -18889,12 +18917,19 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
           try {
             const sr = await dataForSeoSerp({ keyword: `site:${site} "${businessName}"`, location: 'Australia', depth: 5 });
             const org = sr.organic_results || [];
-            const hit = org.find(o => (o.link || '').includes(site) && htmlContainsBiz((o.title || '') + ' ' + (o.snippet || '')));
+            const hits = org.filter(o => (o.link || '').includes(site) && htmlContainsBiz((o.title || '') + ' ' + (o.snippet || '')));
+            const hit = hits[0];
             if (hit) {
               r.status = 'listed';
               r.listing_url = hit.link;
               r.notes = 'Verified in Google index';
               if (!r.found_name) r.found_name = (hit.title || '').split(/[|\-–—]/)[0].trim();
+              // Two or more DISTINCT profile pages for the same business on one directory is the
+              // signature of a duplicate listing. Reported as "possible" — a directory can legitimately
+              // have several pages for one business (reviews tab, category page), so a human confirms.
+              r.duplicates = distinctListingPages(hits).slice(1).map(o => ({
+                url: o.link, title: (o.title || '').trim(), snippet: (o.snippet || '').slice(0, 200),
+              }));
             } else {
               r.status = 'not_listed';
               r.notes = 'Not in Google index for this directory';
@@ -18911,11 +18946,11 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     // Save all results to DB
     for (const r of results) {
       await pool.query(
-        `INSERT INTO citations (project_id, directory_name, status, listing_url, notes, found_name, found_phone, found_address, nap_match, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        `INSERT INTO citations (project_id, directory_name, status, listing_url, notes, found_name, found_phone, found_address, nap_match, duplicates, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
          ON CONFLICT (project_id, directory_name)
-         DO UPDATE SET status=$3, listing_url=CASE WHEN $3='not_listed' THEN NULL ELSE COALESCE($4, citations.listing_url) END, notes=$5, found_name=$6, found_phone=$7, found_address=$8, nap_match=$9, updated_at=NOW()`,
-        [projectId, r.name, r.status, r.listing_url, r.notes, r.found_name || null, r.found_phone || null, r.found_address || null, r.nap_match ? JSON.stringify(r.nap_match) : null]
+         DO UPDATE SET status=$3, listing_url=CASE WHEN $3='not_listed' THEN NULL ELSE COALESCE($4, citations.listing_url) END, notes=$5, found_name=$6, found_phone=$7, found_address=$8, nap_match=$9, duplicates=$10, updated_at=NOW()`,
+        [projectId, r.name, r.status, r.listing_url, r.notes, r.found_name || null, r.found_phone || null, r.found_address || null, r.nap_match ? JSON.stringify(r.nap_match) : null, JSON.stringify(r.duplicates || [])]
       );
     }
 
