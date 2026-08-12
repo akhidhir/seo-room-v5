@@ -18941,7 +18941,13 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
             const sr = await dataForSeoSerp({ keyword: `site:${site} "${businessName}"`, location: 'Australia', depth: 5 });
             const org = sr.organic_results || [];
             const hits = org.filter(o => (o.link || '').includes(site) && htmlContainsBiz((o.title || '') + ' ' + (o.snippet || '')));
-            const hit = hits[0];
+            // For PRESENCE, a snippet match is fine. For DUPLICATES it is not: directories print
+            // "similar businesses" panels, so a COMPETITOR's page carries our client's name in its
+            // description. Real example — site:linkedin.com "Houseworks Plumbing & Gas" returned
+            // OTC Plumbing and Alkimos Plumbing company pages, both scoring on the sidebar text.
+            // A second listing for the same business names it in the TITLE, so require that.
+            const titleHits = hits.filter(o => htmlContainsBiz(o.title || ''));
+            const hit = titleHits[0] || hits[0];
             if (hit) {
               r.status = 'listed';
               r.listing_url = hit.link;
@@ -18950,7 +18956,7 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
               // Two or more DISTINCT profile pages for the same business on one directory is the
               // signature of a duplicate listing. Reported as "possible" — a directory can legitimately
               // have several pages for one business (reviews tab, category page), so a human confirms.
-              r.duplicates = distinctListingPages(hits).slice(1).map(o => ({
+              r.duplicates = distinctListingPages(titleHits).slice(1).map(o => ({
                 url: o.link, title: (o.title || '').trim(), snippet: (o.snippet || '').slice(0, 200),
               }));
             } else {
