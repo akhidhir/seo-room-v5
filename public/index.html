@@ -12188,12 +12188,16 @@
                   if (d.hasUrl === false) return st === 'not_listed' ? 'not_listed' : 'not_checked';
                   return null;                                     // has a URL — judged on its NAP below
                 };
-                const allRows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain, confirmed: true, isWebsite: true, state: null }]
+                // Duplicate listings live on the citations row, not the NAP report — pull them across
+                // so one filter bar covers every kind of problem on a source.
+                const dupesFor = (name) => dupeListings(directories.find(x => x.name === name) || {}).length;
+                const allRows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain, confirmed: true, isWebsite: true, state: null, dupes: 0 }]
                   .concat((napReport.directories || []).map(d => {
                     const state = rowState(d);
                     return {
                       source: d.name,
                       state,
+                      dupes: dupesFor(d.name),
                       sub: state === 'not_checked'
                         ? (d.wrongUrl ? 'saved link was a different business — find the real listing and save its URL' : 'no listing URL saved — search the platform, then save the URL (or register)')
                         : state === 'not_listed'
@@ -12218,9 +12222,23 @@
                   if (vals.length && vals.every(v => v === 'aligned')) return 'aligned';
                   return 'verify';
                 };
-                const counts = { all: allRows.length, aligned: 0, verify: 0, issues: 0, not_listed: 0, not_checked: 0 };
-                allRows.forEach(r => { counts[rowKind(r)]++; });
-                const rows = napFilter === 'all' ? allRows : allRows.filter(r => rowKind(r) === napFilter);
+                // Filters are predicates, not equality, so a source can appear under several
+                // (a listing can be both "not aligned" and "has duplicates").
+                const FILTERS = [
+                  { k: 'all', label: 'All', col: 'var(--accent)', test: () => true },
+                  { k: 'aligned', label: 'Aligned', col: '#22c55e', test: r => rowKind(r) === 'aligned' },
+                  { k: 'not_aligned', label: 'Not aligned', col: '#f97316', test: r => rowKind(r) !== 'aligned' },
+                  { k: 'issues', label: 'Issues', col: '#ef4444', test: r => rowKind(r) === 'issues' },
+                  { k: 'duplicates', label: 'Duplicates', col: '#f59e0b', test: r => r.dupes > 0 },
+                  { k: 'needs_check', label: 'Needs checking', col: '#f59e0b', test: r => ['verify', 'not_checked'].includes(rowKind(r)) },
+                  { k: 'verify', label: 'Verify', col: '#f59e0b', test: r => rowKind(r) === 'verify' },
+                  { k: 'not_checked', label: 'Not checked', col: '#9ca3af', test: r => rowKind(r) === 'not_checked' },
+                  { k: 'not_listed', label: 'Not listed', col: '#9ca3af', test: r => rowKind(r) === 'not_listed' },
+                ];
+                const counts = {};
+                FILTERS.forEach(f => { counts[f.k] = allRows.filter(f.test).length; });
+                const activeFilter = FILTERS.find(f => f.k === napFilter) || FILTERS[0];
+                const rows = allRows.filter(activeFilter.test);
                 const mismatches = napReport.summary?.mismatches || 0;
                 const linkColor = '#a78bfa';
                 return (
@@ -12236,16 +12254,16 @@
                     </div>
                     <div style={{ fontSize: 13, marginBottom: 8, fontWeight: 600, color: mismatches ? '#ef4444' : '#22c55e' }}>
                       {mismatches ? `${mismatches} source${mismatches > 1 ? 's' : ''} don't match your GBP` : 'All checked sources match your GBP'}
-                      {counts.verify ? <span style={{ color: '#f59e0b', fontWeight: 400 }}> · {counts.verify} listing{counts.verify > 1 ? 's' : ''} need a manual look</span> : null}
+                      {counts.duplicates ? <span style={{ color: '#f59e0b', fontWeight: 400 }}> · {counts.duplicates} with duplicate listings</span> : null}
+                      {counts.verify ? <span style={{ color: '#f59e0b', fontWeight: 400 }}> · {counts.verify} need a manual look</span> : null}
                       {counts.not_checked ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {counts.not_checked} not checked (no URL saved)</span> : null}
                       {counts.not_listed ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {counts.not_listed} not listed</span> : null}
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-                      {[['all', 'All', counts.all], ['aligned', 'Aligned', counts.aligned], ['issues', 'Issues', counts.issues], ['verify', 'Verify', counts.verify], ['not_checked', 'Not checked', counts.not_checked], ['not_listed', 'Not listed', counts.not_listed]].map(([k, label, n]) => {
-                        const active = napFilter === k;
-                        const col = k === 'aligned' ? '#22c55e' : k === 'issues' ? '#ef4444' : k === 'verify' ? '#f59e0b' : (k === 'not_listed' || k === 'not_checked') ? '#9ca3af' : 'var(--accent)';
+                      {FILTERS.filter(f => f.k === 'all' || counts[f.k] > 0 || napFilter === f.k).map(f => {
+                        const active = napFilter === f.k;
                         return (
-                          <button key={k} onClick={() => setNapFilter(k)} style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? col : 'var(--border)'}`, background: active ? col : 'transparent', color: active ? '#fff' : 'var(--text2)' }}>{label} <span style={{ opacity: 0.8 }}>{n}</span></button>
+                          <button key={f.k} onClick={() => setNapFilter(f.k)} style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? f.col : 'var(--border)'}`, background: active ? f.col : 'transparent', color: active ? '#fff' : 'var(--text2)' }}>{f.label} <span style={{ opacity: 0.8 }}>{counts[f.k]}</span></button>
                         );
                       })}
                     </div>
@@ -12287,6 +12305,11 @@
                                   {wrongFields.length ? (
                                     <div style={{ fontSize: 10, color: '#ef4444', fontWeight: 700, marginTop: 2 }}>
                                       <i className="fas fa-triangle-exclamation" style={{ marginRight: 4 }} />{wrongFields.join(' + ')} wrong
+                                    </div>
+                                  ) : null}
+                                  {r.dupes > 0 ? (
+                                    <div style={{ fontSize: 10, color: '#f59e0b', fontWeight: 700, marginTop: 2 }}>
+                                      <i className="fas fa-clone" style={{ marginRight: 4 }} />{r.dupes + 1} listings found — possible duplicate
                                     </div>
                                   ) : null}
                                   {r.sub ? <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}>{r.sub}</div> : null}
