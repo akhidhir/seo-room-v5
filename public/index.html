@@ -12224,16 +12224,19 @@
                 };
                 // Filters are predicates, not equality, so a source can appear under several
                 // (a listing can be both "not aligned" and "has duplicates").
+                // "Not aligned" is about ALIGNMENT, so it only covers sources where a listing actually
+                // exists and is not confirmed to match. A directory you aren't on isn't misaligned —
+                // that's a registration job and belongs under Not listed / Not checked.
                 const FILTERS = [
-                  { k: 'all', label: 'All', col: 'var(--accent)', test: () => true },
-                  { k: 'aligned', label: 'Aligned', col: '#22c55e', test: r => rowKind(r) === 'aligned' },
-                  { k: 'not_aligned', label: 'Not aligned', col: '#f97316', test: r => rowKind(r) !== 'aligned' },
-                  { k: 'issues', label: 'Issues', col: '#ef4444', test: r => rowKind(r) === 'issues' },
-                  { k: 'duplicates', label: 'Duplicates', col: '#f59e0b', test: r => r.dupes > 0 },
-                  { k: 'needs_check', label: 'Needs checking', col: '#f59e0b', test: r => ['verify', 'not_checked'].includes(rowKind(r)) },
-                  { k: 'verify', label: 'Verify', col: '#f59e0b', test: r => rowKind(r) === 'verify' },
-                  { k: 'not_checked', label: 'Not checked', col: '#9ca3af', test: r => rowKind(r) === 'not_checked' },
-                  { k: 'not_listed', label: 'Not listed', col: '#9ca3af', test: r => rowKind(r) === 'not_listed' },
+                  { k: 'all', label: 'All', col: 'var(--accent)', test: () => true, tip: 'Every source we know about' },
+                  { k: 'aligned', label: 'Aligned', col: '#22c55e', test: r => rowKind(r) === 'aligned', tip: 'Listing exists and matches your GBP' },
+                  { k: 'not_aligned', label: 'Not aligned', col: '#f97316', test: r => ['issues', 'verify'].includes(rowKind(r)), tip: 'A listing exists but is NOT confirmed to match GBP (mismatches + unreadable). Excludes directories you are not listed on.' },
+                  { k: 'issues', label: 'Issues', col: '#ef4444', test: r => rowKind(r) === 'issues', tip: 'Listing found and it disagrees with your GBP' },
+                  { k: 'duplicates', label: 'Duplicates', col: '#f59e0b', test: r => r.dupes > 0, tip: 'More than one listing page found for this business on that platform' },
+                  { k: 'verify', label: 'Verify', col: '#f59e0b', test: r => rowKind(r) === 'verify', tip: 'Listing exists but blocked us or would not confirm its details' },
+                  { k: 'not_checked', label: 'Not checked', col: '#9ca3af', test: r => rowKind(r) === 'not_checked', tip: 'No listing URL saved, so nothing was checked — a listing may well exist' },
+                  { k: 'not_listed', label: 'Not listed', col: '#9ca3af', test: r => rowKind(r) === 'not_listed', tip: 'Searched the platform and found no listing' },
+                  { k: 'todo', label: 'All to-do', col: '#a78bfa', test: r => rowKind(r) !== 'aligned' || r.dupes > 0, tip: 'Everything that still needs work: mismatches, unreadable listings, duplicates, unchecked and unlisted' },
                 ];
                 const counts = {};
                 FILTERS.forEach(f => { counts[f.k] = allRows.filter(f.test).length; });
@@ -12263,10 +12266,16 @@
                       {FILTERS.filter(f => f.k === 'all' || counts[f.k] > 0 || napFilter === f.k).map(f => {
                         const active = napFilter === f.k;
                         return (
-                          <button key={f.k} onClick={() => setNapFilter(f.k)} style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? f.col : 'var(--border)'}`, background: active ? f.col : 'transparent', color: active ? '#fff' : 'var(--text2)' }}>{f.label} <span style={{ opacity: 0.8 }}>{counts[f.k]}</span></button>
+                          <button key={f.k} onClick={() => setNapFilter(f.k)} title={f.tip} style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? f.col : 'var(--border)'}`, background: active ? f.col : 'transparent', color: active ? '#fff' : 'var(--text2)' }}>{f.label} <span style={{ opacity: 0.8 }}>{counts[f.k]}</span></button>
                         );
                       })}
                     </div>
+                    {napFilter !== 'all' && (
+                      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8, lineHeight: 1.5 }}>
+                        <i className="fas fa-filter" style={{ marginRight: 6 }} />
+                        Showing <b style={{ color: activeFilter.col }}>{activeFilter.label}</b> ({rows.length}) — {activeFilter.tip}
+                      </div>
+                    )}
                     <div style={{ overflowX: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                         <thead><tr style={{ textAlign: 'left', color: 'var(--text3)', textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.5 }}>
