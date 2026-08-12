@@ -11924,6 +11924,15 @@
         return m;
       }, [napReport]);
 
+      // A listing we DID confirm can still leave individual fields unread (the platform hides the
+      // phone behind a click, etc.). Without this the row lands under "Not aligned" showing a green
+      // ✓ Aligned name and no explanation — say which field we couldn't read.
+      const unreadNote = (m) => {
+        const unread = [['name', 'name'], ['address', 'address'], ['phone', 'phone']]
+          .filter(([k]) => (m || {})[k] === 'manual').map(([, l]) => l);
+        return unread.length ? `${unread.join(' and ')} couldn't be read from the page — check by eye` : '';
+      };
+
       // Extra listing pages found for this business on the same directory. Two profiles on one
       // platform split your reviews and local signals, so they're worth surfacing — but a directory
       // can legitimately hold several pages for one business, so this is "possible", never asserted.
@@ -12202,7 +12211,7 @@
                         ? (d.wrongUrl ? 'saved link was a different business — find the real listing and save its URL' : 'no listing URL saved — search the platform, then save the URL (or register)')
                         : state === 'not_listed'
                           ? 'searched and no listing found — register one'
-                          : (d.reachable ? (d.confirmed ? '' : 'listing found but details could not be read') : 'listing blocked our check — open it and confirm by eye'),
+                          : (d.reachable ? (d.confirmed ? unreadNote(d.match) : 'listing found but details could not be read') : 'listing blocked our check — open it and confirm by eye'),
                       found: d.found || {}, match: d.match || {}, url: d.url, searchUrl: d.searchUrl, confirmed: !!d.confirmed, isWebsite: false,
                     };
                   }));
@@ -12242,7 +12251,8 @@
                 FILTERS.forEach(f => { counts[f.k] = allRows.filter(f.test).length; });
                 const activeFilter = FILTERS.find(f => f.k === napFilter) || FILTERS[0];
                 const rows = allRows.filter(activeFilter.test);
-                const mismatches = napReport.summary?.mismatches || 0;
+                // (headline is driven by the live counts above, not the stored summary, so the
+                //  sentence and the chips can never disagree)
                 const linkColor = '#a78bfa';
                 return (
                   <div>
@@ -12255,8 +12265,14 @@
                         </div>
                       ))}
                     </div>
-                    <div style={{ fontSize: 13, marginBottom: 8, fontWeight: 600, color: mismatches ? '#ef4444' : '#22c55e' }}>
-                      {mismatches ? `${mismatches} source${mismatches > 1 ? 's' : ''} don't match your GBP` : 'All checked sources match your GBP'}
+                    {/* Headline must agree with the chips. "All match" is only true when nothing is
+                        mismatched AND nothing is left unconfirmed — otherwise it overstates the result. */}
+                    <div style={{ fontSize: 13, marginBottom: 8, fontWeight: 600, color: counts.issues ? '#ef4444' : counts.not_aligned ? '#f59e0b' : '#22c55e' }}>
+                      {counts.issues
+                        ? `${counts.issues} source${counts.issues > 1 ? 's' : ''} don't match your GBP`
+                        : counts.not_aligned
+                          ? `No confirmed mismatches — but ${counts.not_aligned} listing${counts.not_aligned > 1 ? 's' : ''} couldn't be fully confirmed`
+                          : `All ${counts.aligned} confirmed source${counts.aligned === 1 ? '' : 's'} match your GBP`}
                       {counts.duplicates ? <span style={{ color: '#f59e0b', fontWeight: 400 }}> · {counts.duplicates} with duplicate listings</span> : null}
                       {counts.verify ? <span style={{ color: '#f59e0b', fontWeight: 400 }}> · {counts.verify} need a manual look</span> : null}
                       {counts.not_checked ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {counts.not_checked} not checked (no URL saved)</span> : null}
