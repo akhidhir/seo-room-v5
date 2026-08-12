@@ -18660,18 +18660,27 @@ function distinctListingPages(hits) {
     'category', 'categories', 'tag', 'tags', 'directory', 'login', 'signup', 'register',
     'about', 'careers', 'press', 'media', 'watch', 'video', 'videos', 'photo', 'photos', 'marketplace',
   ]);
+  // A locale prefix is the same page, not another listing: linkedin serves one company page as
+  // www./au./uk.linkedin.com/company/x, and many directories mirror at /en-au/… or /au/….
+  const LOCALE = /^[a-z]{2}(-[a-z]{2})?$/;
   const kept = [];
   const seen = new Set();
   for (const h of hits || []) {
     let path, segs;
     try {
       const u = new URL(h.link);
-      path = (u.host + u.pathname).replace(/\/+$/, '').toLowerCase();   // no query, no hash
       segs = u.pathname.toLowerCase().split('/').filter(Boolean);
     } catch { continue; }
     if (!segs.length) continue;                       // platform home page, not a listing
+    // Order matters: "in" is both a locale code and LinkedIn's profile prefix, so reject
+    // non-listing sections BEFORE stripping any locale, or /in/john becomes /john and survives.
     if (NOT_A_LISTING.has(segs[0])) continue;         // /in/…, /jobs/…, /posts/…
+    if (segs.length > 1 && LOCALE.test(segs[0])) segs = segs.slice(1);   // /en-au/company/x → /company/x
+    if (!segs.length || NOT_A_LISTING.has(segs[0])) continue;
     if (segs.some(s => s === 'search')) continue;     // a search results page
+    // Host is dropped entirely — we're already scoped to one platform by the site: search, so any
+    // host difference (www./au./uk.) is a country mirror, never a second listing.
+    path = '/' + segs.join('/');
     path = path.replace(SUBPAGE, '');
     if (!path || seen.has(path)) continue;
     // Same listing viewed at a deeper path (…/abc and …/abc/anything) — not a second listing.
