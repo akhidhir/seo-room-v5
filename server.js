@@ -18838,16 +18838,20 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         return null;
       },
       'Apple Maps (Apple Business Connect)': async () => {
-        // Apple Maps doesn't have a public search page we can crawl easily
-        // Mark as not_checked — user should verify manually
-        return { status: 'not_checked', notes: 'Apple Maps requires manual verification — search at maps.apple.com' };
+        // Apple Maps listings are not on the public web and are not in Google's index, so neither
+        // the HTTP pass nor the site: pass can ever confirm them. Say so plainly rather than
+        // implying the business isn't there — it usually is.
+        return { status: 'not_checked', notes: 'Apple Maps can only be confirmed by hand — open the "Find / register" link, then set the status and paste the listing URL. A saved URL is kept on future scans.' };
       },
       'Bing Places': async () => {
         const r = await fetchPage(`https://www.bing.com/maps?q=${encodeURIComponent(businessName + ' ' + locationShort)}`);
         if (r && !r.blocked && r.html && htmlContainsBiz(r.html)) {
           return { status: 'listed', listing_url: `https://www.bing.com/maps?q=${encodeURIComponent(businessName + ' ' + locationShort)}`, notes: 'Found via Bing Maps search' };
         }
-        return null;
+        // Bing renders Maps results in JavaScript, so a failed fetch proves nothing. Don't return
+        // null here — null falls through to a hard "not_listed" below, which is how a live Bing
+        // listing ended up marked as absent.
+        return { status: 'not_checked', notes: 'Bing Maps renders results in JavaScript so it cannot be read automatically — confirm by hand via "Find / register", then set the status and paste the listing URL.' };
       },
     };
 
@@ -18952,9 +18956,13 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         console.warn('[citations] SKIPPING Google verification — the site: control query returned nothing, so a "not found" cannot be trusted. Keeping directory-fetch results.');
       } else {
         console.log(`[citations] Google-verifying ${results.length} directories via DataForSEO site: search`);
+        const portalByName = Object.fromEntries(AUSTRALIAN_DIRECTORIES.map(d => [d.name, !!d.portal]));
         for (const r of results) {
           // GBP connection comes straight from Project Settings — already authoritative, don't override it.
           if (r.name === 'Google Business Profile' && r.status === 'listed') continue;
+          // Never run a site: check against a management portal (see `portal` in AUSTRALIAN_DIRECTORIES).
+          // Nothing is indexed there, so the only possible outcome is a false "not listed".
+          if (portalByName[r.name]) continue;
           const site = dirUrlByName[r.name];
           if (!site) continue;
           try {
@@ -19013,7 +19021,15 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
         `INSERT INTO citations (project_id, directory_name, status, listing_url, notes, found_name, found_phone, found_address, nap_match, duplicates, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
          ON CONFLICT (project_id, directory_name)
-         DO UPDATE SET status=$3, listing_url=CASE WHEN $3='not_listed' THEN NULL ELSE COALESCE($4, citations.listing_url) END, notes=$5, found_name=$6, found_phone=$7, found_address=$8, nap_match=$9, duplicates=$10, updated_at=NOW()`,
+         DO UPDATE SET
+           -- An inconclusive scan must never undo a listing a human confirmed. If we could not
+           -- check this run ('not_checked') but the row already has a saved listing URL, keep the
+           -- existing status. Otherwise Apple/Bing and any hand-entered listing would be wiped by
+           -- every scan and the admin's work would silently disappear.
+           status = CASE WHEN $3 = 'not_checked' AND citations.listing_url IS NOT NULL AND citations.listing_url <> ''
+                         THEN citations.status ELSE $3 END,
+           listing_url = CASE WHEN $3 = 'not_listed' THEN NULL ELSE COALESCE($4, citations.listing_url) END,
+           notes=$5, found_name=$6, found_phone=$7, found_address=$8, nap_match=$9, duplicates=$10, updated_at=NOW()`,
         [projectId, r.name, r.status, r.listing_url, r.notes, r.found_name || null, r.found_phone || null, r.found_address || null, r.nap_match ? JSON.stringify(r.nap_match) : null, JSON.stringify(r.duplicates || [])]
       );
     }
@@ -35406,9 +35422,13 @@ app.post('/api/projects/:projectId/audits/gsc/run', async (req, res) => {
 // {loc}=location, {q}=name+location (all URL-encoded by napSearchUrlFor). Every directory has one so a
 // NAP row with no confirmed/valid URL still links to the RIGHT platform's search — for ALL directories.
 const AUSTRALIAN_DIRECTORIES = [
-  { name: 'Google Business Profile', url: 'business.google.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 1, description: 'Most important local listing — drives Maps rankings', search: 'https://www.google.com/maps/search/{q}' },
-  { name: 'Apple Maps (Apple Business Connect)', url: 'businessconnect.apple.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 2, description: 'Growing in importance with iPhone users', search: 'https://maps.apple.com/?q={q}' },
-  { name: 'Bing Places', url: 'bingplaces.com', type: 'Essential', free: true, difficulty: 'Easy', priority: 3, description: 'Powers Bing, Cortana, and some voice search results', search: 'https://www.bing.com/maps?q={q}' },
+  // `portal: true` = the url is a MANAGEMENT console, not where listings are published. Listings for
+  // these live inside a map app (Google/Apple/Bing Maps) and are not indexed under the portal domain,
+  // so a `site:` search there always returns nothing. Treating that as proof of absence would mark a
+  // live listing "not listed" on every scan — these must be confirmed by a human instead.
+  { name: 'Google Business Profile', url: 'business.google.com', portal: true, type: 'Essential', free: true, difficulty: 'Easy', priority: 1, description: 'Most important local listing — drives Maps rankings', search: 'https://www.google.com/maps/search/{q}' },
+  { name: 'Apple Maps (Apple Business Connect)', url: 'businessconnect.apple.com', portal: true, type: 'Essential', free: true, difficulty: 'Easy', priority: 2, description: 'Growing in importance with iPhone users', search: 'https://maps.apple.com/?q={q}' },
+  { name: 'Bing Places', url: 'bingplaces.com', portal: true, type: 'Essential', free: true, difficulty: 'Easy', priority: 3, description: 'Powers Bing, Cortana, and some voice search results', search: 'https://www.bing.com/maps?q={q}' },
   { name: 'Yellow Pages Australia', url: 'yellowpages.com.au', type: 'Major', free: true, paid_option: '$30-300/mo', difficulty: 'Easy', priority: 4, description: 'High DA Australian directory, free basic listing', search: 'https://www.yellowpages.com.au/search/listings?clue={n}&locationClue={loc}' },
   { name: 'True Local', url: 'truelocal.com.au', type: 'Major', free: true, paid_option: '$20-200/mo', difficulty: 'Easy', priority: 5, description: 'Popular Australian directory with good SEO authority', search: 'https://www.truelocal.com.au/search?query={n}' },
   { name: 'Hotfrog', url: 'hotfrog.com.au', type: 'Major', free: true, difficulty: 'Easy', priority: 6, description: 'Free Australian business directory with decent DA', search: 'https://www.hotfrog.com.au/search?q={n}' },
