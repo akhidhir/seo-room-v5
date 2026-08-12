@@ -11887,7 +11887,7 @@
       const napBadge = (s) => {
         // 'manual' = a listing exists but we couldn't read this field → Verify (amber, needs a human).
         // 'no_listing' = there is no listing to read → plain dash. These must never look the same.
-        const map = { aligned: ['#22c55e', '✓', 'Aligned'], mismatch: ['#ef4444', '✗', 'Mismatch'], not_found: ['#9ca3af', '—', 'Not found'], manual: ['#f59e0b', '?', 'Verify'], na: ['#6b7280', '–', 'N/A (no GBP address)'], no_listing: ['#6b7280', '—', 'No listing'] };
+        const map = { aligned: ['#22c55e', '✓', 'Aligned'], mismatch: ['#ef4444', '✗', 'Mismatch'], not_found: ['#9ca3af', '—', 'Not found'], manual: ['#f59e0b', '?', 'Verify'], na: ['#6b7280', '–', 'N/A (no GBP address)'], no_listing: ['#6b7280', '—', 'No listing'], not_checked: ['#6b7280', '—', 'Not checked'] };
         const [c, icon, label] = map[s] || map.not_found;
         return <span style={{ color: c, fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{icon} {label}</span>;
       };
@@ -12169,20 +12169,33 @@
                 const c = napReport.canonical || {};
                 // Directory status from the citations table (what the "Listed" dropdown says).
                 const statusOf = (name) => (directories.find(x => x.name === name) || {}).status;
-                // "No listing" and "couldn't read the listing" are different problems and must not
-                // share the amber Verify badge. A row is NOT LISTED when there is no listing to check:
-                // no saved URL, the saved URL turned out to be someone else's business, or the row is
-                // marked Not Listed. Verify is reserved for a listing that exists but wouldn't confirm.
-                const noListing = (d) => d.hasUrl === false || !!d.wrongUrl || statusOf(d.name) === 'not_listed';
-                const allRows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain, confirmed: true, isWebsite: true, unlisted: false }]
-                  .concat((napReport.directories || []).map(d => ({
-                    source: d.name,
-                    unlisted: noListing(d),
-                    sub: noListing(d)
-                      ? (d.wrongUrl ? 'saved link was a different business — register or add the real URL' : 'no listing found — click to register')
-                      : (d.reachable ? (d.confirmed ? '' : 'listing found but details could not be read') : 'listing blocked our check — open it and confirm by eye'),
-                    found: d.found || {}, match: d.match || {}, url: d.url, searchUrl: d.searchUrl, confirmed: !!d.confirmed, isWebsite: false,
-                  })));
+                // Three things were all being called "Verify". They are different jobs:
+                //   not_checked — we hold no listing URL, so nothing was checked. We do NOT know whether
+                //                 a listing exists. (Apple Maps listings exist but we never had the URL.)
+                //   not_listed  — positively absent: the scan searched the platform and found nothing.
+                //   verify      — a listing exists but blocked us or wouldn't confirm its details.
+                // Never assert "not listed" from the absence of a saved URL — that claim would be false
+                // for any listing we simply haven't linked yet.
+                const rowState = (d) => {
+                  const st = statusOf(d.name);
+                  if (d.wrongUrl) return 'not_checked';           // link pointed at another business; real one unknown
+                  if (d.hasUrl === false) return st === 'not_listed' ? 'not_listed' : 'not_checked';
+                  return null;                                     // has a URL — judged on its NAP below
+                };
+                const allRows = [{ source: 'Website', sub: napReport.website?.reachable ? '' : 'not reachable', found: napReport.website?.found || {}, match: napReport.website?.match || {}, url: project.domain, confirmed: true, isWebsite: true, state: null }]
+                  .concat((napReport.directories || []).map(d => {
+                    const state = rowState(d);
+                    return {
+                      source: d.name,
+                      state,
+                      sub: state === 'not_checked'
+                        ? (d.wrongUrl ? 'saved link was a different business — find the real listing and save its URL' : 'no listing URL saved — search the platform, then save the URL (or register)')
+                        : state === 'not_listed'
+                          ? 'searched and no listing found — register one'
+                          : (d.reachable ? (d.confirmed ? '' : 'listing found but details could not be read') : 'listing blocked our check — open it and confirm by eye'),
+                      found: d.found || {}, match: d.match || {}, url: d.url, searchUrl: d.searchUrl, confirmed: !!d.confirmed, isWebsite: false,
+                    };
+                  }));
                 // Only trust a stored listing URL when we actually confirmed your business on it. Otherwise the
                 // stored URL may point at the wrong business (bad seed data), so link to that platform's own search.
                 const rowHref = (r) => {
@@ -12190,16 +12203,16 @@
                   if (r.confirmed && r.url) return r.url.startsWith('http') ? r.url : 'https://' + r.url;
                   return r.searchUrl || `https://www.google.com/search?q=${encodeURIComponent('"' + ((napReport.canonical || {}).name || '') + '" ' + r.source)}`;
                 };
-                // 'not_listed' (nothing to check) > 'issues' (disagrees with GBP) > 'aligned' > 'verify'.
+                // A row we couldn't check at all keeps its own verdict; everything else is judged on NAP.
                 const rowKind = (r) => {
-                  if (r.unlisted) return 'not_listed';
+                  if (r.state) return r.state;                     // not_checked | not_listed
                   const m = r.match || {};
                   const vals = [m.name, m.address, m.phone].filter(v => v !== 'na'); // N/A (no GBP address) doesn't count either way
                   if (vals.some(v => v === 'mismatch' || v === 'not_found')) return 'issues';
                   if (vals.length && vals.every(v => v === 'aligned')) return 'aligned';
                   return 'verify';
                 };
-                const counts = { all: allRows.length, aligned: 0, verify: 0, issues: 0, not_listed: 0 };
+                const counts = { all: allRows.length, aligned: 0, verify: 0, issues: 0, not_listed: 0, not_checked: 0 };
                 allRows.forEach(r => { counts[rowKind(r)]++; });
                 const rows = napFilter === 'all' ? allRows : allRows.filter(r => rowKind(r) === napFilter);
                 const mismatches = napReport.summary?.mismatches || 0;
@@ -12218,12 +12231,13 @@
                     <div style={{ fontSize: 13, marginBottom: 8, fontWeight: 600, color: mismatches ? '#ef4444' : '#22c55e' }}>
                       {mismatches ? `${mismatches} source${mismatches > 1 ? 's' : ''} don't match your GBP` : 'All checked sources match your GBP'}
                       {counts.verify ? <span style={{ color: '#f59e0b', fontWeight: 400 }}> · {counts.verify} listing{counts.verify > 1 ? 's' : ''} need a manual look</span> : null}
-                      {counts.not_listed ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {counts.not_listed} not listed yet</span> : null}
+                      {counts.not_checked ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {counts.not_checked} not checked (no URL saved)</span> : null}
+                      {counts.not_listed ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {counts.not_listed} not listed</span> : null}
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-                      {[['all', 'All', counts.all], ['aligned', 'Aligned', counts.aligned], ['issues', 'Issues', counts.issues], ['verify', 'Verify', counts.verify], ['not_listed', 'Not listed', counts.not_listed]].map(([k, label, n]) => {
+                      {[['all', 'All', counts.all], ['aligned', 'Aligned', counts.aligned], ['issues', 'Issues', counts.issues], ['verify', 'Verify', counts.verify], ['not_checked', 'Not checked', counts.not_checked], ['not_listed', 'Not listed', counts.not_listed]].map(([k, label, n]) => {
                         const active = napFilter === k;
-                        const col = k === 'aligned' ? '#22c55e' : k === 'issues' ? '#ef4444' : k === 'verify' ? '#f59e0b' : k === 'not_listed' ? '#9ca3af' : 'var(--accent)';
+                        const col = k === 'aligned' ? '#22c55e' : k === 'issues' ? '#ef4444' : k === 'verify' ? '#f59e0b' : (k === 'not_listed' || k === 'not_checked') ? '#9ca3af' : 'var(--accent)';
                         return (
                           <button key={k} onClick={() => setNapFilter(k)} style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${active ? col : 'var(--border)'}`, background: active ? col : 'transparent', color: active ? '#fff' : 'var(--text2)' }}>{label} <span style={{ opacity: 0.8 }}>{n}</span></button>
                         );
@@ -12241,10 +12255,12 @@
                             const kind = rowKind(r);
                             const bad = kind === 'issues';
                             const warn = kind === 'verify';
+                            const unchecked = kind === 'not_checked';
                             const unlisted = kind === 'not_listed';
+                            const skipped = unchecked || unlisted;   // nothing was compared on this row
                             const accent = bad ? '#ef4444' : warn ? '#f59e0b' : 'transparent';
-                            // A row with no listing has nothing to compare — show a plain dash, never "Verify".
-                            const fieldState = (s) => (unlisted ? (s === 'na' ? 'na' : 'no_listing') : s);
+                            // Nothing was compared — show a plain dash, never an amber "Verify".
+                            const fieldState = (s) => (skipped ? (s === 'na' ? 'na' : (unlisted ? 'no_listing' : 'not_checked')) : s);
                             const wrongFields = [['name', 'Name'], ['address', 'Address'], ['phone', 'Phone']]
                               .filter(([k]) => r.match[k] === 'mismatch').map(([, l]) => l);
                             return (
@@ -12252,12 +12268,15 @@
                                 borderTop: '1px solid var(--border)',
                                 background: bad ? 'rgba(239,68,68,0.07)' : warn ? 'rgba(245,158,11,0.05)' : 'transparent',
                                 boxShadow: bad || warn ? `inset 3px 0 0 ${accent}` : 'none',
-                                opacity: unlisted ? 0.75 : 1,
+                                opacity: skipped ? 0.75 : 1,
                               }}>
                                 <td style={{ padding: '8px', fontWeight: 600 }}>
-                                  <a href={rowHref(r)} target="_blank" rel="noopener" style={{ color: bad ? '#ef4444' : unlisted ? 'var(--text2)' : linkColor }}>{r.source}</a>
-                                  {unlisted ? (
-                                    <span style={{ fontSize: 10, marginLeft: 6, padding: '1px 6px', borderRadius: 4, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', fontWeight: 700 }}>NOT LISTED</span>
+                                  <a href={rowHref(r)} target="_blank" rel="noopener" style={{ color: bad ? '#ef4444' : skipped ? 'var(--text2)' : linkColor }}>{r.source}</a>
+                                  {skipped ? (
+                                    <span title={unlisted ? 'Searched and no listing was found' : 'We hold no listing URL for this platform, so nothing was checked — a listing may well exist'}
+                                      style={{ fontSize: 10, marginLeft: 6, padding: '1px 6px', borderRadius: 4, background: 'rgba(156,163,175,0.15)', color: '#9ca3af', fontWeight: 700 }}>
+                                      {unlisted ? 'NOT LISTED' : 'NOT CHECKED'}
+                                    </span>
                                   ) : (!r.isWebsite && !r.confirmed ? <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}> (search)</span> : null)}
                                   {wrongFields.length ? (
                                     <div style={{ fontSize: 10, color: '#ef4444', fontWeight: 700, marginTop: 2 }}>
