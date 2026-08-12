@@ -18092,6 +18092,62 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
   }
 });
 
+// ── Canonical NAP (single source of truth: GBP via RatingCaptain) ──────────────
+// Shared by the NAP consistency check and the "Copy NAP" registration panel on the
+// Citations page. Returns the raw pieces too (street/suburb/state/postcode) because
+// directory signup forms ask for them as separate fields.
+async function getCanonicalNapForProject(projectId) {
+  const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+  if (!project) return { project: null, rc: null, gbp: null, canonical: null, parts: null };
+  const intg = await pool.query(
+    `SELECT kind, config FROM project_integrations WHERE project_id=$1 AND kind IN ('rc_profile','gbp_profile')`,
+    [projectId]
+  );
+  const byKind = {};
+  for (const r of intg.rows) byKind[r.kind] = (typeof r.config === 'string' ? JSON.parse(r.config) : r.config);
+  const rc = byKind.rc_profile?.profile || null;
+  const gbp = byKind.gbp_profile || null;
+  const sa = rc?.storefrontAddress || null;
+  const parts = {
+    street: sa ? (sa.addressLines || []).filter(Boolean).join(', ') : '',
+    suburb: sa?.locality || '',
+    state: sa?.administrativeArea || '',
+    postcode: sa?.postalCode || '',
+    country: sa?.regionCode || 'AU',
+  };
+  const canonical = {
+    name: rc?.title || gbp?.business?.name || project.business_name || project.name || '',
+    address: sa
+      ? [...(sa.addressLines || []), sa.locality, sa.administrativeArea, sa.postalCode].filter(Boolean).join(', ')
+      : (gbp?.address || project.location || ''),
+    phone: rc?.phoneNumbers?.primaryPhone || gbp?.phone || project.phone || '',
+    website: rc?.websiteUri || gbp?.website || (project.domain ? (String(project.domain).startsWith('http') ? project.domain : 'https://' + project.domain) : ''),
+    category: rc?.categories?.primaryCategory?.displayName || gbp?.category || project.industry || '',
+    maps_url: rc?.metadata?.mapsUri || gbp?.maps_url || '',
+  };
+  return { project, rc, gbp, canonical, parts };
+}
+
+// Canonical NAP for the Citations page "Copy NAP" panel — read-only, no crawling.
+app.get('/api/projects/:projectId/nap-canonical', async (req, res) => {
+  try {
+    const { project, rc, gbp, canonical, parts } = await getCanonicalNapForProject(parseInt(req.params.projectId));
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!canonical.name && !canonical.phone) {
+      return res.json({ ok: false, error: 'No GBP profile synced for this project yet — sync it from GBP Optimise, or set the business name/phone in Project Settings.' });
+    }
+    res.json({
+      ok: true,
+      source: rc ? 'gbp_ratingcaptain' : (gbp ? 'gbp' : 'project_settings'),
+      canonical,
+      parts,
+      service_area: !parts.street && !parts.suburb, // no public storefront address
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── NAP Consistency Check ──────────────────────────────────────────
 // Source of truth = GBP (RatingCaptain). Compares the website + every directory listing URL we have
 // against the GBP Name/Address/Phone and flags mismatches. Directories with no URL or that block

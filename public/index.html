@@ -11791,6 +11791,64 @@
       const [napLoading, setNapLoading] = useState(false);
       const [napFilter, setNapFilter] = useState('all'); // all | aligned | verify | issues
       const [napProgress, setNapProgress] = useState('');
+      // ── Registration helpers: canonical NAP straight from GBP, copyable field by field ──
+      const [regNap, setRegNap] = useState(null);      // { canonical, parts, source, service_area }
+      const [regErr, setRegErr] = useState('');
+      const [regOpen, setRegOpen] = useState(true);
+      const [copied, setCopied] = useState('');
+
+      const copyText = async (text, key) => {
+        const val = String(text || '');
+        if (!val) return;
+        try {
+          if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(val);
+          else { const ta = document.createElement('textarea'); ta.value = val; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+          setCopied(key); setTimeout(() => setCopied(c => (c === key ? '' : c)), 1600);
+        } catch (e) { alert('Could not copy: ' + e.message); }
+      };
+
+      const loadRegNap = async () => {
+        if (!project?.id) return;
+        try {
+          const r = await api(`/projects/${project.id}/nap-canonical`);
+          if (r && r.ok) { setRegNap(r); setRegErr(''); }
+          else setRegErr((r && r.error) || 'Could not load NAP.');
+        } catch (e) { setRegErr(e.message); }
+      };
+
+      // The block an admin pastes into a directory signup form.
+      const napBlockText = () => {
+        const c = (regNap && regNap.canonical) || {};
+        const p = (regNap && regNap.parts) || {};
+        return [
+          `Business name: ${c.name || ''}`,
+          `Phone: ${c.phone || ''}`,
+          `Address: ${c.address || '(service area business — no public address)'}`,
+          p.street ? `Street: ${p.street}` : null,
+          p.suburb ? `Suburb: ${p.suburb}` : null,
+          p.state ? `State: ${p.state}` : null,
+          p.postcode ? `Postcode: ${p.postcode}` : null,
+          `Website: ${c.website || ''}`,
+          c.category ? `Category: ${c.category}` : null,
+        ].filter(Boolean).join('\n');
+      };
+
+      // Where the "listing" button goes: saved listing URL if we have one, otherwise
+      // that platform's own search for this business, otherwise the platform home page.
+      const listingHref = (dir) => {
+        if (dir.listing_url) return dir.listing_url.startsWith('http') ? dir.listing_url : 'https://' + dir.listing_url;
+        const c = (regNap && regNap.canonical) || {};
+        const name = c.name || canonicalNAP.name || project?.business_name || project?.name || '';
+        const loc = ((regNap && regNap.parts && regNap.parts.suburb) || project?.location || '').trim();
+        if (dir.search && name) {
+          return dir.search
+            .replace('{n}', encodeURIComponent(name))
+            .replace('{loc}', encodeURIComponent(loc))
+            .replace('{q}', encodeURIComponent((name + ' ' + loc).trim()));
+        }
+        if (dir.url) return 'https://' + String(dir.url).replace(/^https?:\/\//, '');
+        return `https://www.google.com/search?q=${encodeURIComponent('"' + name + '" ' + dir.name)}`;
+      };
       const runNapCheck = async () => {
         setNapLoading(true); setNapReport(null); setNapProgress('');
         try {
@@ -11842,7 +11900,7 @@
       };
 
       useEffect(() => {
-        if (project?.id) { loadCitations(); loadNapReport(); }
+        if (project?.id) { loadCitations(); loadNapReport(); loadRegNap(); }
       }, [project?.id]);
 
       const loadCitations = async () => {
@@ -11979,6 +12037,65 @@
             <div style={{ height: 8, background: 'var(--bg)', borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${(() => { const scanned = stats.total - (stats.not_checked || 0); return scanned > 0 ? (stats.listed / scanned) * 100 : 0; })()}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 4, transition: 'width 0.3s' }} />
             </div>
+          </div>
+
+          {/* ── Registration details: the exact NAP to paste into every directory signup ── */}
+          <div style={{ marginBottom: 24, border: '1px solid rgba(139,92,246,0.35)', borderRadius: 12, overflow: 'hidden', background: 'rgba(139,92,246,0.04)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: regOpen ? '1px solid var(--border)' : 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => setRegOpen(o => !o)}>
+                <i className={`fas fa-chevron-${regOpen ? 'down' : 'right'}`} style={{ fontSize: 11, color: 'var(--text3)' }} />
+                <span style={{ fontSize: 14, fontWeight: 700 }}><i className="fas fa-id-card" style={{ marginRight: 8, color: '#a78bfa' }} />Registration details (NAP from GBP)</span>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>Copy these into directory signup forms — exactly as shown</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-secondary" onClick={loadRegNap} style={{ fontSize: 12, padding: '6px 10px' }} title="Reload from the synced Google Business Profile">
+                  <i className="fas fa-rotate" />
+                </button>
+                <button className="btn btn-primary" disabled={!regNap} onClick={() => copyText(napBlockText(), 'all')} style={{ fontSize: 13, background: copied === 'all' ? '#22c55e' : undefined, borderColor: copied === 'all' ? '#22c55e' : undefined }}>
+                  <i className={`fas fa-${copied === 'all' ? 'check' : 'copy'}`} style={{ marginRight: 6 }} />{copied === 'all' ? 'Copied!' : 'Copy full NAP'}
+                </button>
+              </div>
+            </div>
+            {regOpen && (
+              <div style={{ padding: 16 }}>
+                {!regNap && !regErr && <div style={{ color: 'var(--text3)', fontSize: 13 }}><span className="spinner" style={{ marginRight: 8 }} />Loading NAP from Google Business Profile…</div>}
+                {regErr && <div style={{ color: '#f59e0b', fontSize: 13 }}><i className="fas fa-circle-info" style={{ marginRight: 6 }} />{regErr}</div>}
+                {regNap && (() => {
+                  const c = regNap.canonical || {}; const p = regNap.parts || {};
+                  const fields = [
+                    { k: 'name', label: 'Business name', v: c.name },
+                    { k: 'phone', label: 'Phone', v: c.phone },
+                    { k: 'website', label: 'Website', v: c.website },
+                    { k: 'address', label: 'Full address', v: c.address },
+                    { k: 'street', label: 'Street', v: p.street },
+                    { k: 'suburb', label: 'Suburb', v: p.suburb },
+                    { k: 'state', label: 'State', v: p.state },
+                    { k: 'postcode', label: 'Postcode', v: p.postcode },
+                    { k: 'category', label: 'Primary category', v: c.category },
+                  ].filter(f => f.v);
+                  return (
+                    <div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                        {fields.map(f => (
+                          <div key={f.k} onClick={() => copyText(f.v, f.k)} title="Click to copy"
+                            style={{ background: 'var(--card)', border: `1px solid ${copied === f.k ? '#22c55e' : 'var(--border)'}`, borderRadius: 8, padding: '8px 12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, transition: 'border-color 0.2s' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text3)', marginBottom: 3 }}>{f.label}</div>
+                              <div style={{ fontSize: 13, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.v}</div>
+                            </div>
+                            <i className={`fas fa-${copied === f.k ? 'check' : 'copy'}`} style={{ fontSize: 12, color: copied === f.k ? '#22c55e' : 'var(--text3)', flexShrink: 0 }} />
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10, lineHeight: 1.5 }}>
+                        Source: <b>{regNap.source === 'gbp_ratingcaptain' ? 'Google Business Profile (synced)' : regNap.source === 'gbp' ? 'Google Business Profile' : 'Project Settings'}</b>
+                        {regNap.service_area ? ' · Service-area business — no public address on GBP, so leave address blank or use the suburb only.' : ' · Enter these character for character on every directory; even "St" vs "Street" counts as inconsistent.'}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
 
           {/* NAP Consistency — GBP as source of truth, checks website + directory listings */}
@@ -12154,7 +12271,42 @@
                               )}
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{dir.description}</div>
-                            {dir.listing_url && <a href={dir.listing_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}><i className="fas fa-link" style={{ marginRight: 4, fontSize: 9 }} />View listing</a>}
+                            {/* Go-to-listing / go-register + copy the NAP for this signup form */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                              <a
+                                href={listingHref(dir)}
+                                target="_blank"
+                                rel="noopener"
+                                onClick={e => e.stopPropagation()}
+                                title={dir.listing_url ? 'Open the saved listing' : `Search ${dir.name} for this business / register a new listing`}
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                                  padding: '4px 9px', borderRadius: 6, textDecoration: 'none',
+                                  background: dir.listing_url ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)',
+                                  color: dir.listing_url ? '#22c55e' : '#60a5fa',
+                                  border: `1px solid ${dir.listing_url ? 'rgba(34,197,94,0.35)' : 'rgba(59,130,246,0.35)'}`,
+                                }}
+                              >
+                                <i className={`fas fa-${dir.listing_url ? 'up-right-from-square' : 'magnifying-glass-location'}`} style={{ fontSize: 10 }} />
+                                {dir.listing_url ? 'Go to listing' : 'Find / register'}
+                              </a>
+                              <button
+                                onClick={e => { e.stopPropagation(); copyText(napBlockText(), 'row-' + dir.name); }}
+                                disabled={!regNap}
+                                title="Copy the GBP NAP so you can paste it straight into this directory's form"
+                                style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
+                                  padding: '4px 9px', borderRadius: 6, cursor: regNap ? 'pointer' : 'not-allowed',
+                                  background: copied === 'row-' + dir.name ? 'rgba(34,197,94,0.15)' : 'rgba(139,92,246,0.12)',
+                                  color: copied === 'row-' + dir.name ? '#22c55e' : '#a78bfa',
+                                  border: `1px solid ${copied === 'row-' + dir.name ? 'rgba(34,197,94,0.4)' : 'rgba(139,92,246,0.35)'}`,
+                                  opacity: regNap ? 1 : 0.5,
+                                }}
+                              >
+                                <i className={`fas fa-${copied === 'row-' + dir.name ? 'check' : 'copy'}`} style={{ fontSize: 10 }} />
+                                {copied === 'row-' + dir.name ? 'NAP copied' : 'Copy NAP'}
+                              </button>
+                            </div>
                           </div>
 
                           {/* Listed status */}
