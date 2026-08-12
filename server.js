@@ -18062,7 +18062,14 @@ app.get('/api/projects/:projectId/citations', async (req, res) => {
     );
     const proj = await pool.query('SELECT business_name, name, phone, location FROM projects WHERE id=$1', [req.params.projectId]);
     const project = proj.rows[0] || {};
-    const canonicalNAP = { name: project.business_name || project.name || '', phone: project.phone || '', address: project.location || '' };
+    // Same source of truth as the scan and the NAP check: the GBP profile, not the projects table
+    // (which has no phone field). Falls back to project fields when no GBP is synced yet.
+    const { canonical: gbpNap } = await getCanonicalNapForProject(parseInt(req.params.projectId)).catch(() => ({ canonical: null }));
+    const canonicalNAP = {
+      name: (gbpNap && gbpNap.name) || project.business_name || project.name || '',
+      phone: (gbpNap && gbpNap.phone) || project.phone || '',
+      address: (gbpNap && gbpNap.address) || project.location || '',
+    };
 
     const statusMap = {};
     for (const row of saved.rows) {
@@ -18703,16 +18710,28 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
 
     if (!businessName) return res.status(400).json({ error: 'Business name required in Project Settings' });
 
-    const location = project.location || '';
-    const locationShort = (location || '').split(',')[0].trim();
+    // NAP source of truth is the Google Business Profile (via RatingCaptain), NOT the projects table.
+    // Project Settings has no phone field at all, so `project.phone` was always empty: every listing
+    // was compared against a blank number and the phone signal was silently dead.
+    const { canonical: gbpNap } = await getCanonicalNapForProject(parseInt(projectId)).catch(() => ({ canonical: null }));
+    const location = (gbpNap && gbpNap.address) || project.location || '';
+    const locationShort = (project.location || location || '').split(',')[0].trim();
     const gbpPlaceId = project.gbp_location_id || '';
     const bizSlug = businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
     const locSlug = locationShort.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '');
     const bizLower = businessName.toLowerCase();
-    const bizPhone = project.phone || '';
+    // The GBP name is often the legal name ("… Pty Ltd") while the project holds the trading name.
+    // Searches use the trading name; detection accepts either.
+    const gbpNameLower = ((gbpNap && gbpNap.name) || '').toLowerCase();
+    const bizPhone = (gbpNap && gbpNap.phone) || project.phone || '';
     const bizWords = bizLower.split(/\s+/).filter(w => w.length > 2);
 
-    const canonicalNAP = { name: businessName, phone: bizPhone, address: location };
+    const canonicalNAP = {
+      name: (gbpNap && gbpNap.name) || businessName,
+      phone: bizPhone,
+      address: (gbpNap && gbpNap.address) || project.location || '',
+    };
+    console.log(`[citations] NAP source: ${gbpNap && gbpNap.name ? 'GBP profile' : 'project settings (no GBP synced)'} — name="${canonicalNAP.name}" phone="${canonicalNAP.phone || '(none)'}" address="${canonicalNAP.address || '(service area — none)'}"`);
 
     console.log(`[citations] Scanning ${AUSTRALIAN_DIRECTORIES.length} directories for "${businessName}" (${domain}) phone=${bizPhone} — HTTP + SerpAPI site: fallback`);
 
@@ -18720,8 +18739,9 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     const htmlContainsBiz = (html) => {
       if (!html) return false;
       const h = html.toLowerCase();
-      // Exact name match
+      // Exact name match — trading name (project) or legal name (GBP)
       if (h.includes(bizLower)) return true;
+      if (gbpNameLower && gbpNameLower.length > 4 && h.includes(gbpNameLower)) return true;
       // Domain match
       if (domain && h.includes(domain.toLowerCase())) return true;
       // Phone match
