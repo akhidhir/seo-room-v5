@@ -11890,6 +11890,48 @@
         return <span style={{ color: c, fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{icon} {label}</span>;
       };
 
+      // One NAP cell. When the listing disagrees with GBP we make it impossible to miss:
+      // what the listing says in red strikethrough, what it SHOULD say in green, one click to copy.
+      const napCell = (state, foundVal, correctVal, copyKey) => {
+        const isBad = state === 'mismatch';
+        return (
+          <div>
+            {napBadge(state)}
+            {foundVal ? (
+              <div style={{ fontSize: 10.5, marginTop: 2, color: isBad ? '#ef4444' : 'var(--text3)', textDecoration: isBad ? 'line-through' : 'none' }}>{foundVal}</div>
+            ) : null}
+            {isBad && correctVal ? (
+              <div
+                onClick={() => copyText(correctVal, copyKey)}
+                title="Click to copy the correct value from GBP"
+                style={{ fontSize: 10.5, marginTop: 3, color: '#22c55e', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <i className={`fas fa-${copied === copyKey ? 'check' : 'arrow-right'}`} style={{ fontSize: 8 }} />
+                {copied === copyKey ? 'Copied!' : correctVal}
+              </div>
+            ) : null}
+          </div>
+        );
+      };
+
+      // Directory name → its row in the last NAP report, so the directory list below can
+      // flag listings that disagree with GBP without re-running anything.
+      const napByDir = React.useMemo(() => {
+        const m = {};
+        ((napReport && napReport.directories) || []).forEach(d => { if (d && d.name) m[d.name] = d; });
+        return m;
+      }, [napReport]);
+
+      // Which NAP fields on this directory disagree with GBP. Prefers the live NAP report,
+      // falls back to whatever the directory scan stored.
+      const napMismatchFields = (dir) => {
+        const m = (napByDir[dir.name] && napByDir[dir.name].match) || dir.nap_match || null;
+        if (!m) return [];
+        return [['name', 'Name'], ['address', 'Address'], ['phone', 'Phone']]
+          .filter(([k]) => m[k] === 'mismatch')
+          .map(([, label]) => label);
+      };
+
       const toggleCitSort = (key) => setCitSort(prev => prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
 
       const sortDirs = (dirs) => {
@@ -12025,7 +12067,8 @@
               { id: 'all', label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
               { id: 'listed', label: 'Listed', value: stats.listed, color: '#22c55e', icon: 'fas fa-check-circle' },
               { id: 'not_listed', label: 'Not Listed', value: stats.not_listed, color: '#ef4444', icon: 'fas fa-times-circle' },
-              { id: 'nap_issues', label: 'NAP Issues', value: stats.nap_issues || 0, color: '#f59e0b', icon: 'fas fa-exclamation-triangle' },
+              // Counted live from the same rule that paints the red rows below, so the number always agrees with the list.
+              { id: 'nap_issues', label: 'NAP Issues', value: directories.filter(d => napMismatchFields(d).length > 0).length || stats.nap_issues || 0, color: '#ef4444', icon: 'fas fa-exclamation-triangle' },
             ].map(s => (
               <div key={s.id} onClick={() => setFilter(s.id)} style={{ background: 'var(--card)', borderRadius: 12, padding: 16, textAlign: 'center', border: filter === s.id ? `2px solid ${s.color}` : '1px solid var(--border)', cursor: 'pointer', opacity: filter === 'all' || filter === s.id ? 1 : 0.5, transition: 'all 0.2s' }}>
                 <i className={s.icon} style={{ fontSize: 20, color: s.color, marginBottom: 8, display: 'block' }} />
@@ -12173,18 +12216,36 @@
                           <th style={{ padding: '6px 8px' }}>Source</th><th style={{ padding: '6px 8px' }}>Name</th><th style={{ padding: '6px 8px' }}>Address</th><th style={{ padding: '6px 8px' }}>Phone</th>
                         </tr></thead>
                         <tbody>
-                          {rows.map((r, i) => (
-                            <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                              <td style={{ padding: '8px', fontWeight: 600 }}>
-                                <a href={rowHref(r)} target="_blank" rel="noopener" style={{ color: linkColor }}>{r.source}</a>
-                                {!r.isWebsite && !r.confirmed ? <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}> (search)</span> : null}
-                                {r.sub ? <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}>{r.sub}</div> : null}
-                              </td>
-                              <td style={{ padding: '8px' }}>{napBadge(r.match.name)}{r.found.name ? <div style={{ fontSize: 10, color: 'var(--text3)' }}>{r.found.name}</div> : null}</td>
-                              <td style={{ padding: '8px' }}>{napBadge(r.match.address)}{r.found.address ? <div style={{ fontSize: 10, color: 'var(--text3)' }}>{r.found.address}</div> : null}</td>
-                              <td style={{ padding: '8px' }}>{napBadge(r.match.phone)}{r.found.phone ? <div style={{ fontSize: 10, color: 'var(--text3)' }}>{r.found.phone}</div> : null}</td>
-                            </tr>
-                          ))}
+                          {rows.map((r, i) => {
+                            // Highlight the whole row by verdict: red = disagrees with GBP, amber = needs a human look.
+                            const kind = rowKind(r.match);
+                            const bad = kind === 'issues';
+                            const warn = kind === 'verify';
+                            const accent = bad ? '#ef4444' : warn ? '#f59e0b' : 'transparent';
+                            const wrongFields = [['name', 'Name'], ['address', 'Address'], ['phone', 'Phone']]
+                              .filter(([k]) => r.match[k] === 'mismatch').map(([, l]) => l);
+                            return (
+                              <tr key={i} style={{
+                                borderTop: '1px solid var(--border)',
+                                background: bad ? 'rgba(239,68,68,0.07)' : warn ? 'rgba(245,158,11,0.05)' : 'transparent',
+                                boxShadow: bad || warn ? `inset 3px 0 0 ${accent}` : 'none',
+                              }}>
+                                <td style={{ padding: '8px', fontWeight: 600 }}>
+                                  <a href={rowHref(r)} target="_blank" rel="noopener" style={{ color: bad ? '#ef4444' : linkColor }}>{r.source}</a>
+                                  {!r.isWebsite && !r.confirmed ? <span style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}> (search)</span> : null}
+                                  {wrongFields.length ? (
+                                    <div style={{ fontSize: 10, color: '#ef4444', fontWeight: 700, marginTop: 2 }}>
+                                      <i className="fas fa-triangle-exclamation" style={{ marginRight: 4 }} />{wrongFields.join(' + ')} wrong
+                                    </div>
+                                  ) : null}
+                                  {r.sub ? <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}>{r.sub}</div> : null}
+                                </td>
+                                <td style={{ padding: '8px' }}>{napCell(r.match.name, r.found.name, c.name, `fix-${i}-name`)}</td>
+                                <td style={{ padding: '8px' }}>{napCell(r.match.address, r.found.address, c.address, `fix-${i}-address`)}</td>
+                                <td style={{ padding: '8px' }}>{napCell(r.match.phone, r.found.phone, c.phone, `fix-${i}-phone`)}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -12245,7 +12306,7 @@
 
           {tiers.map(tier => {
             const allTierDirs = directories.filter(d => d.type === tier.key).length;
-            const tierDirsRaw = directories.filter(d => d.type === tier.key && (filter === 'all' || (filter === 'nap_issues' ? (d.nap_match && (d.nap_match.name === 'mismatch' || d.nap_match.phone === 'mismatch' || d.nap_match.address === 'mismatch')) : d.status === filter)));
+            const tierDirsRaw = directories.filter(d => d.type === tier.key && (filter === 'all' || (filter === 'nap_issues' ? napMismatchFields(d).length > 0 : d.status === filter)));
             const tierDirs = sortDirs(tierDirsRaw);
             if (tierDirs.length === 0) return null;
             const tierListed = directories.filter(d => d.type === tier.key && d.status === 'listed').length;
@@ -12262,19 +12323,33 @@
                 <div style={{ background: 'var(--card)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
                   {tierDirs.map((dir, idx) => {
                     const isEditing = editingDir === dir.name;
+                    // A registered listing whose NAP disagrees with GBP gets a red rail + badge,
+                    // so wrong listings jump out of the list without opening anything.
+                    const wrongNap = napMismatchFields(dir);
+                    const hasNapIssue = wrongNap.length > 0;
                     return (
-                      <div key={dir.name} style={{ borderBottom: idx < tierDirs.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <div key={dir.name} style={{
+                        borderBottom: idx < tierDirs.length - 1 ? '1px solid var(--border)' : 'none',
+                        background: hasNapIssue ? 'rgba(239,68,68,0.06)' : 'transparent',
+                        boxShadow: hasNapIssue ? 'inset 3px 0 0 #ef4444' : 'none',
+                      }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 0.8fr 0.8fr 0.5fr', padding: '12px 16px', alignItems: 'center', gap: 12, cursor: 'pointer' }}
-                          onClick={() => dir.status === 'listed' && setExpandedNAP(prev => ({ ...prev, [dir.name]: !prev[dir.name] }))}
+                          onClick={() => (dir.status === 'listed' || hasNapIssue) && setExpandedNAP(prev => ({ ...prev, [dir.name]: !prev[dir.name] }))}
                         >
                           {/* Directory info */}
                           <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span style={{ fontWeight: 600, fontSize: 13 }}>{dir.name}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 600, fontSize: 13, color: hasNapIssue ? '#ef4444' : undefined }}>{dir.name}</span>
                               {dir.free ? (
                                 <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 600 }}>FREE</span>
                               ) : (
                                 <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontWeight: 600 }}>PAID</span>
+                              )}
+                              {hasNapIssue && (
+                                <span title={`This listing's ${wrongNap.join(' and ')} don't match your Google Business Profile`}
+                                  style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'rgba(239,68,68,0.18)', color: '#ef4444', fontWeight: 700, border: '1px solid rgba(239,68,68,0.4)' }}>
+                                  <i className="fas fa-triangle-exclamation" style={{ marginRight: 4 }} />NAP: {wrongNap.join(' + ')} ≠ GBP
+                                </span>
                               )}
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{dir.description}</div>
@@ -12364,30 +12439,53 @@
                           </div>
                         </div>
 
-                        {/* Expanded NAP details */}
-                        {expandedNAP[dir.name] && dir.status === 'listed' && (
-                          <div style={{ padding: '8px 16px 12px', background: 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>NAP Comparison</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr 1fr', gap: 6, fontSize: 12 }}>
-                              <div style={{ fontWeight: 600, color: 'var(--text3)' }}></div>
-                              <div style={{ fontWeight: 600, color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase' }}>Your Business</div>
-                              <div style={{ fontWeight: 600, color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase' }}>Found on Directory</div>
-                              {[
-                                { label: 'Name', canonical: canonicalNAP.name, found: dir.found_name, match: dir.nap_match?.name },
-                                { label: 'Phone', canonical: canonicalNAP.phone, found: dir.found_phone, match: dir.nap_match?.phone },
-                                { label: 'Address', canonical: canonicalNAP.address, found: dir.found_address, match: dir.nap_match?.address },
-                              ].map(row => {
-                                const color = row.match === 'match' ? '#22c55e' : row.match === 'mismatch' ? '#ef4444' : row.match === 'partial' ? '#f59e0b' : 'var(--text3)';
-                                return <React.Fragment key={row.label}>
-                                  <div style={{ fontWeight: 600, color }}>{row.label}</div>
-                                  <div style={{ color: 'var(--text2)', fontSize: 12 }}>{row.canonical || '—'}</div>
-                                  <div style={{ color, fontSize: 12, fontWeight: row.match === 'mismatch' ? 600 : 400 }}>{row.found || <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>Not detected</span>}</div>
-                                </React.Fragment>;
-                              })}
+                        {/* Expanded NAP details — GBP value vs what the listing actually says */}
+                        {expandedNAP[dir.name] && (dir.status === 'listed' || hasNapIssue) && (() => {
+                          const nd = napByDir[dir.name] || null;                 // live NAP report row, if we have one
+                          const gbpNap = (regNap && regNap.canonical) || {};
+                          const cmp = [
+                            { label: 'Name', key: 'name', gbp: gbpNap.name || canonicalNAP.name, found: (nd && nd.found?.name) || dir.found_name, match: (nd && nd.match?.name) || dir.nap_match?.name },
+                            { label: 'Phone', key: 'phone', gbp: gbpNap.phone || canonicalNAP.phone, found: (nd && nd.found?.phone) || dir.found_phone, match: (nd && nd.match?.phone) || dir.nap_match?.phone },
+                            { label: 'Address', key: 'address', gbp: gbpNap.address || canonicalNAP.address, found: (nd && nd.found?.address) || dir.found_address, match: (nd && nd.match?.address) || dir.nap_match?.address },
+                          ];
+                          return (
+                            <div style={{ padding: '10px 16px 14px', background: hasNapIssue ? 'rgba(239,68,68,0.04)' : 'rgba(99,102,241,0.03)', borderTop: '1px dashed var(--border)' }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: hasNapIssue ? '#ef4444' : 'var(--text2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+                                NAP Comparison {hasNapIssue ? '— does not match GBP' : ''}
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr 1fr', gap: 6, fontSize: 12 }}>
+                                <div />
+                                <div style={{ fontWeight: 600, color: '#22c55e', fontSize: 10, textTransform: 'uppercase' }}>GBP (correct)</div>
+                                <div style={{ fontWeight: 600, color: 'var(--text3)', fontSize: 10, textTransform: 'uppercase' }}>Found on this listing</div>
+                                {cmp.map(row => {
+                                  const isBad = row.match === 'mismatch';
+                                  const color = (row.match === 'match' || row.match === 'aligned') ? '#22c55e' : isBad ? '#ef4444' : row.match === 'partial' ? '#f59e0b' : 'var(--text3)';
+                                  return <React.Fragment key={row.label}>
+                                    <div style={{ fontWeight: 600, color }}>{row.label}</div>
+                                    <div
+                                      onClick={() => copyText(row.gbp, `dirfix-${dir.name}-${row.key}`)}
+                                      title="Click to copy the correct value"
+                                      style={{ color: 'var(--text2)', fontSize: 12, cursor: row.gbp ? 'pointer' : 'default' }}
+                                    >
+                                      {row.gbp || '—'}
+                                      {row.gbp ? <i className={`fas fa-${copied === `dirfix-${dir.name}-${row.key}` ? 'check' : 'copy'}`} style={{ marginLeft: 6, fontSize: 10, color: copied === `dirfix-${dir.name}-${row.key}` ? '#22c55e' : 'var(--text3)' }} /> : null}
+                                    </div>
+                                    <div style={{ color, fontSize: 12, fontWeight: isBad ? 700 : 400, textDecoration: isBad ? 'line-through' : 'none' }}>
+                                      {row.found || <span style={{ color: 'var(--text3)', fontStyle: 'italic', textDecoration: 'none' }}>Not detected</span>}
+                                    </div>
+                                  </React.Fragment>;
+                                })}
+                              </div>
+                              {hasNapIssue && (
+                                <div style={{ fontSize: 11.5, color: '#ef4444', marginTop: 10, lineHeight: 1.5 }}>
+                                  <i className="fas fa-screwdriver-wrench" style={{ marginRight: 6 }} />
+                                  Open this listing and correct the <b>{wrongNap.join(' and ')}</b> to match GBP exactly — copy the green value above.
+                                </div>
+                              )}
+                              {dir.notes && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{dir.notes}</div>}
                             </div>
-                            {dir.notes && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}><i className="fas fa-info-circle" style={{ marginRight: 4 }} />{dir.notes}</div>}
-                          </div>
-                        )}
+                          );
+                        })()}
 
                         {/* Expanded edit row */}
                         {isEditing && (
