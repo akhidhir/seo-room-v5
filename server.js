@@ -18123,9 +18123,32 @@ async function getCanonicalNapForProject(projectId) {
     phone: rc?.phoneNumbers?.primaryPhone || gbp?.phone || project.phone || '',
     website: rc?.websiteUri || gbp?.website || (project.domain ? (String(project.domain).startsWith('http') ? project.domain : 'https://' + project.domain) : ''),
     category: rc?.categories?.primaryCategory?.displayName || gbp?.category || project.industry || '',
+    // Real Google PLACE ID (ChIJ…) — NOT the Business Profile API resource name ("locations/1275…").
+    // Only a true Place ID works in a maps place_id: URL; isGooglePlaceId() enforces that.
+    place_id: isGooglePlaceId(rc?.metadata?.placeId) ? rc.metadata.placeId
+      : (isGooglePlaceId(gbp?.place_id) ? gbp.place_id
+        : (isGooglePlaceId(project.gbp_location_id) ? project.gbp_location_id : '')),
     maps_url: rc?.metadata?.mapsUri || gbp?.maps_url || '',
   };
   return { project, rc, gbp, canonical, parts };
+}
+
+// A Google Place ID looks like "ChIJ…"/"GhIJ…"/"EiQ…" — it is NOT the Business Profile API
+// resource name ("locations/12755344744730282615" or "accounts/…/locations/…"). Feeding the
+// resource name into a maps `place_id:` URL produces "Google Maps can't find …", so guard it.
+function isGooglePlaceId(v) {
+  const s = String(v || '').trim();
+  if (!s || s.includes('/')) return false;      // "locations/1275…" / "accounts/…/locations/…"
+  if (/^\d+$/.test(s)) return false;            // bare numeric location id
+  return /^(ChIJ|GhIJ|EiQ|EhI|Ei)/.test(s) && s.length >= 20;
+}
+
+// Best link to a business's live Google listing, in order of reliability.
+function googleListingUrl({ place_id, maps_url } = {}, businessName = '', locality = '') {
+  if (maps_url) return maps_url;                                        // exact profile URL from GBP
+  if (isGooglePlaceId(place_id)) return `https://www.google.com/maps/place/?q=place_id:${place_id}`;
+  const q = [businessName, locality].filter(Boolean).join(' ').trim();
+  return q ? `https://www.google.com/maps/search/${encodeURIComponent(q)}` : 'https://business.google.com';
 }
 
 // Canonical NAP for the Citations page "Copy NAP" panel — read-only, no crawling.
@@ -18705,9 +18728,14 @@ app.post('/api/projects/:projectId/citations/scan', async (req, res) => {
     // ── Special platforms (no SerpAPI — use project data or direct HTTP) ──
     const specialChecks = {
       'Google Business Profile': async () => {
-        // We know if GBP is connected from project settings
+        // We know if GBP is connected from project settings.
+        // gbp_location_id is often the API resource name ("locations/1275…"), which is NOT a Place ID —
+        // putting it in a maps place_id: URL gives "Google Maps can't find". Use the profile's own
+        // mapsUri / real Place ID when we have them, otherwise fall back to a plain name search.
         if (gbpPlaceId) {
-          return { status: 'listed', listing_url: `https://www.google.com/maps/place/?q=place_id:${gbpPlaceId}`, notes: 'GBP connected via Project Settings', found_name: businessName };
+          const { canonical: gbpCanon } = await getCanonicalNapForProject(projectId).catch(() => ({ canonical: null }));
+          const url = googleListingUrl(gbpCanon || { place_id: gbpPlaceId }, businessName, locationShort);
+          return { status: 'listed', listing_url: url, notes: 'GBP connected via Project Settings', found_name: businessName };
         }
         // Try fetching Google Maps search page directly
         const r = await fetchPage(`https://www.google.com/maps/search/${encodeURIComponent(businessName + ' ' + locationShort)}`);

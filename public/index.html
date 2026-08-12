@@ -11833,11 +11833,18 @@
         ].filter(Boolean).join('\n');
       };
 
-      // Where the "listing" button goes: saved listing URL if we have one, otherwise
+      // A saved listing URL is only usable if it actually resolves. The old GBP scan wrote
+      // `place_id:locations/1275…` — that's the Business Profile API resource name, not a Google
+      // Place ID, and Google Maps answers "can't find". Treat those as unusable and search instead.
+      const badListingUrl = (u) => !u || /place_id:(locations|accounts)\//i.test(u) || /place_id:\d+$/.test(u);
+
+      // Where the "listing" button goes: saved listing URL if we have a good one, otherwise
       // that platform's own search for this business, otherwise the platform home page.
       const listingHref = (dir) => {
-        if (dir.listing_url) return dir.listing_url.startsWith('http') ? dir.listing_url : 'https://' + dir.listing_url;
         const c = (regNap && regNap.canonical) || {};
+        // Google: the profile's own Maps URL beats any constructed link.
+        if (/google business profile/i.test(dir.name) && c.maps_url) return c.maps_url;
+        if (!badListingUrl(dir.listing_url)) return dir.listing_url.startsWith('http') ? dir.listing_url : 'https://' + dir.listing_url;
         const name = c.name || canonicalNAP.name || project?.business_name || project?.name || '';
         const loc = ((regNap && regNap.parts && regNap.parts.suburb) || project?.location || '').trim();
         if (dir.search && name) {
@@ -12278,17 +12285,17 @@
                                 target="_blank"
                                 rel="noopener"
                                 onClick={e => e.stopPropagation()}
-                                title={dir.listing_url ? 'Open the saved listing' : `Search ${dir.name} for this business / register a new listing`}
+                                title={!badListingUrl(dir.listing_url) ? 'Open the saved listing' : `Search ${dir.name} for this business / register a new listing`}
                                 style={{
                                   display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600,
                                   padding: '4px 9px', borderRadius: 6, textDecoration: 'none',
-                                  background: dir.listing_url ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)',
-                                  color: dir.listing_url ? '#22c55e' : '#60a5fa',
-                                  border: `1px solid ${dir.listing_url ? 'rgba(34,197,94,0.35)' : 'rgba(59,130,246,0.35)'}`,
+                                  background: !badListingUrl(dir.listing_url) ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)',
+                                  color: !badListingUrl(dir.listing_url) ? '#22c55e' : '#60a5fa',
+                                  border: `1px solid ${!badListingUrl(dir.listing_url) ? 'rgba(34,197,94,0.35)' : 'rgba(59,130,246,0.35)'}`,
                                 }}
                               >
-                                <i className={`fas fa-${dir.listing_url ? 'up-right-from-square' : 'magnifying-glass-location'}`} style={{ fontSize: 10 }} />
-                                {dir.listing_url ? 'Go to listing' : 'Find / register'}
+                                <i className={`fas fa-${!badListingUrl(dir.listing_url) ? 'up-right-from-square' : 'magnifying-glass-location'}`} style={{ fontSize: 10 }} />
+                                {!badListingUrl(dir.listing_url) ? 'Go to listing' : 'Find / register'}
                               </a>
                               <button
                                 onClick={e => { e.stopPropagation(); copyText(napBlockText(), 'row-' + dir.name); }}
