@@ -11919,6 +11919,28 @@
         if (!project?.id) return;
         try { const r = await api(`/projects/${project.id}/nap-check`); if (r && r.saved) setNapReport(r); } catch (e) {}
       };
+      // The cards above and the NAP table below are two different measurements taken at two
+      // different times: the cards read the citations table (updated by "Scan All Directories"),
+      // the table replays a SAVED NAP report (updated by "Check NAP alignment"). Rescan without
+      // re-checking and the two sets of numbers legitimately disagree — say so instead of leaving
+      // the user to spot it.
+      const latestCitationUpdate = React.useMemo(() => {
+        let max = null;
+        (directories || []).forEach(d => { if (d.updated_at && (!max || d.updated_at > max)) max = d.updated_at; });
+        return max;
+      }, [directories]);
+      const napStale = !!(napReport && napReport.checked_at && latestCitationUpdate && new Date(latestCitationUpdate) > new Date(napReport.checked_at));
+      const timeAgo = (iso) => {
+        if (!iso) return '';
+        const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return `${mins} min ago`;
+        const hrs = Math.round(mins / 60);
+        if (hrs < 24) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+        const days = Math.round(hrs / 24);
+        return `${days} day${days === 1 ? '' : 's'} ago`;
+      };
+
       const napBadge = (s) => {
         // 'manual' = a listing exists but we couldn't read this field → Verify (amber, needs a human).
         // 'no_listing' = there is no listing to read → plain dash. These must never look the same.
@@ -12112,7 +12134,12 @@
             </div>
           )}
 
-          {/* Stats */}
+          {/* Stats — REGISTRATION status across all 25 directories (are we on it at all?).
+              Deliberately a different question from the NAP alignment table further down. */}
+          <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 700, marginBottom: 8 }}>
+            Registration — all {stats.total || 25} directories
+            {latestCitationUpdate ? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}> · last scan {timeAgo(latestCitationUpdate)}</span> : null}
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
             {[
               { id: 'all', label: 'Total Directories', value: stats.total, color: 'var(--primary)', icon: 'fas fa-globe' },
@@ -12206,12 +12233,26 @@
               <div>
                 <span style={{ fontSize: 14, fontWeight: 700 }}><i className="fas fa-map-marker-alt" style={{ marginRight: 8, color: '#14b8a6' }} />NAP Consistency</span>
                 <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>Name, Address & Phone checked against your Google Business Profile</span>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>
+                  Your website + {Math.max(0, ((napReport && napReport.directories) || []).length)} directories (Google Business Profile is the source of truth, so it isn't compared to itself) — this is why these counts differ from the cards above.
+                  {napReport && napReport.checked_at ? <> · checked {timeAgo(napReport.checked_at)}</> : null}
+                </div>
               </div>
               <button className="btn btn-primary" onClick={runNapCheck} disabled={napLoading} style={{ fontSize: 13 }}>
                 {napLoading ? <><span className="spinner"></span>Checking…</> : <><i className="fas fa-clipboard-check" style={{ marginRight: 6 }} />Check NAP alignment</>}
               </button>
             </div>
             <div style={{ padding: 16 }}>
+              {napStale && !napLoading && (
+                <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(245,158,11,0.09)', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8 }}>
+                  <div style={{ fontSize: 12.5, color: '#f59e0b', fontWeight: 700, marginBottom: 3 }}>
+                    <i className="fas fa-clock-rotate-left" style={{ marginRight: 6 }} />This NAP check is older than your last directory scan
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text2)', lineHeight: 1.5 }}>
+                    Checked {timeAgo(napReport.checked_at)}, but directories were rescanned {timeAgo(latestCitationUpdate)}. The counts below are from the older run, which is why they can disagree with the cards at the top of the page. Run <b>Check NAP alignment</b> to bring them back in step.
+                  </div>
+                </div>
+              )}
               {napLoading && <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 13, padding: 12 }}><span className="spinner" style={{ marginRight: 8 }} />{napProgress || 'Crawling website + directory listings and comparing to GBP…'}</div>}
               {!napLoading && !napReport && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Run a check to compare your website and directory listings against the Name, Address and Phone on your Google Business Profile.</div>}
               {!napLoading && napReport && napReport.error && <div style={{ color: '#f59e0b', fontSize: 13 }}><i className="fas fa-circle-info" style={{ marginRight: 6 }} />{napReport.error}</div>}
