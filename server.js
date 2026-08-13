@@ -23061,6 +23061,33 @@ function speedPluginCfg(project) {
   return { wpUrl, key };
 }
 
+// Is the seoroom-speed plugin ACTUALLY live on the client site right now?
+// A saved API key only proves someone once pasted a key — it says nothing about whether the plugin
+// is still installed and activated. Every "Plugin" action in the UI depends on it, so the UI has to
+// be able to tell the difference between "plugin will handle this" and "plugin is switched off".
+app.get('/api/projects/:projectId/speed-fixes/health', async (req, res) => {
+  try {
+    const project = (await pool.query('SELECT wordpress_url, seoroom_speed_key FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const wpUrl = (project.wordpress_url || '').replace(/\/$/, '');
+    if (!wpUrl) return res.json({ active: false, reason: 'no_wp_url', message: 'WordPress URL not set in Project Settings.' });
+    if (!project.seoroom_speed_key) return res.json({ active: false, reason: 'no_key', message: 'Speed Plugin Key not set in Project Settings.' });
+    let r;
+    try {
+      r = await fetch(`${wpUrl}/wp-json/seoroom/v1/speed-status`, { signal: AbortSignal.timeout(12000) });
+    } catch (e) {
+      return res.json({ active: false, reason: 'unreachable', message: `Could not reach the site (${e.message}).` });
+    }
+    if (r.status === 404) {
+      return res.json({ active: false, reason: 'inactive', message: 'The SEO Room Speed plugin is not active on this site — its REST routes are gone (404). Reactivate it in WP Admin → Plugins, or these fixes cannot run.' });
+    }
+    if (!r.ok) return res.json({ active: false, reason: 'error', message: `Plugin status check returned HTTP ${r.status}.` });
+    const data = await r.json().catch(() => ({}));
+    if (!data || data.active !== true) return res.json({ active: false, reason: 'error', message: 'Plugin responded but did not report itself active.' });
+    res.json({ active: true, version: data.version || null, safe_mode: !!data.safe_mode, features: data.features || {} });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/projects/:projectId/speed-fixes/scan', async (req, res) => {
   try {
     const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [req.params.projectId])).rows[0];
