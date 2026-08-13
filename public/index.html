@@ -12044,6 +12044,10 @@
           await loadCitations();
         } catch (e) { console.error('Scan citations:', e); }
         finally { setScanning(false); }
+        // The scan only refreshes REGISTRATION status. Re-comparing listings to GBP was a second,
+        // separate run, so the two panels drifted apart and the page had to apologise for it.
+        // Chain it: one click now leaves both halves of the page measured at the same moment.
+        try { await runNapCheck(); } catch (e) { console.error('Chained NAP check:', e); }
       };
 
       const recalcStats = (dirs) => ({
@@ -12129,8 +12133,8 @@
           {scanning && (
             <div className="audit-loading-overlay">
               <span className="spinner-large"></span>
-              <div className="audit-loading-text">Scanning Citations</div>
-              <div className="audit-loading-sub">Crawling each directory for your business listing + checking NAP consistency... this takes 1-2 minutes</div>
+              <div className="audit-loading-text">Step 1 of 2 — Scanning directories</div>
+              <div className="audit-loading-sub">Checking each directory for your listing. The NAP comparison against your Google Business Profile runs straight after, automatically.</div>
             </div>
           )}
 
@@ -12258,7 +12262,7 @@
                   </button>
                 </div>
               )}
-              {napLoading && <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 13, padding: 12 }}><span className="spinner" style={{ marginRight: 8 }} />{napProgress || 'Crawling website + directory listings and comparing to GBP…'}</div>}
+              {napLoading && <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 13, padding: 12 }}><span className="spinner" style={{ marginRight: 8 }} />Step 2 of 2 — {napProgress || 'Crawling website + directory listings and comparing to GBP…'}</div>}
               {!napLoading && !napReport && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Run a check to compare your website and directory listings against the Name, Address and Phone on your Google Business Profile.</div>}
               {!napLoading && napReport && napReport.error && <div style={{ color: '#f59e0b', fontSize: 13 }}><i className="fas fa-circle-info" style={{ marginRight: 6 }} />{napReport.error}</div>}
               {!napLoading && napReport && !napReport.error && (() => {
