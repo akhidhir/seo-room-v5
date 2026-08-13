@@ -12244,13 +12244,18 @@
             </div>
             <div style={{ padding: 16 }}>
               {napStale && !napLoading && (
-                <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(245,158,11,0.09)', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8 }}>
-                  <div style={{ fontSize: 12.5, color: '#f59e0b', fontWeight: 700, marginBottom: 3 }}>
-                    <i className="fas fa-clock-rotate-left" style={{ marginRight: 6 }} />This NAP check is older than your last directory scan
+                <div style={{ marginBottom: 12, padding: '12px 14px', background: 'rgba(245,158,11,0.09)', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8, display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 260 }}>
+                    <div style={{ fontSize: 12.5, color: '#f59e0b', fontWeight: 700, marginBottom: 3 }}>
+                      <i className="fas fa-clock-rotate-left" style={{ marginRight: 6 }} />The results below are {timeAgo(napReport.checked_at).replace(' ago', '')} old
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text2)', lineHeight: 1.5 }}>
+                      "Scan All Directories" ({timeAgo(latestCitationUpdate)}) refreshes the cards at the top — it does <b>not</b> re-compare listings to your GBP. That's a separate run, and it was last done {timeAgo(napReport.checked_at)}.
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text2)', lineHeight: 1.5 }}>
-                    Checked {timeAgo(napReport.checked_at)}, but directories were rescanned {timeAgo(latestCitationUpdate)}. The counts below are from the older run, which is why they can disagree with the cards at the top of the page. Run <b>Check NAP alignment</b> to bring them back in step.
-                  </div>
+                  <button className="btn btn-primary" onClick={runNapCheck} disabled={napLoading} style={{ fontSize: 12.5, whiteSpace: 'nowrap' }}>
+                    <i className="fas fa-clipboard-check" style={{ marginRight: 6 }} />Check NAP alignment now
+                  </button>
                 </div>
               )}
               {napLoading && <div style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 13, padding: 12 }}><span className="spinner" style={{ marginRight: 8 }} />{napProgress || 'Crawling website + directory listings and comparing to GBP…'}</div>}
