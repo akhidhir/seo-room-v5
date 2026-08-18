@@ -32735,6 +32735,9 @@
       const unmeasuredOrbs = orbs.filter(o => o.reach_km == null);
       const byBestPos = (a, b) => ((a.maps_position || a.best_position || 99) - (b.maps_position || b.best_position || 99));
       const zoneBuckets = ZONES.map(z => ({ ...z, items: measuredOrbs.filter(o => o.km > z.lo && o.km <= z.hi).sort(byBestPos) }));
+      // Has ANY keyword actually been grid-scanned? If not, the distance groups below are all empty
+      // and are hidden entirely rather than shown as four "None in this zone" cards.
+      const anyMeasuredReach = zoneBuckets.some(z => z.items.length > 0);
       // RENDER BUDGET — the constellation rotates continuously, so every extra dot is repainted on
       // every frame forever. Discovery can return hundreds of keyword variants; animating them all
       // freezes weaker machines (blank/frozen page). Cap what we DRAW to the most meaningful dots
@@ -32963,15 +32966,30 @@
           {!loading && orbs.length > 0 && (
             <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-key" style={{ marginRight: 8, color: '#60a5fa' }} />Keywords by proven reach</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>
-              Grouped by how far out each keyword still holds a top-10 Maps spot. "best #2" is your best
-              position anywhere on that grid — not your position at that distance — and the % is how much
-              of the grid you actually appeared on. A strong "best" on a low % means one good spot and a
-              lot of blanks. Reach is only quoted when you were found on at least a fifth of the points.
-              {unmeasuredOrbs.length > 0 && ` ${unmeasuredOrbs.length} keyword${unmeasuredOrbs.length === 1 ? ' has' : 's have'} no grid scan, so ${unmeasuredOrbs.length === 1 ? 'it sits' : 'they sit'} in their own group rather than a distance they were never measured against.`}
-            </div>
+            {/* Reach can only come from a GRID SCAN — checking the same keyword from many points around
+                the business. With no scans there is nothing to group by, and showing four empty distance
+                cards next to a full list of keywords just reads as broken. Say what is missing instead. */}
+            {!anyMeasuredReach ? (
+              <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 12, lineHeight: 1.6, background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 8, padding: '12px 14px' }}>
+                <b style={{ color: '#60a5fa' }}>No grid scans yet, so there is no reach to group by.</b><br />
+                Reach means "how far from the business does this keyword still hold a top-10 Maps spot", and that
+                can only be measured by scanning the same keyword from many points across a map — a <b>grid scan</b>.
+                None of these {unmeasuredOrbs.length} keywords have one, which is why all four distance groups are empty.<br />
+                The list below is still real: <b>best #2</b> is the best Maps position seen for that keyword in rank
+                tracking. That tells you the rank, <i>not</i> how far it carries. Run a grid scan on <b>Maps Rankings</b>
+                to fill in the distance groups.
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>
+                Grouped by how far out each keyword still holds a top-10 Maps spot. "best #2" is your best
+                position anywhere on that grid — not your position at that distance — and the % is how much
+                of the grid you actually appeared on. A strong "best" on a low % means one good spot and a
+                lot of blanks. Reach is only quoted when you were found on at least a fifth of the points.
+                {unmeasuredOrbs.length > 0 && ` ${unmeasuredOrbs.length} keyword${unmeasuredOrbs.length === 1 ? ' has' : 's have'} no grid scan, so ${unmeasuredOrbs.length === 1 ? 'it sits' : 'they sit'} in their own group rather than a distance they were never measured against.`}
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-              {zoneBuckets.map((z, zi) => (
+              {anyMeasuredReach && zoneBuckets.map((z, zi) => (
                 <div key={zi} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                     {/* Colours run weakest→strongest. They used to run the other way, so the SHORTEST
