@@ -32735,9 +32735,22 @@
       const unmeasuredOrbs = orbs.filter(o => o.reach_km == null);
       const byBestPos = (a, b) => ((a.maps_position || a.best_position || 99) - (b.maps_position || b.best_position || 99));
       const zoneBuckets = ZONES.map(z => ({ ...z, items: measuredOrbs.filter(o => o.km > z.lo && o.km <= z.hi).sort(byBestPos) }));
-      // Has ANY keyword actually been grid-scanned? If not, the distance groups below are all empty
-      // and are hidden entirely rather than shown as four "None in this zone" cards.
+      // Has ANY keyword actually been grid-scanned? If not, grouping by reach is meaningless — every
+      // bucket is empty. Rather than show four empty distance cards (or an apology), group by the
+      // thing we DO know for these keywords: the best Maps position found. Same cards, useful content.
       const anyMeasuredReach = zoneBuckets.some(z => z.items.length > 0);
+      const bestPosOf = (o) => o.maps_position || o.best_position || null;
+      const POS_BANDS = [
+        { key: 'top3', label: 'Top 3 — in the map pack', lo: 1, hi: 3, color: '#4ade80', tip: 'Shown in the 3 results Google displays on the map. This is where the calls come from.' },
+        { key: 'p1', label: 'Position 4–10', lo: 4, hi: 10, color: '#2dd4bf', tip: 'Ranking, but below the map pack — the searcher has to tap "More places" to see you.' },
+        { key: 'p2', label: 'Position 11–20', lo: 11, hi: 20, color: '#60a5fa', tip: 'Found, but too far down to win work. Closest group to a real gain.' },
+        { key: 'none', label: 'Not in top 20', lo: 21, hi: 9999, color: '#94a3b8', tip: 'Checked but not found in the top 20.' },
+      ];
+      const posBuckets = POS_BANDS.map(b => ({
+        ...b,
+        items: orbs.filter(o => { const p = bestPosOf(o); return p != null && p >= b.lo && p <= b.hi; }).sort(byBestPos),
+      }));
+      const unrankedOrbs = orbs.filter(o => bestPosOf(o) == null);
       // RENDER BUDGET — the constellation rotates continuously, so every extra dot is repainted on
       // every frame forever. Discovery can return hundreds of keyword variants; animating them all
       // freezes weaker machines (blank/frozen page). Cap what we DRAW to the most meaningful dots
@@ -32965,19 +32978,16 @@
           {/* ZONE TABLE — keywords grouped by rank-proxy distance (shown first, above suburbs) */}
           {!loading && orbs.length > 0 && (
             <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}><i className="fas fa-key" style={{ marginRight: 8, color: '#60a5fa' }} />Keywords by proven reach</div>
-            {/* Reach can only come from a GRID SCAN — checking the same keyword from many points around
-                the business. With no scans there is nothing to group by, and showing four empty distance
-                cards next to a full list of keywords just reads as broken. Say what is missing instead. */}
+            <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>
+              <i className="fas fa-key" style={{ marginRight: 8, color: '#60a5fa' }} />
+              {anyMeasuredReach ? 'Keywords by proven reach' : 'Keywords by best Maps position'}
+            </div>
+            {/* Reach comes only from a grid scan. With none, group by the best position we actually
+                hold — four useful buckets instead of four empty ones. */}
             {!anyMeasuredReach ? (
-              <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 12, lineHeight: 1.6, background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.3)', borderRadius: 8, padding: '12px 14px' }}>
-                <b style={{ color: '#60a5fa' }}>No grid scans yet, so there is no reach to group by.</b><br />
-                Reach means "how far from the business does this keyword still hold a top-10 Maps spot", and that
-                can only be measured by scanning the same keyword from many points across a map — a <b>grid scan</b>.
-                None of these {unmeasuredOrbs.length} keywords have one, which is why all four distance groups are empty.<br />
-                The list below is still real: <b>best #2</b> is the best Maps position seen for that keyword in rank
-                tracking. That tells you the rank, <i>not</i> how far it carries. Run a grid scan on <b>Maps Rankings</b>
-                to fill in the distance groups.
+              <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>
+                Your best position on Google Maps for each keyword, strongest first. Top 3 is the map pack — that's where the calls come from.
+                <span style={{ color: 'var(--text2)' }}> Grouping by <b>reach</b> (how far out a keyword still ranks) needs a grid scan, which none of these have yet — run one on <b>Maps Rankings</b> and this switches to distance groups.</span>
               </div>
             ) : (
               <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>
@@ -32989,6 +32999,33 @@
               </div>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+              {/* No grid data → group by best position instead of by distance */}
+              {!anyMeasuredReach && posBuckets.concat(unrankedOrbs.length ? [{ key: 'unknown', label: 'No position recorded', color: '#64748b', tip: 'Not yet checked on Maps.', items: unrankedOrbs }] : []).map((b) => (
+                <div key={b.key} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: b.color }} />
+                    <span style={{ fontWeight: 800, fontSize: 14 }} title={b.tip}>{b.label}</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>{b.items.length} keyword{b.items.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  {b.items.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text3)', fontStyle: 'italic' }}>None</div>
+                  ) : (
+                    <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {b.items.slice(0, 40).map((o, oi) => {
+                        const bp = bestPosOf(o);
+                        return (
+                          <div key={oi} onClick={() => setSel(o)} title={bp ? `Best Maps position seen: #${bp}` : 'No Maps position recorded yet'} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
+                            {bp && <span style={{ fontSize: 10, fontWeight: 700, color: bp <= 3 ? '#4ade80' : bp <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 26 }}>#{bp}</span>}
+                            <span style={{ flex: 1, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
+                            {o.volume ? <span title="Monthly searches" style={{ fontSize: 10, color: 'var(--text3)' }}>{o.volume}/mo</span> : null}
+                          </div>
+                        );
+                      })}
+                      {b.items.length > 40 && <div style={{ fontSize: 11, color: 'var(--text3)', fontStyle: 'italic', paddingTop: 4 }}>+{b.items.length - 40} more</div>}
+                    </div>
+                  )}
+                </div>
+              ))}
               {anyMeasuredReach && zoneBuckets.map((z, zi) => (
                 <div key={zi} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -33020,7 +33057,9 @@
 
               {/* Keywords with no grid scan — no measured reach, so they get their own group rather
                   than being filed under a kilometre heading they were never measured against. */}
-              {unmeasuredOrbs.length > 0 && (
+              {/* Only shown alongside REAL reach zones. With no grid data at all the whole panel is
+                  already grouped by position, so repeating every keyword here would just duplicate it. */}
+              {anyMeasuredReach && unmeasuredOrbs.length > 0 && (
                 <div style={{ background: 'var(--card)', border: '1px dashed var(--border)', borderRadius: 10, padding: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                     <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#64748b' }} />
