@@ -32764,15 +32764,55 @@
       // zero-demand; everything else is simply not measured yet.
       const measuredZero = (o) => o.volume_measured === true && !(o.volume > 0);
       const uncheckedVol = (o) => !o.volume_measured && !(o.volume > 0);
+      const [intentOnly, setIntentOnly] = useState(false);
       // Filtering only ever removes keywords MEASURED at zero — never ones we simply haven't checked.
-      const volFilter = (arr) => (volOnly ? arr.filter(o => !measuredZero(o)) : arr);
+      const volFilter = (arr) => {
+        let out = volOnly ? arr.filter(o => !measuredZero(o)) : arr;
+        if (intentOnly) out = out.filter(o => intentOf(o).level >= 3);   // URGENT + HIGH only
+        return out;
+      };
+      // Demand × intent, not demand alone: 480/mo of "emergency plumbing services" is worth more
+      // than 2,900/mo of "blocked drains" when most of the latter is people looking for a plunger.
       const byVolumeThenPos = (a, b) => {
-        const va = a.volume || 0, vb = b.volume || 0;
-        if (vb !== va) return vb - va;                       // demand first
+        const score = (o) => (o.volume || 0) * [0, 0.15, 0.6, 1.4, 2.2][intentOf(o).level];
+        const sa = score(a), sb = score(b);
+        if (sb !== sa) return sb - sa;
         return (a.maps_position || a.best_position || 99) - (b.maps_position || b.best_position || 99);
       };
       const uncheckedCount = orbs.filter(uncheckedVol).length;
       const zeroCount = orbs.filter(measuredZero).length;
+
+      // ── INTENT ──────────────────────────────────────────────────────────────────────────
+      // Volume alone is a trap: "blocked drains" (2,900/mo) is mostly people looking for a DIY fix,
+      // while "emergency plumber joyner" is someone with water on the floor and a phone in hand.
+      // Two signals, combined:
+      //   1. What the phrase asks for — urgency and hire words vs research words.
+      //   2. CPC — what competitors pay per click. Real money is the least gameable intent signal.
+      const RX_EMERGENCY = /\b(emergency|urgent|24[\s-]?hour|24\/7|after[\s-]?hours|burst|flooding|flooded|no hot water|blocked toilet|same[\s-]?day|tonight|right now|asap)\b/i;
+      const RX_HIRE = /\b(near me|nearby|hire|book|call|quote|cost|price|pricing|cheap|affordable|best|top|local|company|service|services|contractor|specialist|expert|experts|repair|replace|replacement|install|installation|fix|fitting|plumber|electrician|technician)\b/i;
+      const RX_RESEARCH = /\b(how|why|what|when|guide|tips|diy|yourself|prevent|preventing|signs|causes|reasons|meaning|explained|difference|vs|ideas|checklist|may need|should you|can you|steps)\b/i;
+      const intentOf = (o) => {
+        const k = (o.keyword || '').toLowerCase();
+        const cpc = o.cpc;
+        // Research phrasing wins outright — a question is a question no matter what it costs.
+        if (RX_RESEARCH.test(k) && !RX_EMERGENCY.test(k)) {
+          return { level: 1, short: 'RESEARCH', color: '#94a3b8', long: 'Someone learning, not hiring. Useful for blog content and AI answers; it rarely rings the phone.' };
+        }
+        if (RX_EMERGENCY.test(k)) {
+          return { level: 4, short: 'URGENT', color: '#ef4444', long: 'Emergency wording — the searcher needs someone today and will call the first credible result. The most valuable traffic a trade can get.' };
+        }
+        // Expensive clicks mean competitors have proven these convert.
+        if (cpc != null && cpc >= 15) {
+          return { level: 3, short: 'HIGH', color: '#4ade80', long: `Competitors pay about $${cpc.toFixed(2)} a click for this — they only do that because it turns into work.` };
+        }
+        if (RX_HIRE.test(k)) {
+          return { level: 3, short: 'HIGH', color: '#4ade80', long: 'Hiring language (service, repair, near me, quote…) — someone looking for a business, not an explanation.' };
+        }
+        if (cpc != null && cpc >= 5) {
+          return { level: 2, short: 'MED', color: '#f59e0b', long: `Some commercial value — roughly $${cpc.toFixed(2)} a click.` };
+        }
+        return { level: 2, short: 'MED', color: '#f59e0b', long: 'No clear hire or research signal in the wording.' };
+      };
 
       // Where did this keyword come from? Worth stating on the row: a keyword you agreed with the
       // client carries different weight from one a generator produced out of page copy.
@@ -33046,6 +33086,12 @@
                   {volOnly ? `Hiding ${zeroCount} zero-search keywords` : `Hide ${zeroCount} zero-search keywords`}
                 </button>
               )}
+              <button onClick={() => setIntentOnly(v => !v)}
+                title="Keep only keywords where the wording (or the click price competitors pay) says the searcher wants to hire someone — emergency and hiring terms. Hides research questions like 'how to' and 'signs of'."
+                style={{ fontSize: 11.5, fontWeight: 700, padding: '4px 11px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${intentOnly ? '#ef4444' : 'var(--border)'}`, background: intentOnly ? 'rgba(239,68,68,0.15)' : 'transparent', color: intentOnly ? '#ef4444' : 'var(--text2)' }}>
+                <i className="fas fa-phone-volume" style={{ marginRight: 5 }} />
+                {intentOnly ? `High intent only · ${orbs.filter(o => intentOf(o).level < 3).length} hidden` : 'High intent only'}
+              </button>
               {volMsg && <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>{volMsg}</span>}
             </div>
             {/* Reach comes only from a grid scan. With none, group by the best position we actually
@@ -33081,11 +33127,12 @@
                         const bp = bestPosOf(o);
                         return (
                           <div key={oi} onClick={() => setSel(o)} title={`${bp ? `Best Maps position seen: #${bp}` : 'No Maps position recorded yet'}\nSource: ${srcLabel(o).long}`} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
+                            <span title={intentOf(o).long} style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: 0.3, color: intentOf(o).color, background: `${intentOf(o).color}1e`, border: `1px solid ${intentOf(o).color}66`, borderRadius: 3, padding: '0 3px', flexShrink: 0, minWidth: 48, textAlign: 'center' }}>{intentOf(o).short}</span>
                             <span title={srcLabel(o).long} style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: 0.3, color: srcLabel(o).color, border: `1px solid ${srcLabel(o).color}55`, borderRadius: 3, padding: '0 3px', flexShrink: 0 }}>{srcLabel(o).short}</span>
                             {bp && <span style={{ fontSize: 10, fontWeight: 700, color: bp <= 3 ? '#4ade80' : bp <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 26 }}>#{bp}</span>}
                             <span style={{ flex: 1, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
                             {o.volume > 0
-                              ? <span title="Monthly searches (Google Ads)" style={{ fontSize: 10, fontWeight: 700, color: o.volume >= 1000 ? '#4ade80' : o.volume >= 100 ? '#2dd4bf' : 'var(--text3)' }}>{o.volume.toLocaleString()}/mo</span>
+                              ? <span title={`Monthly searches (Google Ads)${o.cpc ? ` · competitors pay about $${o.cpc.toFixed(2)} per click` : ''}`} style={{ fontSize: 10, fontWeight: 700, color: o.volume >= 1000 ? '#4ade80' : o.volume >= 100 ? '#2dd4bf' : 'var(--text3)' }}>{o.volume.toLocaleString()}/mo{o.cpc ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> ${o.cpc.toFixed(0)}</span> : null}</span>
                               : measuredZero(o)
                                 ? <span title="Google reports no measurable monthly searches for this keyword" style={{ fontSize: 10, color: '#ef4444' }}>0/mo</span>
                                 : <span title="Search volume has never been checked for this keyword — this does NOT mean nobody searches it. Use the 'Get search volume' button above." style={{ fontSize: 10, color: '#f59e0b' }}>not checked</span>}

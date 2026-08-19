@@ -43744,27 +43744,34 @@ app.post('/api/projects/:projectId/maps-orbits/backfill-volume', async (req, res
         if (!row?.keyword) continue;
         // A keyword Google returns with no search_volume really is below the reporting threshold —
         // record 0 so we know it was measured, instead of leaving it indistinguishable from unchecked.
-        volumes.set(row.keyword.toLowerCase().trim(), Number.isFinite(row.search_volume) ? row.search_volume : 0);
+        // CPC is the strongest available proxy for COMMERCIAL INTENT: it is what competitors are
+        // willing to pay per click. "how to fix a tap" is cheap, "emergency plumber" is not.
+        volumes.set(row.keyword.toLowerCase().trim(), {
+          volume: Number.isFinite(row.search_volume) ? row.search_volume : 0,
+          cpc: Number.isFinite(row.cpc) ? row.cpc : null,
+          competition: row.competition || null,
+        });
       }
     }
 
     let updated = 0;
-    for (const [kw, vol] of volumes) {
+    for (const [kw, v] of volumes) {
       const r = await pool.query(
-        `UPDATE rank_keywords SET search_volume=$1 WHERE project_id=$2 AND LOWER(TRIM(keyword))=$3`,
-        [vol, projectId, kw]);
+        `UPDATE rank_keywords SET search_volume=$1, cpc=COALESCE($2, cpc), competition=COALESCE($3, competition)
+         WHERE project_id=$4 AND LOWER(TRIM(keyword))=$5`,
+        [v.volume, v.cpc, v.competition, projectId, kw]);
       updated += r.rowCount || 0;
     }
     // Keep the discovery cache in step so both views agree.
     const patch = (arr) => arr.map(k => {
       const v = k.keyword ? volumes.get(k.keyword.toLowerCase().trim()) : undefined;
-      return v === undefined ? k : { ...k, volume: v };
+      return v === undefined ? k : { ...k, volume: v.volume, cpc: v.cpc, competition: v.competition };
     });
     if (dc) {
       await pool.query('UPDATE discovery_cache SET keywords=$1, maps_keywords=$2 WHERE project_id=$3',
         [JSON.stringify(patch(discSerp)), JSON.stringify(patch(discMaps)), projectId]).catch(() => {});
     }
-    const withDemand = [...volumes.values()].filter(v => v > 0).length;
+    const withDemand = [...volumes.values()].filter(v => v.volume > 0).length;
     console.log(`[orbit-volume] project ${projectId}: checked ${wanted.length}, got ${volumes.size}, ${withDemand} with real demand`);
     res.json({ ok: true, checked: wanted.length, measured: volumes.size, with_demand: withDemand, rows_updated: updated });
   } catch (e) {
@@ -43836,7 +43843,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
 
     // All tracked Maps keywords (with origin) + their latest tracked position
     const tracked = (await pool.query(
-      `SELECT rk.id, rk.keyword, rk.location, rk.search_volume, COALESCE(rk.origin,'agreed') AS origin,
+      `SELECT rk.id, rk.keyword, rk.location, rk.search_volume, rk.cpc, rk.competition, COALESCE(rk.origin,'agreed') AS origin,
               (SELECT rt.maps_position FROM rank_tracking rt WHERE rt.project_id=rk.project_id
                 AND LOWER(rt.keyword)=LOWER(rk.keyword) AND rt.maps_position IS NOT NULL
                 ORDER BY rt.checked_at DESC NULLS LAST LIMIT 1) AS maps_position
@@ -43853,6 +43860,8 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         // back into "unknown" and it would render as "no vol." exactly like an unchecked keyword.
         volume: (t.search_volume != null ? Number(t.search_volume) : (volByKw.has(kwl) ? volByKw.get(kwl) : null)),
         volume_measured: t.search_volume != null || volByKw.has(kwl),
+        cpc: t.cpc != null ? Number(t.cpc) : null,          // proxy for commercial intent
+        competition: t.competition || null,
         reach_km: g?.reach_km != null ? Math.round(g.reach_km * 10) / 10 : null,
         best_position: g?.best_position || null,
         has_grid: !!g, scanned_at: g?.scanned_at || null,
