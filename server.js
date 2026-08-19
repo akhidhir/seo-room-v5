@@ -43888,7 +43888,12 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         .map(k => ({
           keyword: k.keyword, location: null, origin: 'discovered', tracked: false,
           maps_position: k.maps_position || null,
-          volume: k.volume || volByKw.get(k.keyword.toLowerCase().trim()) || null,
+          // Keep a measured 0 (|| would turn it back into "never checked") and report whether we
+          // actually hold a figure, so the UI can tell "no demand" from "not looked up yet".
+          volume: (k.volume != null ? k.volume : (volByKw.has(k.keyword.toLowerCase().trim()) ? volByKw.get(k.keyword.toLowerCase().trim()) : null)),
+          volume_measured: k.volume != null || volByKw.has(k.keyword.toLowerCase().trim()),
+          cpc: k.cpc != null ? Number(k.cpc) : null,
+          competition: k.competition || null,
           reach_km: null, best_position: k.maps_position || null, has_grid: false, scanned_at: null,
         }))
         .sort((a, b) => (a.maps_position || 99) - (b.maps_position || 99) || (b.volume || 0) - (a.volume || 0))
@@ -43907,7 +43912,8 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         orbits.push({
           keyword: g.keyword, location: null, origin: 'grid', tracked: false,
           maps_position: r?.best_position || null,
-          volume: volByKw.get(kwl) || null,
+          volume: volByKw.has(kwl) ? volByKw.get(kwl) : null,
+          volume_measured: volByKw.has(kwl),
           reach_km: r?.reach_km != null ? Math.round(r.reach_km * 10) / 10 : null,
           best_position: r?.best_position || null, has_grid: true, scanned_at: r?.scanned_at || g.scanned_at || null,
         });
