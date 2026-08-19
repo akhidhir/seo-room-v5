@@ -32750,6 +32750,14 @@
       };
       const noVolumeCount = orbs.filter(o => !hasVol(o)).length;
 
+      // Where did this keyword come from? Worth stating on the row: a keyword you agreed with the
+      // client carries different weight from one a generator produced out of page copy.
+      const srcLabel = (o) => {
+        if (!o.tracked) return { short: 'DISC', color: '#60a5fa', long: 'Discovered — found by Discover Maps (built from your site\'s pages, industry service templates and organic keywords, then confirmed on Google Maps). Not in rank tracking.' };
+        if (o.origin === 'discovered') return { short: 'DISC', color: '#60a5fa', long: 'Discovered by the dashboard, then added to rank tracking.' };
+        return { short: 'TRK', color: '#a78bfa', long: 'Tracked — added deliberately to rank tracking (agreed keyword, manual add, AI generator or CSV import).' };
+      };
+
       const zoneBuckets = ZONES.map(z => ({ ...z, items: volFilter(measuredOrbs.filter(o => o.km > z.lo && o.km <= z.hi)).sort(byVolumeThenPos) }));
       // Has ANY keyword actually been grid-scanned? If not, grouping by reach is meaningless — every
       // bucket is empty. Rather than show four empty distance cards (or an apology), group by the
@@ -33040,7 +33048,8 @@
                       {b.items.slice(0, 40).map((o, oi) => {
                         const bp = bestPosOf(o);
                         return (
-                          <div key={oi} onClick={() => setSel(o)} title={bp ? `Best Maps position seen: #${bp}` : 'No Maps position recorded yet'} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
+                          <div key={oi} onClick={() => setSel(o)} title={`${bp ? `Best Maps position seen: #${bp}` : 'No Maps position recorded yet'}\nSource: ${srcLabel(o).long}`} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '3px 6px', borderRadius: 4, cursor: 'pointer', background: sel && sel.keyword === o.keyword ? 'rgba(139,92,246,0.15)' : 'transparent' }}>
+                            <span title={srcLabel(o).long} style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: 0.3, color: srcLabel(o).color, border: `1px solid ${srcLabel(o).color}55`, borderRadius: 3, padding: '0 3px', flexShrink: 0 }}>{srcLabel(o).short}</span>
                             {bp && <span style={{ fontSize: 10, fontWeight: 700, color: bp <= 3 ? '#4ade80' : bp <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 26 }}>#{bp}</span>}
                             <span style={{ flex: 1, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
                             {o.volume
