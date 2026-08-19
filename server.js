@@ -43720,17 +43720,29 @@ app.post('/api/projects/:projectId/maps-orbits/backfill-volume', async (req, res
     for (const k of [...discSerp, ...discMaps]) if (k.keyword && k.volume) known.add(k.keyword.toLowerCase().trim());
     for (const t of tracked) if (t.search_volume) known.add(t.keyword.toLowerCase().trim());
 
-    const wanted = [...new Set(
+    const candidates = [...new Set(
       [...tracked.map(t => t.keyword), ...discMaps.map(k => k.keyword), ...discSerp.map(k => k.keyword)]
         .filter(Boolean).map(k => k.trim()).filter(k => k && !known.has(k.toLowerCase()))
     )];
+    // Google Ads rejects a keyword over 10 words or 80 characters — and it fails the ENTIRE batch
+    // with it, not just the offending term. One 11-word question ("should my water meter be moving
+    // when no water is running") returned 40501 and took all 345 keywords down with it, which is why
+    // a successful-looking run produced no volumes at all. Drop the invalid ones before sending.
+    const tooLong = [];
+    const wanted = candidates.filter(k => {
+      const ok = k.split(/\s+/).length <= 10 && k.length <= 80;
+      if (!ok) tooLong.push(k);
+      return ok;
+    });
+    if (tooLong.length) console.log(`[orbit-volume] skipping ${tooLong.length} keyword(s) Google Ads won't accept (>10 words or >80 chars), e.g. "${tooLong[0].slice(0, 60)}"`);
     if (!wanted.length) return res.json({ ok: true, checked: 0, updated: 0, message: 'Every keyword already has a search-volume figure.' });
 
     const locCode = project.location_code || 2036;   // 2036 = Australia
     const dfsHeaders = { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH };
     const volumes = new Map();
-    for (let i = 0; i < wanted.length; i += 500) {           // Google Ads endpoint accepts up to 700
-      const batch = wanted.slice(i, i + 500);
+    // Smaller batches: a rejection kills its whole batch, so keep the blast radius small.
+    for (let i = 0; i < wanted.length; i += 200) {
+      const batch = wanted.slice(i, i + 200);
       const r = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
         method: 'POST', headers: dfsHeaders,
         body: JSON.stringify([{ keywords: batch, location_code: locCode, language_code: 'en' }]),
@@ -43772,8 +43784,14 @@ app.post('/api/projects/:projectId/maps-orbits/backfill-volume', async (req, res
         [JSON.stringify(patch(discSerp)), JSON.stringify(patch(discMaps)), projectId]).catch(() => {});
     }
     const withDemand = [...volumes.values()].filter(v => v.volume > 0).length;
-    console.log(`[orbit-volume] project ${projectId}: checked ${wanted.length}, got ${volumes.size}, ${withDemand} with real demand`);
-    res.json({ ok: true, checked: wanted.length, measured: volumes.size, with_demand: withDemand, rows_updated: updated });
+    console.log(`[orbit-volume] project ${projectId}: checked ${wanted.length}, got ${volumes.size}, ${withDemand} with real demand, ${tooLong.length} skipped as invalid`);
+    res.json({
+      ok: true, checked: wanted.length, measured: volumes.size, with_demand: withDemand,
+      rows_updated: updated, skipped_too_long: tooLong.length,
+      message: volumes.size === 0 && wanted.length > 0
+        ? 'Google Ads returned nothing for this batch — see server logs for the reason.'
+        : undefined,
+    });
   } catch (e) {
     console.error('[orbit-volume]', e.message);
     res.status(500).json({ error: e.message });
