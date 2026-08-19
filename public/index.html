@@ -32740,15 +32740,39 @@
       // rank by demand first — #13 at 170/mo beats #1 at nothing.
       // NB: a missing volume means "we have no volume figure for this", NOT "measured as zero" —
       // the label and the toggle both say so rather than asserting a zero we never measured.
-      const [volOnly, setVolOnly] = useState(true);
+      // NOT hidden by default. Volume used to arrive only via Discover Maps, so most keywords had no
+      // figure and rendered as "no vol." — "plumber" (40,500/mo) among them. Hiding on that basis
+      // would bury the best opportunities on the page. Only filter once the numbers are real, and
+      // only ever hide keywords MEASURED at zero, never merely unchecked ones.
+      const [volOnly, setVolOnly] = useState(false);
+      const [volFetching, setVolFetching] = useState(false);
+      const [volMsg, setVolMsg] = useState('');
+      const fetchVolumes = async () => {
+        setVolFetching(true); setVolMsg('');
+        try {
+          const r = await api(`/projects/${project.id}/maps-orbits/backfill-volume`, { method: 'POST' });
+          if (r && r.error) setVolMsg(r.error);
+          else {
+            setVolMsg(`${r.measured || 0} keywords measured — ${r.with_demand || 0} have real search demand.`);
+            api(`/projects/${project.id}/maps-orbits`).then(d => { if (!d.error) setData(d); }).catch(() => {});
+          }
+        } catch (e) { setVolMsg(e.message); }
+        setVolFetching(false);
+      };
       const hasVol = (o) => (o.volume || 0) > 0;
-      const volFilter = (arr) => (volOnly ? arr.filter(hasVol) : arr);
+      // Unchecked is not the same as zero. Only a keyword Google actually reported on can be called
+      // zero-demand; everything else is simply not measured yet.
+      const measuredZero = (o) => o.volume_measured === true && !(o.volume > 0);
+      const uncheckedVol = (o) => !o.volume_measured && !(o.volume > 0);
+      // Filtering only ever removes keywords MEASURED at zero — never ones we simply haven't checked.
+      const volFilter = (arr) => (volOnly ? arr.filter(o => !measuredZero(o)) : arr);
       const byVolumeThenPos = (a, b) => {
         const va = a.volume || 0, vb = b.volume || 0;
         if (vb !== va) return vb - va;                       // demand first
         return (a.maps_position || a.best_position || 99) - (b.maps_position || b.best_position || 99);
       };
-      const noVolumeCount = orbs.filter(o => !hasVol(o)).length;
+      const uncheckedCount = orbs.filter(uncheckedVol).length;
+      const zeroCount = orbs.filter(measuredZero).length;
 
       // Where did this keyword come from? Worth stating on the row: a keyword you agreed with the
       // client carries different weight from one a generator produced out of page copy.
@@ -33007,14 +33031,22 @@
                 <i className="fas fa-key" style={{ marginRight: 8, color: '#60a5fa' }} />
                 {anyMeasuredReach ? 'Keywords by proven reach' : 'Keywords by best Maps position'}
               </div>
-              {noVolumeCount > 0 && (
-                <button onClick={() => setVolOnly(v => !v)}
-                  title="Keywords with no search-volume figure are usually phrases lifted from page copy rather than things people type. Ranking for them looks like a win and produces no calls."
-                  style={{ fontSize: 11.5, fontWeight: 600, padding: '4px 11px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${volOnly ? '#4ade80' : 'var(--border)'}`, background: volOnly ? 'rgba(74,222,128,0.15)' : 'transparent', color: volOnly ? '#4ade80' : 'var(--text2)' }}>
-                  <i className={`fas fa-${volOnly ? 'filter' : 'filter-circle-xmark'}`} style={{ marginRight: 5 }} />
-                  {volOnly ? `With search volume only · ${noVolumeCount} hidden` : `Showing all · ${noVolumeCount} have no volume figure`}
+              {uncheckedCount > 0 && (
+                <button onClick={fetchVolumes} disabled={volFetching}
+                  title="Look up real Google Ads search volume for every keyword that has never been measured. Without this, an unchecked keyword shows as 'no vol.' and looks like nobody searches it."
+                  style={{ fontSize: 11.5, fontWeight: 700, padding: '4px 11px', borderRadius: 999, cursor: 'pointer', border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>
+                  {volFetching ? <><span className="spinner" style={{ marginRight: 5 }} />Checking…</> : <><i className="fas fa-magnifying-glass-chart" style={{ marginRight: 5 }} />Get search volume for {uncheckedCount} unchecked</>}
                 </button>
               )}
+              {zeroCount > 0 && (
+                <button onClick={() => setVolOnly(v => !v)}
+                  title="Hides only keywords Google measured at zero searches — never ones that simply haven't been checked."
+                  style={{ fontSize: 11.5, fontWeight: 600, padding: '4px 11px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${volOnly ? '#4ade80' : 'var(--border)'}`, background: volOnly ? 'rgba(74,222,128,0.15)' : 'transparent', color: volOnly ? '#4ade80' : 'var(--text2)' }}>
+                  <i className={`fas fa-${volOnly ? 'filter' : 'filter-circle-xmark'}`} style={{ marginRight: 5 }} />
+                  {volOnly ? `Hiding ${zeroCount} zero-search keywords` : `Hide ${zeroCount} zero-search keywords`}
+                </button>
+              )}
+              {volMsg && <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>{volMsg}</span>}
             </div>
             {/* Reach comes only from a grid scan. With none, group by the best position we actually
                 hold — four useful buckets instead of four empty ones. */}
@@ -33052,9 +33084,11 @@
                             <span title={srcLabel(o).long} style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: 0.3, color: srcLabel(o).color, border: `1px solid ${srcLabel(o).color}55`, borderRadius: 3, padding: '0 3px', flexShrink: 0 }}>{srcLabel(o).short}</span>
                             {bp && <span style={{ fontSize: 10, fontWeight: 700, color: bp <= 3 ? '#4ade80' : bp <= 10 ? '#f59e0b' : '#94a3b8', minWidth: 26 }}>#{bp}</span>}
                             <span style={{ flex: 1, color: 'var(--text2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.keyword}</span>
-                            {o.volume
-                              ? <span title="Monthly searches" style={{ fontSize: 10, fontWeight: 700, color: o.volume >= 100 ? '#4ade80' : o.volume >= 30 ? '#2dd4bf' : 'var(--text3)' }}>{o.volume}/mo</span>
-                              : <span title="No search-volume figure for this keyword — often a phrase taken from page copy rather than something people search" style={{ fontSize: 10, color: '#64748b' }}>no vol.</span>}
+                            {o.volume > 0
+                              ? <span title="Monthly searches (Google Ads)" style={{ fontSize: 10, fontWeight: 700, color: o.volume >= 1000 ? '#4ade80' : o.volume >= 100 ? '#2dd4bf' : 'var(--text3)' }}>{o.volume.toLocaleString()}/mo</span>
+                              : measuredZero(o)
+                                ? <span title="Google reports no measurable monthly searches for this keyword" style={{ fontSize: 10, color: '#ef4444' }}>0/mo</span>
+                                : <span title="Search volume has never been checked for this keyword — this does NOT mean nobody searches it. Use the 'Get search volume' button above." style={{ fontSize: 10, color: '#f59e0b' }}>not checked</span>}
                           </div>
                         );
                       })}

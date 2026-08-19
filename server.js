@@ -43697,6 +43697,82 @@ app.get('/api/projects/:projectId/maps-orbits/keyword-suburbs', async (req, res)
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Fill in missing search volumes for every keyword on the Ranking Orbits page.
+// Volume only ever arrived as a side-effect of Discover Maps, so anything added by hand, by the AI
+// generator or by CSV import had NO figure — and the UI rendered that as "no vol.", which reads as
+// "nobody searches this". Measured against Google Ads, "plumber" (40,500/mo) was displaying as no
+// volume. That is a data-coverage gap being shown as a demand fact, so fetch the real numbers.
+app.post('/api/projects/:projectId/maps-orbits/backfill-volume', async (req, res) => {
+  try {
+    if (!DATAFORSEO_AUTH) return res.status(503).json({ error: 'DataForSEO credentials not configured.' });
+    const projectId = parseInt(req.params.projectId);
+    const project = (await pool.query('SELECT * FROM projects WHERE id=$1', [projectId])).rows[0];
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const tracked = (await pool.query(
+      `SELECT keyword, search_volume FROM rank_keywords WHERE project_id=$1`, [projectId])).rows;
+    const dc = (await pool.query('SELECT keywords, maps_keywords FROM discovery_cache WHERE project_id=$1', [projectId])).rows[0];
+    const parse = (v) => (typeof v === 'string' ? JSON.parse(v) : (v || []));
+    const discSerp = parse(dc?.keywords), discMaps = parse(dc?.maps_keywords);
+
+    // Anything we already hold a positive number for doesn't need paying for again.
+    const known = new Set();
+    for (const k of [...discSerp, ...discMaps]) if (k.keyword && k.volume) known.add(k.keyword.toLowerCase().trim());
+    for (const t of tracked) if (t.search_volume) known.add(t.keyword.toLowerCase().trim());
+
+    const wanted = [...new Set(
+      [...tracked.map(t => t.keyword), ...discMaps.map(k => k.keyword), ...discSerp.map(k => k.keyword)]
+        .filter(Boolean).map(k => k.trim()).filter(k => k && !known.has(k.toLowerCase()))
+    )];
+    if (!wanted.length) return res.json({ ok: true, checked: 0, updated: 0, message: 'Every keyword already has a search-volume figure.' });
+
+    const locCode = project.location_code || 2036;   // 2036 = Australia
+    const dfsHeaders = { 'Content-Type': 'application/json', 'Authorization': DATAFORSEO_AUTH };
+    const volumes = new Map();
+    for (let i = 0; i < wanted.length; i += 500) {           // Google Ads endpoint accepts up to 700
+      const batch = wanted.slice(i, i + 500);
+      const r = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+        method: 'POST', headers: dfsHeaders,
+        body: JSON.stringify([{ keywords: batch, location_code: locCode, language_code: 'en' }]),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!r.ok) { console.log(`[orbit-volume] HTTP ${r.status} on batch ${i}`); continue; }
+      const data = await r.json();
+      const task = data?.tasks?.[0];
+      if (task?.status_code !== 20000) { console.log(`[orbit-volume] task ${task?.status_code}: ${task?.status_message}`); continue; }
+      for (const row of (task.result || [])) {
+        if (!row?.keyword) continue;
+        // A keyword Google returns with no search_volume really is below the reporting threshold —
+        // record 0 so we know it was measured, instead of leaving it indistinguishable from unchecked.
+        volumes.set(row.keyword.toLowerCase().trim(), Number.isFinite(row.search_volume) ? row.search_volume : 0);
+      }
+    }
+
+    let updated = 0;
+    for (const [kw, vol] of volumes) {
+      const r = await pool.query(
+        `UPDATE rank_keywords SET search_volume=$1 WHERE project_id=$2 AND LOWER(TRIM(keyword))=$3`,
+        [vol, projectId, kw]);
+      updated += r.rowCount || 0;
+    }
+    // Keep the discovery cache in step so both views agree.
+    const patch = (arr) => arr.map(k => {
+      const v = k.keyword ? volumes.get(k.keyword.toLowerCase().trim()) : undefined;
+      return v === undefined ? k : { ...k, volume: v };
+    });
+    if (dc) {
+      await pool.query('UPDATE discovery_cache SET keywords=$1, maps_keywords=$2 WHERE project_id=$3',
+        [JSON.stringify(patch(discSerp)), JSON.stringify(patch(discMaps)), projectId]).catch(() => {});
+    }
+    const withDemand = [...volumes.values()].filter(v => v > 0).length;
+    console.log(`[orbit-volume] project ${projectId}: checked ${wanted.length}, got ${volumes.size}, ${withDemand} with real demand`);
+    res.json({ ok: true, checked: wanted.length, measured: volumes.size, with_demand: withDemand, rows_updated: updated });
+  } catch (e) {
+    console.error('[orbit-volume]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
   try {
     const projectId = parseInt(req.params.projectId);
@@ -43760,7 +43836,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
 
     // All tracked Maps keywords (with origin) + their latest tracked position
     const tracked = (await pool.query(
-      `SELECT rk.id, rk.keyword, rk.location, COALESCE(rk.origin,'agreed') AS origin,
+      `SELECT rk.id, rk.keyword, rk.location, rk.search_volume, COALESCE(rk.origin,'agreed') AS origin,
               (SELECT rt.maps_position FROM rank_tracking rt WHERE rt.project_id=rk.project_id
                 AND LOWER(rt.keyword)=LOWER(rk.keyword) AND rt.maps_position IS NOT NULL
                 ORDER BY rt.checked_at DESC NULLS LAST LIMIT 1) AS maps_position
@@ -43772,7 +43848,11 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
       return {
         keyword: t.keyword, location: t.location, origin: t.origin, tracked: true,
         maps_position: t.maps_position,
-        volume: volByKw.get(kwl) || null,
+        // Prefer the figure stored on the keyword itself (backfilled from Google Ads); fall back to
+        // whatever discovery happened to capture. A MEASURED 0 must survive — `|| null` would turn it
+        // back into "unknown" and it would render as "no vol." exactly like an unchecked keyword.
+        volume: (t.search_volume != null ? Number(t.search_volume) : (volByKw.has(kwl) ? volByKw.get(kwl) : null)),
+        volume_measured: t.search_volume != null || volByKw.has(kwl),
         reach_km: g?.reach_km != null ? Math.round(g.reach_km * 10) / 10 : null,
         best_position: g?.best_position || null,
         has_grid: !!g, scanned_at: g?.scanned_at || null,
