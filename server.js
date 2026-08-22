@@ -877,6 +877,11 @@ async function initDb() {
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS page_exclusions JSONB DEFAULT '[]'`).catch(() => {});
     // Keyword origin: 'agreed' = contracted with the client, 'discovered' = quick-win found by discovery
     await client.query(`ALTER TABLE rank_keywords ADD COLUMN IF NOT EXISTS origin TEXT DEFAULT 'agreed'`).catch(() => {});
+    // Where the grid centre came from: 'suburb_gps' | 'au_dataset' | 'business_fallback'. A fallback
+    // means the scan measured the business's area, NOT the suburb the keyword names — the UI has to
+    // be able to say so instead of presenting it as that suburb's ranking.
+    await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS center_source TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE grid_scans ADD COLUMN IF NOT EXISTS center_label TEXT`).catch(() => {});
     // Where the maps discovery scan stood — lets the UI link to Google Maps at the exact scan point
     await client.query(`ALTER TABLE discovery_cache ADD COLUMN IF NOT EXISTS maps_center JSONB`).catch(() => {});
     await client.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS cloudflare_zone_id TEXT`).catch(() => {});
@@ -9161,6 +9166,26 @@ function geocodeSuburbText(t) {
     if (stateK && AU_SUBURBS_BY_KEY[sub + '|' + stateK]) return AU_SUBURBS_BY_KEY[sub + '|' + stateK];
     if (AU_SUBURBS_BY_KEY[sub]) return AU_SUBURBS_BY_KEY[sub];
   }
+  return null;
+}
+
+// Resolve the centre point for a GRID SCAN from a piece of text (a keyword's location, or the
+// project's own location). Tries the curated list first, then the full ABS suburb dataset — ~15k
+// suburbs nationwide, already loaded for Smart Map Ranking — so scans work outside Perth/Brisbane.
+//
+// ALWAYS returns the source. The grid scan used to fall back to the business location without
+// recording it, so "plumber dayboro" was scanned from Cashmere ~30km away and the result was
+// presented as Dayboro's ranking. A wrong answer that looks right is worse than an error.
+function resolveGridCentre(text) {
+  const t = (text || '').toString().trim();
+  if (!t) return null;
+  const lower = t.toLowerCase();
+  const parts = lower.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+  for (const c of [lower, parts.slice(0, 2).join(' '), parts[0]].filter(Boolean)) {
+    if (SUBURB_GPS[c]) return { lat: SUBURB_GPS[c].lat, lng: SUBURB_GPS[c].lng, label: c, source: 'suburb_gps' };
+  }
+  const f = geocodeSuburbText(t);
+  if (f) return { lat: f.lat, lng: f.lng, label: `${f.suburb}, ${f.state}`, source: 'au_dataset' };
   return null;
 }
 
@@ -43812,7 +43837,7 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
 
     // Latest grid scan per keyword → proven reach
     const grids = (await pool.query(
-      `SELECT DISTINCT ON (LOWER(keyword)) keyword, center_lat, center_lng, grid_points, arp, scanned_at
+      `SELECT DISTINCT ON (LOWER(keyword)) keyword, center_lat, center_lng, grid_points, arp, scanned_at, center_source, center_label
        FROM grid_scans WHERE project_id=$1 ORDER BY LOWER(keyword), scanned_at DESC`, [projectId])).rows;
     const reachByKw = new Map();
     for (const g of grids) {
@@ -43846,6 +43871,8 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         points: totalPts, found_points: foundPts,
         coverage: totalPts ? Math.round(coverage * 100) : null,
         sparse,
+        // A 'business_fallback' scan did not measure the suburb the keyword names.
+        center_source: g.center_source || null, center_label: g.center_label || null,
       });
     }
 
@@ -43891,6 +43918,11 @@ app.get('/api/projects/:projectId/maps-orbits', async (req, res) => {
         coverage: g?.coverage ?? null,
         sparse: !!g?.sparse,
         arp: g?.arp != null ? Math.round(Number(g.arp) * 10) / 10 : null,
+        center_source: g?.center_source || null,
+        center_label: g?.center_label || null,
+        // True when the grid was centred on the business because the keyword's suburb couldn't be
+        // resolved — the numbers are real, but they are not about that suburb.
+        centre_fallback: g?.center_source === 'business_fallback',
       };
     });
 
@@ -45896,23 +45928,22 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
       }
     }
 
-    // Get business center GPS from project location
-    const rawLocation = (project.location || '').trim();
-    const locParts = rawLocation.toLowerCase().replace(/[,]/g, ' ').split(/\s+/).filter(Boolean);
-    let centerGps = null;
-    const candidates = [rawLocation.toLowerCase().trim(), locParts[0], locParts.slice(0, 2).join(' ')].filter(Boolean);
-    for (const c of candidates) { if (SUBURB_GPS[c]) { centerGps = SUBURB_GPS[c]; break; } }
+    // The suburb dataset is fetched at runtime — make sure it's in memory before we resolve anything,
+    // otherwise every lookup silently falls back to the small curated list.
+    await loadAuSuburbs().catch(() => {});
 
-    // If GBP location has GPS in the name (like "place_id:xxx"), fall back to project location
+    // Get business center GPS from project location (curated list, then the full AU dataset)
+    const rawLocation = (project.location || '').trim();
+    let centerGps = resolveGridCentre(rawLocation);
     if (!centerGps) {
-      // Try to use the first service area as fallback
       const areas = project.service_areas || [];
-      if (areas.length > 0) {
-        const firstArea = (areas[0].name || areas[0] || '').toLowerCase().trim();
-        if (SUBURB_GPS[firstArea]) centerGps = SUBURB_GPS[firstArea];
+      for (const a of areas) {
+        centerGps = resolveGridCentre(a && (a.name || a));
+        if (centerGps) break;
       }
     }
-    if (!centerGps) return res.status(400).json({ error: `Cannot find GPS for location "${rawLocation}". Add a known suburb as your project location.` });
+    if (!centerGps) return res.status(400).json({ error: `Cannot find GPS for location "${rawLocation}". Set the project location to a real Australian suburb (e.g. "Cashmere, QLD").` });
+    console.log(`[grid-scan] business centre: ${centerGps.label} (${centerGps.lat},${centerGps.lng}) via ${centerGps.source}`);
 
     // Get keywords to scan
     let kwFilter = '';
@@ -45940,22 +45971,34 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
 
     // Process keywords sequentially, grid points in parallel batches of 5
     for (const kw of keywords) {
-      // Per-keyword grid center: check location field first, then keyword text
+      // Per-keyword grid centre. A geo keyword must be scanned FROM the suburb it names —
+      // scanning "plumber dayboro" from the business 30km away measures a different place and
+      // reports it as Dayboro's ranking. Resolve properly, and when we genuinely can't, record
+      // that the business centre was used instead of pretending the number is about that suburb.
       const kwLower = (kw.keyword || '').toLowerCase();
-      const kwLocation = (kw.location || '').toLowerCase().trim();
-      let kwCenter = centerGps;
-      // Priority 1: exact match on location field (e.g. "Warner", "North Brisbane")
-      if (kwLocation && SUBURB_GPS[kwLocation]) {
-        kwCenter = SUBURB_GPS[kwLocation];
-      } else {
-        // Priority 2: detect suburb in keyword text
-        const suburbKeys = Object.keys(SUBURB_GPS).sort((a, b) => b.length - a.length);
-        for (const sub of suburbKeys) {
-          if (kwLocation.includes(sub) || kwLower.includes(sub)) { kwCenter = SUBURB_GPS[sub]; break; }
+      const kwLocation = (kw.location || '').trim();
+      let kwCenter = resolveGridCentre(kwLocation);
+      if (!kwCenter) {
+        // The location field was blank or unknown — try the suburb named inside the keyword itself,
+        // longest candidate first so "north brisbane" wins over "brisbane".
+        const words = kwLower.replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+        for (let n = Math.min(3, words.length); n >= 1 && !kwCenter; n--) {
+          for (let i = 0; i + n <= words.length && !kwCenter; i++) {
+            const phrase = words.slice(i, i + n).join(' ');
+            if (phrase.length < 4) continue;
+            const hit = resolveGridCentre(phrase);
+            // Ignore a match on the service word itself ("plumber" is a NSW locality).
+            if (hit && !/^(plumber|plumbing|gas|electrical|electrician|repair|service|services)$/.test(phrase)) kwCenter = hit;
+          }
         }
       }
+      const centreIsFallback = !kwCenter;
+      if (!kwCenter) {
+        kwCenter = { ...centerGps, source: 'business_fallback', label: `${centerGps.label} (business location)` };
+        console.warn(`[grid-scan] NO SUBURB RESOLVED for "${kw.keyword}" (location="${kwLocation}") — scanning from the business centre instead. This result is NOT measured at that suburb.`);
+      }
       const gridPoints = generateGrid(kwCenter.lat, kwCenter.lng, radiusFloat, gridSizeInt);
-      console.log(`[grid-scan] Keyword "${kw.keyword}" center: ${kwCenter.lat},${kwCenter.lng}`);
+      console.log(`[grid-scan] "${kw.keyword}" centre: ${kwCenter.label} (${kwCenter.lat},${kwCenter.lng}) via ${kwCenter.source}${centreIsFallback ? ' [FALLBACK]' : ''}`);
 
       const kwLabel = `${kw.keyword} ${kw.location}`;
       const pointResults = [];
@@ -46081,10 +46124,11 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
 
       // Save to grid_scans table
       await pool.query(
-        `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, competitors, arp, atrp, solv, found_in, data_points, scanned_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())`,
+        `INSERT INTO grid_scans (project_id, keyword_id, keyword, location, grid_size, center_lat, center_lng, radius_km, grid_points, competitors, arp, atrp, solv, found_in, data_points, center_source, center_label, scanned_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())`,
         [projectId, kw.id, kw.keyword, kw.location, gridSizeInt, kwCenter.lat, kwCenter.lng, radiusFloat,
-         JSON.stringify(pointResults), JSON.stringify({ top: competitors.slice(0, 3), our_business: ourBusiness }), arp, atrp, solv, foundCount, totalScanned]
+         JSON.stringify(pointResults), JSON.stringify({ top: competitors.slice(0, 3), our_business: ourBusiness }), arp, atrp, solv, foundCount, totalScanned,
+         kwCenter.source || null, kwCenter.label || null]
       );
 
       // Also update rank_tracking with grid metrics (compatible with existing table display)
