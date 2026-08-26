@@ -35605,6 +35605,7 @@
         setSyncing(true);
         const scanMap = { ...gridScans };
         let failed = 0;
+        const failReasons = [];
         // Scan one keyword at a time to avoid timeout
         for (let i = 0; i < mapKws.length; i++) {
           setScanProgress(`Scanning ${i + 1}/${mapKws.length}: ${mapKws[i].keyword} ${mapKws[i].location || ''}...`);
@@ -35617,7 +35618,7 @@
               r.results.forEach(s => { scanMap[`${s.keyword}|||${s.location}`] = s; });
               setGridScans({ ...scanMap });
             } else if (r.error) {
-              console.error(`Scan error for ${mapKws[i].keyword}:`, r.error); failed++;
+              console.error(`Scan error for ${mapKws[i].keyword}:`, r.error); failed++; failReasons.push(r.error);
             }
           } catch (e) {
             if (e.canForce && confirm(e.message + '\n\nForce re-run all remaining keywords? (additional API costs apply)')) {
@@ -35635,10 +35636,15 @@
               break;
             }
             if (e.status === 429) { alert(e.message); break; }
-            console.error(`Scan failed for ${mapKws[i].keyword}:`, e.message); failed++;
+            console.error(`Scan failed for ${mapKws[i].keyword}:`, e.message); failed++; failReasons.push(e.message);
           }
         }
-        if (failed > 0) alert(`${failed} of ${mapKws.length} keywords failed to scan. Check console for details.`);
+        // Show the actual reason. "Check console for details" made every failure look identical and
+        // sent the user hunting through devtools for a message the server had already explained.
+        if (failed > 0) {
+          const reasons = [...new Set(failReasons)];
+          alert(`${failed} of ${mapKws.length} keywords failed to scan.\n\n${reasons.join('\n\n')}`);
+        }
         await loadData();
         setSyncing(false);
         setScanProgress('');

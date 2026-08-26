@@ -3130,16 +3130,27 @@ app.put('/api/projects/:id', async (req, res) => {
   const clarity_project_id = b.clarity_project_id ?? b.clarityProjectId;
   const clarity_api_token = b.clarity_api_token ?? b.clarityApiToken;
   const cloudflare_zone_id = b.cloudflare_zone_id ?? b.cloudflareZoneId;
-  const grid_scan_limit = b.grid_scan_limit ?? b.gridScanLimit;
+  const grid_scan_limit_raw = b.grid_scan_limit ?? b.gridScanLimit;   // coerced below with the other numerics
   const seoroom_api_key = b.seoroom_api_key || b.seoroomApiKey;
   const seoroom_speed_key = b.seoroom_speed_key || b.seoroomSpeedKey;
   const phone = b.phone;
   const product_slugs = b.product_slugs;
   const defined_services = b.defined_services;
   const defined_products = b.defined_products;
-  const monthly_ai_budget = b.monthly_ai_budget;
-  const monthly_hours = b.monthly_hours;
-  const monthly_fee = b.monthly_fee;
+  // An empty form field arrives as "" — Postgres rejects that for a numeric column with
+  // `invalid input syntax for type integer: ""`, and because the whole UPDATE fails, NOTHING on the
+  // Project Settings page saves. Clearing any number field silently broke the entire form.
+  // Treat blank as "leave unchanged" (null → COALESCE keeps the existing value).
+  const numOrNull = (v) => {
+    if (v === undefined || v === null) return null;
+    if (typeof v === 'string' && v.trim() === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const monthly_ai_budget = numOrNull(b.monthly_ai_budget);
+  const monthly_hours = numOrNull(b.monthly_hours);
+  const monthly_fee = numOrNull(b.monthly_fee);
+  const grid_scan_limit = numOrNull(grid_scan_limit_raw);
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -45942,7 +45953,13 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
         if (centerGps) break;
       }
     }
-    if (!centerGps) return res.status(400).json({ error: `Cannot find GPS for location "${rawLocation}". Set the project location to a real Australian suburb (e.g. "Cashmere, QLD").` });
+    if (!centerGps) {
+      const why = rawLocation
+        ? `"${rawLocation}" isn't a recognised Australian suburb.`
+        : `this project has no Location set in Project Settings.`;
+      console.error(`[grid-scan] project ${projectId}: no grid centre — ${why}`);
+      return res.status(400).json({ error: `Can't scan: ${why} Set Project Settings → Location to a real suburb (e.g. "Perth, WA"), save, then run the scan again.` });
+    }
     console.log(`[grid-scan] business centre: ${centerGps.label} (${centerGps.lat},${centerGps.lng}) via ${centerGps.source}`);
 
     // Get keywords to scan
@@ -46154,7 +46171,7 @@ app.post('/api/projects/:projectId/maps/grid-scan', async (req, res) => {
     console.log(`[grid-scan] Done. Scanned ${keywords.length} keywords, ${totalCalls} API calls. Cost: $${gridCost.toFixed(4)}`);
     res.json({ ok: true, scanned: keywords.length, total_api_calls: totalCalls, results, cost: gridCost });
   } catch (e) {
-    console.error('[grid-scan] Error:', e.message);
+    console.error(`[grid-scan] Error (project ${projectId}, ${keyword_ids ? keyword_ids.length + ' keyword id(s)' : 'all keywords'}):`, e.message, e.stack ? '\n' + e.stack.split('\n').slice(0, 3).join('\n') : '');
     res.status(500).json({ error: e.message });
   }
 });
