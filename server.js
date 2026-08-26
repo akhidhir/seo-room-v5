@@ -3126,7 +3126,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const page_wireframe = b.page_wireframe ?? b.pageWireframe;
   const customer_persona = b.customer_persona ?? b.customerPersona;
   const writer_voice = b.writer_voice ?? b.writerVoice;
-  const rc_location_id = b.rc_location_id ?? b.rcLocationId;
+  const rc_location_id_raw = b.rc_location_id ?? b.rcLocationId;   // INTEGER column — coerced below
   const clarity_project_id = b.clarity_project_id ?? b.clarityProjectId;
   const clarity_api_token = b.clarity_api_token ?? b.clarityApiToken;
   const cloudflare_zone_id = b.cloudflare_zone_id ?? b.cloudflareZoneId;
@@ -3151,6 +3151,10 @@ app.put('/api/projects/:id', async (req, res) => {
   const monthly_hours = numOrNull(b.monthly_hours);
   const monthly_fee = numOrNull(b.monthly_fee);
   const grid_scan_limit = numOrNull(grid_scan_limit_raw);
+  // rc_location_id is an INTEGER column too. A project with no RatingCaptain location posts "" for
+  // it, which failed the whole UPDATE — this is what was still breaking WA Fencing after the first
+  // pass fixed only the money/hours fields.
+  const rc_location_id = numOrNull(rc_location_id_raw);
   try {
     const result = await pool.query(
       `UPDATE projects
@@ -3239,6 +3243,15 @@ app.put('/api/projects/:id', async (req, res) => {
 
     res.json({ project: maskWpSecrets(result.rows[0]) });
   } catch (e) {
+    // "invalid input syntax for type integer: ''" tells you nothing about WHICH field did it, and it
+    // fails the whole form. Name the empty fields so the next one takes seconds, not a log hunt.
+    if (/invalid input syntax for type (integer|numeric|bigint|double)/i.test(e.message || '')) {
+      const blanks = Object.keys(b || {}).filter(k => b[k] === '');
+      console.error(`[project-update] Error: ${e.message} — blank fields in this request: ${blanks.length ? blanks.join(', ') : '(none)'}`);
+      return res.status(400).json({
+        error: `Couldn't save: a number field was sent empty (${blanks.join(', ') || 'unknown field'}). This is a dashboard bug — report it. Nothing on the form was saved.`,
+      });
+    }
     console.error('[project-update] Error:', e.message, e.stack);
     res.status(500).json({ error: e.message });
   }
